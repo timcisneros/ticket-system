@@ -1,5 +1,80 @@
 # Decision Log
 
+## Tranche 5 — Coordination and Verified-Progress Controls (2026-08-02)
+
+**Activity is not progress, and four levels are not one number.** A run that is
+busy is not a run that is advancing, and conflating the two is what let churn
+look like work. The projection keeps `activity`, `candidate_progress`,
+`verified_progress` and `completion` apart at every level, and only the third
+extends tolerance. A successful operation that advances no declared work fact is
+candidate progress at best. Model prose claiming progress is not represented at
+all — there is no field it could occupy.
+
+**Verified progress is not completion.** Completion authority stays with the
+Tranche 3 completion decision and aggregate plan decision. Tranche 5 reports a
+pointer to that authority rather than a verdict of its own, because a surface
+that could read verified progress as completion would eventually ship unverified
+work as done.
+
+**Two answers only: `continue` and `blocked`.** There is deliberately no
+`retry`, `reroute`, `replan` or `remediate`. A runtime that automatically
+repairs churn is a runtime that spends more money on a situation it has just
+proven it does not understand. `blocked` was chosen over `interrupted` because
+ordinary recovery resumes interrupted Runs automatically, which would re-enter
+the loop that produced the stop.
+
+**Every input is a durable row.** No process-local counter takes part, because a
+counter that resets on recovery is a counter a model can evade by crashing —
+exactly the defect pending decision A3 records. Windows are half-open intervals
+over durable reservations and receipts, bounded by a cutoff captured in ONE
+statement, because `withTransaction` runs at READ COMMITTED and receipts are
+written on an independent connection.
+
+**Duration begins at first actual execution.** Neither obvious candidate was
+correct. `runs.started_at` is reset to NULL by `recoverExpiredRun`, so it
+measures the latest attempt and would grant a recovering Run N budgets.
+`governedExecution.capturedAt` is admission time, and since Runs are created
+`pending`, it would charge scheduler queue time as execution. The earliest
+append-only `run.lease_acquired` event is first execution start: absent while
+queued, set exactly once, and unrewritable by recovery or retry preparation.
+
+**Verified progress does not reset cumulative duration.** Tolerance for churn is
+something progress can legitimately earn back. Total execution time is
+consumption, and nothing buys it back. A duration stop carries its own closed
+reason, `cumulative_execution_duration_exhausted`, evaluated ahead of every
+churn signal — reporting it as `repeated_no_op` would name a pattern instead of
+the bound that actually stopped the Run, inviting someone to fix the loop and
+retry into the same wall.
+
+**The evaluation instant comes from the database clock.** The process clock is
+unshared, unverifiable and resettable, so a duration bound derived from it could
+be moved by restarting on a differently-skewed host. `clock_timestamp()` rather
+than `now()`, since `now()` is transaction start time and would understate
+elapsed time for two evaluations in one transaction.
+
+**Incomplete sibling reads block rather than wait.** Structured siblings are
+authority-wise independent — no dependency graph, no ordering, no waiting. But
+independence cuts both ways: a leaf Run reading another item's owned output is
+consuming work whose truthfulness nobody has established. The read is refused
+and the Run stops. Waiting would be a dependency by another name. A completed
+sibling becomes readable only through canonical Tranche 3 authority: a
+reconciled disposition of `completed` carrying a valid completion decision hash.
+Terminal Run status is not completion.
+
+**A blocked Run is the decision of record.** Re-evaluating one would capture a
+later evaluation instant, produce a different projection hash, and conflict with
+the block already stored — so a blocked Run is read, never re-derived. Tamper
+detection is unaffected: the block contract recomputes and verifies its own hash
+on every read.
+
+**A3 is closed for governed structured leaf execution only.** Requests,
+operations, economic consumption, no-progress history, cumulative execution
+duration and persisted stop authority all survive recovery on that path. The
+repository-wide remainder stays open for the execution families deliberately
+left unmodified, which still use attempt-local counters and per-loop-entry
+duration.
+
+
 ## Planner Response Bound and Admission Binding (2026-07-31)
 
 Merge-readiness audit of Tranche 2B corrected three findings before merge.

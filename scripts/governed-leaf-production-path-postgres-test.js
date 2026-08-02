@@ -427,20 +427,44 @@ async function main() {
     const dupOk = duplicated.filter(r => r.status === 'fulfilled');
     assert.equal(dupTransport.calls.length, 1,
       'duplicate orchestration of one logical request makes ONE transport call');
-    const dupOrdinals = new Set(dupOk.map(r => r.value.ordinal));
-    assert.equal(dupOrdinals.size, 1, 'one ordinal');
+
+    // `reservation_refused` is a FULFILLED outcome carrying `ordinal: null`,
+    // and it is a legitimate result: under resource pressure one caller can
+    // fail to acquire a pool connection within `connectionTimeoutMs` before it
+    // ever reaches the ledger. Asserting over every fulfilled ordinal therefore
+    // compared {1, null} and failed for a reason that has nothing to do with
+    // deduplication — which is exactly what the durable checks below measure.
+    //
+    // The guarantee is unchanged and is asserted where it actually lives: ONE
+    // transport call, ONE reservation row, and ordinal 1 for every caller that
+    // genuinely reserved. A refused caller must have reserved nothing.
+    const dupReserved = dupOk.filter(r => r.value.ordinal !== null);
+    const dupRefused = dupOk.filter(r => r.value.ordinal === null);
+    assert.ok(dupReserved.length >= 1,
+      'at least one duplicate caller obtained the reservation');
+    const dupOrdinals = new Set(dupReserved.map(r => r.value.ordinal));
+    assert.equal(dupOrdinals.size, 1,
+      'every caller that reserved reports the SAME ordinal');
     assert.equal([...dupOrdinals][0], 1, 'and it is 1 — never 2');
+    for (const refused of dupRefused) {
+      assert.equal(refused.value.status, 'reservation_refused',
+        `a caller with no ordinal is a reservation refusal, got ${refused.value.status}`);
+      assert.equal(refused.value.possiblyDispatched, false,
+        'a refused caller never claims a request may have been dispatched');
+    }
+
     const dupRows = await store.pool.query(
       `SELECT id FROM ${store.table('economic_request_reservations')} WHERE run_id = $1`,
       [dupRun.id]);
     assert.equal(dupRows.rowCount, 1, 'one reservation');
 
-    // Exactly one caller dispatched; the other reports a closed outcome and
-    // never a second request. A caller that merely LOST the start race must not
-    // settle — the winner owns the outcome and will report metered usage.
+    // Exactly one caller dispatched; any other that reached the ledger reports
+    // a closed outcome and never a second request. A caller that merely LOST
+    // the start race must not settle — the winner owns the outcome and will
+    // report metered usage.
     assert.equal(dupOk.filter(r => r.value.status === 'received').length, 1,
       'exactly one duplicate caller performed the dispatch');
-    for (const other of dupOk.filter(r => r.value.status !== 'received')) {
+    for (const other of dupReserved.filter(r => r.value.status !== 'received')) {
       assert.ok(
         ['reused_durable_response', 'already_dispatched_unresolved']
           .includes(other.value.status),

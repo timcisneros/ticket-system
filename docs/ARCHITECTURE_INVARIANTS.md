@@ -71,3 +71,33 @@ integrity failure.
 Projections read durable rows. A balance is never derived by summing
 reservations, and the durable lifecycle vocabulary is never collapsed into a
 single boolean.
+
+## Verified progress and churn control
+
+Activity, candidate progress, verified progress and completion are four distinct
+levels and are never collapsed into one. Only newly satisfying a previously
+unsatisfied declared-work fact is verified progress, and only verified progress
+extends tolerance. Completion is owned exclusively by the completion-decision and
+aggregate-decision contracts; no progress signal may assert it.
+
+Progress state is reconstructed from durable rows under an explicit cutoff
+captured in a single statement, never carried in a process-local counter. A
+counter that resets on recovery is a counter a model can evade by crashing.
+
+Cumulative execution duration is measured from the immutable execution epoch —
+the earliest append-only `run.lease_acquired` event — so it survives every
+recovery. Admission time and the latest-attempt `started_at` are never duration
+authority. Evaluation instants come from the database clock, captured in the same
+statement and snapshot as the row cutoffs. Verified progress may reset a churn
+streak; it never resets cumulative duration.
+
+A churn decision has exactly two values, `continue` and `blocked`. There is no
+retry, reroute, replan, or automatic remediation, and a blocked Run is never
+automatically reopened. A persisted block is the decision of record: it is read,
+not re-derived, and rows committed after its cutoff do not rewrite it.
+
+Structured siblings have no dependency graph and no ordering. A read of another
+item's owned output is refused and the reading Run stops; it never waits. A
+completed sibling becomes readable only through a reconciled item disposition of
+`completed` carrying a valid completion decision hash — terminal Run status is
+not completion.

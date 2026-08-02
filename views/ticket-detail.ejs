@@ -568,6 +568,83 @@
         : []);
       const aggregateDecision = leafExecution ? leafExecution.aggregateDecision : null;
     %>
+    <%
+      // Tranche 5: the aggregate progress/block summary. Absent for every
+      // ticket that holds no governed structured leaf Run.
+      const ticketProgress = typeof verifiedProgress !== 'undefined' ? verifiedProgress : null;
+      const blockGroups = ticketProgress ? [
+        ['Verified progress exhausted', ticketProgress.blockedForVerifiedProgressExhaustion],
+        ['Repeated no-op', ticketProgress.blockedForRepeatedNoOp],
+        ['Repeated failed operation', ticketProgress.blockedForRepeatedFailedOperation],
+        ['Mutation reversal', ticketProgress.blockedForMutationReversal],
+        ['Cumulative execution duration', ticketProgress.blockedForCumulativeExecutionDuration],
+        ['Undeclared sibling dependency', ticketProgress.blockedForUndeclaredSiblingDependency],
+        ['Progress accounting conflict', ticketProgress.blockedForProgressAccountingConflict]
+      ].filter(entry => entry[1].length > 0) : [];
+    %>
+    <% if (ticketProgress) { %>
+      <h3>Verified progress</h3>
+      <p class="text-muted">Bounded coordination and churn controls for this ticket's governed structured leaf Runs. Every figure is reconstructed from durable rows, so it survives restart. Verified progress means a declared work fact was newly satisfied — it does not mean complete, and completion remains owned by the leaf completion decision below.</p>
+      <dl class="detail-grid">
+        <div>
+          <dt>Governed leaf runs</dt>
+          <dd><%= ticketProgress.governedRunIds.join(', ') || '-' %></dd>
+        </div>
+        <div>
+          <dt>Permitted to continue</dt>
+          <dd><%= ticketProgress.runsPermittedToContinue.join(', ') || '-' %></dd>
+        </div>
+        <% if (ticketProgress.runsQueuedBeforeFirstExecution.length > 0) { %>
+        <div>
+          <dt>Queued, not yet executing</dt>
+          <dd>
+            <%= ticketProgress.runsQueuedBeforeFirstExecution.join(', ') %>
+            <div class="text-muted">Admitted and waiting for a lease. Queue time is not execution time.</div>
+          </dd>
+        </div>
+        <% } %>
+        <% if (ticketProgress.runsNotYetEvaluated.length > 0) { %>
+        <div>
+          <dt>Not yet evaluated</dt>
+          <dd><%= ticketProgress.runsNotYetEvaluated.join(', ') %></dd>
+        </div>
+        <% } %>
+        <div>
+          <dt>Blocked runs</dt>
+          <dd>
+            <% if (blockGroups.length === 0) { %>
+              <span class="text-muted">None.</span>
+            <% } else { %>
+              <% blockGroups.forEach(group => { %>
+                <div><span class="status-badge status-blocked"><%= group[0] %></span> <%= group[1].join(', ') %></div>
+              <% }) %>
+              <div class="text-muted">Blocked runs are stopped, not queued. They are not automatically reopened, and there is no retry, reroute or replan.</div>
+            <% } %>
+          </dd>
+        </div>
+        <div>
+          <dt>Open observation windows</dt>
+          <dd><%= ticketProgress.unresolvedActiveWindows %></dd>
+        </div>
+        <div>
+          <dt>Verified progress facts</dt>
+          <dd>
+            <%= ticketProgress.totalVerifiedProgressFacts %>
+            <div class="text-muted">Newly satisfied declared work facts across governed runs. Not a completion count.</div>
+          </dd>
+        </div>
+        <div>
+          <dt>Consumed</dt>
+          <dd>
+            <%= ticketProgress.cumulativeResources.providerRequests %> provider request(s) ·
+            <%= ticketProgress.cumulativeResources.durableOperations %> operation(s) ·
+            <%= ticketProgress.cumulativeResources.executionDurationMs %> ms executed ·
+            <%= ticketProgress.cumulativeResources.settledMicroUsd %> uUSD settled
+            <div class="text-muted">Consumption facts. Authoritative balances remain the role-scoped economic accounts (<%= ticketProgress.cumulativeResources.settlementAuthority %>).</div>
+          </dd>
+        </div>
+      </dl>
+    <% } %>
     <% if (leafExecution) { %>
       <h3>Leaf execution</h3>
       <p class="text-muted">One Run per immutable work unit, bound at admission. Item status is derived from the persisted Run lifecycle and its durable completion decision — never from a raw Run status, agent prose, or file existence.</p>

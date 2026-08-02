@@ -621,6 +621,81 @@ async function cmdReplay(args) {
         }
         const shared = plan.sharedConstraints.map(constraint => constraint.declaration);
         console.log(`  ${dim('shared constraints')} ${shared.length > 0 ? shared.join('; ') : 'explicitly none'}`);
+        // Tranche 5: verified progress, churn signals and the persisted stop.
+        // Read from the canonical seam the page and API use — the CLI computes
+        // nothing of its own.
+        const progress = run.verifiedProgress || null;
+        if (progress) {
+          const policy = progress.policy;
+          console.log(`  ${dim('progress policy')} ${policy.progressPolicyHash}`);
+          console.log(`  ${dim('progress tolerance')} ` +
+            `${policy.maximumConsecutiveNoProgressWindows} no-progress windows, ` +
+            `${policy.maximumRepeatedMutations} repeated mutations, ` +
+            `${policy.maximumFailedOperationStreak} failed streak, ` +
+            `${policy.maximumMutationReversals} reversals`);
+          console.log(`  ${dim('max execution duration')} ` +
+            `${policy.maximumCumulativeExecutionDurationMs} ms (cumulative, ` +
+            'from first execution)');
+          if (!progress.evaluated) {
+            console.log(`  ${dim('progress evaluation')} none yet ` +
+              '(this run has not been evaluated)');
+          } else {
+            console.log(`  ${dim('execution epoch')} ` +
+              `${progress.executionEpochAt || 'not yet executing'}`);
+            console.log(`  ${dim('evaluation cutoff')} ` +
+              `receipts <= ${progress.cutoff.receiptCutoff}, ` +
+              `reservations <= ${progress.cutoff.reservationCutoff}, ` +
+              `budget <= ${progress.cutoff.budgetCutoff}`);
+            console.log(`  ${dim('evaluated at')} ${progress.cutoff.evaluatedAt} ` +
+              `${dim('(database clock)')} ${progress.cutoff.cutoffIdentity}`);
+            console.log(`  ${dim('window')} ${progress.window.windowIdentity} ` +
+              `${dim('(' + progress.window.windowKind + ', ' +
+                progress.window.windowCount + ' total)')}`);
+            // The four levels, printed apart. Verified progress is not
+            // completion, and the CLI must not let them read as one number.
+            console.log(`  ${dim('activity')} ` +
+              `${progress.progress.activityOperationCount} durable operations`);
+            console.log(`  ${dim('candidate progress')} ` +
+              `${progress.progress.candidateProgressCount} novel fact(s)`);
+            console.log(`  ${dim('verified progress')} ` +
+              `${progress.progress.verifiedProgressCount} newly satisfied ` +
+              'declared fact(s)');
+            console.log(`  ${dim('completion')} decided by ` +
+              `${progress.progress.completionAuthority}, not by progress`);
+            console.log(`  ${dim('cumulative')} ` +
+              `${progress.resources.cumulativeProviderRequests} requests, ` +
+              `${progress.resources.cumulativeDurableOperations} operations, ` +
+              `${progress.resources.cumulativeSettledMicroUsd} uUSD settled, ` +
+              `${progress.resources.cumulativeExecutionDurationMs} ms executed`);
+            console.log(`  ${dim('signals')} ` +
+              `${progress.signals.consecutiveNoProgressWindows} consecutive ` +
+              `no-progress, repeated=${progress.signals.repeatedOperationSignals}, ` +
+              `failed=${progress.signals.failedOperationStreak}, ` +
+              `reversal=${progress.signals.mutationReversalSignals}`);
+            console.log(`  ${dim('churn decision')} ${progress.decision.decision}` +
+              `${progress.decision.reason ? ' — ' + progress.decision.reason : ''} ` +
+              `${dim(progress.decision.decisionHash)}`);
+          }
+          if (progress.block) {
+            const block = progress.block;
+            console.log(`  ${dim('progress block')} ${block.reason} ` +
+              `${dim(block.blockHash)}`);
+            console.log(`    ${dim('blocked at')} ${block.blockedAt} ` +
+              `${dim('cutoff ' + block.cutoff.cutoffIdentity)}`);
+            console.log(`    ${dim('decision')} ${block.churnDecisionHash} ` +
+              `${dim('policy ' + block.progressPolicyHash)}`);
+            if (block.siblingDependency) {
+              const sibling = block.siblingDependency;
+              console.log(`    ${dim('sibling read')} ${sibling.requestedPath} ` +
+                `owned by item #${sibling.siblingAllocationItemId} ` +
+                `${dim('(' + sibling.siblingCompletionState + ')')}`);
+              console.log(`    ${dim('sibling completion')} ` +
+                `${sibling.siblingCompletionDecisionHash || 'no completion decision'}`);
+            }
+            console.log(`    ${dim('note')} blocked runs are not automatically ` +
+              'reopened; there is no retry, reroute or replan');
+          }
+        }
         // Tranche 3 leaf execution: the immutable item-to-Run binding this run
         // executes under, and the durable disposition derived from it.
         const binding = run.leafRunBinding || null;
@@ -1682,6 +1757,54 @@ async function cmdTicket(args) {
           leaf.awaitingSettlementReservationIds.join(', '));
       }
     }
+  }
+  // Tranche 5: the aggregate progress/block summary. Counts only — the
+  // authoritative money remains the role accounts printed above.
+  const ticketProgress = ticket.verifiedProgress || null;
+  if (ticketProgress) {
+    console.log(`  ${dim('governed leaf runs')} ` +
+      `${ticketProgress.governedRunIds.join(', ') || 'none'}`);
+    console.log(`  ${dim('permitted to continue')} ` +
+      `${ticketProgress.runsPermittedToContinue.join(', ') || 'none'}`);
+    if (ticketProgress.runsQueuedBeforeFirstExecution.length > 0) {
+      console.log(`  ${dim('queued, not yet executing')} ` +
+        ticketProgress.runsQueuedBeforeFirstExecution.join(', '));
+    }
+    if (ticketProgress.runsNotYetEvaluated.length > 0) {
+      console.log(`  ${dim('not yet evaluated')} ` +
+        ticketProgress.runsNotYetEvaluated.join(', '));
+    }
+    // One line per closed stop reason, and only when it has occurred. The
+    // reasons are not interchangeable: a duration stop and a no-op loop call
+    // for different human responses.
+    for (const [label, runIds] of [
+      ['blocked: verified progress exhausted',
+        ticketProgress.blockedForVerifiedProgressExhaustion],
+      ['blocked: repeated no-op', ticketProgress.blockedForRepeatedNoOp],
+      ['blocked: repeated failed operation',
+        ticketProgress.blockedForRepeatedFailedOperation],
+      ['blocked: mutation reversal', ticketProgress.blockedForMutationReversal],
+      ['blocked: cumulative execution duration',
+        ticketProgress.blockedForCumulativeExecutionDuration],
+      ['blocked: undeclared sibling dependency',
+        ticketProgress.blockedForUndeclaredSiblingDependency],
+      ['blocked: progress accounting conflict',
+        ticketProgress.blockedForProgressAccountingConflict]
+    ]) {
+      if (runIds.length > 0) {
+        console.log(`  ${dim(label)} ${runIds.join(', ')}`);
+      }
+    }
+    console.log(`  ${dim('open windows')} ${ticketProgress.unresolvedActiveWindows}`);
+    console.log(`  ${dim('verified progress facts')} ` +
+      `${ticketProgress.totalVerifiedProgressFacts} ` +
+      `${dim('(verified progress is not completion)')}`);
+    const consumed = ticketProgress.cumulativeResources;
+    console.log(`  ${dim('consumed')} ${consumed.providerRequests} requests, ` +
+      `${consumed.durableOperations} operations, ` +
+      `${consumed.executionDurationMs} ms executed, ` +
+      `${consumed.settledMicroUsd} uUSD settled ` +
+      `${dim('(balances: ' + consumed.settlementAuthority + ')')}`);
   }
   if (ticket.structuredAllocationAuthority) {
     const authority = ticket.structuredAllocationAuthority;

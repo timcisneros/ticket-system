@@ -70,6 +70,17 @@ Only the lifecycle events documented above are accepted. Development data and fi
 reset or regenerated when the schema changes; readers do not carry compatibility branches for old
 run events. `run.execution_completed` and `run.snapshot_finalized` are never terminal by themselves.
 
+`run.progress_blocked` (Tranche 5) is a **governance** event, not a lifecycle event, and is
+deliberately absent from the five above. It records that a governed structured leaf Run was stopped
+by a verified-progress, churn, duration, or sibling-read decision, and it binds the deciding
+authority: reason, block hash, churn-decision hash, verified-progress projection hash, progress
+policy hash, and the exact cutoff including its database-captured evaluation instant.
+
+It does not participate in the disposition rules above. It is written in the same transaction as
+the block it records, exactly once per block transition — re-evaluating an already-blocked Run reads
+the stored block and appends nothing. A blocked Run is not resumable by recovery, which is why the
+churn decision uses `blocked` rather than `interrupted`.
+
 ## State Machine
 
 ```

@@ -13,6 +13,12 @@ const CONTRACTS = Object.freeze({
   structuredAllocationPlanning: ['writeStructuredAllocationPlanningAttempt', 'admitStructuredAllocationPlan', 'getAllocationPlanForTicket'],
   structuredAllocationLeafExecution: ['admitStructuredAllocationLeafRuns', 'reconcileStructuredAllocationLeafItems', 'getAllocationPlanForTicket'],
   governedEconomicsRead: ['readTicketGovernedEconomics', 'getEconomicReservation'],
+  // Tranche 5: the read-only verified-progress seam. Read methods only — a
+  // surface reading progress must never be able to decide or persist one.
+  verifiedProgressRead: [
+    'readRunVerifiedProgressProjection',
+    'readTicketVerifiedProgressProjection'
+  ],
   governedPlannerDispatch: ['startGovernedPlannerRequest', 'persistGovernedPlannerResponse', 'settleEconomicRequest', 'getEconomicReservation'],
   economicAccounting: ['admitTicketEconomicAccount', 'reserveEconomicRequest', 'markEconomicRequestStarted', 'markEconomicResponsePersisted', 'settleEconomicRequest', 'releaseUndispatchedEconomicReservation', 'getEconomicReservation', 'listRecoverableEconomicReservations'],
   nonTerminalEvidence: ['appendRunEvidence', 'completeActionReceipt', 'prepareTargetOperation', 'completeTargetOperation', 'getTargetOperation', 'withTargetOperationLock'],
@@ -99,6 +105,8 @@ module.exports = {
   assertEconomicAccountingRepository: assertion('economicAccounting', 'economic accounting'),
   assertGovernedEconomicsReadRepository:
     assertion('governedEconomicsRead', 'governed economics read'),
+  assertVerifiedProgressReadRepository:
+    assertion('verifiedProgressRead', 'verified progress read'),
   assertGovernedPlannerDispatchRepository:
     assertion('governedPlannerDispatch', 'governed planner dispatch'),
   assertNonTerminalEvidenceRepository: assertion('nonTerminalEvidence', 'non-terminal evidence'),

@@ -438,6 +438,27 @@ per loop entry there. A run on those paths that recovers N times still receives 
 evaluation or to bound them separately. The staging constraint above still applies to
 them: tightening their wall clock will fail runs that previously passed.
 
+#### Tranche 5 coordination scope deliberately NOT implemented (2026-08-02)
+
+Recorded here so no later reader infers these were overlooked rather than declined.
+None is a defect, and none is planned as part of Tranche 5:
+
+- **dependency DAGs** — structured siblings have no ordering and no graph;
+- **sibling waiting or ordering** — an unverified sibling read is refused and the
+  reading Run stops; waiting would be a dependency by another name;
+- **shared-decision registry** — no generic decision-claim store exists;
+- **advisory review Workflow steps**;
+- **automatic retry**, **automatic replanning**, **automatic rerouting** — the churn
+  decision vocabulary is exactly `continue | blocked`;
+- **automatic unblocking** — a persisted block is the decision of record and is never
+  reopened by the runtime;
+- **generic coordination messaging** between Runs;
+- **Tranche 6 behavior** — controlled evaluation and the product decision.
+
+A separately authorized retry Run is unaffected by any of the above: it receives its own
+execution epoch, its own captured policy and its own duration authority. What does not
+happen is the runtime creating one on its own.
+
 **Interacts with A12.** Because each recovery re-entry restarts the wall clock, no runtime
 limit currently bounds A12's indefinite snapshot-recovery cycling. Fixing A3 alone would
 silently impose a bound there; the two must be decided consistently.

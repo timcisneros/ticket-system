@@ -230,8 +230,235 @@ async function governedAttemptState(store, {
   };
 }
 
+
+// ── A complete governed structured leaf Ticket, seeded canonically ──────────
+//
+// Drives the SAME path production does: authority draft, real planning attempt
+// advanced to `proposal_validated`, v2 plan admission, then leaf-run admission
+// with governed capture. Nothing is inserted directly and no hash is written by
+// hand, so a suite built on this cannot pass against a fixture the runtime
+// would reject.
+async function seedGovernedStructuredTicket(store, {
+  stamp = `seed-${Date.now()}`,
+  actor = 'governed-structured-fixture',
+  progressPolicy = progressControlPolicy(),
+  policySource = null
+} = {}) {
+  const assert = require('node:assert/strict');
+  const crypto = require('node:crypto');
+  const {
+    buildStructuredAllocationAuthorityDraft
+  } = require('../runtime/structured-allocation-prerequisites-contract');
+  const {
+    advancePlanningAttempt,
+    buildPlannerRequestContext,
+    buildPlannerRequestMessages,
+    createPlanningAttempt,
+    lowerPlannerProposalToAllocationPlanDraft,
+    normalizePlannerProposal,
+    plannerRequestHash
+  } = require('../runtime/structured-allocation-planning-contract');
+  const {
+    buildLeafDeclaredWorkSnapshot
+  } = require('../runtime/structured-allocation-leaf-run-contract');
+  const {
+    buildCompletionAuthoritySnapshot
+  } = require('../runtime/completion-decision-contract');
+
+  const group = (await store.createGroup({
+    value: { name: `Seed ${stamp}`, permissions: [], canReceiveTickets: true },
+    changedBy: actor
+  })).group;
+  const mkAgent = async name => (await store.createConfiguredAgent({
+    value: { name: `${name} ${stamp}`, provider: 'openai',
+      model: 'gpt-agent-row-model', apiKey: '' },
+    groupIds: [group.id], changedBy: actor
+  })).agent;
+  const planner = await mkAgent('Planner');
+  const workerA = await mkAgent('WorkerA');
+  const workerB = await mkAgent('WorkerB');
+  const designated = (await store.updateGroup({
+    groupId: group.id, expectedRevision: group.revision,
+    value: { ...group, plannerAgentId: planner.id }, changedBy: actor
+  })).group;
+  const ownedOutputPaths = {
+    [planner.id]: 'reports/planner/',
+    [workerA.id]: 'reports/a/',
+    [workerB.id]: 'reports/b/'
+  };
+
+  const objectiveText = `Seeded governed structured work ${stamp}`;
+  const catalog = await store.getConfiguredAgentsByIds({
+    agentIds: [planner.id, workerA.id, workerB.id] });
+  const authorityDraft = buildStructuredAllocationAuthorityDraft({
+    declaredWork: {
+      objective: objectiveText,
+      expectedOutputs: [{ kind: 'text', declaration: 'One report per folder' }],
+      successCriteria: [{ kind: 'text', declaration: 'Findings are concrete' }],
+      evidenceRequirements: []
+    },
+    ticketObjective: objectiveText,
+    assignmentTargetType: 'group',
+    assignmentMode: 'allocated',
+    assignmentGroup: designated,
+    plannerAgent: catalog.find(agent => agent.id === planner.id),
+    candidateAgents: catalog,
+    ownedOutputPaths
+  });
+
+  const now = new Date().toISOString();
+  const ticket = (await store.createTicketWithEvent({
+    ticket: {
+      objective: objectiveText, acceptanceCriteria: 'Review the reports.',
+      assignmentTargetType: 'group', assignmentTargetId: group.id,
+      assignmentMode: 'allocated', ownedOutputPaths,
+      targetRef: null, executionMode: 'agent', workflowId: null, workflowInput: null,
+      capabilityType: 'directAction', capabilityId: 'agent-selected-actions',
+      capabilityInput: null,
+      executionPolicy: {
+        mode: 'assisted', requireVerification: 'when_declared', autoRetry: false,
+        maxAttempts: null, maxRuntimeMs: null, maxModelRequests: null,
+        maxWorkspaceOperations: null, allowWorkspaceWrites: true,
+        allowParallelRuns: false, allowChildTickets: false, workspaceScope: 'owned_paths'
+      },
+      status: 'open', blockedReason: null, createdBy: actor, changedBy: actor,
+      changedAt: now, createdAt: now, updatedAt: now
+    },
+    structuredAllocationAuthorityDraft: authorityDraft,
+    eventPayload: { source: actor }
+  })).ticket;
+
+  const planning = ticket.structuredAllocationAuthority.planningAuthoritySnapshot;
+  const responseText = JSON.stringify({
+    version: 1,
+    sharedConstraints: [{ kind: 'text', declaration: 'Stay inside your own folder' }],
+    items: planning.candidates.map(candidate => ({
+      assignedAgentId: candidate.agentId,
+      objective: `Review ${candidate.ownedOutputPaths[0]} and record concrete findings`,
+      expectedOutputs: [{ kind: 'text',
+        declaration: `Findings report for ${candidate.ownedOutputPaths[0]}` }],
+      successCriteria: [{ kind: 'text', declaration: 'Report names at least one finding' }],
+      evidenceRequirements: []
+    }))
+  });
+  const proposal = normalizePlannerProposal(JSON.parse(responseText));
+  const planDraft = lowerPlannerProposalToAllocationPlanDraft({
+    ticketId: ticket.id, authority: ticket.structuredAllocationAuthority, proposal
+  });
+
+  const context = buildPlannerRequestContext(
+    ticket.structuredAllocationAuthority, { ticketId: ticket.id });
+  const messages = buildPlannerRequestMessages(context);
+  let attempt = createPlanningAttempt({
+    attemptId: crypto.randomUUID(), ticketId: ticket.id,
+    authority: ticket.structuredAllocationAuthority,
+    createdAt: new Date().toISOString()
+  });
+  attempt = (await store.writeStructuredAllocationPlanningAttempt({
+    ticketId: ticket.id, attempt, expectedAttemptStateHash: null,
+    eventType: 'ticket.structured_planning_started'
+  })).attempt;
+  const { governedExecution: plannerGoverned } = await governedAttemptState(store, {
+    ticketId: ticket.id, attemptId: attempt.attemptId,
+    plannerAgentId: planning.planner.agentId, policy: plannerPolicySource()
+  });
+  const advance = async patch => {
+    attempt = (await store.writeStructuredAllocationPlanningAttempt({
+      ticketId: ticket.id,
+      attempt: advancePlanningAttempt(attempt, patch),
+      expectedAttemptStateHash: attempt.attemptStateHash,
+      eventType: 'ticket.structured_planning_step'
+    })).attempt;
+  };
+  await advance({
+    state: 'request_started',
+    governedExecution: plannerGoverned,
+    requestHash: plannerRequestHash({
+      provider: planning.planner.provider, model: planning.planner.model, messages }),
+    requestMetadata: {
+      contextVersion: context.version, contextHash: context.contextHash,
+      messageCount: messages.length,
+      requestBytes: messages.reduce((total, message) => total + message.content.length, 0),
+      timeoutMs: 120_000, maxResponseBytes: 262_144
+    },
+    requestStartedAt: new Date().toISOString()
+  });
+  await advance({
+    state: 'response_received', responseStatus: 'received', responseText,
+    responseBytes: Buffer.byteLength(responseText, 'utf8'), responseTruncated: false,
+    responseHash: crypto.createHash('sha256').update(responseText).digest('hex')
+  });
+  await advance({
+    state: 'proposal_validated', parseStatus: 'ok', validationStatus: 'ok',
+    proposalHash: proposal.proposalHash
+  });
+
+  const admission = await store.admitStructuredAllocationPlan({
+    ticketId: ticket.id, attempt, allocationPlanDraft: planDraft,
+    plannerCredentialsAvailable: true, eventPayload: { source: actor }
+  });
+  assert.equal(admission.admitted, true, 'the seeded v2 plan is admitted');
+  const plan = admission.plan;
+  const refreshed = await store.getTicket(ticket.id);
+
+  const agentById = new Map([[planner.id, planner], [workerA.id, workerA],
+    [workerB.id, workerB]]);
+  const leafDrafts = plan.items.map(item => {
+    const agent = agentById.get(item.assignedAgentId);
+    const completionAuthoritySnapshot = buildCompletionAuthoritySnapshot({
+      objective: refreshed.objective, kind: 'unrecognized', recognized: false,
+      intent: 'model_driven', completionPolicy: 'explicit_evidence_required',
+      directPostconditions: [], verificationPolicy: 'when_declared',
+      capturedAt: new Date().toISOString()
+    });
+    return {
+      allocationItemId: item.allocationItemId,
+      run: {
+        ticketId: refreshed.id, agentId: agent.id, agentName: agent.name,
+        targetRef: null, workspaceRoot: '/tmp', mainWorkspaceRoot: '/tmp',
+        executionWorkspaceType: 'main_owned_paths',
+        executionPolicySnapshot: refreshed.executionPolicy,
+        completionAuthoritySnapshot,
+        declaredWorkSnapshot: buildLeafDeclaredWorkSnapshot(item, {
+          sharedConstraints: plan.sharedConstraints, completionAuthoritySnapshot
+        }),
+        acceptanceCriteriaSnapshot: null,
+        allocationPlanId: plan.id, allocationItemId: item.allocationItemId,
+        allocationSubtask: null, ownedOutputPaths: [...item.ownedOutputPaths],
+        executionMode: 'agent', capabilityType: 'directAction',
+        capabilityId: 'agent-selected-actions', currentPhase: 'planning',
+        status: 'pending'
+      }
+    };
+  });
+
+  const admitted = await store.admitStructuredAllocationLeafRuns({
+    ticketId: refreshed.id,
+    allocationPlanId: plan.id,
+    leafDrafts,
+    governedLeafCapture: {
+      // The store expects the INNER closed policy document, not the reader's
+      // wrapper. `workerPolicySource()` returns { source, container, role }.
+      policySource: policySource || workerPolicySource().source,
+      progressControlPolicy: progressPolicy
+    },
+    eventPayload: { source: actor }
+  });
+
+  return {
+    ticket: refreshed,
+    ticketId: refreshed.id,
+    plan,
+    admission: admitted,
+    runIds: admitted.runs.map(run => run.id),
+    agents: { planner, workerA, workerB },
+    group: designated
+  };
+}
+
 module.exports = {
   progressControlPolicy,
+  seedGovernedStructuredTicket,
   governedAttemptState,
   governedAttemptStateWithoutStore,
   CAPTURED_AT,

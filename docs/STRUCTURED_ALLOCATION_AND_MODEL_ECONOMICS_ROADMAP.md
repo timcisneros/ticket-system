@@ -572,9 +572,122 @@ The durable lifecycle vocabulary is used verbatim; there is no overloaded
 
 ## Tranche 5 — Coordination and Verified-Progress Controls
 
-Evaluate bounded coordination signals, verified-progress accounting, and churn
-termination using durable evidence. Do not introduce recursive delegation or a
-generic decision-claim registry. This tranche is not implemented by Tranche 1.
+**COMPLETE.** Bounded coordination signals, verified-progress accounting and
+churn termination, evaluated entirely from durable evidence. No recursive
+delegation and no generic decision-claim registry were introduced.
+
+### The authority chain
+
+```text
+governed structured leaf Run
+-> captured progress policy
+-> durable logical request windows
+-> stable database cutoffs
+-> candidate and verified-progress classification
+-> cumulative resource reconstruction
+-> churn or sibling-read decision
+-> persisted cutoff-bound block
+-> no further governed spending
+```
+
+Every link is durable. Nothing in the chain is a process-local counter, so the
+same rows produce the same decision in any process, before or after a restart.
+
+### The distinction the tranche exists to make
+
+```text
+activity            something durable happened
+candidate progress  something NEW happened
+verified progress   a previously unsatisfied declared-work fact is satisfied
+completion          owned by the Tranche 3 completion decision
+```
+
+* **Activity is not progress.** A window full of successful operations that
+  advanced no declared fact has produced activity and nothing more.
+* **A novel mutation is only candidate progress** unless it advances declared
+  work. Writing a file nobody asked for is activity with a new fingerprint.
+* **Verified progress does not mean completion.** It means one declared fact
+  that was unsatisfied is now satisfied. Completion authority is unchanged and
+  remains with the structured allocation completion decision and the aggregate
+  plan decision.
+* **Model prose is not represented at all.** There is no field it could occupy.
+
+### Durability and duration
+
+* **No-progress state survives restart.** Streaks are replayed from durable
+  receipts and reservations under a cutoff captured in one statement, never
+  carried in memory.
+* **Duration begins at first actual execution** — the earliest append-only
+  `run.lease_acquired` event. Not admission time, which would charge scheduler
+  queue time; not `runs.started_at`, which recovery resets to NULL and which
+  therefore measures only the latest attempt.
+* **Verified progress does not reset cumulative duration.** Tolerance for churn
+  is something progress can earn back; total execution time is consumption and
+  nothing buys it back.
+* **Evaluation instants come from the database clock**, captured in the same
+  statement and snapshot as the receipt, reservation and budget cutoffs.
+
+### Coordination
+
+* **Writes remain disjoint.** Owned output paths are non-overlapping by
+  admission, and Tranche 5 changed nothing about that.
+* **No dependency DAG exists.** There is no ordering, no topological sort and no
+  graph of any kind.
+* **Incomplete sibling-output reads block rather than wait.** A leaf Run reading
+  another item's owned output is refused and stopped. It does not wait for the
+  sibling, because waiting would be a dependency by another name.
+* **Completed sibling reads require canonical Tranche 3 completion authority** —
+  a reconciled item disposition of `completed` carrying a valid completion
+  decision hash. Terminal Run status is not completion and does not grant a read.
+* **Blocked Runs are not automatically reopened.** `blocked` was chosen over
+  `interrupted` precisely because ordinary recovery resumes interrupted Runs.
+* **No retry, reroute, replan or automatic remediation occurs.** The churn
+  decision vocabulary has exactly two values, `continue` and `blocked`.
+
+### Pending decision A3
+
+```text
+A3 is closed for governed structured leaf execution.
+
+Requests, operations, economic consumption, no-progress history,
+cumulative execution duration, and persisted stop authority all
+survive recovery.
+
+The broader repository-wide A3 remainder remains open for
+intentionally unmodified execution families that still use
+attempt-local counters or duration behavior.
+```
+
+This is not a repository-wide closure. Direct, v1, workflow, browser, process,
+simulation and compiler execution were deliberately untouched.
+
+### Operational projection
+
+One canonical read-only seam, `runtime/verified-progress-projection.js`, feeds
+Ticket Detail, Run Detail, both runtime APIs, replay snapshots and the CLI. It
+reports the decision the pre-reservation gate already made and re-derives
+nothing. Where a Run is blocked, the stored cutoff is replayed rather than a
+fresh one taken, so reading a blocked Run cannot change what it says.
+
+Cumulative micro-USD in this projection is CONSUMPTION, drawn from the same
+durable settlement facts Tranche 4 reads. Authoritative balances remain the
+role-scoped economic accounts in `runtime/governed-execution-projection.js`;
+Tranche 5 introduces no second ledger.
+
+### Not implemented
+
+Recorded explicitly so no reader infers otherwise:
+
+* dependency DAGs;
+* sibling waiting or ordering;
+* shared-decision registry;
+* advisory review Workflow steps;
+* automatic retry;
+* automatic replanning;
+* automatic rerouting;
+* automatic unblocking;
+* generic coordination messaging;
+* Tranche 6 behavior.
 
 ## Tranche 6 — Controlled Evaluation and Product Decision
 
@@ -591,6 +704,6 @@ Tranche 2A: COMPLETE
 Tranche 2B: COMPLETE
 Tranche 3: COMPLETE
 Tranche 4: COMPLETE
-Tranche 5: NOT STARTED
+Tranche 5: COMPLETE
 Tranche 6: NOT STARTED
 ```

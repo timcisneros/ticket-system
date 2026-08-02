@@ -8,6 +8,10 @@
 - [`ARCHITECTURAL_DECISIONS_PENDING.md`](ARCHITECTURAL_DECISIONS_PENDING.md) — canonical register of
   open integrity defects, deferred work, and pending architectural decisions. Read before starting
   work that touches runtime enforcement, feasibility, recovery, or objective interpretation.
+- [`STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md`](STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md)
+  — structured allocation and governed model economics through Tranche 5, including the verified
+  progress authority chain, the coordination boundaries that were deliberately NOT built, and the
+  precise scope of the A3 closure (governed structured leaf execution only).
 - [`POSTGRES_CUTOVER.md`](POSTGRES_CUTOVER.md) — current PostgreSQL authority/coordination contract.
 - [`PROCESS_EXECUTION_CONTRACT.md`](PROCESS_EXECUTION_CONTRACT.md) — default-off, executor-free
   bounded process-operation authority, request, outcome, evidence, and snapshot contract.

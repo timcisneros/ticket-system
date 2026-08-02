@@ -178,6 +178,9 @@ const {
   projectRunGovernedExecution,
   projectTicketGovernedEconomics
 } = require('./runtime/governed-execution-projection');
+const {
+  projectRunVerifiedProgress
+} = require('./runtime/verified-progress-projection');
 const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
@@ -192,6 +195,7 @@ const {
   assertTicketRunLifecycleRepository,
   assertStructuredAllocationLeafExecutionRepository,
   assertGovernedEconomicsReadRepository,
+  assertVerifiedProgressReadRepository,
   assertGovernedPlannerDispatchRepository,
   assertStructuredAllocationPlanningRepository,
   assertNonTerminalEvidenceRepository,
@@ -8247,6 +8251,15 @@ function serializeRunRuntimeState(run, logsByRunId = null, options = {}) {
     eventSummary: summary,
     latestEventSummary: summary,
     replaySummary,
+    // Tranche 5: the CAPTURED progress authority and the persisted stop, both
+    // of which live on the Run row. This serializer is synchronous, so it
+    // carries no window evaluation — replaying windows needs durable receipt
+    // and reservation rows, and the Run detail read is where that happens.
+    // null for every non-governed execution family.
+    verifiedProgress: projectRunVerifiedProgress({
+      run,
+      storedBlock: run.governedProgressBlock || null
+    }),
     authorityEvidence: getRunAuthorityEvidence(run, suppliedEvents),
     runEvaluation,
     attemptUsage: serializedAttemptUsage,
@@ -8481,6 +8494,13 @@ async function serializeTicketRuntimeState(ticketId) {
     }),
     // null for every ticket that never used governed execution.
     governedEconomics: projectTicketGovernedEconomics(governedEconomicsRows),
+    // Tranche 5: the aggregate progress/block summary for this Ticket's
+    // governed structured leaf Runs. Counts only — it re-derives no decision,
+    // and its resource totals are consumption facts, deliberately NOT a second
+    // set of balances competing with `governedEconomics` above. null for every
+    // ticket that holds no governed structured leaf Run.
+    verifiedProgress: await getVerifiedProgressReadRepository()
+      .readTicketVerifiedProgressProjection(ticket.id),
     // Tranche 3: the durable leaf-execution facts for this ticket — item-to-Run
     // bindings, item authority and owned paths, Run lineage, per-item durable
     // disposition with its completion-decision identity, the aggregate decision
@@ -11199,6 +11219,15 @@ function createReplaySnapshotBase(run, overrides = {}) {
     // only; per-request lifecycle comes from the Run detail read, which can
     // consult the reservation rows. null for historical and v1 Runs.
     governedExecution: projectRunGovernedExecution(run, []),
+    // Tranche 5: the CAPTURED progress authority and the persisted block, both
+    // of which live on the Run itself. The replay snapshot is synchronous, so
+    // it carries no evaluation — a window replay needs durable receipt and
+    // reservation rows, and inventing one here from whatever is in memory is
+    // precisely the reconstruction this seam exists to prevent.
+    verifiedProgress: projectRunVerifiedProgress({
+      run,
+      storedBlock: run.governedProgressBlock || null
+    }),
     ownedOutputPaths: getRunOwnedOutputPaths(run),
     ticketOpenedAt: run.ticketOpenedAt || null,
     runtimeLimits: pickRuntimeLimitValues(getRunRuntimeLimitsSnapshot(run)),
@@ -16173,6 +16202,11 @@ async function resolveGovernedPlannerCredentials({ provider }) {
 
 function getGovernedEconomicsReadRepository() {
   assertGovernedEconomicsReadRepository(postgresRuntimeStore);
+  return postgresRuntimeStore;
+}
+
+function getVerifiedProgressReadRepository() {
+  assertVerifiedProgressReadRepository(postgresRuntimeStore);
   return postgresRuntimeStore;
 }
 
@@ -25747,12 +25781,18 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     ticketExecutionMode: ticket.executionMode || null
   });
 
+  // Tranche 5: the aggregate progress/block summary, read through the single
+  // canonical seam so the page, the API and the CLI cannot disagree.
+  const ticketVerifiedProgress = await getVerifiedProgressReadRepository()
+    .readTicketVerifiedProgressProjection(ticket.id);
+
   return renderCachedView(request, reply, 'ticket-detail.ejs', viewData({
     user: request.user,
     ticket,
     structuredAllocation,
     structuredAllocationPlanning,
     structuredAllocationLeafExecution,
+    verifiedProgress: ticketVerifiedProgress,
     parentTicket,
     childTickets,
     browserTarget: ticket.targetRef && ticket.targetRef.kind === 'browser'
@@ -28300,6 +28340,14 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     // same canonical seam the Ticket surfaces use.
     governedExecution: run
       ? projectRunGovernedExecution(run, governedReservationsForRun)
+      : null,
+    // Tranche 5: the exact observation window, cumulative resources, churn
+    // signals, decision and persisted block authority for this Run. Read
+    // through the single canonical seam, so this page and the pre-reservation
+    // gate cannot disagree. null for every non-governed execution family.
+    verifiedProgress: run
+      ? await getVerifiedProgressReadRepository()
+        .readRunVerifiedProgressProjection(run.id)
       : null,
     leafExecution: projectStructuredAllocationLeafExecution({
       allocationPlan: allocationPlan &&

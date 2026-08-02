@@ -798,3 +798,83 @@ inventing availability evidence.
 Ollama cannot be used for governed structured planning or leaf execution: a tag
 is a moving reference and its liability is unboundable. Ollama remains fully
 supported on historical ungoverned paths.
+
+## 13. Verified Progress and Churn Control (Tranche 5)
+
+### Where to look
+
+Ticket Detail and the `GET` Ticket API expose `verifiedProgress`: the governed
+leaf Run IDs, which are permitted to continue, and one list per closed stop
+reason. The reasons are listed separately on purpose — a duration stop and a
+no-op loop call for different responses, and a single "blocked" count would hide
+that.
+
+Run Detail and the `GET` Run API expose `verifiedProgress` for one Run: the
+captured progress policy, the execution epoch, the exact evaluation cutoff, the
+observation window, the four progress levels, cumulative resources, churn
+signals, the churn decision, and the persisted block with its sibling authority
+where present.
+
+`node scripts/oquery.js` prints the same facts for both Tickets and Runs.
+
+The Run runtime API and replay snapshots carry the CAPTURED policy and the
+persisted block only. They are synchronous and do not replay windows, because
+replaying a window requires durable receipt and reservation rows.
+
+### Reading the four levels
+
+```text
+activity            durable things happened; never extends tolerance
+candidate progress  something NEW happened, not yet known to matter
+verified progress   a previously unsatisfied declared-work fact is satisfied
+completion          NOT decided here — the completion decision owns it
+```
+
+Verified progress is not completion. A Run with many verified facts may still be
+incomplete, and the item disposition in the leaf-execution projection remains the
+only answer to "is this done".
+
+### Reading a block
+
+```text
+verified_progress_exhausted             tolerance for no-progress windows spent
+repeated_no_op                          the same no-op pattern, repeatedly
+repeated_failed_operation               a failed/refused operation streak
+mutation_reversal_churn                 work written then reverted
+cumulative_execution_duration_exhausted total execution time spent
+undeclared_sibling_dependency           read of an unverified sibling's output
+progress_accounting_conflict            durable accounting disagreed with itself
+```
+
+A block is durable and is the decision of record. It is not automatically
+reopened, and there is no retry, reroute or replan. Reading a blocked Run replays
+its STORED cutoff, so the numbers do not move on refresh; if a duration appears
+frozen on a blocked Run, that is correct.
+
+Rows committed after a block's cutoff do not rewrite it. A receipt that lands
+later belongs to no evaluation that has happened yet.
+
+### Common situations
+
+**"A Run is blocked for an undeclared sibling dependency."** It tried to read
+another work unit's owned output before that unit had a durable completion
+decision. It was refused and stopped; it is NOT waiting, and nothing will
+unblock it automatically. The block names the requested path and the owning work
+unit. If the sibling later completes, the blocked Run stays blocked — a Run
+carrying new authority may read the now-verified output.
+
+**"A Run blocked for cumulative execution duration but it looks idle."** The
+bound is total execution time from first lease acquisition across every
+recovery, not time in the current attempt. Queue time is not counted. Verified
+progress does not buy any of it back.
+
+**"The Ticket page shows spend that differs from the accounts."** It should not,
+and both come from the same durable settlement rows. `verifiedProgress`
+cumulative micro-USD is CONSUMPTION; the authoritative balances are the
+role-scoped economic accounts under `governedEconomics`. If they genuinely
+disagree, that is a defect worth escalating, not a display preference.
+
+**"A Run shows no progress projection at all."** It is not a governed structured
+leaf Run. Direct, v1, workflow, browser, process, simulation and compiler Runs
+omit Tranche 5 projections entirely. A Run that is half-governed does not project
+as absent — it fails closed and raises.

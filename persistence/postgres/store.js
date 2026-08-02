@@ -68,6 +68,10 @@ const {
   evaluateGovernedRunProgress
 } = require('../../runtime/governed-progress-evaluation');
 const {
+  projectRunVerifiedProgress,
+  projectTicketVerifiedProgress
+} = require('../../runtime/verified-progress-projection');
+const {
   assertBlockAuthorityMatches,
   buildGovernedProgressBlock,
   normalizeGovernedProgressBlock
@@ -4712,12 +4716,23 @@ class PostgresRuntimeStore {
   //
   // NOTHING HERE IS PROCESS-LOCAL. That is the point: the counters this replaces
   // reset on recovery, which is precisely what pending decision A3 records.
-  async readGovernedRunProgressState(runId, { client = null, cutoff: explicitCutoff = null } = {}) {
+  async readGovernedRunProgressState(runId, {
+    client = null, cutoff: explicitCutoff = null, forUpdate = true
+  } = {}) {
     const id = positiveSafeInteger(runId, 'runId');
     const execute = async connection => {
       // The Run row lock. It both serializes evaluators and fixes the cutoff.
+      //
+      // `forUpdate: false` is for READ-ONLY PROJECTION ONLY. A projection that
+      // took a write lock on every governed Run of a Ticket would serialize
+      // page loads against the execution gate and hold those locks for the
+      // whole read. It does not need the lock: it decides nothing, and the
+      // cutoff is still captured in a single statement, so the rows it reads
+      // are still a mutually consistent set. Every DECIDING caller keeps the
+      // lock, which is the default.
       const runResult = await connection.query(
-        `SELECT * FROM ${this.table('runs')} WHERE id = $1 FOR UPDATE`, [id]);
+        `SELECT * FROM ${this.table('runs')} WHERE id = $1` +
+        (forUpdate ? ' FOR UPDATE' : ''), [id]);
       if (runResult.rowCount === 0) {
         const error = new Error(`run ${id} was not found`);
         error.code = 'POSTGRES_RECORD_NOT_FOUND';
@@ -4980,6 +4995,79 @@ class PostgresRuntimeStore {
     return client ? execute(client) : this.withTransaction(execute);
   }
 
+
+  // ── Tranche 5: the canonical read-only progress projection ─────────────────
+  //
+  // Assembles the durable inputs the projection seam needs and hands them over.
+  // It DECIDES NOTHING. The evaluation it performs is the same deterministic
+  // replay the gate performs, over the same durable rows, so a page and the
+  // gate cannot disagree — and where a block already exists, the STORED cutoff
+  // is replayed rather than a fresh one taken, so merely looking at a blocked
+  // Run cannot change what it says.
+  async readRunVerifiedProgressProjection(runId, { client = null } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const execute = async connection => {
+      const runResult = await connection.query(
+        `SELECT * FROM ${this.table('runs')} WHERE id = $1`, [id]);
+      if (runResult.rowCount === 0) return null;
+      const run = runFromRow(runResult.rows[0]);
+
+      // Not a governed structured leaf Run: the seam returns null and every
+      // other execution family is untouched.
+      if (!run.governedExecution && !run.leafRunBinding) {
+        return projectRunVerifiedProgress({ run });
+      }
+      const storedBlock = run.governedProgressBlock
+        ? normalizeGovernedProgressBlock(run.governedProgressBlock)
+        : null;
+
+      // A blocked Run is replayed through its OWN stored cutoff. Reading must
+      // never capture a later evaluation instant for a decision already made.
+      const progressState = await this.readGovernedRunProgressState(id, {
+        client: connection,
+        cutoff: storedBlock ? storedBlock.cutoff : null,
+        // Read-only: no write lock, so viewing a Ticket never blocks execution.
+        forUpdate: false
+      });
+
+      let evaluation = null;
+      if (run.governedExecution && run.governedExecution.progressControlPolicy) {
+        evaluation = evaluateGovernedRunProgress({
+          progressState,
+          declaredWorkSnapshot: run.declaredWorkSnapshot,
+          progressPolicy: run.governedExecution.progressControlPolicy,
+          allocationPlanId: run.allocationPlanId || null,
+          allocationItemId: run.allocationItemId || null,
+          siblingDependencyBlocked: Boolean(
+            storedBlock && storedBlock.siblingDependency)
+        });
+      }
+      return projectRunVerifiedProgress({
+        run, evaluation, storedBlock, progressState
+      });
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  // Ticket level. Projects each governed structured leaf Run through the seam
+  // above and summarizes; it computes no ticket-level fact of its own.
+  async readTicketVerifiedProgressProjection(ticketId, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const execute = async connection => {
+      const rows = await connection.query(
+        `SELECT id FROM ${this.table('runs')} WHERE ticket_id = $1 ORDER BY id`,
+        [id]
+      );
+      const projections = [];
+      for (const row of rows.rows) {
+        const projection = await this.readRunVerifiedProgressProjection(
+          Number(row.id), { client: connection });
+        if (projection) projections.push(projection);
+      }
+      return projectTicketVerifiedProgress(projections);
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
 
   // ── Tranche 5: sibling-read authority ──────────────────────────────────────
   //

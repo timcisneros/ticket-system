@@ -1220,6 +1220,141 @@
         </dd>
       </div>
       <% } %>
+      <%
+        // Tranche 5: verified progress, read from the single canonical seam.
+        // Absent for every non-governed execution family.
+        const progress = typeof verifiedProgress !== 'undefined' ? verifiedProgress : null;
+      %>
+      <% if (progress) { %>
+      <div>
+        <dt>Progress policy</dt>
+        <dd>
+          <code><%= progress.policy.progressPolicyHash %></code>
+          <div class="text-muted">
+            <%= progress.policy.maximumConsecutiveNoProgressWindows %> no-progress windows ·
+            <%= progress.policy.maximumRepeatedMutations %> repeated mutations ·
+            <%= progress.policy.maximumFailedOperationStreak %> failed streak ·
+            <%= progress.policy.maximumMutationReversals %> reversals ·
+            <%= progress.policy.maximumCumulativeExecutionDurationMs %> ms total execution
+          </div>
+        </dd>
+      </div>
+      <% if (!progress.evaluated) { %>
+      <div>
+        <dt>Progress evaluation</dt>
+        <dd><span class="text-muted">This run has not been evaluated yet.</span></dd>
+      </div>
+      <% } else { %>
+      <div>
+        <dt>Execution epoch</dt>
+        <dd>
+          <% if (progress.executionEpochAt) { %>
+            <code><%= progress.executionEpochAt %></code>
+            <div class="text-muted">First actual execution start. Not admission time, and not reset by recovery.</div>
+          <% } else { %>
+            <span class="text-muted">Not yet executing — queued time is not execution time.</span>
+          <% } %>
+        </dd>
+      </div>
+      <div>
+        <dt>Evaluation cutoff</dt>
+        <dd>
+          receipts &le; <%= progress.cutoff.receiptCutoff %> ·
+          reservations &le; <%= progress.cutoff.reservationCutoff %> ·
+          budget &le; <%= progress.cutoff.budgetCutoff %>
+          <div class="text-muted">
+            evaluated <code><%= progress.cutoff.evaluatedAt %></code> (database clock) ·
+            <code><%= progress.cutoff.cutoffIdentity %></code>
+          </div>
+        </dd>
+      </div>
+      <div>
+        <dt>Observation window</dt>
+        <dd>
+          <code><%= progress.window.windowIdentity %></code>
+          <div class="text-muted"><%= progress.window.windowKind %> · <%= progress.window.windowCount %> window(s) replayed</div>
+        </dd>
+      </div>
+      <div>
+        <dt>Progress</dt>
+        <dd>
+          <div><span class="text-muted">Activity</span> <%= progress.progress.activityOperationCount %> durable operation(s)</div>
+          <div><span class="text-muted">Candidate progress</span> <%= progress.progress.candidateProgressCount %> novel fact(s)</div>
+          <div><span class="text-muted">Verified progress</span> <%= progress.progress.verifiedProgressCount %> newly satisfied declared fact(s)</div>
+          <div class="text-muted">
+            Completion is decided by the structured allocation completion decision, not by progress.
+            Verified progress does not mean complete.
+          </div>
+        </dd>
+      </div>
+      <div>
+        <dt>Cumulative consumption</dt>
+        <dd>
+          <%= progress.resources.cumulativeProviderRequests %> provider request(s) ·
+          <%= progress.resources.cumulativeDurableOperations %> operation(s) ·
+          <%= progress.resources.cumulativeSettledMicroUsd %> uUSD settled ·
+          <%= progress.resources.cumulativeExecutionDurationMs %> ms executed
+          <div class="text-muted">Reconstructed from durable rows and measured from the execution epoch, so it survives every recovery.</div>
+        </dd>
+      </div>
+      <div>
+        <dt>Churn signals</dt>
+        <dd>
+          <%= progress.signals.consecutiveNoProgressWindows %> consecutive no-progress window(s) ·
+          repeated <%= progress.signals.repeatedOperationSignals %> ·
+          failed <%= progress.signals.failedOperationStreak %> ·
+          reversal <%= progress.signals.mutationReversalSignals %>
+        </dd>
+      </div>
+      <div>
+        <dt>Churn decision</dt>
+        <dd>
+          <span class="status-badge status-<%= progress.decision.decision %>"><%= progress.decision.decision %></span>
+          <% if (progress.decision.reason) { %><span class="text-muted"><%= progress.decision.reason %></span><% } %>
+          · <code><%= progress.decision.decisionHash %></code>
+        </dd>
+      </div>
+      <% } %>
+      <% if (progress.block) { %>
+      <div>
+        <dt>Persisted progress block</dt>
+        <dd>
+          <span class="status-badge status-blocked"><%= progress.block.reason %></span>
+          · <code><%= progress.block.blockHash %></code>
+          <div class="text-muted">
+            blocked <%= progress.block.blockedAt %> ·
+            decision <code><%= progress.block.churnDecisionHash %></code> ·
+            policy <code><%= progress.block.progressPolicyHash %></code>
+          </div>
+          <div class="text-muted">
+            This run is stopped. Blocked runs are not automatically reopened, and there is no
+            retry, reroute or replan.
+          </div>
+        </dd>
+      </div>
+      <% if (progress.block.siblingDependency) { %>
+      <div>
+        <dt>Sibling dependency</dt>
+        <dd>
+          <code class="owned-path"><%= progress.block.siblingDependency.requestedPath %></code>
+          <div class="text-muted">
+            owned by work unit #<%= progress.block.siblingDependency.siblingAllocationItemId %>
+            <% if (progress.block.siblingDependency.siblingRunId) { %>· run #<%= progress.block.siblingDependency.siblingRunId %><% } %>
+            · <%= progress.block.siblingDependency.siblingCompletionState %>
+          </div>
+          <div class="text-muted">
+            <% if (progress.block.siblingDependency.siblingCompletionDecisionHash) { %>
+              completion decision <code><%= progress.block.siblingDependency.siblingCompletionDecisionHash %></code>
+            <% } else { %>
+              No durable completion decision supports the sibling. The read was refused rather
+              than queued — siblings are never waited on.
+            <% } %>
+          </div>
+        </dd>
+      </div>
+      <% } %>
+      <% } %>
+      <% } %>
       <% if (typeof allocationPlan !== 'undefined' && allocationPlan && allocationPlan.version === 2 && allocationItem) { %>
       <div>
         <dt>Allocated objective</dt>
