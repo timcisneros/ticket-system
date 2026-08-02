@@ -231,6 +231,50 @@ assert.ok(store.includes('receipt_cutoff'),
 assert.ok(store.includes('AND id <= $2'),
   'queries filter to the captured cutoff');
 
+// ── Tranche 5: the sibling-read preflight precedes every filesystem branch ──
+//
+// A post-read check would already have leaked sibling content, so position is
+// the property that matters, not merely presence.
+
+const readFnStart = server.indexOf(
+  'async function executeWorkspaceOperationUnlocked(');
+assert.ok(readFnStart > 0, 'the workspace read seam exists');
+const readFn = server.slice(readFnStart, readFnStart + 8_000);
+const preflightAt = readFn.indexOf('assertGovernedSiblingReadAllowed(run, args');
+assert.ok(preflightAt > 0, 'the read seam performs the sibling preflight');
+// The guard must be REACHABLE, not merely present: a disabled condition leaves
+// the call in the source while never running it.
+assert.ok(readFn.includes('if (AGENT_READ_OPERATIONS.includes(operation)) {'),
+  'the preflight is guarded by the read-operation condition, not disabled');
+for (const branch of ["if (operation === 'listDirectory')", "if (operation === 'readFile')"]) {
+  const branchAt = readFn.indexOf(branch);
+  if (branchAt > 0) {
+    assert.ok(preflightAt < branchAt,
+      `the preflight precedes the ${branch} filesystem branch`);
+  }
+}
+// It guards reads only. Mutations are already confined by admitted ownership.
+assert.ok(server.includes(
+  "const AGENT_READ_OPERATIONS = Object.freeze(['listDirectory', 'readFile'])"),
+'the guard applies to read operations');
+
+// Blocking persists BEFORE it throws — the rollback trap the churn gate found.
+const guardStart = server.indexOf('async function assertGovernedSiblingReadAllowed(');
+const guard = server.slice(guardStart, readFnStart);
+const persistAt = guard.indexOf('blockGovernedRunForSiblingRead');
+const throwAt = guard.indexOf("error.code = 'GOVERNED_SIBLING_READ_BLOCKED'");
+assert.ok(persistAt > 0 && throwAt > 0 && persistAt < throwAt,
+  'the block is persisted before the refusal is raised');
+// Terminal for the execution, not an ordinary tool error the loop can continue past.
+assert.ok(guard.includes("error.failureKind = 'no_progress'"),
+  'a sibling block stops the worker execution');
+// Non-structured Runs return before any resolution happens.
+assert.ok(guard.includes('!run.leafRunBinding || !run.governedExecution) return;'),
+  'historical and non-structured Runs are untouched by the guard');
+// One resolver, one block authority, no second path matcher.
+assert.equal(guard.includes('normalizeWorkspaceRelativePath'), false,
+  'the guard does not implement its own path normalization');
+
 // ── No production pricing ships in this slice ───────────────────────────────
 
 for (const [label, source] of [

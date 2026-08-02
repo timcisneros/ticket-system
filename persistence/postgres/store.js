@@ -76,6 +76,11 @@ const {
   permitsGovernedRequest
 } = require('../../runtime/churn-decision-contract');
 const {
+  isPathInsideOwnedOutputPaths,
+  normalizeWorkspaceOwnershipPath,
+  normalizeWorkspaceRelativePath
+} = require('../../runtime/authority-paths');
+const {
   assertRunGovernedExecutionPairing,
   buildGovernedRunAuthority,
   classifyRunGovernance,
@@ -4954,6 +4959,149 @@ class PostgresRuntimeStore {
       return stored ? normalizeGovernedProgressBlock(stored) : null;
     };
     return client ? execute(client) : this.withTransaction(execute);
+  }
+
+
+  // ── Tranche 5: sibling-read authority ──────────────────────────────────────
+  //
+  // Structured siblings are authority-wise INDEPENDENT — there is no dependency
+  // graph, no ordering and no waiting. But independence cuts both ways: a leaf
+  // Run reading another item's owned output is consuming work whose truthfulness
+  // nobody has established yet. So the read is refused rather than served, and
+  // the Run stops. It does not wait for the sibling, because waiting would be a
+  // dependency by another name.
+  //
+  // Completion is proven ONLY through the Tranche 3 item disposition and its
+  // supporting completion decision. A terminal Run is not a completed item; a
+  // status without its decision is not proof; a file existing on disk is not
+  // proof at all.
+  //
+  // Returns one closed outcome. It never returns prose and never accepts a
+  // caller-supplied sibling status.
+  async resolveGovernedSiblingReadAuthority({ runId, requestedPath }, { client = null } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const execute = async connection => {
+      const runResult = await connection.query(
+        `SELECT * FROM ${this.table('runs')} WHERE id = $1`, [id]);
+      if (runResult.rowCount === 0) {
+        const error = new Error(`run ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      // Reconstruction already enforces the governed pairing rule, so a
+      // malformed structured Run cannot reach either branch below.
+      const run = runFromRow(runResult.rows[0]);
+      const classified = classifyRunGovernance(run);
+      if (!classified.governed || !run.leafRunBinding) {
+        return { outcome: 'unrelated_scope', sibling: null };
+      }
+
+      // The requested path, through the CANONICAL normalizer. No second matcher.
+      const normalizedPath = normalizeWorkspaceOwnershipPath(
+        normalizeWorkspaceRelativePath(requestedPath || ''));
+      if (!normalizedPath) return { outcome: 'unrelated_scope', sibling: null };
+
+      const plan = await this.getAllocationPlanForTicket(run.ticketId);
+      if (!plan || plan.version !== 2 || !Array.isArray(plan.items)) {
+        return { outcome: 'unrelated_scope', sibling: null };
+      }
+      const ownItemId = run.leafRunBinding.allocationItemId;
+
+      // Own scope first: a Run reading inside its own admitted ownership is
+      // never a sibling dependency.
+      const ownItem = plan.items.find(item => item.allocationItemId === ownItemId) || null;
+      if (ownItem && isPathInsideOwnedOutputPaths(normalizedPath, ownItem.ownedOutputPaths)) {
+        return { outcome: 'own_scope', sibling: null };
+      }
+
+      // Sibling scopes. Admitted ownership is non-overlapping, so at most one
+      // item can match; more than one means the durable authority is corrupt
+      // and the read fails closed rather than picking a winner.
+      const matches = plan.items.filter(item =>
+        item.allocationItemId !== ownItemId &&
+        isPathInsideOwnedOutputPaths(normalizedPath, item.ownedOutputPaths));
+      if (matches.length === 0) {
+        // Neither own nor sibling-owned: ordinary shared or unrelated path, and
+        // the existing workspace read authority decides. A shared parent
+        // directory is NOT treated as a dependency merely because a
+        // sibling-owned descendant exists beneath it.
+        return { outcome: 'unrelated_scope', sibling: null };
+      }
+      if (matches.length > 1) {
+        return {
+          outcome: 'integrity_conflict',
+          sibling: null,
+          detail: `path ${normalizedPath} matches ${matches.length} sibling scopes`
+        };
+      }
+
+      const siblingItem = matches[0];
+      const dispositions = Array.isArray(plan.itemDispositions) ? plan.itemDispositions : [];
+      const disposition = dispositions.find(
+        entry => entry.allocationItemId === siblingItem.allocationItemId) || null;
+
+      const sibling = {
+        requestedPath: normalizedPath,
+        siblingAllocationItemId: siblingItem.allocationItemId,
+        siblingRunId: disposition && disposition.runId ? Number(disposition.runId) : null,
+        siblingOwnedScope: (siblingItem.ownedOutputPaths || []).join(','),
+        siblingCompletionDecisionHash: null,
+        siblingCompletionState: 'unresolved'
+      };
+
+      if (!disposition) {
+        // The sibling has produced no durable disposition at all.
+        sibling.siblingCompletionState = 'decision_absent';
+        return { outcome: 'blocked_incomplete_sibling', sibling };
+      }
+      if (disposition.itemStatus !== 'completed') {
+        sibling.siblingCompletionState = 'incomplete';
+        return { outcome: 'blocked_incomplete_sibling', sibling };
+      }
+      if (!disposition.completionDecisionHash) {
+        // Completed status WITHOUT its supporting decision. A terminal Run is
+        // not a completed item, and status alone is not proof.
+        sibling.siblingCompletionState = 'terminal_without_decision';
+        return { outcome: 'blocked_incomplete_sibling', sibling };
+      }
+
+      return {
+        outcome: 'verified_completed_sibling',
+        sibling: {
+          ...sibling,
+          siblingCompletionState: 'unresolved',
+          siblingCompletionDecisionHash: disposition.completionDecisionHash
+        }
+      };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  // Refuses a governed sibling read by persisting the CANONICAL block first and
+  // only then raising. The block is committed in its own transaction, so the
+  // refusal cannot roll it back — the trap the churn gate already exposed.
+  async blockGovernedRunForSiblingRead({ runId, sibling }) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const progressState = await this.readGovernedRunProgressState(id);
+    const run = progressState.run;
+    const policy = run.governedExecution.progressControlPolicy;
+    const evaluated = evaluateGovernedRunProgress({
+      progressState,
+      declaredWorkSnapshot: run.declaredWorkSnapshot,
+      progressPolicy: policy,
+      allocationPlanId: run.allocationPlanId || null,
+      allocationItemId: run.allocationItemId || null,
+      // The coordination fact, supplied by the resolver above rather than by a
+      // caller asserting it.
+      siblingDependencyBlocked: true
+    });
+    return this.blockGovernedRunForProgressDecision({
+      runId: id,
+      cutoff: progressState.cutoff,
+      projection: evaluated.projection,
+      churnDecision: evaluated.decision,
+      siblingDependency: sibling
+    });
   }
 
   async createRun(record, { client = null, reservedId = null } = {}) {

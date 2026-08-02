@@ -19439,11 +19439,71 @@ async function executeWorkspaceOperation(run, action, step = 0, options = {}) {
   );
 }
 
+// Read operations subject to the Tranche 5 sibling guard. Mutations are already
+// confined by admitted ownership, so only reads can reach another item's scope.
+const AGENT_READ_OPERATIONS = Object.freeze(['listDirectory', 'readFile']);
+
+// Refuses a governed structured leaf Run's read of an unverified sibling's
+// owned output. Historical and non-structured Runs return immediately: the
+// resolver reports `unrelated_scope` for anything without governed leaf
+// authority, so their behaviour is untouched.
+async function assertGovernedSiblingReadAllowed(run, requestedPath) {
+  if (!run || !run.id || !run.leafRunBinding || !run.governedExecution) return;
+  const repository = getGovernedEconomicsReadRepository();
+  const resolved = await repository.resolveGovernedSiblingReadAuthority({
+    runId: run.id, requestedPath
+  });
+  if (resolved.outcome === 'own_scope' || resolved.outcome === 'unrelated_scope' ||
+      resolved.outcome === 'verified_completed_sibling') {
+    return;
+  }
+  if (resolved.outcome === 'integrity_conflict') {
+    const error = new Error(
+      `run ${run.id} sibling ownership is corrupt: ${resolved.detail}`);
+    error.code = 'GOVERNED_SIBLING_READ_INTEGRITY_CONFLICT';
+    error.failureKind = 'runtime_failed';
+    throw error;
+  }
+  // Block first, then refuse. Persisting after the throw would lose it.
+  const persisted = await repository.blockGovernedRunForSiblingRead({
+    runId: run.id, sibling: resolved.sibling
+  });
+  const error = new Error(
+    `run ${run.id} may not read ${resolved.sibling.requestedPath}: allocation item ` +
+    `${resolved.sibling.siblingAllocationItemId} is not verified complete`);
+  error.code = 'GOVERNED_SIBLING_READ_BLOCKED';
+  // Terminal for this execution: the worker loop must stop rather than treat
+  // this as an ordinary tool error and continue.
+  error.failureKind = 'no_progress';
+  error.detail = {
+    reason: 'undeclared_sibling_dependency',
+    blockHash: persisted.block.blockHash,
+    siblingAllocationItemId: resolved.sibling.siblingAllocationItemId,
+    siblingRunId: resolved.sibling.siblingRunId,
+    requestedPath: resolved.sibling.requestedPath,
+    siblingCompletionState: resolved.sibling.siblingCompletionState
+  };
+  throw error;
+}
+
 async function executeWorkspaceOperationUnlocked(run, action, step = 0, operationContext = {}) {
   const { operation, args: rawArgs } = parseWorkspaceOperation(action);
   const { args, strippedKeys } = sanitizeOperationArgs(operation, rawArgs);
   const runWorkspaceProvider = getRunWorkspaceProvider(run);
   const operationKey = operationContext.operationKey || null;
+
+  // ── Tranche 5 sibling-read preflight ─────────────────────────────────────
+  //
+  // Placed here, BEFORE any filesystem branch below, so a refused read never
+  // touches the disk and no sibling content — not even directory metadata —
+  // can be returned. A post-read check would already have leaked it.
+  //
+  // Structured siblings remain independent: this does not wait, poll, reorder
+  // or create a dependency. It stops the reader, durably, and leaves the
+  // sibling alone.
+  if (AGENT_READ_OPERATIONS.includes(operation)) {
+    await assertGovernedSiblingReadAllowed(run, args && args.path);
+  }
 
   if (AGENT_MUTATING_OPERATIONS.includes(operation) && evidencePersistenceFailure) {
     const error = new Error(`Workspace mutations are disabled because event persistence failed: ${evidencePersistenceFailure.message}`);

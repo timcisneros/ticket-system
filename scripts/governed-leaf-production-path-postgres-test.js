@@ -1274,6 +1274,137 @@ async function main() {
       await restarted.close();
     }
 
+    // ── Sibling-read coordination ─────────────────────────────────────────
+    //
+    // Siblings stay independent: this refuses the reader and stops it. It never
+    // waits for the sibling, which would be a dependency by another name.
+
+    const sibTicket = await admitLeafSet('Governed sibling reads');
+    const sibRuns = (await store.listRunsForTicket({ ticketId: sibTicket.ticket.id })).runs;
+    assert.ok(sibRuns.length >= 2, 'two bound sibling Runs exist');
+    const readerRun = await store.getRun(sibRuns[0].id);
+    const siblingRun = await store.getRun(sibRuns[1].id);
+    const sibPlan = await store.getAllocationPlanForTicket(sibTicket.ticket.id);
+    const readerItem = sibPlan.items.find(
+      i => i.allocationItemId === readerRun.leafRunBinding.allocationItemId);
+    const siblingItem = sibPlan.items.find(
+      i => i.allocationItemId === siblingRun.leafRunBinding.allocationItemId);
+
+    const resolve = (runId, requestedPath) =>
+      store.resolveGovernedSiblingReadAuthority({ runId, requestedPath });
+
+    // Own scope and unrelated scope defer to existing read authority.
+    assert.equal((await resolve(readerRun.id, `${readerItem.ownedOutputPaths[0]}notes.md`))
+      .outcome, 'own_scope', 'a Run reading its own owned path is own scope');
+    assert.equal((await resolve(readerRun.id, 'shared/context.md')).outcome,
+      'unrelated_scope', 'an unrelated path defers to existing authority');
+    // A shared parent is NOT a dependency merely because a sibling owns a
+    // descendant beneath it.
+    assert.equal((await resolve(readerRun.id, 'reports/')).outcome, 'unrelated_scope',
+      'a shared parent listing is not blocked by sibling descendants');
+    assert.equal((await resolve(readerRun.id, '')).outcome, 'unrelated_scope',
+      'a root listing is not blocked');
+
+    // Sibling-owned reads: exact file, descendant, and normalized equivalent.
+    const siblingScope = siblingItem.ownedOutputPaths[0];
+    for (const [label, requested] of [
+      ['exact sibling file', `${siblingScope}report.md`],
+      ['descendant beneath sibling scope', `${siblingScope}deep/nested/file.md`],
+      ['normalized equivalent', `./${siblingScope}//report.md`]
+    ]) {
+      const blockedResolve = await resolve(readerRun.id, requested);
+      assert.equal(blockedResolve.outcome, 'blocked_incomplete_sibling',
+        `${label} blocks while the sibling is unverified`);
+      assert.equal(blockedResolve.sibling.siblingAllocationItemId,
+        siblingItem.allocationItemId);
+      assert.ok(['incomplete', 'decision_absent', 'terminal_without_decision']
+        .includes(blockedResolve.sibling.siblingCompletionState),
+        'the completion state is a closed value');
+      assert.equal(blockedResolve.sibling.siblingCompletionDecisionHash, null,
+        'a blocked sibling read cites no completion decision');
+    }
+
+    // Persisting the refusal produces the canonical block, with sibling facts.
+    const sibBlockResult = await store.blockGovernedRunForSiblingRead({
+      runId: readerRun.id,
+      sibling: (await resolve(readerRun.id, `${siblingScope}report.md`)).sibling
+    });
+    const sibBlock = await store.readGovernedProgressBlock(readerRun.id);
+    assert.ok(sibBlock, 'a sibling read persists the canonical block');
+    assert.equal(sibBlock.reason, 'undeclared_sibling_dependency');
+    assert.equal(sibBlock.siblingDependency.siblingAllocationItemId,
+      siblingItem.allocationItemId);
+    assert.equal(sibBlock.siblingDependency.requestedPath.includes('report.md'), true);
+    assert.ok(sibBlock.cutoff.receiptCutoff >= 0, 'the block binds the durable cutoff');
+    assert.match(sibBlock.progressPolicyHash, /^[0-9a-f]{64}$/);
+    assert.match(sibBlock.blockHash, /^[0-9a-f]{64}$/);
+
+    // One event, and repeating is idempotent.
+    const sibEvents = () => store.listTicketEvents(sibTicket.ticket.id, { limit: 500 })
+      .then(r => r.events.filter(e => e.type === 'run.progress_blocked').length);
+    const sibEventsAfterFirst = await sibEvents();
+    assert.equal(sibEventsAfterFirst, 1, 'exactly one sibling block event');
+    await store.blockGovernedRunForSiblingRead({
+      runId: readerRun.id,
+      sibling: (await resolve(readerRun.id, `${siblingScope}report.md`)).sibling
+    });
+    assert.equal(await sibEvents(), sibEventsAfterFirst,
+      'a repeated sibling read appends no second event');
+
+    // The blocked reader cannot reach the provider path afterwards.
+    const sibTransport = recordingTransport();
+    const afterSibBlock = await runGoverned(readerRun,
+      'model-request:agent:1:provider', { transport: sibTransport });
+    assert.equal(afterSibBlock.status, 'reservation_refused');
+    assert.equal(sibTransport.calls.length, 0,
+      'a sibling-blocked Run makes zero provider calls');
+    assert.equal(afterSibBlock.failureReason, 'GOVERNED_RUN_PROGRESS_BLOCKED');
+    assert.equal(
+      (await store.pool.query(
+        `SELECT count(*)::int AS c FROM ${store.table('economic_request_reservations')}
+          WHERE run_id = $1`, [readerRun.id])).rows[0].c,
+      0, 'no economic reservation is created after a sibling block');
+
+    // Later sibling completion does not resume the already blocked reader.
+    // Through the real lifecycle: pending -> running -> completed. Even a
+    // genuinely terminal sibling is not a COMPLETED ITEM without its decision.
+    await store.claimPendingRun({
+      leaseOwner: 'sibling-completion', leaseDurationMs: 600_000,
+      eligibleRunIds: [siblingRun.id] });
+    await store.pool.query(
+      `UPDATE ${store.table('runs')} SET status = 'running',
+              started_at = COALESCE(started_at, clock_timestamp()),
+              revision = revision + 1
+        WHERE id = $1`, [siblingRun.id]);
+    await store.pool.query(
+      `UPDATE ${store.table('runs')} SET status = 'completed',
+              current_phase = 'terminalization',
+              completed_at = clock_timestamp(), lease_owner = NULL,
+              lease_expires_at = NULL, revision = revision + 1
+        WHERE id = $1`, [siblingRun.id]);
+    const stillBlocked = await store.readGovernedProgressBlock(readerRun.id);
+    assert.equal(stillBlocked.blockHash, sibBlock.blockHash,
+      'later sibling completion does not alter the blocked reader');
+    assert.equal(await sibEvents(), sibEventsAfterFirst,
+      'and appends no further event');
+
+    // Terminal status alone is NOT completion proof.
+    const terminalResolve = await resolve(readerRun.id, `${siblingScope}report.md`);
+    assert.equal(terminalResolve.outcome, 'blocked_incomplete_sibling',
+      'a terminal sibling Run without a completion decision still blocks');
+
+    // Restart preserves the sibling block.
+    const { PostgresRuntimeStore: SibStore } = require('../persistence/postgres/store');
+    const sibRestart = new SibStore({
+      connectionString: process.env.TEST_DATABASE_URL, schema: store.schema });
+    try {
+      assert.equal(
+        (await sibRestart.readGovernedProgressBlock(readerRun.id)).blockHash,
+        sibBlock.blockHash, 'restart preserves the sibling block');
+    } finally {
+      await sibRestart.close();
+    }
+
     // ── Historical and malformed Runs ──────────────────────────────────────
 
     // A Run with neither field is an ordinary non-structured Run and keeps the
