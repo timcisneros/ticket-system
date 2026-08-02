@@ -48,7 +48,8 @@ const {
   buildLeafDeclaredWorkSnapshot
 } = require('../runtime/structured-allocation-leaf-run-contract');
 const {
-  buildCompletionAuthoritySnapshot
+  buildCompletionAuthoritySnapshot,
+  buildCompletionDecision
 } = require('../runtime/completion-decision-contract');
 
 const ACTOR = 'governed-leaf-production-path-postgres-test';
@@ -1392,6 +1393,162 @@ async function main() {
     const terminalResolve = await resolve(readerRun.id, `${siblingScope}report.md`);
     assert.equal(terminalResolve.outcome, 'blocked_incomplete_sibling',
       'a terminal sibling Run without a completion decision still blocks');
+
+    // ── Disposition-backed sibling completion states ──────────────────────
+    //
+    // Every state below is produced through the CANONICAL Tranche 3 lifecycle —
+    // real claim, real transition, real consequence, real reconciliation. None
+    // forces `itemStatus` or writes a decision hash by hand, because a fixture
+    // that fabricates completion proves nothing about the authority that
+    // normally grants it.
+
+    const dispositionOutcome = async (label, drive) => {
+      const t = await admitLeafSet(`Sibling state ${label}`);
+      const runs = (await store.listRunsForTicket({ ticketId: t.ticket.id })).runs;
+      const reader = await store.getRun(runs[0].id);
+      const sib = await store.getRun(runs[1].id);
+      const plan = await store.getAllocationPlanForTicket(t.ticket.id);
+      const sibItem = plan.items.find(
+        i => i.allocationItemId === sib.leafRunBinding.allocationItemId);
+      await drive({ sib, sibItem, ticket: t.ticket, plan });
+      const resolved = await store.resolveGovernedSiblingReadAuthority({
+        runId: reader.id, requestedPath: `${sibItem.ownedOutputPaths[0]}report.md`
+      });
+      return { resolved, reader, sib, sibItem, ticket: t.ticket, plan };
+    };
+
+    const driveTerminal = async (sib, status) => {
+      await store.claimPendingRun({
+        leaseOwner: ACTOR, leaseDurationMs: 600_000, eligibleRunIds: [sib.id] });
+      const running = (await store.startClaimedRun({
+        runId: sib.id, leaseOwner: ACTOR, leaseDurationMs: 600_000 })).run;
+      if (status === 'running') return running;
+      return (await store.transitionRun({
+        runId: sib.id, expectedRevision: running.revision,
+        fromStatuses: ['running'], toStatus: status, leaseOwner: ACTOR })).run;
+    };
+
+    // A. nonterminal sibling — never claimed.
+    const stateA = await dispositionOutcome('A nonterminal', async () => {});
+    assert.equal(stateA.resolved.outcome, 'blocked_incomplete_sibling',
+      'A: a nonterminal sibling blocks');
+
+    // B/C. terminal failed and interrupted.
+    for (const [label, status] of [['B failed', 'failed'], ['C interrupted', 'interrupted']]) {
+      const state = await dispositionOutcome(label, async ({ sib }) => {
+        await driveTerminal(sib, status);
+      });
+      assert.equal(state.resolved.outcome, 'blocked_incomplete_sibling',
+        `${label}: a terminal ${status} sibling blocks`);
+      assert.equal(state.resolved.sibling.siblingCompletionDecisionHash, null,
+        `${label}: no completion decision is cited`);
+    }
+
+    // D. terminal COMPLETED Run with no durable completion decision. The
+    // decisive case: terminal status is not completion authority.
+    const stateD = await dispositionOutcome('D terminal no decision',
+      async ({ sib, ticket, plan }) => {
+        await driveTerminal(sib, 'completed');
+        await store.reconcileStructuredAllocationLeafItems({
+          ticketId: ticket.id, allocationPlanId: plan.id });
+      });
+    assert.equal(stateD.resolved.outcome, 'blocked_incomplete_sibling',
+      'D: a terminal completed Run without a decision still blocks');
+    assert.equal(stateD.resolved.sibling.siblingCompletionDecisionHash, null,
+      'D: the block cites no completion decision');
+    assert.ok(['incomplete', 'decision_absent', 'terminal_without_decision']
+      .includes(stateD.resolved.sibling.siblingCompletionState),
+      'D: the unresolved state is explicit and closed');
+
+    // E. terminal completed with a decision built against a DIFFERENT item's
+    // authority — a wrong-Run/stale decision, which the canonical derivation
+    // refuses to treat as this item's completion.
+    const stateE = await dispositionOutcome('E stale decision',
+      async ({ sib, sibItem, ticket, plan }) => {
+        const terminal = await driveTerminal(sib, 'completed');
+        const foreignAuthority = buildCompletionAuthoritySnapshot({
+          objective: 'A different item objective',
+          kind: 'deterministic', recognized: true, intent: 'create_folder',
+          completionPolicy: 'declared_postconditions',
+          directPostconditions: [{ type: 'folder_exists', path: 'somewhere-else' }],
+          verificationPolicy: 'when_declared',
+          capturedAt: new Date().toISOString()
+        });
+        await store.recordRunConsequence({
+          runId: sib.id,
+          consequence: {
+            version: 1, runId: sib.id, ticketId: sib.ticketId,
+            verification: { browserEvidence: null },
+            completionDecision: buildCompletionDecision({
+              run: { ...terminal, completionAuthoritySnapshot: foreignAuthority,
+                runtimeBudgetSnapshot: null },
+              replaySnapshot: { events: [], modelResponses: [], parsedModelPlans: [],
+                workspaceOperations: [], providerRequests: [] },
+              events: [], operations: [],
+              consequence: { version: 1, runId: sib.id, ticketId: sib.ticketId,
+                verification: { browserEvidence: null } },
+              verificationContract: null, evaluatedAt: new Date().toISOString()
+            })
+          }
+        });
+        await store.reconcileStructuredAllocationLeafItems({
+          ticketId: ticket.id, allocationPlanId: plan.id });
+        void sibItem;
+      });
+    assert.equal(stateE.resolved.outcome, 'blocked_incomplete_sibling',
+      'E: a decision built against another authority does not complete the item');
+    assert.equal(stateE.resolved.sibling.siblingCompletionDecisionHash, null,
+      'E: a stale decision is never projected as valid completion authority');
+
+    // ── Corrupted multiple-overlap ownership fails closed ─────────────────
+    //
+    // Plan admission enforces non-overlapping owned scopes, so this state is
+    // unreachable normally. It is manufactured HERE, inside this isolated
+    // check, by tampering with the persisted plan — admission enforcement is
+    // not weakened to produce it. If durable authority is ever corrupt, the
+    // resolver must refuse rather than pick a sibling.
+    const corruptTicket = await admitLeafSet('Governed sibling corruption');
+    const corruptRuns = (await store.listRunsForTicket({
+      ticketId: corruptTicket.ticket.id })).runs;
+    const corruptReader = await store.getRun(corruptRuns[0].id);
+    const corruptPlan = await store.getAllocationPlanForTicket(corruptTicket.ticket.id);
+    const readerItemId = corruptReader.leafRunBinding.allocationItemId;
+    // Give TWO non-reader items ownership of the same scope.
+    const contested = 'contested/';
+    // Tamper the STORED body directly, preserving its exact field shape, so the
+    // corruption is in persisted authority rather than in a rebuilt document.
+    const storedBody = (await store.pool.query(
+      `SELECT body FROM ${store.table('allocation_plans')} WHERE id = $1`,
+      [corruptPlan.id])).rows[0].body;
+    const corruptedItems = storedBody.items.map(item =>
+      item.allocationItemId === readerItemId
+        ? item
+        : { ...item, ownedOutputPaths: [contested] });
+    await store.pool.query(
+      `UPDATE ${store.table('allocation_plans')}
+          SET body = jsonb_set(body, '{items}', $2::jsonb), revision = revision + 1
+        WHERE id = $1`,
+      [corruptPlan.id, JSON.stringify(corruptedItems)]);
+
+    // THE INVARIANT OWNER IS THE PLAN CONTRACT, not the resolver's own
+    // multiple-match branch. `normalizeAllocationPlan` refuses overlapping
+    // sibling ownership on read, so corrupted authority never reaches the
+    // resolver at all. The resolver's `matches.length > 1` branch is
+    // unreachable defense-in-depth, and this test says so rather than
+    // pretending otherwise.
+    await assert.rejects(
+      () => store.resolveGovernedSiblingReadAuthority({
+        runId: corruptReader.id, requestedPath: `${contested}report.md`
+      }),
+      error => {
+        assert.match(String(error.message), /overlap/i,
+          'the plan contract names the overlap');
+        return true;
+      },
+      'corrupted overlapping sibling ownership fails closed on plan read');
+    // No content, no arbitrary sibling choice, and no misleading block.
+    assert.equal(await store.readGovernedProgressBlock(corruptReader.id), null,
+      'a corrupt overlap creates no undeclared-sibling block naming one sibling');
 
     // Restart preserves the sibling block.
     const { PostgresRuntimeStore: SibStore } = require('../persistence/postgres/store');

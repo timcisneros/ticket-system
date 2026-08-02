@@ -5036,7 +5036,15 @@ class PostgresRuntimeStore {
       }
 
       const siblingItem = matches[0];
-      const dispositions = Array.isArray(plan.itemDispositions) ? plan.itemDispositions : [];
+      // The canonical Tranche 3 location: reconciliation persists the aggregate
+      // decision, and its `items` are the per-item dispositions. Reading a
+      // field that does not exist would make EVERY sibling look decision-absent
+      // — blocking correctly by accident while making a genuinely completed
+      // sibling permanently unreadable.
+      const dispositions = plan.aggregateDecision &&
+        Array.isArray(plan.aggregateDecision.items)
+        ? plan.aggregateDecision.items
+        : [];
       const disposition = dispositions.find(
         entry => entry.allocationItemId === siblingItem.allocationItemId) || null;
 
