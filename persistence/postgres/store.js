@@ -68,6 +68,11 @@ const {
   evaluateGovernedRunProgress
 } = require('../../runtime/governed-progress-evaluation');
 const {
+  assertBlockAuthorityMatches,
+  buildGovernedProgressBlock,
+  normalizeGovernedProgressBlock
+} = require('../../runtime/governed-progress-block-contract');
+const {
   permitsGovernedRequest
 } = require('../../runtime/churn-decision-contract');
 const {
@@ -4485,6 +4490,27 @@ class PostgresRuntimeStore {
       // The whole evaluation reads durable rows under the Run lock already held
       // above, so repeating it on identical facts yields an identical decision
       // and nothing is written twice.
+      // A Run already carrying a persisted block never re-evaluates. Reading
+      // the stored decision rather than re-deriving one is what stops a receipt
+      // committed after the cutoff from changing why the Run was blocked, and
+      // what makes restart unable to grant another request.
+      if (run.governedProgressBlock) {
+        const stored = normalizeGovernedProgressBlock(run.governedProgressBlock);
+        const error = new Error(
+          `run ${id} is blocked by a persisted progress decision: ${stored.reason}`);
+        error.code = 'GOVERNED_RUN_PROGRESS_BLOCKED';
+        error.detail = {
+          reason: stored.reason,
+          blockHash: stored.blockHash,
+          churnDecisionHash: stored.churnDecisionHash,
+          progressProjectionHash: stored.verifiedProgressProjectionHash,
+          progressPolicyHash: stored.progressPolicyHash,
+          cutoff: stored.cutoff,
+          persisted: true
+        };
+        throw error;
+      }
+
       const progressPolicy = run.governedExecution &&
         run.governedExecution.progressControlPolicy
         ? run.governedExecution.progressControlPolicy
@@ -4502,19 +4528,16 @@ class PostgresRuntimeStore {
             new Map()
         });
         if (!permitsGovernedRequest(evaluated.decision)) {
-          const error = new Error(
-            `run ${id} is blocked by verified-progress controls: ` +
-            `${evaluated.decision.reason}`);
-          error.code = 'GOVERNED_RUN_PROGRESS_BLOCKED';
-          error.detail = {
-            reason: evaluated.decision.reason,
-            churnDecisionHash: evaluated.decision.decisionHash,
-            progressProjectionHash: evaluated.projection.projectionHash,
-            progressPolicyHash: evaluated.decision.progressPolicyHash,
-            sourceCutoff: evaluated.sourceCutoff,
-            consecutiveNoProgressWindows: evaluated.consecutiveNoProgressWindows
+          // RETURNED, not thrown. Throwing here would roll back this
+          // transaction and discard the very block we need to persist, so the
+          // refusal is carried out and committed by the caller below.
+          return {
+            progressBlockRequired: {
+              cutoff: progressState.cutoff,
+              projection: evaluated.projection,
+              churnDecision: evaluated.decision
+            }
           };
-          throw error;
         }
       }
 
@@ -4623,7 +4646,32 @@ class PostgresRuntimeStore {
         alreadyReserved: false
       };
     };
-    return client ? execute(client) : this.withTransaction(execute);
+
+    // The evaluation transaction commits (or rolls back) cleanly first; only
+    // then is the block persisted, in its own transaction, and the refusal
+    // raised. Persisting inside the evaluation would lose the block to the
+    // rollback that the refusal causes.
+    const outcome = client ? await execute(client) : await this.withTransaction(execute);
+    if (outcome && outcome.progressBlockRequired) {
+      const { cutoff, projection, churnDecision } = outcome.progressBlockRequired;
+      const persisted = await this.blockGovernedRunForProgressDecision({
+        runId: id, cutoff, projection, churnDecision
+      });
+      const error = new Error(
+        `run ${id} is blocked by verified-progress controls: ${churnDecision.reason}`);
+      error.code = 'GOVERNED_RUN_PROGRESS_BLOCKED';
+      error.detail = {
+        reason: churnDecision.reason,
+        blockHash: persisted.block.blockHash,
+        churnDecisionHash: churnDecision.decisionHash,
+        progressProjectionHash: projection.projectionHash,
+        progressPolicyHash: churnDecision.progressPolicyHash,
+        cutoff: persisted.block.cutoff,
+        persisted: true
+      };
+      throw error;
+    }
+    return outcome;
   }
 
 
@@ -4793,6 +4841,117 @@ class PostgresRuntimeStore {
         cutoff,
         sourceCutoff
       };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+
+  // ── Tranche 5: persist a cutoff-bound progress block ───────────────────────
+  //
+  // A churn decision that lives only as a thrown exception is re-derived on
+  // every restart from whatever rows exist then — so a receipt committed after
+  // the stop could silently change WHY the Run was blocked. Persisting the
+  // block with its exact cutoff makes the decision a historical fact.
+  //
+  // The caller cannot supply merely a reason: the block is rebuilt here from
+  // the projection and decision, and refuses unless the decision is `blocked`.
+  async blockGovernedRunForProgressDecision({
+    runId,
+    cutoff,
+    projection,
+    churnDecision,
+    siblingDependency = null,
+    eventType = 'run.progress_blocked'
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+
+    const execute = async connection => {
+      const runResult = await connection.query(
+        `SELECT * FROM ${this.table('runs')} WHERE id = $1 FOR UPDATE`, [id]);
+      if (runResult.rowCount === 0) {
+        const error = new Error(`run ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const run = runFromRow(runResult.rows[0]);
+
+      // Complete governed structured-leaf authority, revalidated under the lock.
+      const classified = classifyRunGovernance(run);
+      if (!classified.governed) {
+        const error = new Error(`run ${id} is not a governed structured leaf run`);
+        error.code = 'GOVERNED_RUN_AUTHORITY_ABSENT';
+        throw error;
+      }
+      const policy = classified.authority.progressControlPolicy;
+
+      const clock = await connection.query('SELECT clock_timestamp() AS ts');
+      const candidate = buildGovernedProgressBlock({
+        ticketId: run.ticketId,
+        runId: id,
+        allocationPlanId: run.allocationPlanId || null,
+        allocationItemId: run.allocationItemId || null,
+        progressPolicyHash: policy.policyHash,
+        cutoff,
+        verifiedProgressProjectionHash: projection.projectionHash,
+        churnDecision,
+        executionEpochAt: (await this.readGovernedRunProgressState(id,
+          { client: connection, cutoff })).executionEpochAt,
+        siblingDependency,
+        blockedAt: isoTimestamp(clock.rows[0].ts, 'progress block clock')
+      });
+
+      // IDEMPOTENT. Identical authority re-reports the stored block and writes
+      // nothing; different authority refuses rather than overwriting the
+      // decision that actually stopped the Run.
+      const existing = run.governedProgressBlock || null;
+      if (existing) {
+        const stored = assertBlockAuthorityMatches(existing, candidate);
+        return { block: stored, alreadyBlocked: true, run };
+      }
+
+      const nextBody = { ...run, governedProgressBlock: candidate };
+      delete nextBody.id;
+      delete nextBody.currentPhase;
+      await connection.query(
+        `UPDATE ${this.table('runs')}
+            SET body = $2::jsonb, revision = revision + 1, updated_at = clock_timestamp()
+          WHERE id = $1`,
+        [id, JSON.stringify(nextBody)]
+      );
+
+      // One event, in the same transaction as the state change. Identities and
+      // hashes only — no request bytes, no credentials.
+      await this._appendEvent(connection, {
+        type: eventType,
+        ticketId: run.ticketId,
+        runId: id,
+        payload: {
+          reason: candidate.reason,
+          blockHash: candidate.blockHash,
+          churnDecisionHash: candidate.churnDecisionHash,
+          verifiedProgressProjectionHash: candidate.verifiedProgressProjectionHash,
+          progressPolicyHash: candidate.progressPolicyHash,
+          cutoff: candidate.cutoff,
+          consecutiveNoProgressWindows: candidate.consecutiveNoProgressWindows
+        }
+      });
+
+      return { block: candidate, alreadyBlocked: false, run };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  // Reads a stored block WITHOUT capturing fresh maxima. A Run that is already
+  // blocked stays blocked for the reason it was blocked, whatever has committed
+  // since.
+  async readGovernedProgressBlock(runId, { client = null } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const execute = async connection => {
+      const result = await connection.query(
+        `SELECT body FROM ${this.table('runs')} WHERE id = $1`, [id]);
+      if (result.rowCount === 0) return null;
+      const stored = result.rows[0].body && result.rows[0].body.governedProgressBlock;
+      return stored ? normalizeGovernedProgressBlock(stored) : null;
     };
     return client ? execute(client) : this.withTransaction(execute);
   }

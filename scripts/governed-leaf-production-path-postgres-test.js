@@ -1107,6 +1107,150 @@ async function main() {
       await cutoffRestart.close();
     }
 
+    // ── The block is a durable fact, not a thrown exception ───────────────
+
+    const storedBlock = await store.readGovernedProgressBlock(churnRun.id);
+    assert.ok(storedBlock, 'threshold exhaustion persists one complete block');
+    assert.equal(storedBlock.decision, 'blocked');
+    assert.equal(storedBlock.reason, 'verified_progress_exhausted');
+    assert.match(storedBlock.blockHash, /^[0-9a-f]{64}$/);
+    // The exact cutoff is stored, and the hash covers it.
+    for (const field of ['receiptCutoff', 'reservationCutoff', 'budgetCutoff']) {
+      assert.equal(Number.isSafeInteger(storedBlock.cutoff[field]), true,
+        `the block stores an exact ${field}`);
+    }
+    assert.equal(storedBlock.progressPolicyHash,
+      churnRun.governedExecution.progressControlPolicy.policyHash,
+      'the block binds the captured policy, not current policy');
+
+    // Idempotent: repeating creates no second event and no second block.
+    const blockEventsBefore = (await store.listTicketEvents(churnTicket.ticket.id,
+      { limit: 500 })).events.filter(e => e.type === 'run.progress_blocked').length;
+    assert.equal(blockEventsBefore, 1, 'exactly one block event was appended');
+    const idempotentTransport = recordingTransport();
+    await runGoverned(churnRun, `model-request:agent:${blockedAt.ordinal}:provider`,
+      { transport: idempotentTransport });
+    const blockEventsAfter = (await store.listTicketEvents(churnTicket.ticket.id,
+      { limit: 500 })).events.filter(e => e.type === 'run.progress_blocked').length;
+    assert.equal(blockEventsAfter, blockEventsBefore,
+      'repeated evaluation appends no second block event');
+    assert.equal(idempotentTransport.calls.length, 0);
+    const reReadBlock = await store.readGovernedProgressBlock(churnRun.id);
+    assert.equal(reReadBlock.blockHash, storedBlock.blockHash,
+      'the stored block is re-reported unchanged');
+
+    // A receipt committed AFTER the block cutoff cannot rewrite why the Run was
+    // blocked — the stored decision is consulted, not re-derived.
+    await store.pool.query(
+      `INSERT INTO ${store.table('operation_receipts')}
+        (run_id, ticket_id, idempotency_key, operation, outcome, target_id,
+         workspace_path, mutation_fingerprint, receipt)
+       VALUES ($1,$2,'after-block','writeFile','succeeded','workspace',
+               'after.md','after-fingerprint','{}'::jsonb)`,
+      [churnRun.id, churnRun.ticketId]);
+    const afterReceiptBlock = await store.readGovernedProgressBlock(churnRun.id);
+    assert.equal(afterReceiptBlock.blockHash, storedBlock.blockHash,
+      'a receipt committed after the cutoff does not rewrite the persisted block');
+    assert.equal(afterReceiptBlock.cutoff.receiptCutoff,
+      storedBlock.cutoff.receiptCutoff,
+      'and does not widen the stored cutoff');
+
+    // After that late receipt, a further request must STILL report the stored
+    // block. Re-deriving from fresh maxima would widen the cutoff and reach a
+    // different decision — which is exactly what the stored block prevents.
+    const afterReceiptTransport = recordingTransport();
+    const afterReceiptResult = await runGoverned(churnRun,
+      `model-request:agent:${blockedAt.ordinal}:provider`,
+      { transport: afterReceiptTransport });
+    assert.equal(afterReceiptResult.status, 'reservation_refused');
+    // The REASON matters: reading the stored block yields the blocked code.
+    // Re-deriving from fresh maxima would widen the cutoff and surface a block
+    // CONFLICT instead — a different failure, and the tell that recovery is
+    // recomputing rather than remembering.
+    assert.equal(afterReceiptResult.failureReason, 'GOVERNED_RUN_PROGRESS_BLOCKED',
+      'the stored block is read, not re-derived from a fresh cutoff');
+    assert.equal(afterReceiptTransport.calls.length, 0,
+      'a blocked Run makes no provider call even after new receipts arrive');
+    assert.equal(
+      (await store.readGovernedProgressBlock(churnRun.id)).blockHash,
+      storedBlock.blockHash,
+      'the stored block still governs after a later receipt');
+    assert.equal(
+      (await store.listTicketEvents(churnTicket.ticket.id, { limit: 500 }))
+        .events.filter(e => e.type === 'run.progress_blocked').length,
+      blockEventsBefore,
+      'no additional block event is appended after a later receipt');
+
+    // The block transaction itself is idempotent when called directly.
+    const directRepeat = await store.blockGovernedRunForProgressDecision({
+      runId: churnRun.id,
+      cutoff: storedBlock.cutoff,
+      projection: { projectionHash: storedBlock.verifiedProgressProjectionHash },
+      churnDecision: {
+        decision: 'blocked',
+        reason: storedBlock.reason,
+        decisionHash: storedBlock.churnDecisionHash,
+        cumulativeResources: storedBlock.cumulativeResources,
+        consecutiveNoProgressWindows: storedBlock.consecutiveNoProgressWindows,
+        repeatedOperationSignals: storedBlock.repeatedOperationSignals,
+        failedOperationStreak: storedBlock.failedOperationStreak,
+        mutationReversalSignals: storedBlock.mutationReversalSignals,
+        progressPolicyHash: storedBlock.progressPolicyHash
+      }
+    });
+    assert.equal(directRepeat.alreadyBlocked, true,
+      'blocking an already blocked Run re-reports the stored block');
+    assert.equal(directRepeat.block.blockHash, storedBlock.blockHash);
+    assert.equal(
+      (await store.listTicketEvents(churnTicket.ticket.id, { limit: 500 }))
+        .events.filter(e => e.type === 'run.progress_blocked').length,
+      blockEventsBefore,
+      'a repeated block writes no second event');
+
+    // A conflicting second block refuses rather than overwriting history.
+    await assert.rejects(
+      () => store.blockGovernedRunForProgressDecision({
+        runId: churnRun.id,
+        cutoff: { ...storedBlock.cutoff, receiptCutoff: storedBlock.cutoff.receiptCutoff + 5 },
+        projection: { projectionHash: storedBlock.verifiedProgressProjectionHash },
+        churnDecision: {
+          decision: 'blocked', reason: storedBlock.reason,
+          decisionHash: storedBlock.churnDecisionHash,
+          cumulativeResources: storedBlock.cumulativeResources,
+          consecutiveNoProgressWindows: storedBlock.consecutiveNoProgressWindows,
+          repeatedOperationSignals: storedBlock.repeatedOperationSignals,
+          failedOperationStreak: storedBlock.failedOperationStreak,
+          mutationReversalSignals: storedBlock.mutationReversalSignals,
+          progressPolicyHash: storedBlock.progressPolicyHash
+        }
+      }),
+      error => error.detail && error.detail.reason === 'progress_block_conflict',
+      'a second block under a different cutoff refuses rather than overwriting');
+
+    // Tampering refuses rather than being read as authority.
+    const {
+      normalizeGovernedProgressBlock
+    } = require('../runtime/governed-progress-block-contract');
+    for (const [label, tampered] of [
+      ['cutoff', { ...storedBlock,
+        cutoff: { ...storedBlock.cutoff, receiptCutoff: 999_999 } }],
+      ['projection hash', { ...storedBlock,
+        verifiedProgressProjectionHash: 'a'.repeat(64) }],
+      ['decision hash', { ...storedBlock, churnDecisionHash: 'b'.repeat(64) }]
+    ]) {
+      assert.throws(() => normalizeGovernedProgressBlock(tampered),
+        error => error.code === 'GOVERNED_PROGRESS_BLOCK_REFUSED',
+        `${label} tampering refuses`);
+    }
+    const { cutoff: _dropped, ...partialBlock } = storedBlock;
+    assert.throws(() => normalizeGovernedProgressBlock(partialBlock),
+      error => error.detail.reason === 'progress_block_partial',
+      'a partial block refuses');
+    assert.throws(
+      () => normalizeGovernedProgressBlock({ ...storedBlock, surprise: 1 }),
+      error => error.detail.reason === 'progress_block_malformed',
+      'an unknown block field refuses');
+
     // Restart: a fresh store instance reconstructs the same decision from the
     // same durable rows. No process-local counter participates.
     const { PostgresRuntimeStore: FreshStore } =
