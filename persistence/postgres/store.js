@@ -65,6 +65,12 @@ const {
   normalizeGovernedProviderRequest
 } = require('../../runtime/governed-provider-request-contract');
 const {
+  evaluateGovernedRunProgress
+} = require('../../runtime/governed-progress-evaluation');
+const {
+  permitsGovernedRequest
+} = require('../../runtime/churn-decision-contract');
+const {
   assertRunGovernedExecutionPairing,
   buildGovernedRunAuthority,
   classifyRunGovernance,
@@ -4303,6 +4309,12 @@ class PostgresRuntimeStore {
       throw error;
     }
     const source = capture && capture.policySource;
+    if (!capture.progressControlPolicy) {
+      const error = new Error(
+        'governed leaf admission requires a captured progress-control policy');
+      error.code = 'GOVERNED_LEAF_PROGRESS_POLICY_REQUIRED';
+      throw error;
+    }
     if (!source || !source.roleRoutingPolicy || !source.economicPolicy ||
         !source.pricingCatalog) {
       const error = new Error(
@@ -4363,6 +4375,8 @@ class PostgresRuntimeStore {
           model: economicAuthority.dispatchTarget,
           adapterId: economicAuthority.adapterId
         }),
+        // Tranche 5 tolerance, captured before the Run becomes visible.
+        progressControlPolicy: capture.progressControlPolicy,
         economicAccountId,
         ticketId,
         runId,
@@ -4397,6 +4411,9 @@ class PostgresRuntimeStore {
     endpointIdentity,
     runtimeModelRequestMaximum = null,
     runtimeModelRequestsUsed = null,
+    // Maps durable receipt identities to the declared-work facts they newly
+    // satisfy. Derived from typed evidence by the caller; never a model claim.
+    satisfiedFactIdentitiesByReceiptId = null,
     preparedAt = null
   }, { client = null } = {}) {
     const id = positiveSafeInteger(runId, 'runId');
@@ -4457,6 +4474,48 @@ class PostgresRuntimeStore {
           `but ticket ${run.ticketId} holds ${accountRow.id}`);
         error.code = 'GOVERNED_RUN_ACCOUNT_MISMATCH';
         throw error;
+      }
+
+      // ── Tranche 5 pre-reservation gate ────────────────────────────────
+      //
+      // Evaluated BEFORE the ordinal is derived and long before anything is
+      // reserved or dispatched, so a blocked Run creates no economic
+      // reservation, no model-request budget charge and makes no provider call.
+      //
+      // The whole evaluation reads durable rows under the Run lock already held
+      // above, so repeating it on identical facts yields an identical decision
+      // and nothing is written twice.
+      const progressPolicy = run.governedExecution &&
+        run.governedExecution.progressControlPolicy
+        ? run.governedExecution.progressControlPolicy
+        : null;
+      if (progressPolicy) {
+        const progressState = await this.readGovernedRunProgressState(id,
+          { client: connection });
+        const evaluated = evaluateGovernedRunProgress({
+          progressState,
+          declaredWorkSnapshot: run.declaredWorkSnapshot,
+          progressPolicy,
+          allocationPlanId: run.allocationPlanId || null,
+          allocationItemId: run.allocationItemId || null,
+          satisfiedFactIdentitiesByReceiptId: satisfiedFactIdentitiesByReceiptId ||
+            new Map()
+        });
+        if (!permitsGovernedRequest(evaluated.decision)) {
+          const error = new Error(
+            `run ${id} is blocked by verified-progress controls: ` +
+            `${evaluated.decision.reason}`);
+          error.code = 'GOVERNED_RUN_PROGRESS_BLOCKED';
+          error.detail = {
+            reason: evaluated.decision.reason,
+            churnDecisionHash: evaluated.decision.decisionHash,
+            progressProjectionHash: evaluated.projection.projectionHash,
+            progressPolicyHash: evaluated.decision.progressPolicyHash,
+            sourceCutoff: evaluated.sourceCutoff,
+            consecutiveNoProgressWindows: evaluated.consecutiveNoProgressWindows
+          };
+          throw error;
+        }
       }
 
       // The durable ledger for THIS Run. Released reservations are excluded
@@ -4562,6 +4621,119 @@ class PostgresRuntimeStore {
       return {
         reservation, preparedRequest: prepared, ordinal: nextOrdinal, run,
         alreadyReserved: false
+      };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+
+  // ── Tranche 5: durable verified-progress reconstruction ────────────────────
+  //
+  // WHY WINDOW MEMBERSHIP IS PROVABLE WITHOUT NEW SCHEMA.
+  //
+  // A Run has exactly one writer at a time: `claimPendingRun` takes the row with
+  // `FOR UPDATE ... SKIP LOCKED` and installs a lease, so no two executors ever
+  // append receipts for the same Run concurrently. Every caller of this method
+  // holds the Run row lock as well. Together those mean the receipt and
+  // reservation rows for one Run form a totally ordered sequence that cannot
+  // grow underneath an evaluation.
+  //
+  // A window is therefore a half-open interval over that sequence:
+  //
+  //   window(ordinal N) = receipts recorded at or after reservation N started,
+  //                       and before reservation N+1 started
+  //
+  // Each receipt falls in exactly one window; a restart replays the same rows in
+  // the same order and reconstructs the same intervals; and two processes cannot
+  // disagree because they cannot both hold the lock.
+  //
+  // NOTHING HERE IS PROCESS-LOCAL. That is the point: the counters this replaces
+  // reset on recovery, which is precisely what pending decision A3 records.
+  async readGovernedRunProgressState(runId, { client = null } = {}) {
+    const id = positiveSafeInteger(runId, 'runId');
+    const execute = async connection => {
+      // The Run row lock. It both serializes evaluators and fixes the cutoff.
+      const runResult = await connection.query(
+        `SELECT * FROM ${this.table('runs')} WHERE id = $1 FOR UPDATE`, [id]);
+      if (runResult.rowCount === 0) {
+        const error = new Error(`run ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const run = runFromRow(runResult.rows[0]);
+
+      // Ordered governed request windows for this Run.
+      const reservations = await connection.query(
+        `SELECT id, model_request_ordinal, logical_source_identity, state,
+                started_at, created_at, settled_micro_usd
+           FROM ${this.table('economic_request_reservations')}
+          WHERE run_id = $1 AND role = $2
+          ORDER BY model_request_ordinal`,
+        [id, GOVERNED_WORKER_ROLE]
+      );
+
+      // Ordered durable operation receipts. `id` is monotonic within the Run
+      // because of the single-writer guarantee above.
+      const receipts = await connection.query(
+        `SELECT id, operation, outcome, workspace_path, mutation_fingerprint,
+                artifact_path, recorded_at
+           FROM ${this.table('operation_receipts')}
+          WHERE run_id = $1
+          ORDER BY id`,
+        [id]
+      );
+
+      // Durable runtime-budget consumption. Reused, never duplicated.
+      const charges = await connection.query(
+        `SELECT dimension, state, reserved_amount, committed_amount
+           FROM ${this.table('run_budget_charges')}
+          WHERE run_id = $1`,
+        [id]
+      );
+
+      const settledMicroUsd = reservations.rows.reduce(
+        (total, row) => total + Number(row.settled_micro_usd || 0), 0);
+      const budgetChargedUnits = charges.rows.reduce(
+        (total, row) => total + Number(row.committed_amount || 0), 0);
+
+      // The evaluation cutoff: the highest receipt id visible under the lock.
+      // A later evaluation takes a new cutoff explicitly; it never re-reads an
+      // old one and gets a different answer.
+      const sourceCutoff = receipts.rowCount === 0
+        ? 0
+        : Number(receipts.rows[receipts.rows.length - 1].id);
+
+      return {
+        run,
+        // Cumulative totals, reconstructed entirely from durable rows.
+        cumulativeResources: {
+          providerRequests: reservations.rows.filter(r => r.state !== 'released').length,
+          durableOperations: receipts.rowCount,
+          settledMicroUsd,
+          budgetChargedUnits
+        },
+        // Duration measured from the DURABLE run start, not a loop-entry
+        // variable. This is the half of A3 that needed no new schema: a Run
+        // that recovers N times no longer receives N wall-clock budgets.
+        startedAt: run.startedAt,
+        reservations: reservations.rows.map(row => ({
+          reservationId: Number(row.id),
+          modelRequestOrdinal: Number(row.model_request_ordinal),
+          logicalSourceIdentity: row.logical_source_identity,
+          state: row.state,
+          startedAt: row.started_at,
+          createdAt: row.created_at
+        })),
+        receipts: receipts.rows.map(row => ({
+          receiptId: Number(row.id),
+          operation: row.operation,
+          outcome: row.outcome,
+          workspacePath: row.workspace_path,
+          mutationFingerprint: row.mutation_fingerprint,
+          artifactPath: row.artifact_path,
+          recordedAt: row.recorded_at
+        })),
+        sourceCutoff
       };
     };
     return client ? execute(client) : this.withTransaction(execute);

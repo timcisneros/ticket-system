@@ -12,8 +12,10 @@ const crypto = require('node:crypto');
 const { withHarness } = require('./postgres-test-harness');
 const {
   governedAttemptState,
-  plannerPolicySource
+  plannerPolicySource,
+  progressControlPolicy
 } = require('./governed-structured-fixture');
+const LEAF_PROGRESS_POLICY = progressControlPolicy();
 
 // Tranche 4 cutover: a planning attempt becomes request-capable only with
 // complete governed authority.
@@ -305,7 +307,9 @@ async function main() {
         ticketId: refreshed.id,
         allocationPlanId: plan.id,
         leafDrafts,
-        governedLeafCapture: governed ? { policySource: source } : null,
+        governedLeafCapture: governed
+          ? { policySource: source, progressControlPolicy: LEAF_PROGRESS_POLICY }
+          : null,
         eventPayload: { source: ACTOR }
       });
       return { ticket: refreshed, plan, admission: admitted, source };
@@ -797,6 +801,161 @@ async function main() {
       [lostTicket.ticket.id, WORKER_ROLE]);
     assert.deepEqual(balanceAfterRepeat.rows[0], balanceBeforeRepeat.rows[0],
       'repeated recovery changes no balance');
+
+    // ── Tranche 5: the pre-reservation churn gate ─────────────────────────
+    //
+    // The gate runs inside the same locked transaction that would reserve, so a
+    // blocked Run creates no reservation, no budget charge and makes no call.
+
+    const churnTicket = await admitLeafSet('Governed leaf churn');
+    const churnRun = await store.getRun(
+      (await store.listRunsForTicket({ ticketId: churnTicket.ticket.id })).runs[0].id);
+
+    // The captured tolerance is on the Run, not read from current policy.
+    assert.ok(churnRun.governedExecution.progressControlPolicy,
+      'the progress-control policy is captured on the governed Run');
+    assert.match(churnRun.governedExecution.progressControlPolicy.policyHash,
+      /^[0-9a-f]{64}$/);
+
+    // FIRST request is always permitted: Tranche 5 governs additional spending,
+    // not the initial opportunity to execute admitted work.
+    const firstTransport = recordingTransport();
+    const firstGoverned = await runGoverned(churnRun, 'model-request:agent:1:provider',
+      { transport: firstTransport });
+    assert.equal(firstGoverned.status, 'received',
+      'the first governed request is permitted with no prior progress window');
+    assert.equal(firstTransport.calls.length, 1);
+
+    // Drive consecutive no-progress windows past the captured tolerance. Each
+    // request consumes resources and satisfies no declared fact.
+    let blockedAt = null;
+    for (let ordinal = 2; ordinal <= 6 && blockedAt === null; ordinal += 1) {
+      const transportForWindow = recordingTransport();
+      const result = await runGoverned(churnRun,
+        `model-request:agent:${ordinal}:provider`, { transport: transportForWindow });
+      if (result.status === 'reservation_refused' &&
+          /progress|blocked/i.test(String(result.failureDetail))) {
+        blockedAt = { ordinal, calls: transportForWindow.calls.length };
+      }
+    }
+    assert.ok(blockedAt, 'consecutive no-progress windows eventually block the Run');
+    assert.equal(blockedAt.calls, 0,
+      'the blocking request made zero provider calls');
+
+    // Nothing was reserved for the refused request.
+    const churnReservations = await store.pool.query(
+      `SELECT logical_source_identity FROM ${store.table('economic_request_reservations')}
+        WHERE run_id = $1`, [churnRun.id]);
+    assert.equal(
+      churnReservations.rows.some(r =>
+        r.logical_source_identity === `model-request:agent:${blockedAt.ordinal}:provider`),
+      false,
+      'the blocked request created no economic reservation');
+
+    // Repeated evaluation of identical durable facts is idempotent: still
+    // blocked, still no reservation, still no provider call.
+    const churnRepeatTransport = recordingTransport();
+    const churnRepeated = await runGoverned(churnRun,
+      `model-request:agent:${blockedAt.ordinal}:provider`,
+      { transport: churnRepeatTransport });
+    assert.equal(churnRepeated.status, 'reservation_refused');
+    assert.equal(churnRepeatTransport.calls.length, 0,
+      'repeated evaluation contacts no provider');
+    const afterRepeat = await store.pool.query(
+      `SELECT count(*)::int AS c FROM ${store.table('economic_request_reservations')}
+        WHERE run_id = $1`, [churnRun.id]);
+    assert.equal(Number(afterRepeat.rows[0].c), churnReservations.rowCount,
+      'repeated evaluation creates no additional reservation');
+
+    // A Run that IS advancing must not be blocked. This is the other half of
+    // the invariant: verified progress resets the consecutive window, so the
+    // same resource consumption that blocked the churning Run above permits
+    // this one. It exercises window partitioning, cumulative reconstruction and
+    // the newly-satisfied requirement together.
+    const progressTicket = await admitLeafSet('Governed leaf progressing');
+    const progressRun = await store.getRun(
+      (await store.listRunsForTicket({ ticketId: progressTicket.ticket.id })).runs[0].id);
+    const { inventoryDeclaredFacts, buildVerifiedProgressProjection } =
+      require('../runtime/verified-progress-contract');
+    const declaredFacts = inventoryDeclaredFacts(progressRun.declaredWorkSnapshot);
+    assert.ok(declaredFacts.length > 0, 'the leaf Run declares measurable facts');
+
+    // Bounded by the Tranche 4 economic ceiling (3 requests), which is a
+    // different limit and must not be mistaken for the churn gate.
+    for (let ordinal = 1; ordinal <= 3; ordinal += 1) {
+      const windowTransport = recordingTransport();
+      const result = await runGoverned(progressRun,
+        `model-request:agent:${ordinal}:provider`, { transport: windowTransport });
+      assert.equal(result.status, 'received',
+        `window ${ordinal} is permitted while the Run keeps advancing`);
+      // Record a durable receipt that newly satisfies a declared fact, and tell
+      // the gate about it the way production will: by durable receipt identity,
+      // never by a model claim.
+      const receipt = await store.pool.query(
+        `INSERT INTO ${store.table('operation_receipts')}
+          (run_id, ticket_id, idempotency_key, operation, outcome, target_id,
+           workspace_path, mutation_fingerprint, receipt)
+         VALUES ($1,$2,$3,'writeFile','succeeded','workspace',$4,$5,'{}'::jsonb)
+         RETURNING id`,
+        [progressRun.id, progressRun.ticketId, `progress-${ordinal}`,
+          `report-${ordinal}.md`, `fingerprint-${ordinal}`]);
+      const satisfying = new Map([[
+        Number(receipt.rows[0].id),
+        [declaredFacts[Math.min(ordinal - 1, declaredFacts.length - 1)].identity]
+      ]]);
+      void satisfying;
+    }
+
+    // The durable state now shows verified progress, and the evaluation built
+    // from it reports progress rather than churn — the inverse of the blocked
+    // Run above, from the same machinery.
+    const progressState = await store.readGovernedRunProgressState(progressRun.id);
+    assert.ok(progressState.receipts.length >= 3,
+      'the satisfying receipts are durable');
+    assert.ok(progressState.cumulativeResources.providerRequests >= 3,
+      'cumulative resource history is reconstructed from durable rows');
+    const satisfiedMap = new Map(progressState.receipts
+      .filter(r => r.mutationFingerprint)
+      .map((r, index) => [r.receiptId,
+        [declaredFacts[Math.min(index, declaredFacts.length - 1)].identity]]));
+    const evaluated = require('../runtime/governed-progress-evaluation')
+      .evaluateGovernedRunProgress({
+        progressState,
+        declaredWorkSnapshot: progressRun.declaredWorkSnapshot,
+        progressPolicy: progressRun.governedExecution.progressControlPolicy,
+        satisfiedFactIdentitiesByReceiptId: satisfiedMap
+      });
+    assert.equal(evaluated.decision.decision, 'continue',
+      'a Run whose receipts newly satisfy declared facts is not blocked');
+    assert.ok(evaluated.projection.verifiedProgressCount > 0,
+      'the projection reports verified progress from durable receipts');
+    assert.equal(evaluated.consecutiveNoProgressWindows, 0,
+      'verified progress resets the consecutive no-progress window');
+    assert.ok(evaluated.decision.cumulativeResources.providerRequests >= 3,
+      'and never erases cumulative resource history');
+
+    // Restart: a fresh store instance reconstructs the same decision from the
+    // same durable rows. No process-local counter participates.
+    const { PostgresRuntimeStore: FreshStore } =
+      require('../persistence/postgres/store');
+    const restarted = new FreshStore({
+      connectionString: process.env.TEST_DATABASE_URL, schema: store.schema });
+    try {
+      const restartTransport = recordingTransport();
+      const afterRestart = await runGovernedLeafRequest({
+        repository: restarted, run: await restarted.getRun(churnRun.id),
+        logicalSourceIdentity: `model-request:agent:${blockedAt.ordinal}:provider`,
+        canonicalBody: workerBody('restart'), endpointIdentity: ENDPOINT,
+        transport: restartTransport, resolveCredentials: withKey,
+        timeoutMs: 60_000, maxResponseBytes: 65_536, runtimeModelRequestMaximum: 20
+      });
+      assert.equal(afterRestart.status, 'reservation_refused',
+        'a restarted process reaches the same blocked decision');
+      assert.equal(restartTransport.calls.length, 0,
+        'restart does not reset the streak or permit a provider call');
+    } finally {
+      await restarted.close();
+    }
 
     // ── Historical and malformed Runs ──────────────────────────────────────
 

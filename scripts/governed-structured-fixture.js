@@ -16,6 +16,23 @@
 // suites focused on their original subject.
 
 const { readGovernedPolicySource } = require('../runtime/governed-policy-source');
+const {
+  buildProgressControlPolicy
+} = require('../runtime/churn-decision-contract');
+
+// Tranche 5 tolerance used by every governed fixture. Bounded, and generous
+// enough that suites testing OTHER subjects are not incidentally blocked.
+function progressControlPolicy(overrides = {}) {
+  return buildProgressControlPolicy({
+    maximumConsecutiveNoProgressWindows: 3,
+    maximumRepeatedMutations: 3,
+    maximumFailedOperationStreak: 4,
+    maximumMutationReversals: 3,
+    maximumInspectionOnlyStreak: 4,
+    resourceDimensions: ['provider_requests', 'settled_micro_usd'],
+    ...overrides
+  });
+}
 
 const PLANNER_ROLE = 'structured_planner';
 const WORKER_ROLE = 'structured_leaf_executor';
@@ -211,6 +228,7 @@ async function governedAttemptState(store, {
 }
 
 module.exports = {
+  progressControlPolicy,
   governedAttemptState,
   governedAttemptStateWithoutStore,
   CAPTURED_AT,

@@ -42,8 +42,10 @@ const { withHarness } = require('./postgres-test-harness');
 const {
   governedAttemptState,
   zeroPricePlannerPolicySource,
-  zeroPriceWorkerPolicySource
+  zeroPriceWorkerPolicySource,
+  progressControlPolicy
 } = require('./governed-structured-fixture');
+const LEAF_PROGRESS_POLICY = progressControlPolicy();
 
 // Tranche 4 cutover. This suite's subject is Tranche 3 leaf behaviour, not
 // economics, so it uses explicitly ZERO-PRICED governed authority: every
@@ -497,7 +499,10 @@ async function main() {
     const admission = await store.admitStructuredAllocationLeafRuns({
       ticketId: primary.ticket.id,
       allocationPlanId: primary.plan.id,
-      governedLeafCapture: { policySource: LEAF_WORKER_POLICY.source },
+      governedLeafCapture: {
+          policySource: LEAF_WORKER_POLICY.source,
+          progressControlPolicy: LEAF_PROGRESS_POLICY
+        },
       leafDrafts: draftsFor(primary.ticket, primary.plan),
       eventPayload: { source: ACTOR }
     });
@@ -606,7 +611,10 @@ async function main() {
     const repeat = await store.admitStructuredAllocationLeafRuns({
       ticketId: primary.ticket.id,
       allocationPlanId: primary.plan.id,
-      governedLeafCapture: { policySource: LEAF_WORKER_POLICY.source },
+      governedLeafCapture: {
+          policySource: LEAF_WORKER_POLICY.source,
+          progressControlPolicy: LEAF_PROGRESS_POLICY
+        },
       leafDrafts: draftsFor(primary.ticket, primary.plan)
     });
     assert.equal(repeat.admitted, false, 'a committed leaf set re-reports itself');
@@ -624,13 +632,19 @@ async function main() {
       store.admitStructuredAllocationLeafRuns({
         ticketId: concurrent.ticket.id,
         allocationPlanId: concurrent.plan.id,
-        governedLeafCapture: { policySource: LEAF_WORKER_POLICY.source },
+        governedLeafCapture: {
+          policySource: LEAF_WORKER_POLICY.source,
+          progressControlPolicy: LEAF_PROGRESS_POLICY
+        },
         leafDrafts: concurrentDrafts
       }),
       store.admitStructuredAllocationLeafRuns({
         ticketId: concurrent.ticket.id,
         allocationPlanId: concurrent.plan.id,
-        governedLeafCapture: { policySource: LEAF_WORKER_POLICY.source },
+        governedLeafCapture: {
+          policySource: LEAF_WORKER_POLICY.source,
+          progressControlPolicy: LEAF_PROGRESS_POLICY
+        },
         leafDrafts: concurrentDrafts
       })
     ]);
@@ -675,7 +689,10 @@ async function main() {
       () => store.admitStructuredAllocationLeafRuns({
         ticketId: typedPlan.ticket.id,
         allocationPlanId: typedPlan.plan.id,
-        governedLeafCapture: { policySource: LEAF_WORKER_POLICY.source },
+        governedLeafCapture: {
+          policySource: LEAF_WORKER_POLICY.source,
+          progressControlPolicy: LEAF_PROGRESS_POLICY
+        },
         leafDrafts: [
           {
             allocationItemId: textOnlyItem.allocationItemId,
@@ -716,7 +733,10 @@ async function main() {
         allocationPlanId: rollback.plan.id,
         // The second draft names an agent the item never admitted, so the whole
         // transaction must roll back rather than persist the first.
-        governedLeafCapture: { policySource: LEAF_WORKER_POLICY.source },
+        governedLeafCapture: {
+          policySource: LEAF_WORKER_POLICY.source,
+          progressControlPolicy: LEAF_PROGRESS_POLICY
+        },
         leafDrafts: [
           rollbackDrafts[0],
           {
@@ -737,7 +757,10 @@ async function main() {
       () => store.admitStructuredAllocationLeafRuns({
         ticketId: rollback.ticket.id,
         allocationPlanId: rollback.plan.id,
-        governedLeafCapture: { policySource: LEAF_WORKER_POLICY.source },
+        governedLeafCapture: {
+          policySource: LEAF_WORKER_POLICY.source,
+          progressControlPolicy: LEAF_PROGRESS_POLICY
+        },
         leafDrafts: [
           rollbackDrafts[0],
           {
@@ -753,7 +776,10 @@ async function main() {
       () => store.admitStructuredAllocationLeafRuns({
         ticketId: rollback.ticket.id,
         allocationPlanId: rollback.plan.id,
-        governedLeafCapture: { policySource: LEAF_WORKER_POLICY.source },
+        governedLeafCapture: {
+          policySource: LEAF_WORKER_POLICY.source,
+          progressControlPolicy: LEAF_PROGRESS_POLICY
+        },
         leafDrafts: [rollbackDrafts[0]]
       }),
       error => error.reason === 'leaf_ownership_drift'
@@ -837,7 +863,10 @@ async function main() {
     const completingAdmission = await store.admitStructuredAllocationLeafRuns({
       ticketId: completing.ticket.id,
       allocationPlanId: completing.plan.id,
-      governedLeafCapture: { policySource: LEAF_WORKER_POLICY.source },
+      governedLeafCapture: {
+          policySource: LEAF_WORKER_POLICY.source,
+          progressControlPolicy: LEAF_PROGRESS_POLICY
+        },
       leafDrafts: completing.plan.items.map(item => ({
         allocationItemId: item.allocationItemId,
         run: leafRunDraft(
@@ -964,7 +993,10 @@ async function main() {
     const orderingAdmission = await store.admitStructuredAllocationLeafRuns({
       ticketId: ordering.ticket.id,
       allocationPlanId: ordering.plan.id,
-      governedLeafCapture: { policySource: LEAF_WORKER_POLICY.source },
+      governedLeafCapture: {
+          policySource: LEAF_WORKER_POLICY.source,
+          progressControlPolicy: LEAF_PROGRESS_POLICY
+        },
       leafDrafts: ordering.plan.items.map(item => ({
         allocationItemId: item.allocationItemId,
         run: leafRunDraft(
@@ -1042,7 +1074,10 @@ async function main() {
     const unprovenAdmission = await store.admitStructuredAllocationLeafRuns({
       ticketId: unproven.ticket.id,
       allocationPlanId: unproven.plan.id,
-      governedLeafCapture: { policySource: LEAF_WORKER_POLICY.source },
+      governedLeafCapture: {
+          policySource: LEAF_WORKER_POLICY.source,
+          progressControlPolicy: LEAF_PROGRESS_POLICY
+        },
       leafDrafts: unproven.plan.items.map(item => ({
         allocationItemId: item.allocationItemId,
         run: leafRunDraft(
@@ -1146,7 +1181,10 @@ async function main() {
     const rollbackFinalAdmission = await store.admitStructuredAllocationLeafRuns({
       ticketId: rollbackFinal.ticket.id,
       allocationPlanId: rollbackFinal.plan.id,
-      governedLeafCapture: { policySource: LEAF_WORKER_POLICY.source },
+      governedLeafCapture: {
+          policySource: LEAF_WORKER_POLICY.source,
+          progressControlPolicy: LEAF_PROGRESS_POLICY
+        },
       leafDrafts: rollbackFinal.plan.items.map(item => ({
         allocationItemId: item.allocationItemId,
         run: leafRunDraft(
@@ -1258,7 +1296,10 @@ async function main() {
       const admitted = await store.admitStructuredAllocationLeafRuns({
         ticketId: scenario.ticket.id,
         allocationPlanId: scenario.plan.id,
-        governedLeafCapture: { policySource: LEAF_WORKER_POLICY.source },
+        governedLeafCapture: {
+          policySource: LEAF_WORKER_POLICY.source,
+          progressControlPolicy: LEAF_PROGRESS_POLICY
+        },
         leafDrafts: scenario.plan.items.map(item => ({
           allocationItemId: item.allocationItemId,
           run: leafRunDraft(
@@ -1478,7 +1519,10 @@ async function main() {
     const recoveringAdmission = await store.admitStructuredAllocationLeafRuns({
       ticketId: recovering.ticket.id,
       allocationPlanId: recovering.plan.id,
-      governedLeafCapture: { policySource: LEAF_WORKER_POLICY.source },
+      governedLeafCapture: {
+          policySource: LEAF_WORKER_POLICY.source,
+          progressControlPolicy: LEAF_PROGRESS_POLICY
+        },
       leafDrafts: recovering.plan.items.map(item => ({
         allocationItemId: item.allocationItemId,
         run: leafRunDraft(
@@ -1520,7 +1564,10 @@ async function main() {
     const failingAdmission = await store.admitStructuredAllocationLeafRuns({
       ticketId: failing.ticket.id,
       allocationPlanId: failing.plan.id,
-      governedLeafCapture: { policySource: LEAF_WORKER_POLICY.source },
+      governedLeafCapture: {
+          policySource: LEAF_WORKER_POLICY.source,
+          progressControlPolicy: LEAF_PROGRESS_POLICY
+        },
       leafDrafts: failing.plan.items.map(item => ({
         allocationItemId: item.allocationItemId,
         run: leafRunDraft(
@@ -1564,7 +1611,10 @@ async function main() {
     const interruptedAdmission = await store.admitStructuredAllocationLeafRuns({
       ticketId: interrupted.ticket.id,
       allocationPlanId: interrupted.plan.id,
-      governedLeafCapture: { policySource: LEAF_WORKER_POLICY.source },
+      governedLeafCapture: {
+          policySource: LEAF_WORKER_POLICY.source,
+          progressControlPolicy: LEAF_PROGRESS_POLICY
+        },
       leafDrafts: interrupted.plan.items.map(item => ({
         allocationItemId: item.allocationItemId,
         run: leafRunDraft(
@@ -1697,7 +1747,10 @@ async function main() {
       () => store.admitStructuredAllocationLeafRuns({
         ticketId: completing.ticket.id,
         allocationPlanId: completing.plan.id,
-        governedLeafCapture: { policySource: LEAF_WORKER_POLICY.source },
+        governedLeafCapture: {
+          policySource: LEAF_WORKER_POLICY.source,
+          progressControlPolicy: LEAF_PROGRESS_POLICY
+        },
         leafDrafts: draftsFor(completing.ticket, completing.plan)
       }),
       error => error.reason === 'plan_not_pending',

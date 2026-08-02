@@ -40,6 +40,9 @@ const {
 } = require('./declared-work-contract');
 const { normalizeRoleRoutingDecision } = require('./role-routing-contract');
 const { normalizeEconomicAuthority } = require('./economic-authority-contract');
+const {
+  normalizeProgressControlPolicy
+} = require('./churn-decision-contract');
 
 const GOVERNED_RUN_AUTHORITY_VERSION = 1;
 const WORKER_ROLE = 'structured_leaf_executor';
@@ -60,6 +63,10 @@ const GOVERNED_RUN_AUTHORITY_FIELDS = Object.freeze([
   // Retained here for the same reason the reservation retains them: settlement
   // happens later, possibly after the catalog has been re-priced or deleted.
   'pricingEntry',
+  // Tranche 5. Captured immutably at admission, so a later policy edit cannot
+  // change the tolerance a running Run is judged by, and so a model has nothing
+  // to negotiate with.
+  'progressControlPolicy',
   // Where this Run's money comes from. Shared with every sibling leaf Run.
   'economicAccountId',
   // Binding to the exact Run and allocation item this authority was captured
@@ -163,6 +170,7 @@ function buildGovernedRunAuthority({
   routingDecision,
   economicAuthority,
   pricingEntry,
+  progressControlPolicy,
   economicAccountId,
   ticketId,
   runId,
@@ -208,6 +216,7 @@ function buildGovernedRunAuthority({
     routingDecision: decision,
     economicAuthority: authority,
     pricingEntry: assertCapturedPricingEntry(pricingEntry, authority),
+    progressControlPolicy: normalizeProgressControlPolicy(progressControlPolicy),
     economicAccountId: positiveSafeInteger(economicAccountId, 'economicAccountId'),
     ticketId: positiveSafeInteger(ticketId, 'ticketId'),
     runId: positiveSafeInteger(runId, 'runId'),
@@ -259,6 +268,9 @@ function normalizeGovernedRunAuthority(value, {
   const decision = normalizeRoleRoutingDecision(value.routingDecision);
   const authority = normalizeEconomicAuthority(value.economicAuthority);
   assertCapturedPricingEntry(value.pricingEntry, authority);
+  // A governed leaf Run with missing or partial progress policy fails closed:
+  // executing it would mean spending under a tolerance nobody set.
+  normalizeProgressControlPolicy(value.progressControlPolicy);
   if (authority.routingDecisionHash !== decision.decisionHash) {
     refuse('governed_run_route_mismatch',
       'the stored economic authority does not bind the stored routing decision');

@@ -13,8 +13,10 @@ const crypto = require('node:crypto');
 const { withHarness } = require('./postgres-test-harness');
 const {
   governedAttemptState,
-  plannerPolicySource
+  plannerPolicySource,
+  progressControlPolicy
 } = require('./governed-structured-fixture');
+const LEAF_PROGRESS_POLICY = progressControlPolicy();
 
 // Tranche 4 cutover: a planning attempt becomes request-capable only with
 // complete governed authority.
@@ -303,7 +305,9 @@ async function main() {
         ticketId: refreshed.id,
         allocationPlanId: plan.id,
         leafDrafts,
-        governedLeafCapture: governed ? { policySource: source } : null,
+        governedLeafCapture: governed
+          ? { policySource: source, progressControlPolicy: LEAF_PROGRESS_POLICY }
+          : null,
         eventPayload: { source: ACTOR }
       });
       return { ticket: refreshed, plan, admission: admitted, source };
