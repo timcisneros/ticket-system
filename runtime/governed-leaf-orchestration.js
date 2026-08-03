@@ -48,6 +48,9 @@ const GOVERNED_LEAF_OUTCOMES = Object.freeze([
   'already_dispatched_unresolved',
   // The winner is still working. Not a failure, not a result — a report.
   'request_in_flight',
+  // THIS caller started the request and cannot prove what became of it.
+  // Distinct from `request_in_flight`, where someone else is still working.
+  'request_delivery_uncertain',
   'request_released'
 ]);
 
@@ -205,6 +208,32 @@ async function runGovernedLeafRequest({
       // and close books the winner still owns. So the Run's lease decides,
       // using the same predicate the canonical recovery path uses.
       const executor = await repository.isRunExecutorActive(run.id);
+
+      // WHOSE LEASE IS IT? A recovering worker holds the Run's lease itself, so
+      // "an executor is live" was reported as "someone else is still working"
+      // — describing the recovering process as its own competitor, and telling
+      // an operator something plainly untrue about why the Run stopped.
+      //
+      // When the live lease is THIS caller's, nobody else is going to finish
+      // this request. The honest statement is that the bytes may or may not
+      // have reached the provider and no durable response says which: a
+      // database transaction is not atomic with a network send, so no marker
+      // on either side of the send could have settled it. Retransmitting could
+      // pay for and apply a second answer to a request already served, so this
+      // fails closed rather than guessing.
+      if (executor.active && executor.leaseOwner &&
+          executor.leaseOwner === run.leaseOwner) {
+        return outcome('request_delivery_uncertain', {
+          possiblyDispatched: true,
+          reservationId: reservation.id,
+          ordinal,
+          failureReason: 'governed_request_delivery_uncertain',
+          failureDetail:
+            `run ${run.id} request ${ordinal} (${logicalSourceIdentity}) was ` +
+            'started but holds no durable response; delivery cannot be proven ' +
+            'and automatic retransmission is unsupported'
+        });
+      }
       if (executor.active) {
         return outcome('request_in_flight', {
           possiblyDispatched: true,

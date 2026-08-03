@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Tranche 5 — a request that was paid for is reused, never re-bought.
+// Tranche 5 — a request the provider RECEIVED, whose answer never landed.
 //
 // The crash lands at the last instant before any byte leaves, once request 2
 // has already obtained every piece of durable dispatch authority: economic
@@ -39,8 +39,8 @@ const {
 } = require('./governed-structured-fixture');
 const { eligibleExecutionFacts } = require('../runtime/governed-eligible-facts');
 
-const STAMP = `gpt-${Date.now()}`;
-const ACTOR = 'governed-pre-transport-restart-test';
+const STAMP = `gxa-${Date.now()}`;
+const ACTOR = 'governed-post-transport-restart-test';
 const HERMETIC = path.join(__dirname, 'fixtures', 'hermetic-governed-transport-preload.js');
 const FAULT = path.join(__dirname, 'fixtures', 'governed-fault-injection-preload.js');
 const SENTINEL = 'test-only-sentinel-not-a-real-credential';
@@ -78,7 +78,7 @@ function staged(identity, plan) {
 }
 
 async function main() {
-  await withHarness('governed pre-transport restart',
+  await withHarness('governed post-transport restart',
     async ({ store, workspaceRoot, startServer }) => {
       const assertThat = createAsserter();
 
@@ -105,7 +105,7 @@ async function main() {
       const factB = facts.find(f => f.criterion.path.endsWith('/beta'));
       fs.mkdirSync(path.join(workspaceRoot, OWNED_ROOT), { recursive: true });
 
-      const tmp = suffix => path.join(os.tmpdir(), `gpt-${suffix}-${process.pid}-${STAMP}`);
+      const tmp = suffix => path.join(os.tmpdir(), `gxa-${suffix}-${process.pid}-${STAMP}`);
       const capturePath = tmp('cap');
       const responsePath = tmp('res');
       const markerPath = tmp('marker');
@@ -159,19 +159,19 @@ async function main() {
 
       // ── Server 1: interrupted after request-1 evidence, before request 2 ──
       const first = await startServer({
-        env: { ...env, HERMETIC_TRANSPORT_CRASH_BEFORE_ORDINAL: '2' }
+        env: { ...env, HERMETIC_TRANSPORT_CRASH_AFTER_ORDINAL: '2' }
       });
       try {
         for (let attempt = 0; attempt < 200; attempt += 1) {
           if (fs.existsSync(`${capturePath}.marker`) &&
               fs.readFileSync(`${capturePath}.marker`, 'utf8')
-                .includes('BOUNDARY_PRE_TRANSPORT_REACHED')) break;
+                .includes('BOUNDARY_POST_TRANSPORT_REACHED')) break;
           await sleep(500);
         }
         assertThat(fs.existsSync(`${capturePath}.marker`) &&
           fs.readFileSync(`${capturePath}.marker`, 'utf8')
-            .includes('BOUNDARY_PRE_TRANSPORT_REACHED'),
-        'the EXACT boundary was reached: request 2 was about to send its first byte');
+            .includes('BOUNDARY_POST_TRANSPORT_REACHED'),
+        'the EXACT boundary was reached: the provider RECEIVED request 2, then the process died');
         await sleep(3000);
       } finally {
         // The child crashed at the boundary; stopping a dead child is fine.
@@ -194,8 +194,8 @@ async function main() {
         'request 2 durably charged the runtime budget before the crash');
       assertThat((replayBefore.providerRequests || []).length === 2,
         'request 2 durably persisted its provider-request replay before transport');
-      assertThat(capturesForRun().length === 1,
-        'and NO byte was sent — exactly one transport so far, request 1');
+      assertThat(capturesForRun().length === 2,
+        'the fixture RECORDED request 2 — the bytes really did arrive');
       assertThat((replayBefore.modelResponses || []).length === 1,
         'no response exists for request 2');
 
@@ -242,8 +242,8 @@ async function main() {
         // What recovery must never do is treat an un-transported request as
         // "never happened" and buy another under a fresh identity. It does not:
         // the ordinals, reservation and charge above are unchanged.
-        assertThat(capturesForRun().length <= 2,
-          'request 2 was never transported more than once in total');
+        assertThat(capturesForRun().length === 2,
+          'request 2 was never transported a second time');
         assertThat((replayAfter.modelResponses || []).length <= 2,
           'at most one response identity exists for request 2');
 
@@ -352,7 +352,7 @@ async function main() {
         assertThat(repeatedReservations.length === 2,
           'repeated restart creates no third ordinal');
 
-        console.log(`  (${assertThat.count()} pre-transport restart assertions)`);
+        console.log(`  (${assertThat.count()} post-transport restart assertions)`);
       } finally {
         await third.stop();
         for (const file of [capturePath, responsePath, markerPath, statePath, servedPath]) {
@@ -377,7 +377,7 @@ async function main() {
       `the suite never calls ${name} — production creates and recovers these records`);
   }
 
-  console.log('governed pre-transport restart PostgreSQL test passed');
+  console.log('governed post-transport restart PostgreSQL test passed');
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

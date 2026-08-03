@@ -12289,9 +12289,15 @@ async function dispatchGovernedLeafModelRequest({
 
   // Every other outcome is terminal for this request. The reservation has
   // already been released or conservatively settled inside the orchestration.
+  // A request this executor started but cannot account for is an integrity
+  // outcome, not a provider failure and not churn. It gets its own code so no
+  // surface can report it as "the model made no progress".
+  const governedErrorCode = result.status === 'request_delivery_uncertain'
+    ? 'GOVERNED_REQUEST_DELIVERY_UNCERTAIN'
+    : 'GOVERNED_LEAF_REQUEST_FAILED';
   const error = createProviderError(
     result.failureDetail || result.failureReason || 'governed leaf request failed',
-    'GOVERNED_LEAF_REQUEST_FAILED',
+    governedErrorCode,
     {
       governedStatus: result.status,
       possiblyDispatched: result.possiblyDispatched,

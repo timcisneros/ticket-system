@@ -67,6 +67,8 @@ let fixtureRequestCount = 0;
 // defect that does not exist. The path is optional; without it the fixture
 // keeps its single-process behaviour.
 const SERVED_PATH = process.env.HERMETIC_TRANSPORT_SERVED || null;
+// Fault-state file shared with the store decorator, so a crash fires once.
+const SERVED_STATE = process.env.GOVERNED_FAULT_STATE || null;
 
 function loadServed() {
   if (!SERVED_PATH) return new Set();
@@ -176,6 +178,26 @@ function fixtureHttpsRequest(options, onResponse) {
         hasAuthorization: Boolean(options.headers && options.headers.Authorization),
         body
       });
+      // ── POST-TRANSPORT CRASH BOUNDARY ─────────────────────────────────
+      //
+      // The request HAS been received here — the capture above proves the test
+      // reached this point — and the process dies before the response can be
+      // persisted. Production must not use that knowledge: from its durable
+      // state this is indistinguishable from the pre-transport case, which is
+      // exactly why both must fail closed the same way.
+      const CRASH_AFTER_ORDINAL = Number(
+        process.env.HERMETIC_TRANSPORT_CRASH_AFTER_ORDINAL || 0);
+      if (CRASH_AFTER_ORDINAL && fixtureRequestCount === CRASH_AFTER_ORDINAL &&
+          !(SERVED_STATE && require('node:fs').existsSync(SERVED_STATE))) {
+        const detail =
+          `BOUNDARY_POST_TRANSPORT_REACHED ordinal=${fixtureRequestCount}`;
+        if (SERVED_STATE) require('node:fs').writeFileSync(SERVED_STATE, detail);
+        if (CAPTURE_PATH) {
+          require('node:fs').appendFileSync(`${CAPTURE_PATH}.marker`, `${detail}\n`);
+        }
+        process.exit(71);
+      }
+
       setImmediate(() => {
         onResponse(response);
         response.end(candidate.body);

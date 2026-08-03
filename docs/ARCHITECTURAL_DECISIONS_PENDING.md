@@ -5463,40 +5463,46 @@ already-observed absence of effects, and mutation-test removal of the hash
 check against it.
 
 
-## Transport Outcome Is Uncertain After Request Replay (recorded 2026-08-02)
+## Governed Request Delivery Uncertainty (recorded 2026-08-02, resolved as fail-closed)
 
-**Status:** open — a real limit of the current durable record, failing closed
-correctly today.
+**Status:** closed as a design position, not as a defect. Exactly-once external
+transport is NOT claimed.
 
-A governed request commits its economic reservation, ordinal, runtime-budget
-charge and provider-request replay, and `markEconomicRequestStarted` runs BEFORE
-any byte leaves. Nothing durable separates:
+A governed request commits its reservation, ordinal, budget charge and
+provider-request replay, and `markEconomicRequestStarted` runs before any byte
+leaves. There is no marker that could fix this: a database transaction is not
+atomic with a network send. A marker written before the send cannot prove bytes
+left; one written after cannot be guaranteed to exist when they did. Adding one
+would buy the appearance of certainty and none of the substance, so none was
+added.
 
-```text
-request replay persisted        (nothing sent)
-transport invocation began      (bytes may be on the wire)
-```
+The runtime therefore treats a reservation in `request_started` with no durable
+response as UNDECIDABLE and fails closed under
+`GOVERNED_REQUEST_DELIVERY_UNCERTAIN` / `governed_request_delivery_uncertain`.
+It does not retransmit: a second send could pay for and apply a second answer to
+a request the provider already served.
 
-So a reservation left in `request_started` with no response is genuinely
-ambiguous after a crash. The existing Tranche 4 contract refuses to re-dispatch
-it, which is the correct behaviour: re-sending could pay for and apply a second
-answer to a request the provider may already have served.
+Two crash points prove the position, and prove production cannot tell them
+apart — which is the point:
 
-`scripts/governed-pre-transport-restart-postgres-test.js` proves the failure is
-closed rather than lossy: no second ordinal, reservation, charge, request replay
-or transport; the started reservation is neither re-sent nor discarded; the Run
-reaches an explicit durable stop and does NOT stop for churn.
+* `governed-pre-transport-restart-postgres-test.js` — zero bytes sent;
+* `governed-post-transport-restart-postgres-test.js` — the provider demonstrably
+  received the request, then the process died before the response was durable.
 
-**What it costs.** A request the Ticket paid for can end unanswered, and the Run
-stops with a message about lease ownership that describes the recovering process
-as a competing executor. The refusal is right; its explanation is not yet
-truthful to an operator.
+Both yield the same durable outcome: one ordinal, one charge, one reservation,
+one request replay, no response, no progress window, no churn increment, no
+progress block, no second transport, and an idempotent reason across repeated
+restarts.
 
-**What would close it.** A durable transport-began marker ordered strictly
-between request replay and the transport call would let recovery distinguish the
-two cases and resume the un-sent one exactly once. That is a Tranche 4 authority
-change and is deliberately not made here.
+**Consequence, stated plainly.** A request the Ticket paid for can end
+unanswered, and no automatic recovery will complete it. That is a deliberate
+trade: an unanswered paid request is recoverable by an operator, while a
+duplicated external send is not.
+
+**Not claimed.** No progress window exists until a durable response and its
+required evidence exist. Automatic retransmission of an ambiguous started
+request is unsupported.
 
 ---
 
-*Replayed Recovery Window Churn recorded and resolved 2026-08-02. Transport Uncertainty After Request Replay recorded 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
+*Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
