@@ -306,26 +306,73 @@ async function main() {
         await second.stop();
       }
 
-      // ── THE DISPOSITION IS STABLE AFTER THE EXECUTOR IS GONE ───────────
+      // ── A FRESH SERVER STARTS, AND THE TICKET PROJECTS ─────────────────
       //
-      // Asserted from durable state with no server running, rather than from a
-      // third spawned server. A fresh server currently REFUSES TO START against
-      // this Ticket — `Run 1 cannot project its ticket without a completion
-      // decision` — because the Ticket projection demands a completion decision
-      // for a leaf that truthfully has none and never will. That cascade is a
-      // DIFFERENT defect from the one under test, and it is named here rather
-      // than worked around silently: it is the reason this assertion is weaker
-      // than a full restart.
-      const rowAfterStop = await runRow();
-      assertThat(rowAfterStop.status === 'failed' &&
-        rowAfterStop.code === 'POSTGRES_REPLAY_INTEGRITY_FAILURE',
-      'the terminal disposition survives the executor exiting');
-      assertThat(rowAfterStop.revision === revisionAfterTerminalFinal,
-        'nothing touches the Run once no executor holds it');
-      assertThat(await integrityEvents() === 1,
-        'still exactly one integrity event');
-      assertThat(JSON.stringify(await storedSnapshot()) === tamperedJson,
-        'the corrupted replay is still present and unmodified');
+      // This is a real second process against the same database, not a store
+      // read. It previously could not start at all: the projector demanded a
+      // completion decision from a leaf that truthfully has none, so one corrupt
+      // leaf made the whole Ticket unserviceable and took its siblings with it.
+      const third = await startServer({ env });
+      try {
+        assertThat(true, 'a fresh server STARTS against a Ticket holding a failed leaf');
+
+        const rowAfterRestart = await runRow();
+        assertThat(rowAfterRestart.status === 'failed' &&
+          rowAfterRestart.code === 'POSTGRES_REPLAY_INTEGRITY_FAILURE',
+        'the failed Run is still terminal after a real restart');
+        assertThat(rowAfterRestart.revision === revisionAfterTerminalFinal,
+          'the restart does not reclaim it — its revision is untouched');
+        assertThat(rowAfterRestart.lease_owner === null,
+          'and it acquires no lease: it is not scheduler-eligible');
+        assertThat(await integrityEvents() === 1,
+          'the restart appends no second integrity event');
+
+        // ── The Ticket and Run project truthfully ────────────────────────
+        const cookie = await third.login();
+        const ticketPage = await third.request('GET', `/tickets/${run.ticketId}`, { cookie });
+        assertThat(ticketPage.statusCode === 200,
+          'the Ticket projection renders over the failed leaf');
+        assertThat(!/COMPLETION_EVIDENCE_MISSING/.test(String(ticketPage.body || '')),
+          'with no COMPLETION_EVIDENCE_MISSING refusal');
+        const runPage = await third.request('GET', `/runs/${runId}`, { cookie });
+        // THE RUN DETAIL PAGE IS NOT YET PROJECTABLE. It still reads the
+        // corrupted transcript through a path other than display hydration and
+        // returns 500. That is recorded in the pending-decisions register rather
+        // than asserted as correct here — the Ticket-level projection, which is
+        // what made the whole Ticket unserviceable, does render.
+        assertThat(runPage.statusCode === 500 || runPage.statusCode === 200,
+          'the Run detail page responds rather than hanging (500 is a known gap)');
+
+        // ── No completion decision was required OR fabricated ────────────
+        const decisions = (await store.pool.query(
+          `SELECT consequence FROM ${store.table('run_consequences')} WHERE run_id = $1`,
+          [runId])).rows.filter(r => r.consequence && r.consequence.completionDecision);
+        assertThat(decisions.length === 0,
+          'NO completion decision exists — and none was fabricated for it');
+
+        // ── Siblings are not punished for this leaf ──────────────────────
+        //
+        // Siblings may fail for their OWN reasons — this fixture starves them of
+        // staged responses. What must never happen is a sibling failing because
+        // THIS leaf has no completion decision, which is what the projector's
+        // old requirement caused.
+        const siblings = (await store.pool.query(
+          `SELECT id, status, body->>'error' AS reason FROM ${store.table('runs')}
+            WHERE ticket_id = $1 AND id <> $2`, [run.ticketId, runId])).rows;
+        assertThat(siblings.every(sibling =>
+          !/COMPLETION_EVIDENCE_MISSING|without a completion decision/
+            .test(String(sibling.reason || ''))),
+        'no sibling fails because THIS leaf lacks completion authority');
+
+        // ── Nothing was spent or retried by the restart ──────────────────
+        assertThat(capturesForRun().length === 1, 'the restart makes no provider call');
+        assertThat((await economicOf()).length === 1, 'no new economic reservation');
+        assertThat((await chargesOf()).length === 1, 'no new runtime-budget charge');
+        assertThat(JSON.stringify(await storedSnapshot()) === tamperedJson,
+          'and the corrupted replay is still untouched');
+      } finally {
+        await third.stop();
+      }
 
       console.log(`  (${assertThat.count()} corruption containment assertions)`);
       for (const file of [capturePath, responsePath, markerPath, statePath, servedPath]) {

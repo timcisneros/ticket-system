@@ -5876,9 +5876,25 @@ async function readRunReplaySnapshot(run) {
   return record ? record.snapshot : null;
 }
 
+// Hydration is for DISPLAY. A Run already terminalized for a replay integrity
+// failure has a transcript nobody may trust, and reading it here would turn its
+// Run page into an error instead of the page that explains what happened. The
+// snapshot is omitted — never repaired, never presented as healthy — and the
+// integrity code on the Run itself is what a reader sees.
+//
+// Only that one recorded disposition is tolerated. A Run that has NOT been
+// terminalized for integrity still propagates the failure, because there the
+// corruption is news rather than history.
 async function hydrateRunReplaySnapshot(run) {
   if (!run || typeof run !== 'object') return run;
-  const replaySnapshot = await readRunReplaySnapshot(run);
+  let replaySnapshot = null;
+  try {
+    replaySnapshot = await readRunReplaySnapshot(run);
+  } catch (error) {
+    const alreadyRecorded = error && error.code === 'POSTGRES_REPLAY_INTEGRITY_FAILURE' &&
+      run.integrityFailureCode === 'POSTGRES_REPLAY_INTEGRITY_FAILURE';
+    if (!alreadyRecorded) throw error;
+  }
   return replaySnapshot ? { ...run, replaySnapshot } : { ...run };
 }
 

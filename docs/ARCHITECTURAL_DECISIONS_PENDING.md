@@ -5503,32 +5503,33 @@ duplicated external send is not.
 required evidence exist. Automatic retransmission of an ambiguous started
 request is unsupported.
 
-## Ticket Projection Blocks Startup Over a Failed Leaf (recorded 2026-08-03)
+## Run Detail Page Still Reads a Corrupted Transcript (recorded 2026-08-03)
 
-**Status:** open — downstream cascade, exposed by replay-corruption containment.
+**Status:** open — narrowed. Ticket-level projection is fixed; the Run detail
+page is not.
 
-A governed leaf that terminalizes for `POSTGRES_REPLAY_INTEGRITY_FAILURE`
-truthfully has no completion decision and never will. The Ticket projection
-demands one anyway, and a server starting against that Ticket fails with:
+A leaf terminalized for `POSTGRES_REPLAY_INTEGRITY_FAILURE` truthfully has no
+completion decision. The Ticket projector demanded one anyway, so a fresh server
+could not START against the Ticket at all. That is fixed: the projector now
+treats a Run that is `failed` AND carries an integrity-failure code as failed
+without requiring completion authority, and the bulk replay read omits a corrupt
+row instead of destroying the whole page.
 
-```text
-Run 1 cannot project its ticket without a completion decision
-```
+**Still open.** `GET /runs/:id` returns HTTP 500 with
+`POSTGRES_REPLAY_INTEGRITY_FAILURE`. It reaches the corrupted snapshot through a
+path other than display hydration, which was guarded. The Run whose failure a
+reader most needs to understand is the one page they cannot open.
 
-This is severe enough to prevent a fresh server from starting at all, which is
-why `scripts/governed-replay-corruption-postgres-test.js` asserts terminal
-stability from durable state after the executor exits rather than from a third
-spawned server. The weaker assertion is named in the suite itself.
+**What would close it.** Find the remaining read on the Run detail path and give
+it the same treatment as hydration: tolerate the fault only for a Run whose
+integrity failure is already RECORDED, omit the transcript, and render the
+integrity disposition. Do not weaken the check for a Run whose corruption has
+not been terminalized — there the fault is news, not history.
 
-**What would close it.** The projection must treat a leaf whose truthful state is
-`failed` as failed, rather than awaiting completion authority that cannot exist.
-No completion requirement for SUCCESSFUL leaves should be weakened. The
-structured-allocation aggregate rules for a failed leaf already exist; the
-projection needs to use them.
-
-**Related, unresolved.** Sibling Runs were also observed failing with
-`COMPLETION_EVIDENCE_MISSING` for the same reason.
+**Sibling behaviour.** Siblings no longer fail because of this leaf's missing
+completion authority, asserted directly on their failure reasons. They may still
+fail for their own reasons, which the corruption suite does not constrain.
 
 ---
 
-*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
+*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*

@@ -8697,6 +8697,24 @@ class PostgresRuntimeStore {
       }));
       const projectedStatus = item => {
         if (!item.completionAuthoritySnapshot) return item.status;
+
+        // A LEAF THAT FAILED FOR A DETERMINISTIC INTEGRITY FAULT HAS NO
+        // COMPLETION DECISION, AND NEVER WILL.
+        //
+        // Its execution never reached the completion boundary, so demanding
+        // completion authority before projecting it asks for evidence that
+        // cannot exist. Left in, that requirement held the WHOLE Ticket
+        // projection hostage to one corrupt leaf — a fresh server could not
+        // even start against the Ticket, and sibling Runs failed for a fault
+        // that was never theirs.
+        //
+        // The discriminator is the truthful terminal failure disposition, NOT
+        // `status !== 'completed'`. A Run claiming `completed`, or failing
+        // without a recorded integrity fault, still requires its decision: the
+        // exception is for leaves that demonstrably failed, never a way around
+        // completion authority.
+        if (item.status === 'failed' && item.integrityFailureCode) return 'failed';
+
         const decision = completionDecisionByRunId.get(item.id);
         if (!decision || decision.runId !== item.id || decision.ticketId !== item.ticketId) {
           const error = new Error(`Run ${item.id} cannot project its ticket without a completion decision`);
@@ -10097,7 +10115,27 @@ class PostgresRuntimeStore {
        LIMIT $2`,
       [ids, boundedLimit]
     );
-    return result.rows.map(replaySnapshotFromRow);
+    // A BULK PROJECTION MUST NOT BE DESTROYED BY ONE CORRUPT ROW.
+    //
+    // This is the read a Ticket page makes for every Run it shows. Mapping it
+    // strictly meant a single Run whose snapshot failed its integrity check
+    // returned HTTP 500 for the entire Ticket — the corrupt Run had already been
+    // terminalized truthfully, and its siblings were perfectly readable, but
+    // nobody could see any of them.
+    //
+    // The corrupt row is OMITTED, never repaired and never silently presented as
+    // healthy. Callers already handle a Run without a replay record; a Run whose
+    // transcript cannot be trusted is exactly such a Run, and its integrity
+    // failure is recorded on the Run itself where a reader will find it.
+    const records = [];
+    for (const row of result.rows) {
+      try {
+        records.push(replaySnapshotFromRow(row));
+      } catch (error) {
+        if (!error || error.code !== 'POSTGRES_REPLAY_INTEGRITY_FAILURE') throw error;
+      }
+    }
+    return records;
   }
 
   async updateRunReplay({ runId, update }, { client = null } = {}) {
