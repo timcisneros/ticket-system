@@ -36,9 +36,13 @@ const PROCESS_EXECUTION_RELEASE_CONTRACT_VERSION = 1;
 // have made `inspectDatabase` refuse a correctly migrated database with
 // PROCESS_RELEASE_SCHEMA_INCOMPATIBLE — a release blocked by a schema it
 // actually had.
-const PROCESS_EXECUTION_DATABASE_SCHEMA_VERSION = 37;
-const PROCESS_EXECUTION_MINIMUM_DATABASE_SCHEMA_VERSION = 37;
-const PROCESS_EXECUTION_MAXIMUM_DATABASE_SCHEMA_VERSION = 37;
+// Bumped again by migration 038 (governed request claim binding). Same
+// reasoning as 035-037: it does not touch process execution, but the preflight
+// requires an exact head, so leaving it behind would refuse a correctly
+// migrated database.
+const PROCESS_EXECUTION_DATABASE_SCHEMA_VERSION = 38;
+const PROCESS_EXECUTION_MINIMUM_DATABASE_SCHEMA_VERSION = 38;
+const PROCESS_EXECUTION_MAXIMUM_DATABASE_SCHEMA_VERSION = 38;
 const PROCESS_OPERATION_SCHEMA_VERSION = 29;
 const PROCESS_EXECUTION_ROOTFS_REGISTRY_SCHEMA_VERSION = 1;
 const PROCESS_EXECUTION_RELEASE_READINESS_VERSION = 1;

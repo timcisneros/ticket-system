@@ -218,18 +218,26 @@ async function runGovernedLeafRequest({
       // for both, and told a legitimate duplicate its request might have been
       // lost when in fact a winner was mid-flight with it.
       //
-      // The discriminator is the CLAIM, not the claimant. A request started
-      // before the current claim was acquired belongs to an earlier attempt —
-      // nobody alive is going to finish it, and whether its bytes reached the
-      // provider cannot be established, because a database transaction is not
-      // atomic with a network send. A request started at or after the current
-      // claim belongs to THIS attempt, where a live winner still owns it.
-      const startedBeforeCurrentClaim = Boolean(
-        executor.currentClaimAt && reservation.startedAt &&
-        new Date(reservation.startedAt).getTime() <
-          new Date(executor.currentClaimAt).getTime());
+      // The discriminator is the CLAIM, compared BY IDENTITY. Timestamps cannot
+      // do this: `clock_timestamp()` has finite resolution, so a claim acquired
+      // in the same millisecond as an earlier request start compares as
+      // not-earlier and the recovering caller is told a winner is mid-flight
+      // with a request nobody will finish. Clock order is not append order
+      // either. The event id is unique per acquisition and identical for every
+      // caller within one claim, which is exactly the distinction needed. The
+      // event `position` is APPEND order, so it is unaffected by clock skew.
+      //
+      // A request with NO binding predates this rule. It is treated as an
+      // earlier attempt rather than the current one: the claim that started it
+      // is unrecoverable, and assuming it is current would resurrect the bug
+      // this replaced.
+      const startedUnderCurrentClaim =
+        reservation.startedClaimEventPosition !== null &&
+        reservation.startedClaimEventPosition !== undefined &&
+        executor.currentClaimEventPosition !== null &&
+        reservation.startedClaimEventPosition === executor.currentClaimEventPosition;
 
-      if (executor.active && startedBeforeCurrentClaim) {
+      if (executor.active && !startedUnderCurrentClaim) {
         return outcome('request_delivery_uncertain', {
           possiblyDispatched: true,
           reservationId: reservation.id,

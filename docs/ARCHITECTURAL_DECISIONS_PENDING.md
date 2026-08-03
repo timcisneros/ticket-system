@@ -5503,6 +5503,35 @@ duplicated external send is not.
 required evidence exist. Automatic retransmission of an ambiguous started
 request is unsupported.
 
+## Equal-Timestamp Claim Collision Has No Constructible Scenario (recorded 2026-08-03)
+
+**Status:** open — coverage gap, with the reason it resisted construction.
+
+Governed request starts are now bound to the append-only `position` of the
+`run.lease_acquired` event that authorized them, and classification compares
+those identities. Reverting the classifier to the previous TIMESTAMP comparison
+still passes every suite, because ordinary runs never produce the collision the
+identity guards against.
+
+The weakness is real and was demonstrated directly: with a later claim acquired
+in the same millisecond as an earlier request start, `startedAt < claimAt` is
+false and the classifier answers `request_in_flight` where identity answers
+`request_delivery_uncertain` — a recovering caller told a winner is mid-flight
+with a request nobody will finish. Clock order is also not append order.
+
+**Why no test forces it.** Three separate integrity mechanisms refuse to build
+the inconsistent state: the event chain-shape constraint rejects a synthetic
+`run.lease_acquired` row, `position` is generated and cannot be supplied, and
+the reservation's own constraints reject a rewritten `started_at`. That
+resistance is desirable — it is why claim identity is trustworthy — but it means
+the collision cannot be staged through any supported or unsupported path
+reachable from a test.
+
+**What would close it.** A contract-level test over the classification predicate
+alone, with claim identity and timestamps supplied as data, in the manner of
+`governed-transport-correlation-test`. That requires extracting the predicate
+from `runGovernedLeafRequest` into a pure function first.
+
 ## Parent–Fixture Hash Handshake: NOT REQUIRED (recorded and closed 2026-08-03)
 
 **Status:** closed as a design position.

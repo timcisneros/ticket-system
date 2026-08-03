@@ -46,8 +46,8 @@ const baseReadiness = {
     applicationVersion: '1.1.1'
   },
   migrationStatus: {
-    currentVersion: 37,
-    headVersion: 37,
+    currentVersion: 38,
+    headVersion: 38,
     fullyApplied: true,
     checksumsValid: true,
     partial: false,

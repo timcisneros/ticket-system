@@ -3313,6 +3313,12 @@ class PostgresRuntimeStore {
       responseHash: row.response_hash,
       createdAt: row.created_at,
       startedAt: row.started_at,
+      // The claim that started this request. NULL for rows predating the
+      // binding, which callers must treat conservatively rather than as current.
+      startedClaimEventPosition: row.started_claim_event_position === null ||
+        row.started_claim_event_position === undefined
+        ? null
+        : Number(row.started_claim_event_position),
       responsePersistedAt: row.response_persisted_at,
       settledAt: row.settled_at,
       releasedAt: row.released_at,
@@ -3598,13 +3604,24 @@ class PostgresRuntimeStore {
       // The conditional predicate is the whole guarantee: `state = 'reserved'`
       // can only be true for one caller, because the row lock serializes them
       // and the winner leaves the row in `request_started`.
+      // THE CLAIM THAT AUTHORIZES THIS START, derived here rather than accepted
+      // from the caller. A caller-supplied attempt identity would be an
+      // assertion about authority made by the party seeking it; the store reads
+      // the Run's newest `run.lease_acquired` event inside this transaction, so
+      // the binding is a fact about the claim that is live at the moment the
+      // request starts.
       const won = await connection.query(
-        `UPDATE ${this.table('economic_request_reservations')}
+        `UPDATE ${this.table('economic_request_reservations')} AS reservation
          SET state = 'request_started',
              started_at = clock_timestamp(),
+             started_claim_event_position = (
+               SELECT max(claim.position) FROM ${this.table('events')} AS claim
+                WHERE claim.run_id = reservation.run_id
+                  AND claim.type = 'run.lease_acquired'
+             ),
              revision = revision + 1,
              updated_at = clock_timestamp()
-         WHERE id = $1 AND state = 'reserved'
+         WHERE reservation.id = $1 AND reservation.state = 'reserved'
          RETURNING *`,
         [id]
       );
@@ -3976,7 +3993,8 @@ class PostgresRuntimeStore {
       // Append-only and hash-chained, so it cannot be rewritten by a later
       // mutation the way a revision counter can.
       const claimed = await connection.query(
-        `SELECT max(ts) AS claimed_at FROM ${this.table('events')}
+        `SELECT max(position) AS claim_event_position, max(ts) AS claimed_at
+           FROM ${this.table('events')}
           WHERE run_id = $1 AND type = 'run.lease_acquired'`, [id]);
 
       return {
@@ -3989,6 +4007,12 @@ class PostgresRuntimeStore {
         active: row.lease_live === true,
         status: row.status,
         leaseOwner: row.lease_owner,
+        // THE IDENTITY. The timestamp below is retained for diagnostics only;
+        // classification compares this id, because two claims can share a
+        // millisecond and clock order is not append order.
+        currentClaimEventPosition: claimed.rows[0].claim_event_position === null
+          ? null
+          : Number(claimed.rows[0].claim_event_position),
         currentClaimAt: claimed.rows[0].claimed_at === null
           ? null
           : isoTimestamp(claimed.rows[0].claimed_at, 'run current claim')
