@@ -5503,33 +5503,25 @@ duplicated external send is not.
 required evidence exist. Automatic retransmission of an ambiguous started
 request is unsupported.
 
-## Run Detail Page Still Reads a Corrupted Transcript (recorded 2026-08-03)
+## Replay-Availability Field Is Exposed But Unasserted (recorded 2026-08-03)
 
-**Status:** open — narrowed. Ticket-level projection is fixed; the Run detail
-page is not.
+**Status:** open — minor coverage gap.
 
-A leaf terminalized for `POSTGRES_REPLAY_INTEGRITY_FAILURE` truthfully has no
-completion decision. The Ticket projector demanded one anyway, so a fresh server
-could not START against the Ticket at all. That is fixed: the projector now
-treats a Run that is `failed` AND carries an integrity-failure code as failed
-without requiring completion authority, and the bulk replay read omits a corrupt
-row instead of destroying the whole page.
+`readRuntimeRunAuthority` now reports `replayAvailability` on every Run
+(`replay_available` / `replay_unavailable_integrity_failure`), so no surface has
+to infer from an absent snapshot whether a transcript is missing, pending or
+untrustworthy. Removing that field fails no test: the corruption suite asserts
+the Run page and two runtime APIs render and expose no corrupt content, but does
+not assert the availability value itself on a surface that carries it.
 
-**Still open.** `GET /runs/:id` returns HTTP 500 with
-`POSTGRES_REPLAY_INTEGRITY_FAILURE`. It reaches the corrupted snapshot through a
-path other than display hydration, which was guarded. The Run whose failure a
-reader most needs to understand is the one page they cannot open.
+The behaviour it describes IS defended — rereading the corrupt replay, and
+suppressing corruption without a recorded disposition, are both caught. Only the
+field's own presence is unasserted.
 
-**What would close it.** Find the remaining read on the Run detail path and give
-it the same treatment as hydration: tolerate the fault only for a Run whose
-integrity failure is already RECORDED, omit the transcript, and render the
-integrity disposition. Do not weaken the check for a Run whose corruption has
-not been terminalized — there the fault is news, not history.
-
-**Sibling behaviour.** Siblings no longer fail because of this leaf's missing
-completion authority, asserted directly on their failure reasons. They may still
-fail for their own reasons, which the corruption suite does not constrain.
+**What would close it.** Assert `replay_unavailable_integrity_failure` on a Run
+surface that actually serializes the authority object, or drop the field if no
+surface consumes it. Do not add a surface merely to give the field a consumer.
 
 ---
 
-*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
+*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*

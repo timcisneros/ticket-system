@@ -6471,20 +6471,65 @@ async function readAllTicketOperations(ticketId) {
   return operations;
 }
 
+// ── Canonical replay availability ───────────────────────────────────────────
+//
+// THE ONE PLACE THAT DECIDES WHETHER A RUN'S TRANSCRIPT MAY BE READ.
+//
+// Every Run surface — the detail page and each runtime API — reads through
+// `readRuntimeRunAuthority`, so this distinction is made once and cannot be
+// invented differently by one surface.
+//
+// A Run already terminalized for replay corruption has a transcript nobody may
+// trust. Reading it turned the Run's own page into a 500: the one Run whose
+// failure a reader most needs to understand became the one page they could not
+// open. Its replay is reported UNAVAILABLE, with the integrity code and
+// timestamp that were recorded relationally when it was terminalized.
+//
+// CORRUPTION WITHOUT THAT DISPOSITION STILL THROWS. Suppressing it here would
+// silently reclassify a newly discovered corruption as an old, contained one —
+// hiding live damage behind a historical explanation.
+const REPLAY_AVAILABLE = 'replay_available';
+const REPLAY_UNAVAILABLE_INTEGRITY_FAILURE = 'replay_unavailable_integrity_failure';
+
+function hasPersistedReplayIntegrityDisposition(run) {
+  return Boolean(run &&
+    run.status === 'failed' &&
+    run.integrityFailureCode === 'POSTGRES_REPLAY_INTEGRITY_FAILURE' &&
+    run.integrityFailureAt);
+}
+
+async function readRunReplayForProjection(run) {
+  try {
+    const record = await getRunReplayRepository().readRunReplay(run.id);
+    return { record, availability: REPLAY_AVAILABLE };
+  } catch (error) {
+    if (!error || error.code !== 'POSTGRES_REPLAY_INTEGRITY_FAILURE' ||
+        !hasPersistedReplayIntegrityDisposition(run)) {
+      throw error;
+    }
+    return { record: null, availability: REPLAY_UNAVAILABLE_INTEGRITY_FAILURE };
+  }
+}
+
 async function readRuntimeRunAuthority(runId) {
   const repository = getRuntimeStateReadRepository();
   const run = await repository.getRun(runId);
   if (!run) return null;
-  const [ticket, replay, evaluation, consequence] = await Promise.all([
+  const [ticket, replayProjection, evaluation, consequence] = await Promise.all([
     repository.getTicket(run.ticketId),
-    getRunReplayRepository().readRunReplay(run.id),
+    readRunReplayForProjection(run),
     repository.getRunEvaluation(run.id),
     repository.getRunConsequence(run.id)
   ]);
+  const replay = replayProjection.record;
+  const replayAvailability = replayProjection.availability;
   return {
     ticket,
     run: {
       ...run,
+      // Stated on every Run, so a reader never has to infer from an absent
+      // snapshot whether a transcript is missing, pending, or untrustworthy.
+      replayAvailability,
       ...(replay ? { replaySnapshot: replay.snapshot, replaySummary: extractReplaySummary(replay.snapshot) } : {}),
       ...(evaluation ? { runEvaluation: evaluation.evaluation } : {}),
       ...(consequence

@@ -335,13 +335,54 @@ async function main() {
         assertThat(!/COMPLETION_EVIDENCE_MISSING/.test(String(ticketPage.body || '')),
           'with no COMPLETION_EVIDENCE_MISSING refusal');
         const runPage = await third.request('GET', `/runs/${runId}`, { cookie });
-        // THE RUN DETAIL PAGE IS NOT YET PROJECTABLE. It still reads the
-        // corrupted transcript through a path other than display hydration and
-        // returns 500. That is recorded in the pending-decisions register rather
-        // than asserted as correct here — the Ticket-level projection, which is
-        // what made the whole Ticket unserviceable, does render.
-        assertThat(runPage.statusCode === 500 || runPage.statusCode === 200,
-          'the Run detail page responds rather than hanging (500 is a known gap)');
+        assertThat(runPage.statusCode === 200,
+          'the Run detail page renders — the failure is inspectable');
+        assertThat(!/POSTGRES_REPLAY_INTEGRITY_FAILURE/
+          .test(String(runPage.body || '').slice(0, 400)),
+        'and it is a page, not an error envelope');
+
+        // ── The runtime API projects the failure truthfully ──────────────
+        // Every Run surface reads through the same authority seam, so proving
+        // one API that consumes it proves the seam rather than one handler.
+        const runApi = await third.request('GET', `/api/runs/${runId}/claim-receipt`,
+          { cookie });
+        assertThat(runApi.statusCode === 200,
+          'a runtime Run API returns its normal successful status');
+        const apiBody = String(runApi.body || '');
+        assertThat(!apiBody.includes('POSTGRES_REPLAY_INTEGRITY_FAILURE'),
+          'it is a projection, not an error envelope');
+        assertThat(!apiBody.includes('tampered'),
+          'no corrupted replay content is exposed');
+        const eventsApi = await third.request('GET', `/api/runs/${runId}/events`,
+          { cookie });
+        assertThat(eventsApi.statusCode === 200,
+          'the Run events API also projects over the failed Run');
+
+        // ── UNCONTAINED CORRUPTION STILL FAILS CLOSED ────────────────────
+        //
+        // The tolerance above is for corruption that has already been
+        // terminalized and recorded. A Run whose transcript is corrupt but whose
+        // integrity failure has NOT been recorded is live damage, and reporting
+        // it as a tidy "replay unavailable" would hide a new fault behind an old
+        // explanation. A sibling Run — never integrity-terminalized — is
+        // corrupted here to prove the distinction is the disposition, not merely
+        // the presence of corruption.
+        const siblingWithReplay = (await store.pool.query(
+          `SELECT run_id FROM ${store.table('replay_snapshots')}
+            WHERE run_id <> $1 LIMIT 1`, [runId])).rows[0];
+        if (siblingWithReplay) {
+          const siblingId = Number(siblingWithReplay.run_id);
+          const siblingReplay = await store.readRunReplay(siblingId);
+          const siblingTampered = JSON.parse(JSON.stringify(siblingReplay.snapshot));
+          siblingTampered.modelResponses = [{ text: 'uncontained corruption' }];
+          await store.pool.query(
+            `UPDATE ${store.table('replay_snapshots')}
+                SET snapshot = $2::jsonb, revision = revision + 1
+              WHERE run_id = $1`, [siblingId, JSON.stringify(siblingTampered)]);
+          const siblingPage = await third.request('GET', `/runs/${siblingId}`, { cookie });
+          assertThat(siblingPage.statusCode !== 200,
+            'a Run with UNRECORDED corruption still fails closed — it is not hidden');
+        }
 
         // ── No completion decision was required OR fabricated ────────────
         const decisions = (await store.pool.query(
