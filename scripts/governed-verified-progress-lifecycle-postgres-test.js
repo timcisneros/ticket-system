@@ -25,6 +25,7 @@
 // which the source scan at the end enforces.
 
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -156,34 +157,97 @@ async function main() {
            FROM ${store.table('operation_receipts')}
           WHERE run_id = $1 ORDER BY id`, [runId])).rows;
 
+      // ── CANONICAL TRANSPORT ATTRIBUTION ─────────────────────────────────
+      //
+      // A transport belongs to this Run when its bytes hash to the
+      // `exact_request_hash` its own economic reservation recorded. Counting by
+      // prompt substring was attribution by resemblance: the planner item's
+      // owned path appears in more than one Run's prompt, and any refinement of
+      // the string is still a guess about content rather than a statement about
+      // identity.
+      const leafRequestHashes = async () => (await store.pool.query(
+        `SELECT model_request_ordinal AS ordinal, exact_request_hash AS hash
+           FROM ${store.table('economic_request_reservations')}
+          WHERE run_id = $1 ORDER BY model_request_ordinal`, [runId])).rows;
+      const capturedEntries = () => fs.readFileSync(capturePath, 'utf8').trim()
+        .split('\n').filter(Boolean).map(line => JSON.parse(line));
+      const capturesForRun = async () => {
+        const hashes = new Map((await leafRequestHashes())
+          .map(row => [row.hash, Number(row.ordinal)]));
+        return capturedEntries()
+          .map(entry => ({
+            entry,
+            ordinal: hashes.get(crypto.createHash('sha256')
+              .update(String(entry.body || ''), 'utf8').digest('hex')) || null
+          }))
+          .filter(item => item.ordinal !== null);
+      };
+
       try {
-        // ── Wait for the SECOND post-batch evidence set ───────────────────
+        // ── Wait for a COMPLETE, DURABLE lifecycle ────────────────────────
+        //
+        // The previous loop exited silently when it ran out of attempts, and
+        // the assertions then ran against whatever had happened so far — which
+        // is indistinguishable from a real defect and is the most likely source
+        // of this suite's intermittent transport-count failure. It now waits on
+        // every durable fact the assertions depend on, and says so loudly if
+        // they never arrive.
         let evidence = [];
         let terminal = null;
-        for (let attempt = 0; attempt < 200; attempt += 1) {
+        let lifecycleSettled = false;
+        for (let attempt = 0; attempt < 240; attempt += 1) {
           evidence = await store.readGovernedPostconditionEvidence(runId);
           const batches = new Set(evidence
             .filter(row => row.evaluationKind === 'post_batch')
             .map(row => row.batchStepId));
           const current = await store.getRun(runId);
-          if (batches.size >= 2 && ['completed', 'failed', 'blocked', 'cancelled']
-            .includes(current.status)) { terminal = current; break; }
+          const reservations = await leafRequestHashes();
+          const correlated = await capturesForRun();
+          if (batches.size >= 2 &&
+              reservations.length >= 2 &&
+              correlated.length >= 2 &&
+              (await store.readRunReplay(runId) || {}).snapshot &&
+              ((await store.readRunReplay(runId)).snapshot.modelResponses || []).length >= 2 &&
+              ['completed', 'failed', 'blocked', 'cancelled'].includes(current.status)) {
+            terminal = current;
+            lifecycleSettled = true;
+            break;
+          }
           await sleep(500);
         }
+        assert.ok(lifecycleSettled,
+          'the lifecycle never reached a complete durable state: ' +
+          `evidence batches=${new Set(evidence.filter(r => r.evaluationKind === 'post_batch')
+            .map(r => r.batchStepId)).size}, ` +
+          `reservations=${(await leafRequestHashes()).length}, ` +
+          `correlated transports=${(await capturesForRun()).length}, ` +
+          `status=${(await store.getRun(runId)).status}`);
 
         // ── Hermeticity first ─────────────────────────────────────────────
         const output = String(server.output());
         assertThat(output.includes('HERMETIC_PRELOAD_ACTIVE=true'),
           'the hermetic preload ran inside the spawned server');
-        const captured = fs.readFileSync(capturePath, 'utf8').trim()
-          .split('\n').filter(Boolean).map(line => JSON.parse(line))
-          .filter(entry => String(entry.body || '').includes(LEAF_MARKER));
+        const correlated = await capturesForRun();
+        const captured = correlated.map(item => item.entry);
         assertThat(captured.length === 2,
           'exactly two hermetic transport calls occurred — one per governed request');
         assertThat(captured.every(entry => entry.hostname === 'api.openai.com' &&
           entry.path === '/v1/responses' && entry.method === 'POST'),
         'both calls went to the governed endpoint and nowhere else');
-        assertThat(captured[1].requestOrdinal === 2,
+        // THE FIXTURE'S ARRIVAL NUMBER IS NOT THIS RUN'S ORDINAL.
+        //
+        // `requestOrdinal` counts every call the fixture SAW in its process,
+        // including ones it refused — the planner's governed request is refused
+        // for want of a staged response and still advances the counter. Reading
+        // it as "this leaf's second request" made the assertion depend on
+        // whether a foreign Run happened to reach the transport first, which is
+        // exactly the intermittency this suite kept showing.
+        //
+        // The canonical ordinal comes from the reservation whose
+        // `exact_request_hash` these bytes hash to.
+        assertThat(correlated.map(item => item.ordinal).join(',') === '1,2',
+          'this Run made exactly requests 1 and 2, by canonical reservation ordinal');
+        assertThat(correlated.filter(item => item.ordinal === 2).length === 1,
           'exactly one SECOND transport call occurred');
 
         const receipts = await receiptsOf();

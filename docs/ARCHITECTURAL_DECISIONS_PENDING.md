@@ -5503,26 +5503,31 @@ duplicated external send is not.
 required evidence exist. Automatic retransmission of an ambiguous started
 request is unsupported.
 
-## Governed Lifecycle Suite Has a Recurring Transport-Count Flake (recorded 2026-08-03)
+## Intermittent Test Guards Cannot Be Mutation-Proved in One Run (recorded 2026-08-03)
 
-**Status:** open — intermittent, unexplained, recurring.
+**Status:** open — a limit of the current mutation method, not a defect.
 
-`governed-verified-progress-lifecycle-postgres-test` has now failed twice across
-sessions on `exactly one SECOND transport call occurred`, passing on every
-retry (3/3 and 2/2). A previous session tightened the capture discriminator from
-`reports/planner` to `reports/planner/alpha` because the planner Run's own
-request matched the folder — that removed one demonstrated collision but has not
-eliminated the flake.
+The governed lifecycle suite's transport-count flake is fixed (root cause and
+30/30 stability below), but three guards added for it — canonical hash
+attribution, rejection of arrival-order fallback, and waiting for durable
+settlement — all SURVIVE mutation in a single run.
 
-**Why it matters more than a retry.** The suite counts real governed provider
-requests. An assertion that intermittently sees the wrong number is either
-miscounting or witnessing a real nondeterminism in how many requests a Run
-issues, and only the second would be a product defect. Which one is unknown.
+They survive for the same reason the bug was intermittent: in a typical run no
+foreign transport is recorded, arrival order coincidentally equals the canonical
+ordinal, and settlement completes quickly. Removing a guard only matters in the
+minority of runs where the race occurs.
 
-**What would close it.** Capture the failing run's capture file and reservation
-rows at the moment of failure — the assertion currently reports only the count —
-and determine whether a third request was genuinely dispatched or a foreign
-request was counted.
+**What would close it.** Either a fixture mode that deterministically records a
+foreign transport attempt before the leaf's second request — making arrival
+order provably differ from canonical ordinal every run — or a mutation harness
+that runs N iterations and treats "failed at least once in N" as caught. The
+second is the general fix and would apply to every timing-sensitive guard in
+this tranche.
+
+**Why it is written down rather than asserted around.** A guard that cannot fail
+its own test is not defended, and claiming otherwise on the strength of a
+green run would be exactly the reasoning that let this flake survive three
+sessions.
 
 ## Malformed Success Is Hard to Persist (recorded 2026-08-03)
 
@@ -5546,4 +5551,4 @@ proved something about a database this system does not run on.
 
 ---
 
-*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and closed 2026-08-03 (one shared authority, both consumers). Governed Lifecycle Transport-Count Flake recorded 2026-08-03. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
+*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and closed 2026-08-03 (one shared authority, both consumers). Governed Lifecycle Transport-Count Flake recorded and closed 2026-08-03 (fixture arrival counter conflated with canonical ordinal). Intermittent Guard Mutation Limit recorded 2026-08-03. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
