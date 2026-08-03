@@ -5503,36 +5503,31 @@ duplicated external send is not.
 required evidence exist. Automatic retransmission of an ambiguous started
 request is unsupported.
 
-## Terminal-Leaf Outcome Seams Are Aligned But Not Merged (recorded 2026-08-03)
+## Terminal-Leaf Outcome Seams Share One Rule, Two Mappings (recorded 2026-08-03, resolved 2026-08-03)
 
-**Status:** narrowed. The disagreement is gone; the duplication remains by
-design, and the reason is recorded so nobody "finishes" the merge unaware.
+**Status:** resolved as a design position. The semantic duplication is gone; the
+two mappings remain, deliberately.
 
-`deriveLeafItemDisposition` (reconciliation) and `projectedStatus` (Ticket
-projection) no longer disagree: the projector now applies the contract's rule
-that only `completed` is a claim requiring durable evidence, so a terminal
-non-success Run projects truthfully without a completion decision. Both
-directions are mutation-defended — removing the relaxation fails the replay-
-corruption suite, removing the strictness fails
-`malformed-completion-projection-postgres-test`.
+`evaluateRunCompletionEvidence` in
+`runtime/structured-allocation-leaf-run-contract.js` now owns the single
+question — does this Run's claim need a decision, and is that decision valid —
+with a closed result vocabulary (`not_applicable`, `valid`, `missing`, `stale`,
+`authority_mismatch`, `conflicts_with_run`). Ticket projection consumes it; the
+store no longer carries its own copy of those checks.
 
-**They are NOT merged, and should not be merged naively.** They have different
-domains and different outputs:
+**The two callers keep different mappings, and must.** Allocation reconciliation
+emits a full item disposition; Ticket projection emits a projected status or a
+closed refusal. Their domains also differ — the projector serves any Run with
+completion authority, while `deriveLeafItemDisposition` requires an
+allocation-item binding — and they map a `blocked` disposition differently.
 
-* `projectedStatus` applies to ANY Run carrying completion authority, structured
-  or not; `deriveLeafItemDisposition` requires an allocation-item binding
-  (`allocationItemId`, `itemDeclaredWorkHash`) that a non-structured Run has not
-  got.
-* They map a `blocked` completion disposition differently — the projector emits
-  `blocked`, the contract emits `failed` with reason `completion_blocked`.
-  Delegating without reconciling that would silently change Ticket projection
-  for every blocked Run.
-
-**What a real consolidation needs.** Either extend the canonical contract to
-non-structured Runs, or have the projector delegate only for structured leaves
-and settle the `blocked` mapping deliberately. Both are changes to a hot path
-behind every Ticket page and need validation against completion-authority,
-typed-projection and allocation suites.
+**One honest limit.** `deriveLeafItemDisposition` was NOT rewritten to call the
+helper. Its surrounding flow applies stale and authority checks in an order the
+helper's `not_applicable` short-circuit would change for non-completed Runs
+carrying a decision. Rather than risk that behaviour silently, the helper
+encodes the rule and a contract test asserts the two AGREE. Rewiring the
+contract itself remains available and is now low-risk, since the agreement is
+pinned by test.
 
 ## Malformed Success Is Hard to Persist (recorded 2026-08-03)
 
@@ -5556,4 +5551,4 @@ proved something about a database this system does not run on.
 
 ---
 
-*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and narrowed 2026-08-03. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
+*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded, narrowed and resolved 2026-08-03. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*

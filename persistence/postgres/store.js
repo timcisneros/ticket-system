@@ -46,6 +46,7 @@ const {
   buildLeafDeclaredWorkSnapshot,
   buildLeafRunBinding,
   deriveLeafItemDisposition,
+  evaluateRunCompletionEvidence,
   normalizeAggregatePlanDecision,
   normalizeLeafRunBinding,
   refuseLeafAdmission
@@ -8699,29 +8700,30 @@ class PostgresRuntimeStore {
         if (!item.completionAuthoritySnapshot) return item.status;
 
         const decision = completionDecisionByRunId.get(item.id);
-        if (!decision || decision.runId !== item.id || decision.ticketId !== item.ticketId) {
-          // ONLY `completed` IS A CLAIM THAT NEEDS DURABLE EVIDENCE TO SURVIVE.
-          //
-          // This is the rule `deriveLeafItemDisposition` already applies during
-          // reconciliation: "a failed or interrupted Run is truthfully that even
-          // with no decision". This projection had its own stricter rule and
-          // threw for ANY missing decision, so the two seams could classify the
-          // same Run differently — and the projector's version is the one that
-          // can make a whole Ticket unserviceable.
-          //
-          // A Run that reached a terminal NON-SUCCESS state did not get there by
-          // claiming anything; demanding completion authority from it asks for
-          // evidence that execution never produced. A Run claiming `completed`
-          // still fails closed here, which is the invariant that matters.
-          //
-          // This subsumes the narrower replay-integrity carve-out that stood
-          // here: an integrity-failed Run is simply one terminal non-success
-          // case among several, and does not need its own exception.
-          if (item.status !== 'completed') {
-            return item.status === 'interrupted' ? 'interrupted' : 'failed';
-          }
-          const error = new Error(`Run ${item.id} cannot project its ticket without a completion decision`);
+
+        // THE SHARED RULE, NOT A SECOND COPY OF IT. `evaluateRunCompletionEvidence`
+        // owns the question "does this Run's claim need a decision, and is that
+        // decision valid" for both allocation reconciliation and this
+        // projection. The two callers still map the answer differently — a full
+        // item disposition there, a projected status or refusal here — but they
+        // no longer decide it separately, which is how they came to disagree.
+        const evidence = evaluateRunCompletionEvidence({
+          runStatus: item.status,
+          runId: item.id,
+          runTicketId: item.ticketId,
+          runCompletionAuthorityHash: null,
+          decision: decision || null
+        });
+        if (evidence.result === 'not_applicable') {
+          // A Run that never claimed success is truthfully itself.
+          return item.status === 'interrupted' ? 'interrupted' : 'failed';
+        }
+        if (evidence.result !== 'valid') {
+          const error = new Error(
+            `Run ${item.id} cannot project its ticket: ${evidence.reason}`);
           error.code = 'COMPLETION_EVIDENCE_MISSING';
+          error.completionEvidenceResult = evidence.result;
+          error.completionEvidenceReason = evidence.reason;
           throw error;
         }
         if (decision.completionDisposition === 'completed') return 'completed';

@@ -31,6 +31,8 @@ const {
   buildLeafDeclaredWorkSnapshot,
   buildLeafRunBinding,
   deriveLeafItemDisposition,
+  evaluateRunCompletionEvidence,
+  COMPLETION_EVIDENCE_RESULTS,
   normalizeAggregatePlanDecision,
   normalizeLeafRunBinding,
   projectStructuredAllocationLeafExecution,
@@ -962,3 +964,61 @@ assert.equal(
 );
 
 console.log('structured allocation leaf-run contract test passed');
+
+
+// ── The shared completion-evidence rule ─────────────────────────────────────
+//
+// Allocation reconciliation and Ticket projection both consume this. Pinning it
+// here keeps the two surfaces from drifting apart again: if the rule changes,
+// it changes in one place and this table says so.
+{
+  const decision = {
+    runId: 3001, ticketId: 700,
+    objectiveContractHash: 'a'.repeat(64),
+    completionDisposition: 'completed'
+  };
+  const evaluate = overrides => evaluateRunCompletionEvidence({
+    runStatus: 'completed', runId: 3001, runTicketId: 700,
+    runCompletionAuthorityHash: 'a'.repeat(64), decision, ...overrides
+  });
+
+  // A Run that never claimed success is never asked for proof of it.
+  for (const runStatus of ['pending', 'running', 'failed', 'interrupted']) {
+    assert.equal(evaluate({ runStatus }).result, 'not_applicable',
+      `a ${runStatus} Run does not require completion evidence`);
+  }
+
+  assert.equal(evaluate({}).result, 'valid');
+  assert.equal(evaluate({}).reason, 'completion_verified');
+  assert.equal(evaluate({ decision: null }).reason, 'completion_decision_missing');
+  assert.equal(evaluate({ runTicketId: 701 }).reason, 'completion_decision_stale');
+  assert.equal(evaluate({ runId: 3002 }).reason, 'completion_decision_stale');
+  assert.equal(evaluate({ runCompletionAuthorityHash: 'b'.repeat(64) }).reason,
+    'completion_authority_mismatch');
+
+  // An unknown authority hash cannot be compared, so it is not grounds for
+  // refusal — the Ticket projection has no item binding and passes null.
+  assert.equal(evaluate({ runCompletionAuthorityHash: null }).result, 'valid',
+    'an uncomparable authority hash does not manufacture a mismatch');
+
+  assert.deepEqual([...COMPLETION_EVIDENCE_RESULTS],
+    ['not_applicable', 'valid', 'missing', 'stale', 'authority_mismatch',
+      'conflicts_with_run'],
+    'the completion-evidence result vocabulary is closed');
+
+  // THE RULE AGREES WITH THE DISPOSITION CONTRACT. Same inputs, same verdict —
+  // asserted rather than assumed, because the whole point of extracting it was
+  // that two hand-written copies disagreed.
+  const agree = (overrides, expectedReason) => {
+    const derived = deriveLeafItemDisposition(runFacts('completed', overrides));
+    assert.equal(derived.reason, expectedReason);
+    assert.equal(evaluate({
+      decision: overrides.decision === undefined ? decision : overrides.decision,
+      runTicketId: overrides.runTicketId || 700
+    }).reason, expectedReason,
+    `the shared rule and the disposition contract agree on ${expectedReason}`);
+  };
+  agree({ decision: null }, 'completion_decision_missing');
+}
+
+console.log('  ok shared completion-evidence rule');

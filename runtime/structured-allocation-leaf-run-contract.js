@@ -528,6 +528,62 @@ function leafItemDisposition(allocationItemId, runId, itemStatus, completionDeci
   });
 }
 
+// ── The shared completion-evidence rule ─────────────────────────────────────
+//
+// ONE QUESTION, ASKED IN TWO PLACES: when does a Run's claimed completion
+// require a canonical decision, and when is that decision valid?
+//
+// Allocation reconciliation and Ticket projection both need this answer and had
+// coded it separately. Their OUTPUTS legitimately differ — reconciliation emits
+// a full item disposition, projection emits a status or a refusal — but the
+// underlying rule must not, or the same Run can be classified two ways
+// depending on which surface a reader happens to open.
+//
+// The rule itself is short, and its shape is the important part: a Run that is
+// not claiming success is not asked for evidence at all. Only `completed` is a
+// claim, and a claim is what needs proof.
+const COMPLETION_EVIDENCE_RESULTS = Object.freeze([
+  'not_applicable',
+  'valid',
+  'missing',
+  'stale',
+  'authority_mismatch',
+  'conflicts_with_run'
+]);
+
+function evaluateRunCompletionEvidence({
+  runStatus,
+  runId,
+  runTicketId,
+  runCompletionAuthorityHash = null,
+  decision = null
+}) {
+  // A Run that reached a terminal non-success state, or has not finished at
+  // all, never asserted completion. Demanding evidence from it asks for
+  // something execution was never in a position to produce.
+  if (runStatus !== 'completed') {
+    return { result: 'not_applicable', reason: null };
+  }
+  if (!decision) {
+    return { result: 'missing', reason: 'completion_decision_missing' };
+  }
+  if (decision.runId !== runId || decision.ticketId !== runTicketId) {
+    return { result: 'stale', reason: 'completion_decision_stale' };
+  }
+  if (runCompletionAuthorityHash !== null &&
+      decision.objectiveContractHash !== runCompletionAuthorityHash) {
+    return { result: 'authority_mismatch', reason: 'completion_authority_mismatch' };
+  }
+  // A decision claiming completion for a Run that did not reach `completed`
+  // contradicts the persisted lifecycle. Unreachable while `runStatus` is
+  // already known to be `completed`, and kept because this helper's contract is
+  // the rule, not the one caller that currently satisfies it early.
+  if (decision.completionDisposition === 'completed' && runStatus !== 'completed') {
+    return { result: 'conflicts_with_run', reason: 'completion_decision_conflicts_run' };
+  }
+  return { result: 'valid', reason: 'completion_verified' };
+}
+
 function deriveLeafItemDisposition({
   binding,
   runId,
@@ -899,6 +955,8 @@ function projectLeafRunBindingForRun(run) {
 }
 
 module.exports = {
+  COMPLETION_EVIDENCE_RESULTS,
+  evaluateRunCompletionEvidence,
   AGGREGATE_DECISION_FIELDS,
   LEAF_ADMISSION_STATES,
   AGGREGATE_ITEM_FIELDS,
