@@ -5432,6 +5432,37 @@ Open questions for the diagnosis:
 - Does a retried leaf invalidate the item's prior completion-decision identity, or is the lineage's latest valid decision sufficient?
 - Should partial retry of a multi-item plan be permitted while sibling items are still running?
 
+## Governed Response-Hash Tamper Has No Scenario (recorded 2026-08-02)
+
+**Status:** open — test-coverage gap, not a known defect.
+
+Governed recovery rehydrates request 1's transcript from canonical response
+replay and verifies it against the response hash the reservation recorded at
+dispatch. Removing that verification fails no test, because nothing constructs a
+mismatch.
+
+An attempt this session altered the stored transcript while leaving its hash —
+the shape a partial write or edited replay row would leave. Two useful things
+came out of it and are worth keeping:
+
+* the replay table refuses an update that does not advance its revision, which
+  is a real durability guard;
+* with the transcript tampered, the Run executed NOTHING — the injected action
+  never ran and no request 2 was issued.
+
+What could not be shown in the time available is that the refusal surfaces as
+the canonical integrity error on a durable, observable Run state: the Run stayed
+in `running` across the observation window rather than terminalizing with
+`GOVERNED_RESPONSE_REHYDRATION_CONFLICT`. Whether the guard fires and the Run
+merely retries, or the mismatch is absorbed somewhere earlier, is UNRESOLVED.
+The scenario was removed rather than committed in a failing state.
+
+**What would close it.** Determine where a rehydration conflict lands in the
+attempt lifecycle, then assert the durable integrity signal alongside the
+already-observed absence of effects, and mutation-test removal of the hash
+check against it.
+
+
 ---
 
-*Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
+*Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*

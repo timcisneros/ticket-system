@@ -23,6 +23,10 @@ const {
   baselineSatisfiedFactIdentities
 } = require('../runtime/governed-postcondition-evidence-contract');
 const { seedGovernedStructuredTicket } = require('./governed-structured-fixture');
+const {
+  buildGovernedSatisfiedFactTransitions,
+  TRANSITION_REFUSALS
+} = require('../runtime/governed-fact-transitions');
 
 const STAMP = `gpe-${Date.now()}`;
 const ACTOR = 'governed-postcondition-evidence-test';
@@ -87,7 +91,11 @@ async function main() {
       completion = completionAuthorityHash,
       stepId = '1',
       logical = `model-request:agent:${stepId}:provider`,
-      receiptCount = 1
+      receiptCount = 1,
+      // A zero-receipt evaluation is legal and carries no anchor: an evaluation
+      // may follow a batch that committed no qualifying receipt, and saying so
+      // is more truthful than borrowing an unrelated one.
+      receipt = receiptId
     } = {}) => buildGovernedPostconditionEvidence({
       ticketId: targetTicketId,
       runId: targetRunId,
@@ -100,7 +108,7 @@ async function main() {
       criterionType,
       evaluatorIdentity: 'objective_contract',
       evaluatorVersion: 1,
-      throughOperationReceiptId: receiptId,
+      throughOperationReceiptId: receipt,
       requestSourceIdentity: logical,
       batchStepId: stepId,
       evaluatedReceiptCount: receiptCount,
@@ -581,6 +589,116 @@ async function main() {
       assert.ok(
         baselineSatisfiedFactIdentities(rows, { runId }).includes(baselineFact),
         'but it is recorded as already-satisfied before execution');
+    }
+
+    // ── THE FACT SET IS ONE ATOMIC AUTHORITY ───────────────────────────────
+    //
+    // A partial set is the one shape that must never exist. It looks evaluated
+    // while missing verdicts, and a missing verdict is indistinguishable from
+    // "this fact did not advance" unless completeness is guaranteed. That
+    // guarantee is what lets a later reader treat absence as an integrity
+    // problem rather than as no progress — which is the difference between
+    // stopping a Run for churn it committed and stopping it for churn it did
+    // not.
+    {
+      const atomicStep = '77';
+      const atomicLogical = `model-request:agent:${atomicStep}:provider`;
+      const setFor = passedByFact => [criterionA, criterionB].map(identity =>
+        evidenceFor({
+          factIdentity: identity,
+          criterionType: identity === criterionA ? 'folder_exists' : 'path_absent',
+          passed: passedByFact[identity],
+          stepId: atomicStep,
+          logical: atomicLogical,
+          receipt: null,
+          receiptCount: 0
+        }));
+
+      const countRows = async () => (await store.pool.query(
+        `SELECT count(*)::int AS total
+           FROM ${store.table('governed_postcondition_evidence')}
+          WHERE run_id = $1 AND batch_step_id = $2`, [runId, atomicStep])).rows[0].total;
+
+      assert.equal(await countRows(), 0, 'the atomic batch starts empty');
+
+      // 1. A complete set commits.
+      const first = await store.appendGovernedPostconditionEvidenceSet({
+        evidenceRecords: setFor({ [criterionA]: true, [criterionB]: false })
+      });
+      assert.equal(first.appended.length, 2, 'the complete set commits both rows');
+      assert.equal(await countRows(), 2);
+
+      // 2. The identical set re-reports rather than duplicating. A restart
+      //    re-evaluating the same window must not append a second reading of
+      //    the same durable instant.
+      const again = await store.appendGovernedPostconditionEvidenceSet({
+        evidenceRecords: setFor({ [criterionA]: true, [criterionB]: false })
+      });
+      assert.equal(again.appended.length, 2, 'the duplicate set re-reports both rows');
+      assert.equal(await countRows(), 2, 'and appends nothing');
+
+      // 3. A CONFLICTING verdict for one fact writes nothing for the others.
+      //    The conflicting fact is second in the list, so a non-atomic
+      //    implementation would already have committed the first.
+      const conflictStep = '78';
+      const conflictLogical = `model-request:agent:${conflictStep}:provider`;
+      const conflictSet = [criterionA, criterionB].map(identity =>
+        evidenceFor({
+          factIdentity: identity,
+          criterionType: identity === criterionA ? 'folder_exists' : 'path_absent',
+          passed: false,
+          stepId: conflictStep,
+          logical: conflictLogical,
+          receipt: null,
+          receiptCount: 0
+        }));
+      await store.appendGovernedPostconditionEvidenceSet({
+        evidenceRecords: [conflictSet[1]]
+      });
+      const conflicting = [conflictSet[0], evidenceFor({
+        factIdentity: criterionB, criterionType: 'path_absent',
+        passed: true, stepId: conflictStep, logical: conflictLogical,
+        receipt: null, receiptCount: 0
+      })];
+      await assert.rejects(
+        () => store.appendGovernedPostconditionEvidenceSet({ evidenceRecords: conflicting }),
+        error => /already holds different evidence|conflict/i.test(String(error.message)),
+        'a conflicting verdict for one fact refuses the whole set');
+      const conflictRows = (await store.pool.query(
+        `SELECT declared_fact_identity FROM ${store.table('governed_postcondition_evidence')}
+          WHERE run_id = $1 AND batch_step_id = $2`, [runId, conflictStep])).rows;
+      assert.equal(conflictRows.length, 1,
+        'the refused set wrote NOTHING for the other fact — the pre-existing row stands alone');
+      assert.equal(conflictRows[0].declared_fact_identity, criterionB);
+
+      // 4. A pre-existing PARTIAL set is refused by the transition reader
+      //    rather than quietly filled in. Step 78 has one of two verdicts.
+      const partialTransitions = () => buildGovernedSatisfiedFactTransitions({
+        runId,
+        allocationItemId: item.allocationItemId,
+        eligibleFacts: [
+          { declaredFactIdentity: criterionA },
+          { declaredFactIdentity: criterionB }
+        ],
+        evidenceRows: [],
+        receiptBearingBatches: [conflictStep]
+      });
+      // The derivation refuses on INTEGRITY and never returns an empty mapping.
+      // Baseline completeness is checked before batch completeness, so this
+      // isolated construction surfaces `fact_baseline_incomplete` first; the
+      // end-to-end `fact_evidence_incomplete` case, where baselines exist and a
+      // receipt-bearing batch is missing a verdict, is proved against the real
+      // writer in governed-evidence-integrity-postgres-test. What matters here
+      // is the shared property: incomplete authority is an integrity failure,
+      // never a zero-progress verdict a Run can be stopped for.
+      let partialRefusal = null;
+      try { partialTransitions(); } catch (error) { partialRefusal = error; }
+      assert.ok(partialRefusal, 'incomplete authority refuses rather than returning a mapping');
+      assert.equal(partialRefusal.code, 'GOVERNED_FACT_TRANSITION_REFUSED');
+      assert.ok(TRANSITION_REFUSALS.includes(partialRefusal.detail.reason),
+        'the refusal names a closed integrity reason');
+      assert.notEqual(partialRefusal.detail.reason, 'fact_evidence_window_ambiguous',
+        'and it is a completeness failure, not an ambiguity one');
     }
 
     // ── The closed vocabularies stay closed ────────────────────────────────
