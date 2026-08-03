@@ -55,6 +55,9 @@ const transportModulePath = path.join(
 const transportModule = require(transportModulePath);
 const realCreate = transportModule.createOpenAiGovernedTransport;
 
+// DIAGNOSTIC ONLY. This counts every call the fixture saw, including refused
+// ones, so it can never stand for a Run's request ordinal. It appears in the
+// capture record and the x-request-id and decides nothing.
 let fixtureRequestCount = 0;
 
 // SERVED STATE MUST SURVIVE A RESTART.
@@ -69,6 +72,7 @@ let fixtureRequestCount = 0;
 const SERVED_PATH = process.env.HERMETIC_TRANSPORT_SERVED || null;
 // Fault-state file shared with the store decorator, so a crash fires once.
 const SERVED_STATE = process.env.GOVERNED_FAULT_STATE || null;
+const FAULT_STATE = process.env.GOVERNED_FAULT_STATE || null;
 
 function loadServed() {
   if (!SERVED_PATH) return new Set();
@@ -102,29 +106,6 @@ function fixtureHttpsRequest(options, onResponse) {
   // rather than a failure of the requests that were answered.
   fixtureRequestCount += 1;
   const staged = loadFixtureResponses();
-  // ── PRE-TRANSPORT CRASH BOUNDARY ──────────────────────────────────────
-  //
-  // Interrupt at the last instant before any byte leaves, once the request has
-  // already obtained every piece of durable dispatch authority: reservation,
-  // ordinal, budget charge and provider-request replay all commit before this
-  // point. That is the window where a recovering process must reuse the request
-  // it has already paid for rather than abandon it and buy another.
-  //
-  // Fires once. The crash is recorded in the shared fault-state file, so the
-  // restarted process transports normally instead of crashing forever.
-  const CRASH_BEFORE_ORDINAL = Number(
-    process.env.HERMETIC_TRANSPORT_CRASH_BEFORE_ORDINAL || 0);
-  const CRASH_STATE = process.env.GOVERNED_FAULT_STATE || null;
-  if (CRASH_BEFORE_ORDINAL && fixtureRequestCount === CRASH_BEFORE_ORDINAL &&
-      !(CRASH_STATE && require('node:fs').existsSync(CRASH_STATE))) {
-    const detail = `BOUNDARY_PRE_TRANSPORT_REACHED ordinal=${fixtureRequestCount}`;
-    if (CRASH_STATE) require('node:fs').writeFileSync(CRASH_STATE, detail);
-    if (CAPTURE_PATH) {
-      require('node:fs').appendFileSync(`${CAPTURE_PATH}.marker`, `${detail}\n`);
-    }
-    process.exit(70);
-  }
-
   // The transport spells its options discretely so a test can read back exactly
   // what production sends. Assert the destination here too: a stub that accepts
   // any host would hide a redirect defect rather than catch it.
@@ -162,6 +143,36 @@ function fixtureHttpsRequest(options, onResponse) {
           `HERMETIC_FIXTURE_UNPLANNED_REQUEST_${fixtureRequestCount}: ` +
           'no staged response matches these request bytes');
       }
+      // ── BOUNDARIES BELONG TO A REQUEST, NOT TO AN ARRIVAL POSITION ───
+      //
+      // Crash selection used to compare a process-global arrival counter that
+      // advanced even for REFUSED calls. The structured planner's governed
+      // request is refused here for want of a staged response and still moved
+      // the boundary, so "crash on request 2" could land on the leaf's FIRST
+      // request whenever the planner reached the transport first. The scenario
+      // then asserted against a state it had not created.
+      //
+      // A boundary now belongs to the staged response that OWNS the request —
+      // the same content ownership that decides which answer it receives — so a
+      // call nobody staged for cannot move it.
+      const crashState = require('node:fs');
+      const alreadyCrashed = path =>
+        Boolean(path) && crashState.existsSync(path);
+
+      if (candidate.crashBeforeTransport && !alreadyCrashed(FAULT_STATE)) {
+        // Nothing has been sent and nothing is recorded: from production's
+        // durable state this is a request that may or may not have left. The
+        // staged response is deliberately NOT consumed, so a legitimate retry
+        // of the same request can still be answered.
+        const detail = 'BOUNDARY_PRE_TRANSPORT_REACHED ' +
+          `match=${candidate.match || 'any'}`;
+        if (FAULT_STATE) crashState.writeFileSync(FAULT_STATE, detail);
+        if (CAPTURE_PATH) {
+          crashState.appendFileSync(`${CAPTURE_PATH}.marker`, `${detail}\n`);
+        }
+        process.exit(70);
+      }
+
       servedIndexes.add(staged.indexOf(candidate));
       response.statusCode = candidate.statusCode || 200;
       response.headers = {
@@ -180,20 +191,19 @@ function fixtureHttpsRequest(options, onResponse) {
       });
       // ── POST-TRANSPORT CRASH BOUNDARY ─────────────────────────────────
       //
-      // The request HAS been received here — the capture above proves the test
+      // The request HAS been received — the capture above proves the test
       // reached this point — and the process dies before the response can be
       // persisted. Production must not use that knowledge: from its durable
       // state this is indistinguishable from the pre-transport case, which is
       // exactly why both must fail closed the same way.
-      const CRASH_AFTER_ORDINAL = Number(
-        process.env.HERMETIC_TRANSPORT_CRASH_AFTER_ORDINAL || 0);
-      if (CRASH_AFTER_ORDINAL && fixtureRequestCount === CRASH_AFTER_ORDINAL &&
-          !(SERVED_STATE && require('node:fs').existsSync(SERVED_STATE))) {
-        const detail =
-          `BOUNDARY_POST_TRANSPORT_REACHED ordinal=${fixtureRequestCount}`;
-        if (SERVED_STATE) require('node:fs').writeFileSync(SERVED_STATE, detail);
+      //
+      // Owned by the staged response, for the same reason as above.
+      if (candidate.crashAfterTransport && !alreadyCrashed(SERVED_STATE)) {
+        const detail = 'BOUNDARY_POST_TRANSPORT_REACHED ' +
+          `match=${candidate.match || 'any'}`;
+        if (SERVED_STATE) crashState.writeFileSync(SERVED_STATE, detail);
         if (CAPTURE_PATH) {
-          require('node:fs').appendFileSync(`${CAPTURE_PATH}.marker`, `${detail}\n`);
+          crashState.appendFileSync(`${CAPTURE_PATH}.marker`, `${detail}\n`);
         }
         process.exit(71);
       }

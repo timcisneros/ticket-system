@@ -71,6 +71,13 @@ const LIMITS = {
   maxOutputArtifactBytesPerRun: 1_048_576
 };
 
+// Mark a staged response so the fixture crashes AFTER the fixture receives the request that owns it, before any durable response.
+// Ownership, not arrival position: a refused planner call owns no staged
+// response and therefore cannot move this boundary.
+function crashAfterTransport(entry) {
+  return { ...entry, crashAfterTransport: true };
+}
+
 function staged(identity, plan) {
   return {
     match: LEAF_MARKER,
@@ -126,11 +133,11 @@ async function main() {
             actions: [{ operation: 'createFolder', args: { path: factA.criterion.path } }],
             complete: false
           }),
-          staged('fixture-restart-response-2', {
+          crashAfterTransport(staged('fixture-restart-response-2', {
             message: 'Creating the second declared folder.',
             actions: [{ operation: 'createFolder', args: { path: factB.criterion.path } }],
             complete: true
-          })
+          }))
         ]
       }));
 
@@ -165,7 +172,8 @@ async function main() {
 
       // ── Server 1: interrupted after request-1 evidence, before request 2 ──
       const first = await startServer({
-        env: { ...env, HERMETIC_TRANSPORT_CRASH_AFTER_ORDINAL: '2' }
+        // Carried by the staged response that owns request 2.
+        env
       });
       try {
         for (let attempt = 0; attempt < 200; attempt += 1) {

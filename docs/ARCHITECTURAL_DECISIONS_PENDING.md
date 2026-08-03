@@ -5503,33 +5503,33 @@ duplicated external send is not.
 required evidence exist. Automatic retransmission of an ambiguous started
 request is unsupported.
 
-## Fixture Crash Boundaries Still Use the Arrival Counter (recorded 2026-08-03)
+## Hermetic Response Ownership Is Content-Matched, Not Hash-Addressed (recorded 2026-08-03)
 
-**Status:** open — same defect class as the lifecycle flake, in a different
-place, with a specific hypothesis.
+**Status:** open — narrowed. The arrival-counter defect is gone; response
+ownership is still selected by a substring the staged entry carries.
 
-`governed-post-transport-restart-postgres-test` failed once during
-checkpoint-order validation on `request 2 durably reserved before the crash`,
-passing 2/2 on retry. That assertion runs BEFORE the restart, so the crash fired
-at a moment when request 2 had not yet reserved.
+Crash boundaries are now owned by the staged response that owns the request
+(`crashBeforeTransport` / `crashAfterTransport`), and no semantic decision reads
+`fixtureRequestCount` — pinned by a source assertion that the counter is never
+compared. Both restart suites are 30/30.
 
-The hermetic fixture's crash boundaries select their moment by
-`HERMETIC_TRANSPORT_CRASH_BEFORE_ORDINAL` / `..._AFTER_ORDINAL`, compared
-against `fixtureRequestCount` — the same per-process arrival counter that caused
-the lifecycle flake, incremented even for REFUSED calls. The structured
-planner's governed request is refused for want of a staged response and still
-advances it, so "crash at ordinal 2" can land on the leaf's FIRST request
-whenever the planner reaches the transport first.
+**What remains.** Response ownership still uses `entry.match`, a substring that
+must appear in the request bytes, plus first-unused ordering among entries whose
+match succeeds. That is content ADDRESSING but not content IDENTITY: two
+requests from the same Run both contain the leaf's declared path, so their
+relative order still decides which staged answer each receives.
 
-This is the same root cause fixed for attribution this session, surviving in the
-boundary selector. Both pre- and post-transport restart suites depend on it.
+**Why hash addressing was not built.** The canonical `exact_request_hash` is not
+knowable when responses are staged — the body contains a prompt built from live
+workspace and plan state. Keying by hash needs a handshake: the fixture blocks
+on the hash it just computed, the parent test resolves it against the durable
+reservation and writes back an instruction. That is a control-plane protocol
+inside a preload with no database access, and it was not attempted without the
+budget to prove it.
 
-**What would close it.** Select the crash moment by a stable property of the
-request rather than arrival position — the leaf's own canonical body content, or
-an explicit staged-response identity — so a foreign call cannot shift the
-boundary. The attribution helper cannot be reused directly here because the
-fixture runs inside the server process and has no reservation rows, so the
-discriminator must come from the request bytes it already holds.
+**Residual risk, stated plainly.** Within one Run the staged order still decides
+which of its own requests gets which answer. Across Runs, ownership is now safe:
+a planner or sibling call cannot consume a leaf response or move a boundary.
 
 ## Malformed Success Is Hard to Persist (recorded 2026-08-03)
 
@@ -5553,4 +5553,4 @@ proved something about a database this system does not run on.
 
 ---
 
-*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and closed 2026-08-03 (one shared authority, both consumers). Governed Lifecycle Transport-Count Flake recorded and closed 2026-08-03 (fixture arrival counter conflated with canonical ordinal). Intermittent Guard Mutation Limit recorded and closed 2026-08-03 (deterministic correlation contract). Fixture Crash Boundary Arrival Counter recorded 2026-08-03. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
+*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and closed 2026-08-03 (one shared authority, both consumers). Governed Lifecycle Transport-Count Flake recorded and closed 2026-08-03 (fixture arrival counter conflated with canonical ordinal). Intermittent Guard Mutation Limit recorded and closed 2026-08-03 (deterministic correlation contract). Fixture Crash Boundary Arrival Counter recorded and closed 2026-08-03. Hermetic Response Ownership Content-Matched recorded 2026-08-03. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*

@@ -178,4 +178,33 @@ assert.deepEqual([...CORRELATION_REFUSALS],
   }
 }
 
+// ── The fixture's semantic controls are content-owned ───────────────────────
+//
+// `fixtureRequestCount` counts every call the transport saw, including refused
+// ones, so it can never stand for a Run's ordinal. It may appear in diagnostics
+// — the capture record and the x-request-id — but no response ownership, crash
+// boundary or refusal may be selected by it. Pinned in source because the
+// failure it caused was invisible in ordinary runs.
+{
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const preload = fs.readFileSync(path.join(__dirname, 'fixtures',
+    'hermetic-governed-transport-preload.js'), 'utf8');
+  const executable = preload.split('\n')
+    .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line)).join('\n');
+
+  assert.equal(/CRASH_BEFORE_ORDINAL|CRASH_AFTER_ORDINAL/.test(executable), false,
+    'crash boundaries are not selected by an arrival ordinal');
+
+  // The counter may be incremented and reported; it may not be compared.
+  const comparisons = executable.match(/fixtureRequestCount\s*(===|==|>=|<=|>|<)/g) || [];
+  assert.deepEqual(comparisons, [],
+    'fixtureRequestCount is never compared — it decides nothing');
+
+  for (const owned of ['crashBeforeTransport', 'crashAfterTransport']) {
+    assert.ok(executable.includes(`candidate.${owned}`),
+      `the ${owned} boundary is carried by the staged response that owns the request`);
+  }
+}
+
 console.log('governed transport correlation test passed');
