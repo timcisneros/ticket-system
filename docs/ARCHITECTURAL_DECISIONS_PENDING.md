@@ -5503,56 +5503,32 @@ duplicated external send is not.
 required evidence exist. Automatic retransmission of an ambiguous started
 request is unsupported.
 
-## Corrupted Replay Snapshot Causes an Unbounded Recovery Loop (recorded 2026-08-02, diagnosed 2026-08-02)
+## Ticket Projection Blocks Startup Over a Failed Leaf (recorded 2026-08-03)
 
-**Status:** open — root cause now known exactly; the fix is larger than one call
-site and is not yet made.
+**Status:** open — downstream cascade, exposed by replay-corruption containment.
 
-Corruption is DETECTED correctly. Altering a governed Run's durable transcript
-(text changed, recorded response hash preserved, replay revision advanced) is
-caught by `replaySnapshotFromRow` with the stable code
-`POSTGRES_REPLAY_INTEGRITY_FAILURE`, before governed response rehydration is
-reached. Nothing corrupt executes: no parse, no workspace action, no receipt, no
-evidence, no later request, no transport, no charge, no reservation.
-
-**The root cause is NOT that the outer catch treats integrity failure as
-recoverable.** It does not. `runAgentTicket`'s catch reaches its terminalizing
-`else` and calls `failAgentRun`. The failure path then destroys itself:
+A governed leaf that terminalizes for `POSTGRES_REPLAY_INTEGRITY_FAILURE`
+truthfully has no completion decision and never will. The Ticket projection
+demands one anyway, and a server starting against that Ticket fails with:
 
 ```text
-replaySnapshotFromRow            persistence/postgres/store.js:798
-  <- initializeRunReplay          persistence/postgres/store.js:9976
-  <- ensureFailedRunReplaySnapshot  server.js:13805
-  <- failAgentRunUnlocked           server.js:15691
+Run 1 cannot project its ticket without a completion decision
 ```
 
-`ensureFailedRunReplaySnapshot` re-reads and re-verifies the very snapshot whose
-corruption is being recorded, throws the same error, escapes to the scheduler's
-`onError`, and the Run is reclaimed and fails identically — observed 38 times in
-one window. A Run cannot be recorded as failed BECAUSE its transcript is broken,
-which is exactly backwards.
+This is severe enough to prevent a fresh server from starting at all, which is
+why `scripts/governed-replay-corruption-postgres-test.js` asserts terminal
+stability from durable state after the executor exits rather than from a third
+spawned server. The weaker assertion is named in the suite itself.
 
-**Attempted and reverted.** Making `ensureFailedRunReplaySnapshot` tolerate
-`POSTGRES_REPLAY_INTEGRITY_FAILURE` — justified on its own terms, since that
-function only needs to establish that a snapshot EXISTS and never reads its
-content — did NOT stop the loop. At least one further re-read of the corrupt
-snapshot remains on the terminalization path. The change was reverted rather
-than committed unproven.
+**What would close it.** The projection must treat a leaf whose truthful state is
+`failed` as failed, rather than awaiting completion authority that cannot exist.
+No completion requirement for SUCCESSFUL leaves should be weakened. The
+structured-allocation aggregate rules for a failed leaf already exist; the
+projection needs to use them.
 
-**What would close it.** Walk `failAgentRunUnlocked` and everything it calls,
-find every read of the replay snapshot on the failure path, and make
-terminalization independent of transcript integrity. Then assert: one durable
-terminal disposition naming `POSTGRES_REPLAY_INTEGRITY_FAILURE`, the Run no
-longer scheduler-eligible, exactly one failure event, and idempotence across
-restarts. A related cascade was also observed and is untriaged: a SIBLING Run
-failed with `COMPLETION_EVIDENCE_MISSING` because the looping Run has no
-completion decision.
-
-**Scope note.** `GOVERNED_RESPONSE_REHYDRATION_CONFLICT` remains unreachable
-through normal persisted data, because the replay-chain check fires first. It is
-defense in depth behind replay integrity, not independently load-bearing, and
-should be documented as such rather than given a manufactured scenario.
+**Related, unresolved.** Sibling Runs were also observed failing with
+`COMPLETION_EVIDENCE_MISSING` for the same reason.
 
 ---
 
-*Corrupted Replay Snapshot Recovery Loop recorded and diagnosed 2026-08-02. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
+*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*

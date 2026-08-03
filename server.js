@@ -23787,7 +23787,22 @@ async function runAgentTicket(runId) {
 
     run = await completeAgentRun(run);
   } catch (error) {
-    if (error && error.code === 'RUN_LEASE_LOST') {
+    // A corrupted replay snapshot cannot be recorded by the ordinary failure
+    // path, because that path reconstructs the very replay that failed its
+    // integrity check. Routed here it terminalizes from relational authority
+    // alone; routed below it would throw the same error out of the catch, reach
+    // the scheduler's outer handler, and be reclaimed forever.
+    //
+    // Matched on the stable error CODE, never on a message.
+    if (error && error.code === 'POSTGRES_REPLAY_INTEGRITY_FAILURE') {
+      const terminal = await getRunLeaseRepository()
+        .terminalizeRunForReplayIntegrityFailure({
+          runId,
+          ticketId: run.ticketId,
+          leaseOwner: RUN_LEASE_OWNER
+        });
+      if (terminal && terminal.run) run = terminal.run;
+    } else if (error && error.code === 'RUN_LEASE_LOST') {
       const currentRun = await getRunLeaseRepository().getRun(runId);
       await appendEvent({
         type: 'run.lease_lost',

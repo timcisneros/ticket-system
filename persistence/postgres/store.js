@@ -9609,6 +9609,103 @@ class PostgresRuntimeStore {
     });
   }
 
+  // ── Terminalize a Run whose replay snapshot cannot be trusted ────────────
+  //
+  // THE FAILURE PATH MUST NOT DEPEND ON THE THING THAT FAILED. The ordinary
+  // terminalization path reconstructs a Run's replay, consequence and completion
+  // decision. For a Run whose replay snapshot fails its integrity check that is
+  // impossible: recording the failure re-reads the corruption, throws the same
+  // error, escapes to the scheduler, and the Run is reclaimed and fails
+  // identically — forever. A Run could not be recorded as failed BECAUSE its
+  // transcript was broken, which is exactly backwards.
+  //
+  // So this writes the terminal state from RELATIONAL AUTHORITY ONLY: the `runs`
+  // row, its identity, and its lease. It reads no replay snapshot, reconstructs
+  // nothing, and evaluates no progress or completion.
+  //
+  // THE CORRUPTED SNAPSHOT IS LEFT EXACTLY AS IT IS. It is the evidence of what
+  // happened; overwriting it with a synthetic healthy one would destroy the only
+  // record of the corruption and make the Run look ordinarily failed.
+  async terminalizeRunForReplayIntegrityFailure({
+    runId,
+    ticketId = null,
+    leaseOwner = null,
+    code = 'POSTGRES_REPLAY_INTEGRITY_FAILURE',
+    reason = 'Replay snapshot integrity check failed; replay reconstruction is unavailable'
+  }) {
+    const id = positiveSafeInteger(runId, 'runId');
+    return this.withTransaction(async client => {
+      const locked = await client.query(
+        `SELECT * FROM ${this.table('runs')} WHERE id = $1 FOR UPDATE`, [id]);
+      if (locked.rowCount === 0) {
+        const error = new Error(`run ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const current = locked.rows[0];
+      if (ticketId !== null && Number(current.ticket_id) !== Number(ticketId)) {
+        const error = new Error(
+          `run ${id} belongs to ticket ${current.ticket_id}, not ${ticketId}`);
+        error.code = 'POSTGRES_RUN_TICKET_MISMATCH';
+        throw error;
+      }
+
+      // IDEMPOTENT. A second observation of the same corruption re-reports the
+      // stored disposition and writes nothing — no duplicate event, no second
+      // terminal timestamp, no revision churn.
+      const alreadyTerminal = TERMINAL_RUN_STATUSES.has(current.status) &&
+        current.body && current.body.integrityFailureCode === code;
+      if (alreadyTerminal) {
+        return { run: runFromRow(current), terminalized: false, alreadyTerminal: true };
+      }
+
+      const patch = {
+        error: reason,
+        integrityFailureCode: code,
+        integrityFailureAt: null,
+        replayReconstructionAvailable: false,
+        failureKind: 'run_integrity_failure'
+      };
+
+      const updated = await client.query(
+        `UPDATE ${this.table('runs')}
+            SET status = 'failed',
+                current_phase = 'terminalization',
+                body = body || $2::jsonb
+                       || jsonb_build_object('integrityFailureAt',
+                            to_char(clock_timestamp() AT TIME ZONE 'UTC',
+                                    'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')),
+                lease_owner = NULL,
+                lease_expires_at = NULL,
+                last_heartbeat_at = NULL,
+                completed_at = COALESCE(completed_at, clock_timestamp()),
+                updated_at = clock_timestamp(),
+                revision = revision + 1
+          WHERE id = $1
+            AND ($3::text IS NULL OR lease_owner IS NULL OR lease_owner = $3)
+          RETURNING *`,
+        [id, JSON.stringify(patch), leaseOwner]
+      );
+      if (updated.rowCount === 0) {
+        // Another live executor holds the claim. Its own observation will reach
+        // the same conclusion; nothing is forced out from under it.
+        return { run: runFromRow(current), terminalized: false, alreadyTerminal: false };
+      }
+
+      // The event log is append-only and does not read the replay snapshot, so
+      // it stays available exactly when replay does not.
+      await this._appendEvent(client, {
+        ticketId: Number(current.ticket_id),
+        runId: id,
+        type: 'run.integrity_terminalized',
+        summary: reason,
+        payload: { code, replayReconstructionAvailable: false }
+      });
+
+      return { run: runFromRow(updated.rows[0]), terminalized: true, alreadyTerminal: false };
+    });
+  }
+
   async repairRunTerminalization({
     runId,
     status,

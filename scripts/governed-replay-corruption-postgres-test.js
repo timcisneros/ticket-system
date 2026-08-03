@@ -1,0 +1,355 @@
+#!/usr/bin/env node
+'use strict';
+
+// Tranche 5 — a Run whose transcript is corrupt fails once and stays failed.
+//
+// THE FAILURE PATH MUST NOT DEPEND ON THE THING THAT FAILED. The ordinary
+// terminalization path reconstructs a Run's replay, consequence and completion
+// decision. For a Run whose replay snapshot fails its integrity check that is
+// impossible: recording the failure re-read the corruption, threw the same
+// error, escaped to the scheduler, and the Run was reclaimed and failed
+// identically — 38 times in one window before this. A Run could not be recorded
+// as failed BECAUSE its transcript was broken.
+//
+// The corruption here is introduced deliberately, advancing the replay revision
+// so the database accepts the write and the canonical integrity check — not the
+// revision trigger — is what rejects it. That is the one place a suite in this
+// tranche writes durable state, and it is the scenario rather than a shortcut:
+// this state cannot be produced through any supported path.
+//
+// The corrupted snapshot is asserted to survive UNCHANGED. It is the evidence of
+// what happened, and a synthetic healthy replacement would erase it.
+//
+// The lifecycle suite proves that complete request-1 evidence authorizes a
+// second governed request. This proves that authority is a HISTORICAL FACT
+// reconstructed from durable rows, not an in-flight decision that a restart can
+// lose or repeat.
+//
+// Both failure directions cost real money. Lose it, and a Run that genuinely
+// advanced stops as though it had churned. Repeat it, and every crash buys
+// another provider request against the same earned progress — an unbounded
+// spend that looks like normal operation from every surface.
+//
+// So the interruption lands exactly between durable request-1 evidence and any
+// request-2 authority, and the scenario then restarts twice.
+
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { withHarness, createAsserter } = require('./postgres-test-harness');
+const {
+  seedGovernedStructuredTicket,
+  progressControlPolicy
+} = require('./governed-structured-fixture');
+const { eligibleExecutionFacts } = require('../runtime/governed-eligible-facts');
+
+const STAMP = `gci-${Date.now()}`;
+const ACTOR = 'governed-replay-corruption-test';
+const HERMETIC = path.join(__dirname, 'fixtures', 'hermetic-governed-transport-preload.js');
+const FAULT = path.join(__dirname, 'fixtures', 'governed-fault-injection-preload.js');
+const SENTINEL = 'test-only-sentinel-not-a-real-credential';
+// DISCRIMINATE THE LEAF, NOT THE FOLDER. The planner Run's own governed request
+// also names `reports/planner` — it is that item's owned output path — so
+// matching the root alone lets a planner request be counted as this Run's
+// transport, and lets the planner consume a response staged for the leaf. The
+// leaf's declared postcondition path appears only in the leaf's prompt.
+const OWNED_ROOT = 'reports/planner';
+const LEAF_MARKER = 'reports/planner/alpha';
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+const LIMITS = {
+  maxExecutionSteps: 8,
+  // EXACTLY TWO, because this Run genuinely makes exactly two requests. The
+  // crashed attempt's replayed turn is not a third: it is request 1 again,
+  // already counted from durable evidence. Sitting exactly on the ceiling is
+  // deliberate — it is what makes double-counting the replayed turn fail here
+  // rather than pass unnoticed with headroom to absorb it.
+  maxModelRequestsPerRun: 2,
+  maxWorkspaceOperationsPerRun: 40,
+  maxRuntimeDurationMs: 600_000,
+  maxAttempts: 3,
+  maxProcessOperationsPerRun: 5,
+  maxBrowserOperationsPerRun: 5,
+  maxOutputArtifactBytes: 1_048_576,
+  maxOutputArtifactBytesPerRun: 1_048_576
+};
+
+function staged(identity, plan) {
+  return {
+    match: LEAF_MARKER,
+    statusCode: 200,
+    body: JSON.stringify({
+      id: identity,
+      output_text: JSON.stringify(plan),
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 }
+    })
+  };
+}
+
+async function main() {
+  await withHarness('governed replay corruption containment',
+    async ({ store, workspaceRoot, startServer }) => {
+      const assertThat = createAsserter();
+
+      const seeded = await seedGovernedStructuredTicket(store, {
+        stamp: STAMP,
+        actor: ACTOR,
+        workspaceRoot,
+        agentApiKey: SENTINEL,
+        runtimeLimits: LIMITS,
+        ticketObjective:
+          'Create folders reports/planner/alpha and reports/planner/beta',
+        progressPolicy: progressControlPolicy({
+          maximumConsecutiveNoProgressWindows: 1
+        }),
+        leafPostconditions: (item, owned) => [
+          { type: 'folder_exists', path: `${owned}/alpha` },
+          { type: 'folder_exists', path: `${owned}/beta` }
+        ]
+      });
+      const runId = seeded.runIds[0];
+      const run = await store.getRun(runId);
+      const facts = eligibleExecutionFacts(run);
+      const factA = facts.find(f => f.criterion.path.endsWith('/alpha'));
+      const factB = facts.find(f => f.criterion.path.endsWith('/beta'));
+      fs.mkdirSync(path.join(workspaceRoot, OWNED_ROOT), { recursive: true });
+
+      const tmp = suffix => path.join(os.tmpdir(), `gci-${suffix}-${process.pid}-${STAMP}`);
+      const capturePath = tmp('cap');
+      const responsePath = tmp('res');
+      const markerPath = tmp('marker');
+      const statePath = tmp('state');
+      const servedPath = tmp('served');
+      fs.writeFileSync(capturePath, '');
+      fs.writeFileSync(markerPath, '');
+      fs.writeFileSync(responsePath, JSON.stringify({
+        responses: [
+          staged('fixture-restart-response-1', {
+            message: 'Creating the first declared folder.',
+            actions: [{ operation: 'createFolder', args: { path: factA.criterion.path } }],
+            complete: false
+          }),
+          staged('fixture-restart-response-2', {
+            message: 'Creating the second declared folder.',
+            actions: [{ operation: 'createFolder', args: { path: factB.criterion.path } }],
+            complete: true
+          })
+        ]
+      }));
+
+      const env = {
+        NODE_OPTIONS: `--require ${HERMETIC} --require ${FAULT}`,
+        OPENAI_API_KEY: SENTINEL,
+        HERMETIC_TRANSPORT_CAPTURE: capturePath,
+        HERMETIC_TRANSPORT_RESPONSE: responsePath,
+        HERMETIC_TRANSPORT_SERVED: servedPath,
+        GOVERNED_FAULT_MARKER: markerPath,
+        GOVERNED_FAULT_STATE: statePath,
+        RUNTIME_SCHEDULER_INTERVAL_MS: '200',
+        // Short, so the crashed Run's lease expires promptly and the real
+        // recovery path can reclaim it within the scenario.
+        RUN_LEASE_DURATION_MS: '4000'
+      };
+
+      const capturesForRun = () => fs.readFileSync(capturePath, 'utf8').trim()
+        .split('\n').filter(Boolean).map(line => JSON.parse(line))
+        .filter(entry => String(entry.body || '').includes(LEAF_MARKER));
+      const chargesOf = async () => (await store.pool.query(
+        `SELECT source_identity, state FROM ${store.table('run_budget_charges')}
+          WHERE run_id = $1 AND dimension = 'model_request' ORDER BY id`, [runId])).rows;
+      const economicOf = async () => (await store.pool.query(
+        `SELECT logical_source_identity, model_request_ordinal
+           FROM ${store.table('economic_request_reservations')}
+          WHERE run_id = $1 ORDER BY id`, [runId])).rows;
+      const replayOf = async () => {
+        const replay = await store.readRunReplay(runId);
+        return (replay && replay.snapshot) || {};
+      };
+
+      // ── Server 1: interrupted after request-1 evidence, before request 2 ──
+      const first = await startServer({
+        env: { ...env, GOVERNED_FAULT_BOUNDARY: 'before_next_request_reservation' }
+      });
+      try {
+        for (let attempt = 0; attempt < 200; attempt += 1) {
+          if (fs.readFileSync(markerPath, 'utf8').includes('BOUNDARY_B_REACHED')) break;
+          await sleep(500);
+        }
+        assertThat(fs.readFileSync(markerPath, 'utf8').includes('BOUNDARY_B_REACHED'),
+          'the EXACT boundary was reached: request-2 authority was about to be created');
+        await sleep(3000);
+      } finally {
+        // The child crashed at the boundary; stopping a dead child is fine.
+        try { await first.stop(); } catch (_) { /* already gone */ }
+      }
+
+      // ── Durable state after the interruption ────────────────────────────
+      const evidenceBefore = await store.readGovernedPostconditionEvidence(runId);
+      const postBatchBefore = evidenceBefore.filter(r => r.evaluationKind === 'post_batch');
+      assertThat(postBatchBefore.length === 2,
+        'request 1 durably committed its COMPLETE evidence set');
+      const verdictBefore = fact => postBatchBefore
+        .find(r => r.declaredFactIdentity === fact.declaredFactIdentity).satisfied;
+      assertThat(verdictBefore(factA) === true && verdictBefore(factB) === false,
+        'the durable request-1 evidence is A=true, B=false');
+      assertThat(capturesForRun().length === 1, 'exactly one transport call so far');
+      assertThat((await chargesOf()).length === 1, 'exactly one budget charge so far');
+      assertThat((await economicOf()).length === 1, 'exactly one economic reservation so far');
+
+      const transitionsBefore = await store.readGovernedFactTransitions(runId);
+      const baselineIdsBefore = evidenceBefore
+        .filter(r => r.evaluationKind === 'baseline').map(r => r.evidenceId).sort();
+
+      // ── CORRUPT THE TRANSCRIPT, ADVANCING THE REVISION ──────────────────
+      const replayRow = await store.readRunReplay(runId);
+      const originalSnapshotJson = JSON.stringify(replayRow.snapshot);
+      const tampered = JSON.parse(originalSnapshotJson);
+      tampered.modelResponses = (tampered.modelResponses || []).map(item => ({
+        ...item, text: JSON.stringify({ message: 'tampered', actions: [], complete: false })
+      }));
+      const tamperedJson = JSON.stringify(tampered);
+      await store.pool.query(
+        `UPDATE ${store.table('replay_snapshots')}
+            SET snapshot = $2::jsonb, revision = revision + 1
+          WHERE run_id = $1`, [runId, tamperedJson]);
+
+      const runRow = async () => (await store.pool.query(
+        `SELECT status, lease_owner, revision, completed_at IS NOT NULL AS done,
+                body->>'integrityFailureCode' AS code,
+                body->>'integrityFailureAt' AS at,
+                body->>'error' AS reason
+           FROM ${store.table('runs')} WHERE id = $1`, [runId])).rows[0];
+      const integrityEvents = async () => (await store.pool.query(
+        `SELECT count(*)::int AS n FROM ${store.table('events')}
+          WHERE run_id = $1 AND type = 'run.integrity_terminalized'`, [runId])).rows[0].n;
+      const storedSnapshot = async () => (await store.pool.query(
+        `SELECT snapshot FROM ${store.table('replay_snapshots')} WHERE run_id = $1`,
+        [runId])).rows[0].snapshot;
+
+      let revisionAfterTerminalFinal = null;
+      const second = await startServer({ env });
+      try {
+        for (let attempt = 0; attempt < 200; attempt += 1) {
+          const current = await store.getRun(runId);
+          if (['completed', 'failed', 'blocked', 'cancelled'].includes(current.status)) break;
+          await sleep(500);
+        }
+        await sleep(2000);
+
+        const evidenceAfter = await store.readGovernedPostconditionEvidence(runId);
+        const baselineIdsAfter = evidenceAfter
+          .filter(r => r.evaluationKind === 'baseline').map(r => r.evidenceId).sort();
+        assertThat(JSON.stringify(baselineIdsAfter) === JSON.stringify(baselineIdsBefore),
+          'the SAME baseline rows are read — none re-appended');
+        const window1After = evidenceAfter.filter(r =>
+          r.evaluationKind === 'post_batch' &&
+          r.batchStepId === postBatchBefore[0].batchStepId);
+        assertThat(window1After.length === 2,
+          'request-1 evidence is unchanged — no duplicate row was appended');
+
+        const transitionsAfter = await store.readGovernedFactTransitions(runId);
+        const creditedA = transitionsAfter.creditedInBatch[factA.declaredFactIdentity];
+        assertThat(creditedA === transitionsBefore.creditedInBatch[factA.declaredFactIdentity],
+          'the SAME cutoff-bounded A false-to-true transition is derived after restart');
+        assertThat(transitionsAfter.windows
+          .filter(w => w.newlySatisfiedFactIdentities.includes(factA.declaredFactIdentity))
+          .length === 1,
+        'A is credited EXACTLY ONCE across the restart');
+
+        let row = await runRow();
+        for (let i = 0; i < 45 && row.status !== 'failed'; i += 1) {
+          await sleep(1000); row = await runRow();
+        }
+        await sleep(5000);
+        row = await runRow();
+
+        // ── ONE STABLE TERMINAL DISPOSITION ─────────────────────────────
+        assertThat(row.status === 'failed',
+          'the Run reaches the existing terminal failed status');
+        assertThat(row.code === 'POSTGRES_REPLAY_INTEGRITY_FAILURE',
+          'the exact stable integrity code is persisted');
+        assertThat(typeof row.at === 'string' && Number.isFinite(Date.parse(row.at)),
+          'a database-generated terminal timestamp is persisted');
+        assertThat(row.done === true, 'completed_at is set');
+        assertThat(row.lease_owner === null, 'lease authority is cleared');
+        assertThat(/integrity/i.test(String(row.reason || '')),
+          'the operator-facing reason names the integrity failure');
+        assertThat(await integrityEvents() === 1,
+          'exactly ONE canonical integrity event exists');
+
+        // ── NOT SCHEDULER-ELIGIBLE, AND NOT LOOPING ─────────────────────
+        const revisionAfterTerminal = row.revision;
+        await sleep(4000);
+        const settled = await runRow();
+        assertThat(settled.revision === revisionAfterTerminal,
+          'the Run is no longer claimed — its revision stops advancing');
+        assertThat(settled.lease_owner === null, 'and no lease is re-acquired');
+        assertThat(await integrityEvents() === 1,
+          'no duplicate integrity event is appended');
+
+        // ── NOTHING WAS SPENT OR EXECUTED ON THE CORRUPT TRANSCRIPT ─────
+        assertThat(capturesForRun().length === 1, 'no provider call after corruption');
+        assertThat((await economicOf()).length === 1, 'no new economic reservation');
+        assertThat((await chargesOf()).length === 1, 'no new runtime-budget charge');
+        assertThat(!(await store.getRun(runId)).governedProgressBlock,
+          'no progress block was created');
+
+        // ── THE CORRUPTION SURVIVES AS EVIDENCE ─────────────────────────
+        assertThat(JSON.stringify(await storedSnapshot()) === tamperedJson,
+          'the corrupted replay is NOT rewritten, repaired, or replaced');
+        assertThat(JSON.stringify(await storedSnapshot()) !== originalSnapshotJson,
+          'and it is still the corrupted content, not the original');
+        revisionAfterTerminalFinal = settled.revision;
+      } finally {
+        await second.stop();
+      }
+
+      // ── THE DISPOSITION IS STABLE AFTER THE EXECUTOR IS GONE ───────────
+      //
+      // Asserted from durable state with no server running, rather than from a
+      // third spawned server. A fresh server currently REFUSES TO START against
+      // this Ticket — `Run 1 cannot project its ticket without a completion
+      // decision` — because the Ticket projection demands a completion decision
+      // for a leaf that truthfully has none and never will. That cascade is a
+      // DIFFERENT defect from the one under test, and it is named here rather
+      // than worked around silently: it is the reason this assertion is weaker
+      // than a full restart.
+      const rowAfterStop = await runRow();
+      assertThat(rowAfterStop.status === 'failed' &&
+        rowAfterStop.code === 'POSTGRES_REPLAY_INTEGRITY_FAILURE',
+      'the terminal disposition survives the executor exiting');
+      assertThat(rowAfterStop.revision === revisionAfterTerminalFinal,
+        'nothing touches the Run once no executor holds it');
+      assertThat(await integrityEvents() === 1,
+        'still exactly one integrity event');
+      assertThat(JSON.stringify(await storedSnapshot()) === tamperedJson,
+        'the corrupted replay is still present and unmodified');
+
+      console.log(`  (${assertThat.count()} corruption containment assertions)`);
+      for (const file of [capturePath, responsePath, markerPath, statePath, servedPath]) {
+        fs.rmSync(file, { force: true });
+      }
+    });
+
+  const forbidden = [
+    ['appendGovernedPostcondition', 'Evidence'],
+    ['INSERT ', 'INTO'],
+    ['DELETE ', 'FROM'],
+    ['reserveEconomic', 'Request'],
+    ['terminalizeRunForReplay', 'IntegrityFailure']
+  ].map(parts => parts.join(''));
+  const executable = fs.readFileSync(__filename, 'utf8').split('\n')
+    .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line))
+    .filter(line => !/^\s*\['/.test(line))
+    .join('\n');
+  for (const name of forbidden) {
+    assert.equal(executable.includes(name), false,
+      `the suite never calls ${name} — production creates and recovers these records`);
+  }
+
+  console.log('governed replay corruption containment PostgreSQL test passed');
+}
+
+main().catch(error => { console.error(error); process.exit(1); });
