@@ -56,7 +56,42 @@ const transportModule = require(transportModulePath);
 const realCreate = transportModule.createOpenAiGovernedTransport;
 
 let fixtureRequestCount = 0;
-const servedIndexes = new Set();
+
+// SERVED STATE MUST SURVIVE A RESTART.
+//
+// Held only in memory, a restarted server starts again at the first staged
+// response — so a scenario that crashes and recovers silently receives its
+// FIRST answer a second time. That is indistinguishable from a real agent
+// repeating itself: the replayed answer advances no declared fact, the Run is
+// correctly blocked for churn, and the scenario appears to prove a recovery
+// defect that does not exist. The path is optional; without it the fixture
+// keeps its single-process behaviour.
+const SERVED_PATH = process.env.HERMETIC_TRANSPORT_SERVED || null;
+
+function loadServed() {
+  if (!SERVED_PATH) return new Set();
+  try {
+    return new Set(JSON.parse(require('node:fs').readFileSync(SERVED_PATH, 'utf8')));
+  } catch (_) {
+    return new Set();
+  }
+}
+
+function saveServed(served) {
+  if (!SERVED_PATH) return;
+  require('node:fs').writeFileSync(SERVED_PATH, JSON.stringify([...served]));
+}
+
+const memoryServed = new Set();
+const servedIndexes = {
+  has: index => (SERVED_PATH ? loadServed() : memoryServed).has(index),
+  add(index) {
+    if (!SERVED_PATH) { memoryServed.add(index); return; }
+    const served = loadServed();
+    served.add(index);
+    saveServed(served);
+  }
+};
 
 function fixtureHttpsRequest(options, onResponse) {
   // A bounded fixture answers only the requests its scenario staged. The worker

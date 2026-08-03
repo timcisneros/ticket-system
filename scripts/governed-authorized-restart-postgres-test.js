@@ -38,6 +38,11 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 const LIMITS = {
   maxExecutionSteps: 8,
+  // EXACTLY TWO, because this Run genuinely makes exactly two requests. The
+  // crashed attempt's replayed turn is not a third: it is request 1 again,
+  // already counted from durable evidence. Sitting exactly on the ceiling is
+  // deliberate — it is what makes double-counting the replayed turn fail here
+  // rather than pass unnoticed with headroom to absorb it.
   maxModelRequestsPerRun: 2,
   maxWorkspaceOperationsPerRun: 40,
   maxRuntimeDurationMs: 600_000,
@@ -93,6 +98,7 @@ async function main() {
       const responsePath = tmp('res');
       const markerPath = tmp('marker');
       const statePath = tmp('state');
+      const servedPath = tmp('served');
       fs.writeFileSync(capturePath, '');
       fs.writeFileSync(markerPath, '');
       fs.writeFileSync(responsePath, JSON.stringify({
@@ -115,6 +121,7 @@ async function main() {
         OPENAI_API_KEY: SENTINEL,
         HERMETIC_TRANSPORT_CAPTURE: capturePath,
         HERMETIC_TRANSPORT_RESPONSE: responsePath,
+        HERMETIC_TRANSPORT_SERVED: servedPath,
         GOVERNED_FAULT_MARKER: markerPath,
         GOVERNED_FAULT_STATE: statePath,
         RUNTIME_SCHEDULER_INTERVAL_MS: '200',
@@ -242,83 +249,111 @@ async function main() {
         // ── REQUEST 1 IS NOT REPEATED ────────────────────────────────────
         //
         // Recovery may reconstruct state. It may not re-execute a request that
-        // already happened — that would pay for the same answer twice.
-        assertThat(capturesForRun().length === 1,
-          'provider request 1 was NOT transported again');
-        assertThat((await economicOf()).length === 1,
-          'no duplicate request-1 economic reservation');
-        assertThat((await chargesOf()).length === 1,
-          'no duplicate request-1 runtime-budget charge');
-        const receiptsAfterResume = (await store.pool.query(
-          `SELECT id FROM ${store.table('operation_receipts')}
-            WHERE run_id = $1 AND outcome = 'succeeded'`, [runId])).rows;
-        assertThat(receiptsAfterResume.length === 1,
-          'no duplicate operation receipt — the mutation was not re-committed');
+        // already happened — that would pay for the same answer twice. Request 1
+        // is identified by its own reserved ordinal, not by counting calls.
+        const economicAfter = await economicOf();
+        const ordinals = economicAfter.map(row => Number(row.model_request_ordinal));
+        assertThat(ordinals.filter(ordinal => ordinal === 1).length === 1,
+          'request 1 holds exactly ONE economic reservation — it was not re-reserved');
+        const chargesAfter = await chargesOf();
+        assertThat(chargesAfter
+          .filter(row => row.source_identity === 'model-request:agent:0:provider')
+          .length === 1,
+        'no duplicate request-1 runtime-budget charge');
+        const capturedAll = capturesForRun();
+        assertThat(capturedAll.filter(entry =>
+          String(entry.body || '').includes('alpha') &&
+          !String(entry.body || '').includes('beta')).length <= 1,
+        'request 1 was not transported a second time');
         const resumedSnapshot = await replayOf();
-        assertThat((resumedSnapshot.providerRequests || []).length === 1,
-          'no duplicate provider-request replay item');
-        assertThat((resumedSnapshot.modelResponses || []).length === 1,
-          'no duplicate model-response replay item');
-        const postBatchAfterResume = (await store.readGovernedPostconditionEvidence(runId))
+        assertThat((resumedSnapshot.modelResponses || [])
+          .filter(item => item.responseHash === (resumedSnapshot.modelResponses[0] || {}).responseHash)
+          .length === 1,
+        'no duplicate model-response replay item for the recovered turn');
+        const succeededReceipts = (await store.pool.query(
+          `SELECT id, workspace_path FROM ${store.table('operation_receipts')}
+            WHERE run_id = $1 AND outcome = 'succeeded' ORDER BY id`, [runId])).rows;
+        assertThat(succeededReceipts
+          .filter(row => String(row.workspace_path).endsWith('alpha')).length === 1,
+        'no duplicate operation receipt — request 1 mutation was not re-committed');
+        const postBatchAfter = (await store.readGovernedPostconditionEvidence(runId))
           .filter(r => r.evaluationKind === 'post_batch');
-        assertThat(postBatchAfterResume.length === 2,
+        assertThat(postBatchAfter.filter(r => r.batchStepId === '0').length === 2,
           'no duplicate postcondition evidence for the recovered window');
 
+        // ── A IS CREDITED ONCE, AND IT AUTHORIZED REQUEST 2 ──────────────
         const transitionsResumed = await store.readGovernedFactTransitions(runId);
         assertThat(transitionsResumed.windows
           .filter(w => w.newlySatisfiedFactIdentities.includes(factA.declaredFactIdentity))
           .length === 1,
         'A is credited exactly once across the crash and recovery');
-        assertThat(!transitionsResumed.newlyVerifiedFactIdentities
-          .includes(factB.declaredFactIdentity),
-        'B remains unverified');
 
-        const baselineAfterResume = (await store.readGovernedPostconditionEvidence(runId))
-          .filter(r => r.evaluationKind === 'baseline');
-        assertThat(baselineAfterResume.length === 2,
-          'the baseline is captured ONCE — resume re-reports it, never re-observes it');
-        assertThat(capturesForRun().length === 1,
-          'no provider request was replayed by the recovery itself');
+        // ── REQUEST 2 EXACTLY ONCE ───────────────────────────────────────
+        //
+        // The whole point of recovering: the SAME Run goes on to earn its next
+        // request from durable evidence, rather than discarding proven progress.
+        assertThat(ordinals.filter(ordinal => ordinal === 2).length === 1,
+          'exactly ONE request-2 economic reservation exists');
+        assertThat(chargesAfter
+          .filter(row => row.source_identity === 'model-request:agent:1:provider')
+          .length === 1,
+        'exactly ONE request-2 runtime-budget charge exists');
+        assertThat((resumedSnapshot.providerRequests || []).length === 2,
+          'exactly ONE request-2 provider-request replay item exists');
+        assertThat(capturedAll.length === 2,
+          'exactly ONE request-2 transport call occurred');
+        assertThat(!resumedRun.governedProgressBlock,
+          'no progress block exists — A reset the no-progress streak');
 
+        // ── SAME RUN, SAME AUTHORITY ─────────────────────────────────────
+        //
+        // A recovery lease or attempt may change. Execution authority may not.
+        assertThat(resumedRun.id === run.id && resumedRun.ticketId === run.ticketId,
+          'request 2 is issued by the SAME Run and Ticket — no replacement Run');
+        assertThat(resumedRun.allocationItemId === run.allocationItemId,
+          'the same allocation item');
+        assertThat(JSON.stringify(resumedRun.leafRunBinding) ===
+          JSON.stringify(run.leafRunBinding),
+        'the same leaf binding');
+        assertThat(resumedRun.completionAuthoritySnapshot.snapshotHash ===
+          run.completionAuthoritySnapshot.snapshotHash,
+        'the same captured completion authority hash');
+        assertThat(JSON.stringify(resumedRun.governedExecution.progressControlPolicy) ===
+          JSON.stringify(run.governedExecution.progressControlPolicy),
+        'the same captured progress policy');
+
+        const progress = await store.readGovernedRunProgressState(runId,
+          { forUpdate: false });
+        assertThat(progress.cumulativeResources.providerRequests === 2,
+          'cumulative provider requests is 2 across the crash — never reset');
+        assertThat(typeof progress.executionEpochAt === 'string',
+          'duration is still anchored to the IMMUTABLE epoch, not the latest attempt');
       } finally {
         await second.stop();
       }
 
-      // ── A second restart changes nothing that was already durable ──────
-      const evidenceBeforeThird = (await store.readGovernedPostconditionEvidence(runId)).length;
+      // ── A further restart buys nothing ─────────────────────────────────
+      const economicBeforeThird = (await economicOf()).length;
       const chargesBeforeThird = (await chargesOf()).length;
+      const capturesBeforeThird = capturesForRun().length;
+      const evidenceBeforeThird = (await store.readGovernedPostconditionEvidence(runId)).length;
       const third = await startServer({ env });
       try {
         await sleep(6000);
+        assertThat((await economicOf()).length === economicBeforeThird,
+          'a further restart creates no additional economic reservation');
+        assertThat((await chargesOf()).length === chargesBeforeThird,
+          'a further restart creates no additional budget charge');
+        assertThat(capturesForRun().length === capturesBeforeThird,
+          'a further restart dispatches nothing');
         assertThat((await store.readGovernedPostconditionEvidence(runId)).length ===
           evidenceBeforeThird,
-        'a second restart appends no duplicate evidence');
-        assertThat((await chargesOf()).length === chargesBeforeThird,
-          'a second restart creates no further budget charge');
-        assertThat(capturesForRun().length === 1,
-          'a second restart dispatches nothing');
-
-        // VERIFIED PROGRESS IS STILL NOT COMPLETION, EVEN AFTER RECOVERY.
-        // B was never satisfied, so no surface may report this work as done —
-        // whatever terminal status the recovered attempt happens to reach.
-        const plan = await store.getAllocationPlanForTicket(run.ticketId);
-        const items = (plan && plan.aggregateDecision && plan.aggregateDecision.items) || [];
-        const leafItem = items.find(item =>
-          Number(item.allocationItemId) === Number(run.allocationItemId));
-        assertThat(!leafItem || leafItem.itemStatus !== 'completed',
-          'the leaf item is NOT completed — B was never satisfied');
-
-        const progress = await store.readGovernedRunProgressState(runId,
-          { forUpdate: false });
-        assertThat(progress.cumulativeResources.providerRequests === 1,
-          'cumulative provider requests survives every restart');
-        assertThat(typeof progress.executionEpochAt === 'string',
-          'duration is still anchored to the IMMUTABLE epoch, not the latest attempt');
+        'a further restart appends no duplicate evidence');
 
         console.log(`  (${assertThat.count()} authorized restart assertions)`);
       } finally {
         await third.stop();
-        for (const file of [capturePath, responsePath, markerPath, statePath]) {
+        for (const file of [capturePath, responsePath, markerPath, statePath, servedPath]) {
           fs.rmSync(file, { force: true });
         }
       }

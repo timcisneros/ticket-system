@@ -12277,6 +12277,10 @@ async function dispatchGovernedLeafModelRequest({
         : governedResponseCompletedAtMs,
       requestEvidenceKey: buildRunEvidenceKey(run, 'provider-request', slot),
       responseEvidenceKey: governedResponseEvidenceKey,
+      // The worker counts model requests to enforce the per-Run ceiling. A
+      // reused durable response is not an additional request — it is the same
+      // one, already counted from durable evidence when the attempt resumed.
+      reusedDurableResponse: result.status === 'reused_durable_response',
       reservationId: result.reservationId,
       modelRequestOrdinal: result.ordinal,
       settlementReceiptHash: result.settlementReceiptHash
@@ -22504,6 +22508,17 @@ async function runAgentTicket(runId) {
             ? '[redacted browser model response]'
             : text
         });
+        // A REUSED DURABLE RESPONSE IS NOT A NEW REQUEST.
+        //
+        // On resume `modelRequestCount` is seeded from the durable provider
+        // requests this Run already made, so the turn being replayed is ALREADY
+        // counted. Incrementing again above charged the same logical request
+        // twice against the per-Run ceiling, and a two-request Run recovered
+        // after its first request could never reach its second: the limit was
+        // exhausted by double-counting the one it had already paid for.
+        if (issuedProviderCall && issuedProviderCall.reusedDurableResponse) {
+          modelRequestCount -= 1;
+        }
         providerCall = {
           ...issuedProviderCall,
           recovered: false,
@@ -23667,9 +23682,31 @@ async function runAgentTicket(runId) {
       }
       const compiledPostcondition = isBrowserRun(run) ? null : checkObjectiveContractPostcondition(compiledContract);
       const declaredDirectPostcondition = isBrowserRun(run) ? null : checkObviousTicketPostcondition(ticket);
+      // A REDUNDANT ACTION IS NOT EVIDENCE OF COMPLETION FOR A GOVERNED RUN.
+      //
+      // `checkPostconditionCompletion` carries a last-resort heuristic: if the
+      // model asked for something that was already true, the objective was
+      // probably already met. That is a reasonable guess for an ungoverned Run
+      // and a false one for a governed Run being recovered, because a recovered
+      // turn REPLAYS an action that has already been applied. Its redundancy
+      // proves the turn already ran — not that the declared work is done.
+      //
+      // Left in, this terminalized every recovered governed Run at its first
+      // replayed turn: request 1's mutation was a no-op the second time, the
+      // heuristic read that as success, and the Run stopped before it could
+      // ever prepare request 2 — discarding verified progress that was already
+      // durable while a declared fact was still false.
+      //
+      // A governed leaf Run has a better answer available and must use it: its
+      // admitted declared facts, evaluated by the same authority that owns
+      // completion. So the heuristic is simply not consulted here. The two
+      // authoritative sources above are unchanged.
+      const governedLeafRun = Boolean(run && run.leafRunBinding && run.governedExecution);
       const postcondition = compiledPostcondition ||
         declaredDirectPostcondition ||
-        (isBrowserRun(run) ? null : await checkPostconditionCompletion(run, actions, actionResults, step));
+        (isBrowserRun(run) || governedLeafRun
+          ? null
+          : await checkPostconditionCompletion(run, actions, actionResults, step));
       if (postcondition) {
         await recordRunEvent(run, 'run:postcondition_completed', postcondition.reason, {
           step,
