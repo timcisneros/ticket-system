@@ -5503,6 +5503,50 @@ duplicated external send is not.
 required evidence exist. Automatic retransmission of an ambiguous started
 request is unsupported.
 
+## Corrupted Replay Snapshot Causes an Unbounded Recovery Loop (recorded 2026-08-02)
+
+**Status:** open — reproduced defect. Detection works; disposition does not.
+
+Tampering a governed Run's durable `modelResponses` transcript (text changed,
+recorded response hash preserved, replay revision advanced) IS detected: the
+replay snapshot carries its own integrity check and it fires correctly, before
+the governed response-hash verification is ever reached. Nothing corrupt is
+executed — no parse, no workspace action, no receipt, no evidence, no further
+request, no transport, no charge, no reservation.
+
+But the failure lands OUTSIDE the execution boundary:
+
+```text
+Run 1 failed outside its execution boundary: Replay snapshot integrity check failed for run 1
+```
+
+and repeats without limit. The Run stays `running`, is re-claimed by the
+scheduler, fails the same way, and is claimed again — observed for the full
+window with no terminal state and no durable reason. Events show repeated
+`run.lease_acquired` / `run.resumed` / `scheduler.run_selected` and no progress.
+
+**Why this matters.** The containment is real: a corrupted transcript cannot
+cause false progress or spending. What is missing is the disposition. An
+operator sees a Run that appears to run forever with no durable reason naming
+the integrity failure, and the scheduler burns capacity on it indefinitely.
+"Fails closed" and "fails closed and stops" are different guarantees, and only
+the first currently holds.
+
+**Consequence for the governed response-hash guard.** Because the replay
+integrity check fires first, the narrower
+`GOVERNED_RESPONSE_REHYDRATION_CONFLICT` guard remains unexercised by any
+scenario. It is defensive-only, and this is the third session in which its
+tamper coverage has not landed — it should be treated as the item most at risk
+of never being closed.
+
+**What would close it.** Give failures raised outside the execution boundary a
+terminal integrity disposition — reusing an existing Run failure mechanism, with
+a truthful reason naming replay-snapshot integrity — then assert one durable
+disposition, a stable reason, no duplicate events, no further claims, and
+idempotence across restarts. The response-hash tamper case can then assert its
+own disposition instead of being masked by the earlier check.
+
+
 ---
 
-*Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
+*Corrupted Replay Snapshot Recovery Loop recorded 2026-08-02. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
