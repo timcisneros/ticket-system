@@ -551,35 +551,80 @@ const COMPLETION_EVIDENCE_RESULTS = Object.freeze([
   'conflicts_with_run'
 ]);
 
-function evaluateRunCompletionEvidence({
-  runStatus,
+const COMPLETION_BINDING_RESULTS = Object.freeze([
+  'absent',
+  'valid',
+  'stale',
+  'authority_mismatch'
+]);
+
+// IS THIS DECISION THIS RUN'S DECISION? Answered without reference to what the
+// Run claims, because a decision bound to the wrong Run or built against
+// different authority is malformed whatever its subject's status happens to be.
+//
+// Keeping this separate is what stops `not_applicable` from swallowing a
+// malformed decision: a failed Run carrying someone else's decision is still
+// carrying someone else's decision, and saying "completion evidence is not
+// applicable here" would file that under the wrong heading and lose it.
+function evaluateCompletionDecisionBinding({
   runId,
   runTicketId,
   runCompletionAuthorityHash = null,
   decision = null
 }) {
-  // A Run that reached a terminal non-success state, or has not finished at
-  // all, never asserted completion. Demanding evidence from it asks for
-  // something execution was never in a position to produce.
-  if (runStatus !== 'completed') {
-    return { result: 'not_applicable', reason: null };
-  }
-  if (!decision) {
-    return { result: 'missing', reason: 'completion_decision_missing' };
-  }
+  if (!decision) return { result: 'absent', reason: null };
   if (decision.runId !== runId || decision.ticketId !== runTicketId) {
     return { result: 'stale', reason: 'completion_decision_stale' };
   }
+  // A null hash on either side is NOT a mismatch. Ticket projection has no item
+  // binding and supplies none; inventing a conflict from an absent comparison
+  // would refuse Runs nobody has any evidence against.
   if (runCompletionAuthorityHash !== null &&
       decision.objectiveContractHash !== runCompletionAuthorityHash) {
     return { result: 'authority_mismatch', reason: 'completion_authority_mismatch' };
   }
-  // A decision claiming completion for a Run that did not reach `completed`
-  // contradicts the persisted lifecycle. Unreachable while `runStatus` is
-  // already known to be `completed`, and kept because this helper's contract is
-  // the rule, not the one caller that currently satisfies it early.
-  if (decision.completionDisposition === 'completed' && runStatus !== 'completed') {
+  return { result: 'valid', reason: null };
+}
+
+// DOES THIS RUN'S STATE REQUIRE COMPLETION EVIDENCE, AND DOES WHAT IT HAS
+// SATISFY THAT?
+//
+// Precedence matters more than the individual answers. Decision INTEGRITY is
+// judged first, so a malformed decision is reported as malformed no matter what
+// the Run claims. Only once the decision is either absent or genuinely this
+// Run's does the Run's own claim decide whether evidence was required at all —
+// because only `completed` is a claim, and only a claim needs proof.
+function evaluateRunCompletionEvidence({
+  runStatus,
+  runId,
+  runTicketId,
+  runCompletionAuthorityHash = null,
+  decision = null,
+  binding = null
+}) {
+  const bound = binding || evaluateCompletionDecisionBinding({
+    runId, runTicketId, runCompletionAuthorityHash, decision
+  });
+
+  // A present-but-malformed decision is never hidden behind "not applicable".
+  if (bound.result === 'stale' || bound.result === 'authority_mismatch') {
+    return { result: bound.result, reason: bound.reason };
+  }
+
+  if (bound.result === 'absent') {
+    return runStatus === 'completed'
+      ? { result: 'missing', reason: 'completion_decision_missing' }
+      : { result: 'not_applicable', reason: null };
+  }
+
+  // The decision is well bound. A decision asserting completion for a Run that
+  // did not reach `completed` contradicts the persisted lifecycle.
+  if (decision && decision.completionDisposition === 'completed' &&
+      runStatus !== 'completed') {
     return { result: 'conflicts_with_run', reason: 'completion_decision_conflicts_run' };
+  }
+  if (runStatus !== 'completed') {
+    return { result: 'not_applicable', reason: null };
   }
   return { result: 'valid', reason: 'completion_verified' };
 }
@@ -621,19 +666,37 @@ function deriveLeafItemDisposition({
   if (nullableHash(runCompletionAuthorityHash, 'run.completionAuthorityHash') === null) {
     return decided('interrupted', null, 'run_terminal_without_authority');
   }
-  if (!decision) {
-    // A failed or interrupted Run is truthfully that even with no decision; only
-    // `completed` is the claim that requires durable evidence to survive.
-    return status === 'completed'
-      ? decided('interrupted', null, 'completion_decision_missing')
-      : decided(status === 'interrupted' ? 'interrupted' : 'failed', null,
-        'completion_decision_missing');
+  // ONE AUTHORITY, MAPPED HERE. The decisive comparisons — is the decision
+  // present, is it this Run's, was it built against this authority, does it
+  // contradict the Run — belong to `evaluateRunCompletionEvidence`. This
+  // function's job is turning that answer into an allocation-item disposition,
+  // which is a different question from whether the evidence is sound.
+  const evidence = evaluateRunCompletionEvidence({
+    runStatus: status,
+    runId: bound.runId,
+    runTicketId: bound.ticketId,
+    runCompletionAuthorityHash,
+    decision
+  });
+  if (evidence.result === 'missing') {
+    // Only a completion CLAIM is unresolved by missing evidence.
+    return decided('interrupted', null, evidence.reason);
   }
-  if (decision.runId !== bound.runId || decision.ticketId !== bound.ticketId) {
-    return decided('interrupted', null, 'completion_decision_stale');
+  if (evidence.result === 'not_applicable' && !decision) {
+    // A terminal non-success Run with NO decision is truthfully itself.
+    // Reported with the historical reason so existing consumers keep the
+    // string they had.
+    //
+    // Only the ABSENT case short-circuits. A non-completed Run that carries a
+    // well-bound decision still has something to say — a `blocked` disposition
+    // is a real outcome with its own reason — and swallowing it here would
+    // discard authority the Run legitimately holds.
+    return decided(status === 'interrupted' ? 'interrupted' : 'failed', null,
+      'completion_decision_missing');
   }
-  if (decision.objectiveContractHash !== runCompletionAuthorityHash) {
-    return decided('interrupted', null, 'completion_authority_mismatch');
+  if (evidence.result === 'stale' || evidence.result === 'authority_mismatch' ||
+      evidence.result === 'conflicts_with_run') {
+    return decided('interrupted', null, evidence.reason);
   }
   const disposition = enumerated(
     decision.completionDisposition,
@@ -956,6 +1019,8 @@ function projectLeafRunBindingForRun(run) {
 
 module.exports = {
   COMPLETION_EVIDENCE_RESULTS,
+  COMPLETION_BINDING_RESULTS,
+  evaluateCompletionDecisionBinding,
   evaluateRunCompletionEvidence,
   AGGREGATE_DECISION_FIELDS,
   LEAF_ADMISSION_STATES,

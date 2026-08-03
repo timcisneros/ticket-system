@@ -33,6 +33,7 @@ const {
   deriveLeafItemDisposition,
   evaluateRunCompletionEvidence,
   COMPLETION_EVIDENCE_RESULTS,
+  COMPLETION_BINDING_RESULTS,
   normalizeAggregatePlanDecision,
   normalizeLeafRunBinding,
   projectStructuredAllocationLeafExecution,
@@ -966,59 +967,110 @@ assert.equal(
 console.log('structured allocation leaf-run contract test passed');
 
 
-// ── The shared completion-evidence rule ─────────────────────────────────────
+// ── The shared completion-evidence authority ────────────────────────────────
 //
-// Allocation reconciliation and Ticket projection both consume this. Pinning it
-// here keeps the two surfaces from drifting apart again: if the rule changes,
-// it changes in one place and this table says so.
+// Both Ticket projection and leaf reconciliation consume this. The precedence
+// is the substantive part: decision INTEGRITY is judged before the Run's own
+// claim, so a malformed decision is never filed under "not applicable" just
+// because its subject did not finish.
 {
-  const decision = {
-    runId: 3001, ticketId: 700,
-    objectiveContractHash: 'a'.repeat(64),
-    completionDisposition: 'completed'
-  };
-  const evaluate = overrides => evaluateRunCompletionEvidence({
+  const HASH = 'a'.repeat(64);
+  const OTHER = 'b'.repeat(64);
+  const good = { runId: 3001, ticketId: 700, objectiveContractHash: HASH,
+    completionDisposition: 'completed' };
+  const blockedDecision = { ...good, completionDisposition: 'blocked' };
+  const ev = overrides => evaluateRunCompletionEvidence({
     runStatus: 'completed', runId: 3001, runTicketId: 700,
-    runCompletionAuthorityHash: 'a'.repeat(64), decision, ...overrides
+    runCompletionAuthorityHash: HASH, decision: null, ...overrides
   });
 
-  // A Run that never claimed success is never asked for proof of it.
+  // No decision at all.
   for (const runStatus of ['pending', 'running', 'failed', 'interrupted']) {
-    assert.equal(evaluate({ runStatus }).result, 'not_applicable',
-      `a ${runStatus} Run does not require completion evidence`);
+    const r = ev({ runStatus });
+    assert.equal(r.result, 'not_applicable',
+      `${runStatus} with no decision does not require completion evidence`);
+    assert.equal(r.reason, null);
+  }
+  assert.equal(ev({}).reason, 'completion_decision_missing',
+    'completed with no decision is missing evidence');
+
+  // A valid decision for a Run that claims completion.
+  assert.equal(ev({ decision: good }).result, 'valid');
+  assert.equal(ev({ decision: good }).reason, 'completion_verified');
+
+  // BINDING FAULTS OUTRANK RUN STATUS. A decision belonging to another Run or
+  // built against other authority is malformed whatever its subject claims.
+  for (const runStatus of ['completed', 'running', 'failed', 'interrupted']) {
+    assert.equal(ev({ runStatus, decision: { ...good, runId: 3002 } }).reason,
+      'completion_decision_stale', `${runStatus} + wrong Run decision is stale`);
+    assert.equal(ev({ runStatus, decision: { ...good, ticketId: 701 } }).reason,
+      'completion_decision_stale', `${runStatus} + wrong Ticket decision is stale`);
+    assert.equal(
+      ev({ runStatus, decision: { ...good, objectiveContractHash: OTHER } }).reason,
+      'completion_authority_mismatch',
+      `${runStatus} + authority mismatch is reported as a mismatch`);
   }
 
-  assert.equal(evaluate({}).result, 'valid');
-  assert.equal(evaluate({}).reason, 'completion_verified');
-  assert.equal(evaluate({ decision: null }).reason, 'completion_decision_missing');
-  assert.equal(evaluate({ runTicketId: 701 }).reason, 'completion_decision_stale');
-  assert.equal(evaluate({ runId: 3002 }).reason, 'completion_decision_stale');
-  assert.equal(evaluate({ runCompletionAuthorityHash: 'b'.repeat(64) }).reason,
-    'completion_authority_mismatch');
+  // A well-bound decision asserting completion for a Run that did not reach it
+  // contradicts the persisted lifecycle.
+  for (const runStatus of ['running', 'failed', 'interrupted']) {
+    assert.equal(ev({ runStatus, decision: good }).reason,
+      'completion_decision_conflicts_run',
+      `${runStatus} + a completed decision conflicts with the run`);
+  }
 
-  // An unknown authority hash cannot be compared, so it is not grounds for
-  // refusal — the Ticket projection has no item binding and passes null.
-  assert.equal(evaluate({ runCompletionAuthorityHash: null }).result, 'valid',
-    'an uncomparable authority hash does not manufacture a mismatch');
+  // A non-completed Run carrying a NON-completion decision is not a conflict —
+  // a `blocked` disposition is a real outcome the caller still maps.
+  assert.equal(ev({ runStatus: 'failed', decision: blockedDecision }).result,
+    'not_applicable', 'a blocked decision on a failed Run is not a conflict');
+
+  // An uncomparable authority hash is not a mismatch: Ticket projection has no
+  // item binding and supplies none.
+  assert.equal(
+    ev({ runCompletionAuthorityHash: null, decision: { ...good, objectiveContractHash: OTHER } })
+      .result, 'valid',
+    'an absent authority hash does not manufacture a mismatch');
 
   assert.deepEqual([...COMPLETION_EVIDENCE_RESULTS],
     ['not_applicable', 'valid', 'missing', 'stale', 'authority_mismatch',
       'conflicts_with_run'],
-    'the completion-evidence result vocabulary is closed');
-
-  // THE RULE AGREES WITH THE DISPOSITION CONTRACT. Same inputs, same verdict —
-  // asserted rather than assumed, because the whole point of extracting it was
-  // that two hand-written copies disagreed.
-  const agree = (overrides, expectedReason) => {
-    const derived = deriveLeafItemDisposition(runFacts('completed', overrides));
-    assert.equal(derived.reason, expectedReason);
-    assert.equal(evaluate({
-      decision: overrides.decision === undefined ? decision : overrides.decision,
-      runTicketId: overrides.runTicketId || 700
-    }).reason, expectedReason,
-    `the shared rule and the disposition contract agree on ${expectedReason}`);
-  };
-  agree({ decision: null }, 'completion_decision_missing');
+    'the completion-evidence vocabulary is closed');
+  assert.deepEqual([...COMPLETION_BINDING_RESULTS],
+    ['absent', 'valid', 'stale', 'authority_mismatch'],
+    'the binding vocabulary is closed');
 }
 
-console.log('  ok shared completion-evidence rule');
+// ── The decisive comparisons live in ONE production place ───────────────────
+//
+// Callers may map the shared result; they may not re-derive it. This pins that
+// boundary in source so a future edit cannot quietly reintroduce a second copy.
+{
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const authority = path.join(__dirname, '..', 'runtime',
+    'structured-allocation-leaf-run-contract.js');
+  const consumers = [
+    path.join(__dirname, '..', 'persistence', 'postgres', 'store.js')
+  ];
+  const decisive = [
+    /decision\.runId\s*!==/,
+    /decision\.ticketId\s*!==/,
+    /decision\.objectiveContractHash\s*!==/
+  ];
+  for (const file of consumers) {
+    const executable = fs.readFileSync(file, 'utf8').split('\n')
+      .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line)).join('\n');
+    for (const pattern of decisive) {
+      assert.equal(pattern.test(executable), false,
+        `${path.basename(file)} must not re-derive ${pattern} — the shared ` +
+        'completion-evidence authority owns it');
+    }
+  }
+  const authoritySource = fs.readFileSync(authority, 'utf8');
+  for (const pattern of decisive) {
+    assert.ok(pattern.test(authoritySource),
+      `the shared authority still owns ${pattern}`);
+  }
+}
+
+console.log('  ok shared completion-evidence authority');
