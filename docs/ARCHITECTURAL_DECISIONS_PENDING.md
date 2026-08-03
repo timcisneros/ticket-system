@@ -5503,33 +5503,44 @@ duplicated external send is not.
 required evidence exist. Automatic retransmission of an ambiguous started
 request is unsupported.
 
-## Hermetic Response Ownership Is Content-Matched, Not Hash-Addressed (recorded 2026-08-03)
+## Hermetic Response Ownership Needs a Parent–Fixture Handshake (recorded 2026-08-03)
 
-**Status:** open — narrowed. The arrival-counter defect is gone; response
-ownership is still selected by a substring the staged entry carries.
+**Status:** open — the identity question is now answered, and the answer is that
+no shortcut exists.
 
-Crash boundaries are now owned by the staged response that owns the request
-(`crashBeforeTransport` / `crashAfterTransport`), and no semantic decision reads
-`fixtureRequestCount` — pinned by a source assertion that the counter is never
-compared. Both restart suites are 30/30.
+**Verdict: PARENT–FIXTURE HASH HANDSHAKE REQUIRED.** The canonical governed
+request body contains only `model`, `input`, `text.format`, `max_output_tokens`
+and `truncation` (`runtime/provider-request-body.js:33`), and the transport
+sends only `Content-Type`, `Content-Length` and `Authorization`
+(`runtime/governed-openai-transport.js:62`). There is no Run ID, logical source
+identity, ordinal or model-call key anywhere the fixture can see. Response
+ownership therefore cannot be keyed by canonical identity without correlating
+the exact request hash against the durable reservation — which only the parent
+test process can do.
 
-**What remains.** Response ownership still uses `entry.match`, a substring that
-must appear in the request bytes, plus first-unused ordering among entries whose
-match succeeds. That is content ADDRESSING but not content IDENTITY: two
-requests from the same Run both contain the leaf's declared path, so their
-relative order still decides which staged answer each receives.
+**What the handshake requires, and why it was not built here.** The transport's
+`end()` runs synchronously inside the server process. Blocking it until the
+parent writes an instruction means a synchronous wait — `Atomics.wait` or a
+polling loop on the filesystem — that stalls that server's event loop, including
+any sibling Run in the same process. It also introduces a genuine deadlock
+class: if the parent never writes an instruction, or the reservation is not yet
+visible, the server hangs until a timeout that must itself be proven. Building
+that control plane and migrating eight suites onto it is a session's work on its
+own, and starting it without the budget to finish would have left eight
+currently-green suites depending on a half-built protocol.
 
-**Why hash addressing was not built.** The canonical `exact_request_hash` is not
-knowable when responses are staged — the body contains a prompt built from live
-workspace and plan state. Keying by hash needs a handshake: the fixture blocks
-on the hash it just computed, the parent test resolves it against the durable
-reservation and writes back an instruction. That is a control-plane protocol
-inside a preload with no database access, and it was not attempted without the
-budget to prove it.
+**What was done instead.** Ownership is no longer trusted — it is CHECKED.
+`governed-verified-progress-lifecycle-postgres-test` matches each persisted
+response to its execution turn, which is canonical, and asserts that turn 0
+received the answer staged for request 1 and turn 1 the answer staged for
+request 2. Swapping the staged responses now fails deterministically in one run.
+Mis-service is detected rather than prevented.
 
-**Residual risk, stated plainly.** Within one Run the staged order still decides
-which of its own requests gets which answer. Across Runs, ownership is now safe:
-a planner or sibling call cannot consume a leaf response or move a boundary.
+**Residual risk, unchanged and stated.** Within a single Run, the fixture still
+picks the first unused staged response whose `match` appears in the request
+bytes, so staged ORDER decides which of that Run's own requests gets which
+answer. Across Runs ownership is already safe: a planner or sibling call cannot
+consume a leaf response or move a crash boundary.
 
 ## Malformed Success Is Hard to Persist (recorded 2026-08-03)
 
@@ -5553,4 +5564,4 @@ proved something about a database this system does not run on.
 
 ---
 
-*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and closed 2026-08-03 (one shared authority, both consumers). Governed Lifecycle Transport-Count Flake recorded and closed 2026-08-03 (fixture arrival counter conflated with canonical ordinal). Intermittent Guard Mutation Limit recorded and closed 2026-08-03 (deterministic correlation contract). Fixture Crash Boundary Arrival Counter recorded and closed 2026-08-03. Hermetic Response Ownership Content-Matched recorded 2026-08-03. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
+*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and closed 2026-08-03 (one shared authority, both consumers). Governed Lifecycle Transport-Count Flake recorded and closed 2026-08-03 (fixture arrival counter conflated with canonical ordinal). Intermittent Guard Mutation Limit recorded and closed 2026-08-03 (deterministic correlation contract). Fixture Crash Boundary Arrival Counter recorded and closed 2026-08-03. Hermetic Response Ownership Handshake Requirement recorded 2026-08-03. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*

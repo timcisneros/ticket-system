@@ -293,6 +293,30 @@ async function main() {
         const providerRequests = snapshot.providerRequests || [];
         assertThat(modelResponses.length === 2 && providerRequests.length === 2,
           'replay holds two provider requests and two model responses');
+        // ── OWNERSHIP IS VERIFIED, NOT ASSUMED ───────────────────────────
+        //
+        // The fixture still selects a staged answer by matching content and
+        // taking the first unused one, so within a single Run the staged ORDER
+        // decides which of its own requests gets which response. Keying that by
+        // canonical identity needs a parent/fixture handshake, because the
+        // request body carries no Run, source or ordinal and the exact hash is
+        // unknowable while the scenario is being staged.
+        //
+        // What can be done without that machinery is to stop trusting the
+        // ordering and CHECK it: each response is matched to its execution turn,
+        // which is canonical, and compared against the answer that turn was
+        // supposed to receive. A mis-served response is then a deterministic
+        // failure rather than a silent swap.
+        const responseByTurn = new Map((modelResponses || [])
+          .filter(item => Number.isSafeInteger(item.executionTurn))
+          .map(item => [item.executionTurn, item.responseIdentity]));
+        assertThat(responseByTurn.get(0) === RESPONSE_ONE,
+          'execution turn 0 received the response staged for request 1');
+        assertThat(responseByTurn.get(1) === RESPONSE_TWO,
+          'execution turn 1 received the response staged for request 2');
+        assertThat(responseByTurn.size === 2,
+          'exactly two turns received a staged response');
+
         assertThat(JSON.stringify(modelResponses).includes(RESPONSE_ONE) &&
           JSON.stringify(modelResponses).includes(RESPONSE_TWO),
         'both persisted response identities are the fixed fixture identities');
