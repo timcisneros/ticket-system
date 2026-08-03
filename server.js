@@ -22153,6 +22153,8 @@ async function runAgentTicket(runId) {
     let consecutiveActionContractViolations = 0;
     const actionContractViolationTypes = [];
     let modelRequestCount = 0;
+    // Model-call keys whose provider request is already durable (see resume).
+    const durableRequestedTurnKeys = new Set();
     let workspaceOperationCount = 0;
     let listDirectoryCount = 0;
     let readFileCount = 0;
@@ -22299,6 +22301,23 @@ async function runAgentTicket(runId) {
       const persistedSnapshot = persistedReplay ? persistedReplay.snapshot : (run.replaySnapshot || {});
       const executionRecoverySnapshot = buildAgentExecutionRecoverySnapshot(persistedSnapshot);
       modelRequestCount = countDurableAgentExecutionProviderRequests(executionRecoverySnapshot);
+      // WHICH TURNS ALREADY HOLD A DURABLE REQUEST.
+      //
+      // The count above includes every request this Run has ISSUED, including
+      // one that was interrupted before its response came back. Re-entering
+      // that turn is not a new request — it is the same one being finished —
+      // so it must not be checked against, or added to, the per-Run ceiling.
+      //
+      // Without this a Run interrupted between persisting its provider-request
+      // replay and receiving the response could never resume: the ceiling had
+      // already counted the request, and the ceiling check runs before the
+      // reuse path can recognize it. The Ticket had paid for a request the Run
+      // was then forbidden to collect.
+      for (const request of (executionRecoverySnapshot.providerRequests || [])) {
+        if (request && typeof request.modelCallKey === 'string') {
+          durableRequestedTurnKeys.add(request.modelCallKey);
+        }
+      }
       if (hasDurableAgentResponseWithoutPlan(executionRecoverySnapshot)) {
         const recoveryState = reconstructAgentRecoveryState({
           run,
@@ -22492,9 +22511,14 @@ async function runAgentTicket(runId) {
         providerCall = pendingRecoveredProviderCall;
         pendingRecoveredProviderCall = null;
       } else {
-        assertRunModelRequestAllowed(run, modelRequestCount, limits);
+        // A turn whose request is already durable is being FINISHED, not
+        // started. It was counted when it was issued.
+        const reentrantTurn = durableRequestedTurnKeys.has(modelCallKey);
+        if (!reentrantTurn) {
+          assertRunModelRequestAllowed(run, modelRequestCount, limits);
+        }
         appendRunLog(run, 'model:request', `${providerConfig.provider} request sent with model ${providerConfig.model}`);
-        modelRequestCount += 1;
+        if (!reentrantTurn) modelRequestCount += 1;
         const issuedProviderCall = await callModelProviderWithRunEvidence(run, agent, input, runStartedAtMs, limits, {
           slot: modelCallKey,
           metadata: { executionTurn: step, modelCallKey },
@@ -22516,7 +22540,8 @@ async function runAgentTicket(runId) {
         // twice against the per-Run ceiling, and a two-request Run recovered
         // after its first request could never reach its second: the limit was
         // exhausted by double-counting the one it had already paid for.
-        if (issuedProviderCall && issuedProviderCall.reusedDurableResponse) {
+        if (issuedProviderCall && issuedProviderCall.reusedDurableResponse &&
+            !durableRequestedTurnKeys.has(modelCallKey)) {
           modelRequestCount -= 1;
         }
         providerCall = {

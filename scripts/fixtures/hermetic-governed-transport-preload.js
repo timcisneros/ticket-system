@@ -100,6 +100,29 @@ function fixtureHttpsRequest(options, onResponse) {
   // rather than a failure of the requests that were answered.
   fixtureRequestCount += 1;
   const staged = loadFixtureResponses();
+  // ── PRE-TRANSPORT CRASH BOUNDARY ──────────────────────────────────────
+  //
+  // Interrupt at the last instant before any byte leaves, once the request has
+  // already obtained every piece of durable dispatch authority: reservation,
+  // ordinal, budget charge and provider-request replay all commit before this
+  // point. That is the window where a recovering process must reuse the request
+  // it has already paid for rather than abandon it and buy another.
+  //
+  // Fires once. The crash is recorded in the shared fault-state file, so the
+  // restarted process transports normally instead of crashing forever.
+  const CRASH_BEFORE_ORDINAL = Number(
+    process.env.HERMETIC_TRANSPORT_CRASH_BEFORE_ORDINAL || 0);
+  const CRASH_STATE = process.env.GOVERNED_FAULT_STATE || null;
+  if (CRASH_BEFORE_ORDINAL && fixtureRequestCount === CRASH_BEFORE_ORDINAL &&
+      !(CRASH_STATE && require('node:fs').existsSync(CRASH_STATE))) {
+    const detail = `BOUNDARY_PRE_TRANSPORT_REACHED ordinal=${fixtureRequestCount}`;
+    if (CRASH_STATE) require('node:fs').writeFileSync(CRASH_STATE, detail);
+    if (CAPTURE_PATH) {
+      require('node:fs').appendFileSync(`${CAPTURE_PATH}.marker`, `${detail}\n`);
+    }
+    process.exit(70);
+  }
+
   // The transport spells its options discretely so a test can read back exactly
   // what production sends. Assert the destination here too: a stub that accepts
   // any host would hide a redirect defect rather than catch it.

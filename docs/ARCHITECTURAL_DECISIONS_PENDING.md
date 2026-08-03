@@ -5463,6 +5463,35 @@ already-observed absence of effects, and mutation-test removal of the hash
 check against it.
 
 
+## Should a Replayed Recovery Window Count Against Churn Tolerance? (recorded 2026-08-02)
+
+**Status:** open — policy question, reproduced by test.
+
+A governed Run interrupted after request 2 obtained all of its dispatch
+authority — economic reservation, ordinal, runtime-budget charge and
+provider-request replay — but before a single byte was sent, does NOT go on to
+send it. Recovery replays turn 0 from its durable response; that window commits
+a redundant action and so credits no new declared fact; under a tolerance of one
+no-progress window that exhausts the Run's churn allowance, and it stops with
+`verified_progress_exhausted` before the already-paid-for request is issued.
+
+`scripts/governed-pre-transport-restart-postgres-test.js` pins down the
+unambiguous parts: authority is never duplicated (same ordinals, one
+reservation, one charge, one replay item), the request is never re-bought under
+a fresh identity, and the Run reaches an explicit durable stop under an existing
+closed reason rather than running forever.
+
+**The open question.** A replayed recovery window is not the agent failing to
+make progress — it is the runtime re-deriving state it already had. Counting it
+against churn tolerance charges a Run for the machine having crashed. But
+exempting it needs care: a Run that crash-loops must still be stoppable, and
+"this window was a replay" must be decided from durable authority, not inferred.
+
+**Cost of leaving it.** A request the Ticket has already been charged for can be
+abandoned unsent. No money is spent twice — but money already spent buys
+nothing.
+
+
 ---
 
-*Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
+*Replayed Recovery Window Churn recorded 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
