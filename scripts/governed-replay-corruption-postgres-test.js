@@ -337,9 +337,22 @@ async function main() {
         const runPage = await third.request('GET', `/runs/${runId}`, { cookie });
         assertThat(runPage.statusCode === 200,
           'the Run detail page renders — the failure is inspectable');
-        assertThat(!/POSTGRES_REPLAY_INTEGRITY_FAILURE/
-          .test(String(runPage.body || '').slice(0, 400)),
-        'and it is a page, not an error envelope');
+        const runBody = String(runPage.body || '');
+        assertThat(!/POSTGRES_REPLAY_INTEGRITY_FAILURE/.test(runBody.slice(0, 400)),
+          'and it is a page, not an error envelope');
+
+        // ── THE REPLAY-AVAILABILITY CONTRACT IS OPERATOR-VISIBLE ─────────
+        //
+        // Asserted on the surface, not just on the seam: a status code alone
+        // would pass even if the page silently showed the Run as if its
+        // transcript were fine. The operator must be able to see WHY there is
+        // nothing to read.
+        assertThat(runBody.includes('replay_unavailable_integrity_failure'),
+          'the Run page states replay is unavailable due to integrity failure');
+        assertThat(runBody.includes('POSTGRES_REPLAY_INTEGRITY_FAILURE'),
+          'and names the exact stable integrity code');
+        assertThat(!runBody.includes('tampered'),
+          'while exposing no corrupted replay content');
 
         // ── The runtime API projects the failure truthfully ──────────────
         // Every Run surface reads through the same authority seam, so proving

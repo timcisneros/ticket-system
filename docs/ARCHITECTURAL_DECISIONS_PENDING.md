@@ -5503,25 +5503,50 @@ duplicated external send is not.
 required evidence exist. Automatic retransmission of an ambiguous started
 request is unsupported.
 
-## Replay-Availability Field Is Exposed But Unasserted (recorded 2026-08-03)
+## Two Terminal-Leaf Outcome Derivations Disagree (recorded 2026-08-03)
 
-**Status:** open — minor coverage gap.
+**Status:** open — duplicate authority, audited and confirmed.
 
-`readRuntimeRunAuthority` now reports `replayAvailability` on every Run
-(`replay_available` / `replay_unavailable_integrity_failure`), so no surface has
-to infer from an absent snapshot whether a transcript is missing, pending or
-untrustworthy. Removing that field fails no test: the corruption suite asserts
-the Run page and two runtime APIs render and expose no corrupt content, but does
-not assert the availability value itself on a surface that carries it.
+Two production paths independently decide whether a structured leaf is
+completed, failed or blocked, and they do not agree.
 
-The behaviour it describes IS defended — rereading the corrupt replay, and
-suppressing corruption without a recorded disposition, are both caught. Only the
-field's own presence is unasserted.
+`deriveLeafItemDisposition` (`runtime/structured-allocation-leaf-run-contract.js`)
+implements the full truth table and never throws:
 
-**What would close it.** Assert `replay_unavailable_integrity_failure` on a Run
-surface that actually serializes the authority object, or drop the field if no
-surface consumes it. Do not add a surface merely to give the field a consumer.
+```text
+completed + no decision      -> interrupted, completion_decision_missing
+completed + stale decision   -> interrupted, completion_decision_stale
+authority hash mismatch      -> interrupted, completion_authority_mismatch
+decision says completed,
+  run is not                 -> interrupted, completion_decision_conflicts_run
+failed/interrupted +
+  no decision                -> failed / interrupted (truthfully)
+```
+
+`projectedStatus` (`persistence/postgres/store.js:8698`), used by Ticket
+projection, has its own rule and THROWS `COMPLETION_EVIDENCE_MISSING` whenever a
+Run carrying completion authority has no decision. A replay-integrity exception
+was added to it, which is why an integrity-failed leaf now projects — but the
+contract already held that ANY failed Run without a decision is truthfully
+failed, so the projector remains stricter than the authority it should be
+reading.
+
+**Why this matters.** The reconciliation seam and the projection seam can
+classify the same leaf differently, and the projector's version is the one that
+can make a Ticket unserviceable. The exception added for replay integrity treats
+one symptom of a general disagreement.
+
+**What would close it.** Have `projectedStatus` delegate to
+`deriveLeafItemDisposition` rather than re-deciding, so one pure projection owns
+the truth table. That is a change to a hot projection path shared by every
+Ticket page and was not attempted without budget to validate it against the full
+completion-authority and typed-projection suites.
+
+**Already true and asserted elsewhere.** Malformed success fails closed in the
+contract (`completed` + missing/stale/conflicting decision never yields
+`completed`), and `completion-decision-postgres-test` and
+`typed-projection-parity-postgres-test` pass unchanged.
 
 ---
 
-*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
+*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
