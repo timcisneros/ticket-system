@@ -35,6 +35,12 @@ const {
   progressControlPolicy
 } = require('./governed-structured-fixture');
 const { eligibleExecutionFacts } = require('../runtime/governed-eligible-facts');
+const {
+  correlateGovernedTransports,
+  missingTransports,
+  transportedOrdinals,
+  transportsForRun
+} = require('./fixtures/governed-transport-correlation');
 
 const STAMP = `gvl-${Date.now()}`;
 const ACTOR = 'governed-verified-progress-lifecycle-test';
@@ -165,23 +171,30 @@ async function main() {
       // owned path appears in more than one Run's prompt, and any refinement of
       // the string is still a guess about content rather than a statement about
       // identity.
-      const leafRequestHashes = async () => (await store.pool.query(
-        `SELECT model_request_ordinal AS ordinal, exact_request_hash AS hash
-           FROM ${store.table('economic_request_reservations')}
-          WHERE run_id = $1 ORDER BY model_request_ordinal`, [runId])).rows;
+      // Attribution is delegated to the canonical correlation helper, whose
+      // rules are proved deterministically in governed-transport-correlation-test.
+      // This suite supplies durable rows and captured bytes; it does not decide
+      // which call belongs to whom.
+      const reservationRows = async () => (await store.pool.query(
+        `SELECT id, run_id, ticket_id, model_request_ordinal, logical_source_identity,
+                exact_request_hash
+           FROM ${store.table('economic_request_reservations')} ORDER BY id`)).rows
+        .map(row => ({
+          reservationId: Number(row.id),
+          runId: row.run_id === null ? null : Number(row.run_id),
+          ticketId: row.ticket_id === null ? null : Number(row.ticket_id),
+          modelRequestOrdinal: Number(row.model_request_ordinal),
+          logicalSourceIdentity: row.logical_source_identity,
+          exactRequestHash: row.exact_request_hash
+        }));
       const capturedEntries = () => fs.readFileSync(capturePath, 'utf8').trim()
         .split('\n').filter(Boolean).map(line => JSON.parse(line));
-      const capturesForRun = async () => {
-        const hashes = new Map((await leafRequestHashes())
-          .map(row => [row.hash, Number(row.ordinal)]));
-        return capturedEntries()
-          .map(entry => ({
-            entry,
-            ordinal: hashes.get(crypto.createHash('sha256')
-              .update(String(entry.body || ''), 'utf8').digest('hex')) || null
-          }))
-          .filter(item => item.ordinal !== null);
-      };
+      const attributedTransports = async () => correlateGovernedTransports({
+        captures: capturedEntries(),
+        reservations: await reservationRows()
+      });
+      const capturesForRun = async () =>
+        transportsForRun(await attributedTransports(), runId);
 
       try {
         // ── Wait for a COMPLETE, DURABLE lifecycle ────────────────────────
@@ -201,7 +214,8 @@ async function main() {
             .filter(row => row.evaluationKind === 'post_batch')
             .map(row => row.batchStepId));
           const current = await store.getRun(runId);
-          const reservations = await leafRequestHashes();
+          const reservations = (await reservationRows())
+            .filter(row => row.runId === runId);
           const correlated = await capturesForRun();
           if (batches.size >= 2 &&
               reservations.length >= 2 &&
@@ -219,7 +233,7 @@ async function main() {
           'the lifecycle never reached a complete durable state: ' +
           `evidence batches=${new Set(evidence.filter(r => r.evaluationKind === 'post_batch')
             .map(r => r.batchStepId)).size}, ` +
-          `reservations=${(await leafRequestHashes()).length}, ` +
+          `reservations=${(await reservationRows()).filter(r => r.runId === runId).length}, ` +
           `correlated transports=${(await capturesForRun()).length}, ` +
           `status=${(await store.getRun(runId)).status}`);
 
@@ -227,8 +241,15 @@ async function main() {
         const output = String(server.output());
         assertThat(output.includes('HERMETIC_PRELOAD_ACTIVE=true'),
           'the hermetic preload ran inside the spawned server');
-        const correlated = await capturesForRun();
-        const captured = correlated.map(item => item.entry);
+        const attributed = await attributedTransports();
+        const correlated = transportsForRun(attributed, runId);
+        const captured = correlated.map(item => capturedEntries()[item.captureIndex]);
+
+        // An omission is invisible to a count of what arrived, so it is asked
+        // about directly.
+        assertThat(missingTransports(attributed, await reservationRows(), runId)
+          .length === 0,
+        'every request-2 dispatch authority actually reached the transport');
         assertThat(captured.length === 2,
           'exactly two hermetic transport calls occurred — one per governed request');
         assertThat(captured.every(entry => entry.hostname === 'api.openai.com' &&
@@ -245,7 +266,7 @@ async function main() {
         //
         // The canonical ordinal comes from the reservation whose
         // `exact_request_hash` these bytes hash to.
-        assertThat(correlated.map(item => item.ordinal).join(',') === '1,2',
+        assertThat(transportedOrdinals(attributed, runId) === '1,2',
           'this Run made exactly requests 1 and 2, by canonical reservation ordinal');
         assertThat(correlated.filter(item => item.ordinal === 2).length === 1,
           'exactly one SECOND transport call occurred');

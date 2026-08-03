@@ -177,6 +177,7 @@ const TESTS = Object.freeze([
   { file: "test-server-startup-contract-test.js", status: "required" },
   { file: "governed-openai-transport-hermetic-test.js", status: "required" },
   { file: "governed-leaf-first-response-postgres-test.js", status: "required" },
+  { file: "governed-transport-correlation-test.js", status: "required" },
   { file: "governed-verified-progress-lifecycle-postgres-test.js", status: "required" },
   { file: "governed-no-progress-withholding-postgres-test.js", status: "required" },
   { file: "governed-evidence-integrity-postgres-test.js", status: "required" },

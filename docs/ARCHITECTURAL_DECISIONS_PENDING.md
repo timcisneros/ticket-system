@@ -5503,31 +5503,33 @@ duplicated external send is not.
 required evidence exist. Automatic retransmission of an ambiguous started
 request is unsupported.
 
-## Intermittent Test Guards Cannot Be Mutation-Proved in One Run (recorded 2026-08-03)
+## Fixture Crash Boundaries Still Use the Arrival Counter (recorded 2026-08-03)
 
-**Status:** open — a limit of the current mutation method, not a defect.
+**Status:** open — same defect class as the lifecycle flake, in a different
+place, with a specific hypothesis.
 
-The governed lifecycle suite's transport-count flake is fixed (root cause and
-30/30 stability below), but three guards added for it — canonical hash
-attribution, rejection of arrival-order fallback, and waiting for durable
-settlement — all SURVIVE mutation in a single run.
+`governed-post-transport-restart-postgres-test` failed once during
+checkpoint-order validation on `request 2 durably reserved before the crash`,
+passing 2/2 on retry. That assertion runs BEFORE the restart, so the crash fired
+at a moment when request 2 had not yet reserved.
 
-They survive for the same reason the bug was intermittent: in a typical run no
-foreign transport is recorded, arrival order coincidentally equals the canonical
-ordinal, and settlement completes quickly. Removing a guard only matters in the
-minority of runs where the race occurs.
+The hermetic fixture's crash boundaries select their moment by
+`HERMETIC_TRANSPORT_CRASH_BEFORE_ORDINAL` / `..._AFTER_ORDINAL`, compared
+against `fixtureRequestCount` — the same per-process arrival counter that caused
+the lifecycle flake, incremented even for REFUSED calls. The structured
+planner's governed request is refused for want of a staged response and still
+advances it, so "crash at ordinal 2" can land on the leaf's FIRST request
+whenever the planner reaches the transport first.
 
-**What would close it.** Either a fixture mode that deterministically records a
-foreign transport attempt before the leaf's second request — making arrival
-order provably differ from canonical ordinal every run — or a mutation harness
-that runs N iterations and treats "failed at least once in N" as caught. The
-second is the general fix and would apply to every timing-sensitive guard in
-this tranche.
+This is the same root cause fixed for attribution this session, surviving in the
+boundary selector. Both pre- and post-transport restart suites depend on it.
 
-**Why it is written down rather than asserted around.** A guard that cannot fail
-its own test is not defended, and claiming otherwise on the strength of a
-green run would be exactly the reasoning that let this flake survive three
-sessions.
+**What would close it.** Select the crash moment by a stable property of the
+request rather than arrival position — the leaf's own canonical body content, or
+an explicit staged-response identity — so a foreign call cannot shift the
+boundary. The attribution helper cannot be reused directly here because the
+fixture runs inside the server process and has no reservation rows, so the
+discriminator must come from the request bytes it already holds.
 
 ## Malformed Success Is Hard to Persist (recorded 2026-08-03)
 
@@ -5551,4 +5553,4 @@ proved something about a database this system does not run on.
 
 ---
 
-*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and closed 2026-08-03 (one shared authority, both consumers). Governed Lifecycle Transport-Count Flake recorded and closed 2026-08-03 (fixture arrival counter conflated with canonical ordinal). Intermittent Guard Mutation Limit recorded 2026-08-03. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
+*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and closed 2026-08-03 (one shared authority, both consumers). Governed Lifecycle Transport-Count Flake recorded and closed 2026-08-03 (fixture arrival counter conflated with canonical ordinal). Intermittent Guard Mutation Limit recorded and closed 2026-08-03 (deterministic correlation contract). Fixture Crash Boundary Arrival Counter recorded 2026-08-03. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
