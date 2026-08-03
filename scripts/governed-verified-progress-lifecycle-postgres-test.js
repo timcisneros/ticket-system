@@ -45,6 +45,13 @@ const RESPONSE_TWO = 'fixture-governed-lifecycle-response-2';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 const OWNED_ROOT = 'reports/planner';
+// DISCRIMINATE THE LEAF, NOT THE FOLDER. The planner Run's own governed request
+// also names `reports/planner` — it is that item's owned output path — so
+// matching the root alone let a planner request be counted as a leaf transport,
+// and let the planner consume a response staged for the leaf. The leaf's
+// declared postcondition path appears only in the leaf's prompt, which is what
+// makes it a safe identifier for this Run's traffic.
+const LEAF_MARKER = 'reports/planner/alpha';
 
 const LIFECYCLE_LIMITS = {
   maxExecutionSteps: 6,
@@ -124,12 +131,12 @@ async function main() {
             message: 'Creating the first declared folder.',
             actions: [{ operation: 'createFolder', args: { path: factA.criterion.path } }],
             complete: false
-          }, OWNED_ROOT),
+          }, LEAF_MARKER),
           stagedResponse(RESPONSE_TWO, {
             message: 'Creating the second declared folder.',
             actions: [{ operation: 'createFolder', args: { path: factB.criterion.path } }],
             complete: true
-          }, OWNED_ROOT)
+          }, LEAF_MARKER)
         ]
       }));
 
@@ -170,7 +177,7 @@ async function main() {
           'the hermetic preload ran inside the spawned server');
         const captured = fs.readFileSync(capturePath, 'utf8').trim()
           .split('\n').filter(Boolean).map(line => JSON.parse(line))
-          .filter(entry => String(entry.body || '').includes(OWNED_ROOT));
+          .filter(entry => String(entry.body || '').includes(LEAF_MARKER));
         assertThat(captured.length === 2,
           'exactly two hermetic transport calls occurred — one per governed request');
         assertThat(captured.every(entry => entry.hostname === 'api.openai.com' &&

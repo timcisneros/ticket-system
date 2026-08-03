@@ -37,7 +37,13 @@ const ACTOR = 'governed-evidence-integrity-test';
 const HERMETIC = path.join(__dirname, 'fixtures', 'hermetic-governed-transport-preload.js');
 const FAULT = path.join(__dirname, 'fixtures', 'governed-fault-injection-preload.js');
 const SENTINEL = 'test-only-sentinel-not-a-real-credential';
+// DISCRIMINATE THE LEAF, NOT THE FOLDER. The planner Run's own governed request
+// also names `reports/planner` — it is that item's owned output path — so
+// matching the root alone lets a planner request be counted as this Run's
+// transport, and lets the planner consume a response staged for the leaf. The
+// leaf's declared postcondition path appears only in the leaf's prompt.
 const OWNED_ROOT = 'reports/planner';
+const LEAF_MARKER = 'reports/planner/alpha';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -55,7 +61,7 @@ const LIMITS = {
 
 function staged(identity, plan) {
   return {
-    match: OWNED_ROOT,
+    match: LEAF_MARKER,
     statusCode: 200,
     body: JSON.stringify({
       id: identity,
@@ -135,7 +141,7 @@ async function main() {
           WHERE run_id = $1 ORDER BY id`, [runId])).rows;
       const capturesForRun = () => fs.readFileSync(capturePath, 'utf8').trim()
         .split('\n').filter(Boolean).map(line => JSON.parse(line))
-        .filter(entry => String(entry.body || '').includes(OWNED_ROOT));
+        .filter(entry => String(entry.body || '').includes(LEAF_MARKER));
       const chargesOf = async () => (await store.pool.query(
         `SELECT source_identity, state FROM ${store.table('run_budget_charges')}
           WHERE run_id = $1 AND dimension = 'model_request' ORDER BY id`, [runId])).rows;
