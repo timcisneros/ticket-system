@@ -185,6 +185,7 @@ const TESTS = Object.freeze([
   { file: "governed-pre-transport-restart-postgres-test.js", status: "required" },
   { file: "governed-post-transport-restart-postgres-test.js", status: "required" },
   { file: "governed-replay-corruption-postgres-test.js", status: "required" },
+  { file: "malformed-completion-projection-postgres-test.js", status: "required" },
   { file: "governed-planner-dispatch-postgres-test.js", status: "required" },
   { file: "governed-planner-production-path-postgres-test.js", status: "required" },
   { file: "economic-authority-contract-test.js", status: "required" },

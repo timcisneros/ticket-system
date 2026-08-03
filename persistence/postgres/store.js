@@ -8698,25 +8698,28 @@ class PostgresRuntimeStore {
       const projectedStatus = item => {
         if (!item.completionAuthoritySnapshot) return item.status;
 
-        // A LEAF THAT FAILED FOR A DETERMINISTIC INTEGRITY FAULT HAS NO
-        // COMPLETION DECISION, AND NEVER WILL.
-        //
-        // Its execution never reached the completion boundary, so demanding
-        // completion authority before projecting it asks for evidence that
-        // cannot exist. Left in, that requirement held the WHOLE Ticket
-        // projection hostage to one corrupt leaf — a fresh server could not
-        // even start against the Ticket, and sibling Runs failed for a fault
-        // that was never theirs.
-        //
-        // The discriminator is the truthful terminal failure disposition, NOT
-        // `status !== 'completed'`. A Run claiming `completed`, or failing
-        // without a recorded integrity fault, still requires its decision: the
-        // exception is for leaves that demonstrably failed, never a way around
-        // completion authority.
-        if (item.status === 'failed' && item.integrityFailureCode) return 'failed';
-
         const decision = completionDecisionByRunId.get(item.id);
         if (!decision || decision.runId !== item.id || decision.ticketId !== item.ticketId) {
+          // ONLY `completed` IS A CLAIM THAT NEEDS DURABLE EVIDENCE TO SURVIVE.
+          //
+          // This is the rule `deriveLeafItemDisposition` already applies during
+          // reconciliation: "a failed or interrupted Run is truthfully that even
+          // with no decision". This projection had its own stricter rule and
+          // threw for ANY missing decision, so the two seams could classify the
+          // same Run differently — and the projector's version is the one that
+          // can make a whole Ticket unserviceable.
+          //
+          // A Run that reached a terminal NON-SUCCESS state did not get there by
+          // claiming anything; demanding completion authority from it asks for
+          // evidence that execution never produced. A Run claiming `completed`
+          // still fails closed here, which is the invariant that matters.
+          //
+          // This subsumes the narrower replay-integrity carve-out that stood
+          // here: an integrity-failed Run is simply one terminal non-success
+          // case among several, and does not need its own exception.
+          if (item.status !== 'completed') {
+            return item.status === 'interrupted' ? 'interrupted' : 'failed';
+          }
           const error = new Error(`Run ${item.id} cannot project its ticket without a completion decision`);
           error.code = 'COMPLETION_EVIDENCE_MISSING';
           throw error;
