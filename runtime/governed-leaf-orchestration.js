@@ -209,20 +209,27 @@ async function runGovernedLeafRequest({
       // using the same predicate the canonical recovery path uses.
       const executor = await repository.isRunExecutorActive(run.id);
 
-      // WHOSE LEASE IS IT? A recovering worker holds the Run's lease itself, so
-      // "an executor is live" was reported as "someone else is still working"
-      // — describing the recovering process as its own competitor, and telling
-      // an operator something plainly untrue about why the Run stopped.
+      // WHICH CLAIM ATTEMPT STARTED THIS REQUEST?
       //
-      // When the live lease is THIS caller's, nobody else is going to finish
-      // this request. The honest statement is that the bytes may or may not
-      // have reached the provider and no durable response says which: a
-      // database transaction is not atomic with a network send, so no marker
-      // on either side of the send could have settled it. Retransmitting could
-      // pay for and apply a second answer to a request already served, so this
-      // fails closed rather than guessing.
-      if (executor.active && executor.leaseOwner &&
-          executor.leaseOwner === run.leaseOwner) {
+      // Two situations look identical through a lease OWNER and need opposite
+      // answers. A duplicate racing a live winner inside one process shares
+      // that process's owner string, and so does a recovery after a crash when
+      // the same process reclaims the Run. Comparing owners answered "it is me"
+      // for both, and told a legitimate duplicate its request might have been
+      // lost when in fact a winner was mid-flight with it.
+      //
+      // The discriminator is the CLAIM, not the claimant. A request started
+      // before the current claim was acquired belongs to an earlier attempt —
+      // nobody alive is going to finish it, and whether its bytes reached the
+      // provider cannot be established, because a database transaction is not
+      // atomic with a network send. A request started at or after the current
+      // claim belongs to THIS attempt, where a live winner still owns it.
+      const startedBeforeCurrentClaim = Boolean(
+        executor.currentClaimAt && reservation.startedAt &&
+        new Date(reservation.startedAt).getTime() <
+          new Date(executor.currentClaimAt).getTime());
+
+      if (executor.active && startedBeforeCurrentClaim) {
         return outcome('request_delivery_uncertain', {
           possiblyDispatched: true,
           reservationId: reservation.id,

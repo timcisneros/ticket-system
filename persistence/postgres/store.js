@@ -3962,6 +3962,23 @@ class PostgresRuntimeStore {
         throw error;
       }
       const row = result.rows[0];
+
+      // THE CURRENT CLAIM ATTEMPT, not merely its owner.
+      //
+      // `lease_owner` is a PROCESS identity, so two concurrent callers inside
+      // one process share it and a later claim by the same process reuses it.
+      // Neither a duplicate racing a live winner nor a recovery after a crash
+      // can be told apart by it — and they need opposite answers.
+      //
+      // Every claim appends one `run.lease_acquired` event, so the newest such
+      // event dates the CURRENT claim. A request started before it belongs to
+      // an earlier attempt; one started at or after it belongs to this one.
+      // Append-only and hash-chained, so it cannot be rewritten by a later
+      // mutation the way a revision counter can.
+      const claimed = await connection.query(
+        `SELECT max(ts) AS claimed_at FROM ${this.table('events')}
+          WHERE run_id = $1 AND type = 'run.lease_acquired'`, [id]);
+
       return {
         // A LIVE LEASE is the executor, and the status is deliberately not part
         // of this test: `claimPendingRun` takes the lease before the Run
@@ -3971,7 +3988,10 @@ class PostgresRuntimeStore {
         // condition the canonical recovery query uses.
         active: row.lease_live === true,
         status: row.status,
-        leaseOwner: row.lease_owner
+        leaseOwner: row.lease_owner,
+        currentClaimAt: claimed.rows[0].claimed_at === null
+          ? null
+          : isoTimestamp(claimed.rows[0].claimed_at, 'run current claim')
       };
     };
     return client ? execute(client) : this.withTransaction(execute);

@@ -5503,44 +5503,6 @@ duplicated external send is not.
 required evidence exist. Automatic retransmission of an ambiguous started
 request is unsupported.
 
-## REGRESSION: Concurrent Duplicate Misclassified as Delivery Uncertainty (recorded 2026-08-03)
-
-**Status:** open — regression I introduced in `e2e8a38`, reproduced and
-attributed. Highest priority.
-
-`scripts/governed-leaf-production-path-postgres-test.js` fails on:
-
-```text
-a duplicate observes the active winner rather than settling it
-```
-
-It expects `request_in_flight` and now gets `request_delivery_uncertain`.
-
-**Cause.** `e2e8a38` added, in `runGovernedLeafRequest`'s `request_started`
-branch, a test that when the live lease belongs to THIS caller nobody else will
-finish the request, so the outcome is delivery uncertainty rather than
-"someone else is working". `RUN_LEASE_OWNER` is PROCESS-WIDE. Two concurrent
-orchestration callers inside one process share it, so a genuine duplicate racing
-an active winner is indistinguishable from a recovering caller by that test —
-and the duplicate is now told the request may have been lost rather than that a
-winner owns it.
-
-**Proved by bisection, not inspection.** Reverting only
-`runtime/governed-leaf-orchestration.js` to its pre-`e2e8a38` state makes the
-suite pass; restoring it fails again.
-
-**Why it cannot simply be reverted.** The same branch is what makes
-`governed-pre-transport-restart` and `governed-post-transport-restart` assert a
-truthful delivery-uncertain disposition instead of the misleading "still
-executing under lease". Reverting trades one regression for two.
-
-**What would close it.** A discriminator that separates "another caller in this
-process is mid-flight" from "I am resuming a request I started before a crash".
-Lease ownership cannot do it. Candidates: whether the reservation was started in
-a previous execution attempt, or an explicit recovery marker set when the Run is
-reclaimed. Neither is currently recorded, so this needs a durable fact rather
-than an inference.
-
 ## Parent–Fixture Hash Handshake: NOT REQUIRED (recorded and closed 2026-08-03)
 
 **Status:** closed as a design position.
@@ -5593,4 +5555,4 @@ proved something about a database this system does not run on.
 
 ---
 
-*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and closed 2026-08-03 (one shared authority, both consumers). Governed Lifecycle Transport-Count Flake recorded and closed 2026-08-03 (fixture arrival counter conflated with canonical ordinal). Intermittent Guard Mutation Limit recorded and closed 2026-08-03 (deterministic correlation contract). Fixture Crash Boundary Arrival Counter recorded and closed 2026-08-03. Parent-Fixture Hash Handshake recorded and closed as NOT REQUIRED 2026-08-03. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
+*Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and closed 2026-08-03 (one shared authority, both consumers). Governed Lifecycle Transport-Count Flake recorded and closed 2026-08-03 (fixture arrival counter conflated with canonical ordinal). Intermittent Guard Mutation Limit recorded and closed 2026-08-03 (deterministic correlation contract). Fixture Crash Boundary Arrival Counter recorded and closed 2026-08-03. Parent-Fixture Hash Handshake recorded and closed as NOT REQUIRED 2026-08-03. Concurrent-Duplicate Misclassification regression recorded and closed 2026-08-03 by claim-epoch classification. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
