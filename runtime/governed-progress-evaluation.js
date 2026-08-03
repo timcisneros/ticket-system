@@ -55,6 +55,7 @@ function partitionReceiptsIntoWindows({ reservations, receipts }) {
       modelRequestOrdinal: reservation.modelRequestOrdinal,
       reservationId: reservation.reservationId,
       state: reservation.state,
+      hasDurableResponse: Boolean(reservation.hasDurableResponse),
       from,
       until,
       observations: []
@@ -188,7 +189,21 @@ function evaluateGovernedRunProgress({
     // live in `cumulativeResources` and are never rewound.
     if (projection.verifiedProgressCount > 0) {
       consecutiveNoProgressWindows = 0;
-    } else if (window.observations.length > 0 || window.modelRequestOrdinal > 0) {
+    } else if (window.hasDurableResponse &&
+               (window.observations.length > 0 || window.modelRequestOrdinal > 0)) {
+      // A REQUEST WITH NO DURABLE RESPONSE HAS NOT MADE NO PROGRESS.
+      //
+      // It has not had the chance to make any. A window opens when dispatch
+      // authority is won and closes when the answer is durable; between those
+      // two points the request is in flight, or was interrupted in flight, and
+      // classifying it as a failure to advance is a statement about work that
+      // was never done rather than work that was done badly.
+      //
+      // Counting the ordinal alone did exactly that. Every reservation has an
+      // ordinal, so a Run that crashed after authorizing its next request came
+      // back to find that authorization already scored against its churn
+      // tolerance — and a Run whose tolerance was one stopped without ever
+      // sending the request the Ticket had already been charged for.
       consecutiveNoProgressWindows += 1;
     }
     latestProjection = projection;

@@ -247,25 +247,39 @@ async function main() {
         assertThat((replayAfter.modelResponses || []).length <= 2,
           'at most one response identity exists for request 2');
 
-        // WHAT ACTUALLY HAPPENS, STATED PLAINLY. The recovered attempt replays
-        // turn 0 from its durable response. That window commits a redundant
-        // action and therefore credits no new fact, which — under a tolerance
-        // of one no-progress window — exhausts the Run's churn allowance before
-        // the interrupted request 2 is ever sent. So an interrupted request can
-        // be lost to churn control even though it was already paid for.
+        // ── A MERELY AUTHORIZED REQUEST IS NOT A NO-PROGRESS WINDOW ─────
         //
-        // That is recorded as an open question rather than asserted as correct:
-        // whether a REPLAYED recovery window should count against churn
-        // tolerance at all is a policy decision nobody has taken. What this
-        // suite pins down is the part that is unambiguous — the Run stops under
-        // an existing durable disposition, and it never re-buys the request.
+        // Request 2 has an ordinal and a started reservation and no answer. It
+        // has not failed to advance the work; it has not had the chance to. The
+        // Run must not be stopped for churn on the strength of a request it was
+        // interrupted before sending.
         const stopped = await store.getRun(runId);
+        assertThat(!stopped.governedProgressBlock,
+          'NO progress block: an unanswered request is not a no-progress window');
+        const reservationStates = (await store.pool.query(
+          `SELECT model_request_ordinal AS ord, state, response_hash IS NOT NULL AS answered
+             FROM ${store.table('economic_request_reservations')}
+            WHERE run_id = $1 ORDER BY model_request_ordinal`, [runId])).rows;
+        assertThat(reservationStates.length === 2 &&
+          reservationStates[0].answered === true &&
+          reservationStates[1].answered === false,
+        'request 1 is answered and request 2 is not — the two are distinguishable');
+
+        // ── TRANSPORT UNCERTAINTY, FAILING CLOSED ───────────────────────
+        //
+        // Production cannot prove the bytes never left. `markEconomicRequestStarted`
+        // commits BEFORE transport and nothing durable separates "request replay
+        // persisted" from "transport began", so a started reservation with no
+        // response is genuinely ambiguous. The existing Tranche 4 contract
+        // refuses to re-dispatch it rather than guess, and that refusal is the
+        // correct behaviour: sending again could pay for and apply a second
+        // answer to a request the provider may already have served.
+        assertThat(reservationStates[1].state === 'request_started',
+          'request 2 keeps its started reservation — it is neither re-sent nor discarded');
         assertThat(['failed', 'blocked'].includes(stopped.status),
-          'the Run reaches an explicit durable stop, not an indefinite running state');
-        assertThat(Boolean(stopped.governedProgressBlock),
-          'the stop is recorded as a canonical progress block');
-        assertThat(stopped.governedProgressBlock.reason === 'verified_progress_exhausted',
-          'under an existing closed reason — no new status was invented');
+          'the Run reaches an explicit durable stop rather than looping');
+        assertThat(!/verified_progress_exhausted/.test(String(stopped.error || '')),
+          'and it does NOT stop for churn — the reason is transport uncertainty');
 
         // ── Same Run, same captured authority ───────────────────────────
         const resumed = await store.getRun(runId);

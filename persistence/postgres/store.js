@@ -4832,7 +4832,7 @@ class PostgresRuntimeStore {
       // Ordered governed request windows for this Run.
       const reservations = await connection.query(
         `SELECT id, model_request_ordinal, logical_source_identity, state,
-                started_at, created_at, settled_micro_usd
+                started_at, created_at, settled_micro_usd, response_hash
            FROM ${this.table('economic_request_reservations')}
           WHERE run_id = $1 AND role = $2 AND id <= $3
           ORDER BY model_request_ordinal`,
@@ -4908,6 +4908,11 @@ class PostgresRuntimeStore {
           modelRequestOrdinal: Number(row.model_request_ordinal),
           logicalSourceIdentity: row.logical_source_identity,
           state: row.state,
+          // A DURABLE RESPONSE IS WHAT COMPLETES A REQUEST WINDOW. Carried here
+          // because progress accounting must distinguish a request that was
+          // answered from one that was merely authorized: only the first can be
+          // said to have made, or not made, progress.
+          hasDurableResponse: Boolean(row.response_hash),
           startedAt: row.started_at,
           createdAt: row.created_at
         })),
