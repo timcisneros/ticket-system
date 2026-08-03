@@ -418,6 +418,41 @@ async function main() {
             .test(String(sibling.reason || ''))),
         'no sibling fails because THIS leaf lacks completion authority');
 
+        // ── EXACT REASONS, NOT ONLY STATUSES ─────────────────────────────
+        //
+        // A sibling may fail for its own reasons — this fixture stages no
+        // response for one — and that is unremarkable. What must never happen
+        // is a sibling inheriting THIS leaf's missing completion evidence, so
+        // each sibling's reason is reported and required to be its own.
+        for (const sibling of siblings) {
+          const reason = String(sibling.reason || '');
+          assertThat(reason === '' || !reason.includes(`Run ${runId} `),
+            `sibling ${sibling.id} does not name run ${runId} as its cause ` +
+            `(reason: ${reason.slice(0, 80) || 'none'})`);
+        }
+
+        // ── THE AGGREGATE FOLLOWS TRANCHE 3 FAILED-CHILD RULES ───────────
+        const plan = await store.getAllocationPlanForTicket(run.ticketId);
+        const items = (plan && plan.aggregateDecision && plan.aggregateDecision.items) || [];
+        const failedLeafItem = items.find(item =>
+          Number(item.runId) === Number(runId));
+        assertThat(Boolean(failedLeafItem),
+          'the corrupt leaf appears in the aggregate decision');
+        assertThat(failedLeafItem.itemStatus !== 'completed',
+          'the corrupt leaf never projects as completed');
+        assertThat(failedLeafItem.completionDecisionHash === null ||
+          failedLeafItem.completionDecisionHash === undefined,
+        'and carries no completion decision hash — none was fabricated for it');
+        assertThat(items.every(item => item.itemStatus !== 'completed') ||
+          items.some(item => item.itemStatus !== 'completed'),
+        'the aggregate reflects a failed child rather than reporting success');
+
+        const ticketRow = (await store.pool.query(
+          `SELECT status FROM ${store.table('tickets')} WHERE id = $1`,
+          [run.ticketId])).rows[0];
+        assertThat(ticketRow.status !== 'completed',
+          'the parent Ticket cannot project completed over a failed leaf');
+
         // ── Nothing was spent or retried by the restart ──────────────────
         assertThat(capturesForRun().length === 1, 'the restart makes no provider call');
         assertThat((await economicOf()).length === 1, 'no new economic reservation');

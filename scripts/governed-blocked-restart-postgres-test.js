@@ -220,6 +220,43 @@ async function main() {
         assertThat(blockAfter.progressPolicyHash === blockBefore.progressPolicyHash,
           'the block still names the policy captured at admission');
 
+        // ── EACH TERMINAL STATE KEEPS ITS OWN AUTHORITY ──────────────────
+        //
+        // Four non-success outcomes exist and none may borrow another's
+        // evidence: successful completion answers to a completion decision, a
+        // progress block to governedProgressBlock, a sibling-dependency block
+        // to its own sibling/path authority, and a replay-integrity failure to
+        // the relational integrity disposition. Collapsing them would let a Run
+        // stopped for churn be explained as a corrupt transcript, or the
+        // reverse — and an operator would have no way to tell.
+        assertThat(blockAfter.siblingDependency === null ||
+          blockAfter.siblingDependency === undefined,
+        'a progress block carries NO sibling dependency — that is a different authority');
+        assertThat(!after.integrityFailureCode,
+          'and no integrity-failure disposition — this Run is blocked, not corrupt');
+        const blockedDecisions = (await store.pool.query(
+          `SELECT consequence FROM ${store.table('run_consequences')}
+            WHERE run_id = $1`, [runId])).rows
+          .filter(row => row.consequence && row.consequence.completionDecision);
+        // A blocked leaf DOES receive a completion decision — with disposition
+        // `blocked`, which the contract maps to `completion_blocked`. What it
+        // must never receive is a decision claiming success, and the churn
+        // reason lives in the progress block rather than in that decision.
+        assertThat(blockedDecisions.every(row =>
+          row.consequence.completionDecision.completionDisposition !== 'completed'),
+        'no completion decision claims success for a blocked leaf');
+        assertThat(blockedDecisions.every(row =>
+          !String(JSON.stringify(row.consequence.completionDecision))
+            .includes('verified_progress_exhausted')),
+        'the churn reason lives in the progress block, not in the completion decision');
+        const blockedPlan = await store.getAllocationPlanForTicket(run.ticketId);
+        const blockedItems = (blockedPlan && blockedPlan.aggregateDecision &&
+          blockedPlan.aggregateDecision.items) || [];
+        const blockedItem = blockedItems.find(item =>
+          Number(item.runId) === Number(runId));
+        assertThat(!blockedItem || blockedItem.itemStatus !== 'completed',
+          'and it never projects as completed');
+
         // ── ZERO further governed spending ────────────────────────────────
         assertThat((await chargesOf()).length === chargesBefore.length,
           'no additional runtime-budget charge');

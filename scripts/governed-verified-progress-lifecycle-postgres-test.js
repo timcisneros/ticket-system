@@ -293,6 +293,46 @@ async function main() {
         const providerRequests = snapshot.providerRequests || [];
         assertThat(modelResponses.length === 2 && providerRequests.length === 2,
           'replay holds two provider requests and two model responses');
+        // ── ONE RUN NEVER HAS TWO TURNS IN FLIGHT ────────────────────────
+        //
+        // This is what makes staged response ORDER safe within a Run, and it is
+        // a property of production rather than of the fixture: request 2's
+        // authority cannot exist until request 1 is durably finished. Proved
+        // from durable row ordering, since ids are monotonic — the request-2
+        // reservation is created after request 1's response, receipts and
+        // evidence are committed.
+        //
+        // Two turns cannot race for a staged answer if the second cannot be
+        // authorized while the first is unresolved.
+        const orderRows = await store.pool.query(
+          `SELECT
+             (SELECT created_at FROM ${store.table('economic_request_reservations')}
+               WHERE run_id = $1 AND model_request_ordinal = 2) AS request_two_reserved_at,
+             (SELECT max(recorded_at) FROM ${store.table('operation_receipts')}
+               WHERE run_id = $1 AND step_id = $2) AS turn_one_last_receipt_at,
+             (SELECT max(evaluated_at) FROM ${store.table('governed_postcondition_evidence')}
+               WHERE run_id = $1 AND batch_step_id = $2) AS turn_one_last_evidence_at,
+             (SELECT response_persisted_at FROM ${store.table('economic_request_reservations')}
+               WHERE run_id = $1 AND model_request_ordinal = 1) AS request_one_response_at`,
+          [runId, String(receiptA.step_id)]);
+        const order = orderRows.rows[0];
+        const at = value => (value === null ? null : new Date(value).getTime());
+
+        assertThat(at(order.request_two_reserved_at) !== null,
+          'request 2 obtained its own reservation');
+        assertThat(at(order.turn_one_last_receipt_at) <= at(order.request_two_reserved_at),
+          'turn 0 receipts committed BEFORE request-2 authority existed');
+        assertThat(at(order.turn_one_last_evidence_at) <= at(order.request_two_reserved_at),
+          'turn 0 postcondition evidence committed BEFORE request-2 authority existed');
+        assertThat(at(order.request_one_response_at) !== null &&
+          at(order.request_one_response_at) <= at(order.request_two_reserved_at),
+        'request 1 had a DURABLE RESPONSE before request 2 was authorized');
+
+        // The transports themselves never overlap: request 2's bytes are
+        // captured after request 1's, by the canonical ordinals above.
+        assertThat(correlated[0].ordinal === 1 && correlated[1].ordinal === 2,
+          'the two transports are ordered turn 0 then turn 1 — never interleaved');
+
         // ── OWNERSHIP IS VERIFIED, NOT ASSUMED ───────────────────────────
         //
         // The fixture still selects a staged answer by matching content and
