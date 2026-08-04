@@ -8800,11 +8800,26 @@ class PostgresRuntimeStore {
         // projection. The two callers still map the answer differently — a full
         // item disposition there, a projected status or refusal here — but they
         // no longer decide it separately, which is how they came to disagree.
+        // THE EXPECTED AUTHORITY IS ALREADY IN HAND.
+        //
+        // This passed `null`, which the shared rule reads as "no opinion" so it
+        // never reported `completion_authority_mismatch`. That rule exists for
+        // a caller that genuinely holds no comparable hash — but this one does:
+        // the guard above has just proved `item.completionAuthoritySnapshot`
+        // exists, and allocation reconciliation compares against exactly this
+        // field. A structured leaf could therefore present a decision built
+        // against a DIFFERENT objective contract and be projected `completed`
+        // by the Ticket while reconciliation called it a mismatch.
+        //
+        // A generic Run never reaches this line — the guard returns its status
+        // first — so supplying the hash cannot make an unstructured Run fail
+        // for lacking structured authority.
         const evidence = evaluateRunCompletionEvidence({
           runStatus: item.status,
           runId: item.id,
           runTicketId: item.ticketId,
-          runCompletionAuthorityHash: null,
+          runCompletionAuthorityHash:
+            item.completionAuthoritySnapshot.objectiveContractHash || null,
           decision: decision || null
         });
         if (evidence.result === 'not_applicable') {

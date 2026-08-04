@@ -5558,12 +5558,23 @@ Findings that changed how these must be proved:
   its own admitted Run.
 * **Terminal Runs cannot be reopened**, so one Run cannot serve two malformed
   cases in sequence.
-* **Case 4 is structurally unobservable in Ticket projection.** That projection
-  passes `runCompletionAuthorityHash: null`, and the shared rule treats a null
-  comparison as "no opinion" rather than a mismatch — deliberately, so it does
-  not refuse Runs nobody holds evidence against. The mismatch rule belongs to
-  allocation-item reconciliation, which supplies the hash. Asserting a
-  Ticket-projection refusal would describe a refusal that surface does not make.
+* **Case 4 was unobservable in Ticket projection — and that was a defect, not
+  a property.** CORRECTED 2026-08-04. The projection passed
+  `runCompletionAuthorityHash: null`, which the shared rule reads as "no
+  opinion", so it never reported `completion_authority_mismatch`. That rule
+  exists for a caller genuinely holding no comparable hash; this caller held
+  one. `projectedStatus` guards on `item.completionAuthoritySnapshot` in order
+  to reach the evaluator at all, and allocation reconciliation compares against
+  exactly `run.completionAuthoritySnapshot.objectiveContractHash`. So a
+  structured leaf could present a decision built against a DIFFERENT objective
+  contract, be called a mismatch by reconciliation, and be projected
+  `completed` by the Ticket in the same breath.
+
+  **Verdict: STRUCTURED TICKET PROJECTION CAN VALIDATE COMPLETION AUTHORITY.**
+  The projection now supplies the hash it already holds — the existing durable
+  field, not a reconstruction. A generic Run is unaffected: the guard returns
+  its status before the evaluator is reached, so no Run without structured
+  authority can fail for lacking it. Both domains are asserted.
 
 `COMPLETION_EVIDENCE_MISSING` is ONE code carrying DIFFERENT closed reasons
 (`completion_decision_missing`, `completion_decision_stale`,

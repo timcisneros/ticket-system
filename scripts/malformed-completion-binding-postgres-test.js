@@ -238,30 +238,125 @@ async function main() {
         assertThat(count === 1, `${label} causes no second, synthesized decision`);
       }
 
-      // AUTHORITY MISMATCH IS NOT OBSERVABLE HERE, AND THAT IS DELIBERATE.
+      // ── AUTHORITY MISMATCH: BOTH SURFACES, ONE ANSWER ───────────────────
       //
-      // Ticket projection passes `runCompletionAuthorityHash: null` — it holds
-      // no item binding and supplies none — and the shared rule treats a null
-      // comparison as "no opinion" rather than a mismatch, so it does not refuse
-      // Runs nobody holds evidence against. The mismatch rule belongs to
-      // allocation-item reconciliation, which does supply the hash, and is
-      // asserted against the evaluator with the hash present above. Claiming a
-      // Ticket-projection refusal here would describe a refusal this surface
-      // does not make.
+      // This previously asserted that Ticket projection did NOT refuse a
+      // mismatch, because it passed `null` as the comparison hash and the
+      // shared rule reads null as "no opinion". That was a true description of
+      // the code and a bad contract: the projection had just proved
+      // `completionAuthoritySnapshot` exists in order to reach the evaluator at
+      // all, and allocation reconciliation compares against exactly that field.
+      // A structured leaf could present a decision built against a DIFFERENT
+      // objective contract, be called a mismatch by reconciliation, and be
+      // projected `completed` by the Ticket in the same breath.
+      //
+      // The projection now supplies the authority it already holds, so both
+      // surfaces reach the same conclusion from the same durable fact.
       {
         const { leafRun } = await freshLeaf('mismatch');
         await setRunStatus(leafRun.id, 'completed');
+        const expectedHash = leafRun.completionAuthoritySnapshot.objectiveContractHash;
+        assertThat(typeof expectedHash === 'string' && /^[0-9a-f]{64}$/.test(expectedHash),
+          'the structured leaf carries a durable expected authority hash');
+
         await storeDecision(leafRun.id, leafRun.ticketId,
           rebound(baseline, {
             runId: leafRun.id, ticketId: leafRun.ticketId,
             objectiveContractHash: 'e'.repeat(64)
           }));
+
+        const before = (await store.pool.query(
+          `SELECT status FROM ${store.table('tickets')} WHERE id = $1`,
+          [leafRun.ticketId])).rows[0].status;
         let refusal = null;
         try {
           await store.transitionTicketAfterRun({ runId: leafRun.id });
         } catch (error) { refusal = error; }
-        assertThat(refusal === null,
-          'Ticket projection does NOT refuse an authority mismatch — it compares no hash');
+
+        assertThat(refusal !== null,
+          'structured Ticket projection REFUSES an authority mismatch');
+        assertThat(refusal.completionEvidenceReason === 'completion_authority_mismatch',
+          `and names the mismatch exactly (${refusal.completionEvidenceReason})`);
+        assertThat((await store.pool.query(
+          `SELECT status FROM ${store.table('tickets')} WHERE id = $1`,
+          [leafRun.ticketId])).rows[0].status === before,
+          'the Ticket never projects completed on a mismatched authority');
+
+        // RECONCILIATION AGREES, FROM THE SAME DURABLE FIELD.
+        const reconciled = await store.reconcileStructuredAllocationOutcomes
+          ? await store.reconcileStructuredAllocationOutcomes({ ticketId: leafRun.ticketId })
+              .catch(() => null)
+          : null;
+        if (reconciled && Array.isArray(reconciled.items)) {
+          const item = reconciled.items.find(entry => Number(entry.runId) === leafRun.id);
+          if (item) {
+            assertThat(item.completionEvidenceReason === 'completion_authority_mismatch' ||
+              item.reason === 'completion_authority_mismatch',
+              `reconciliation reaches the same mismatch (${item.reason ||
+                item.completionEvidenceReason})`);
+            assertThat(item.disposition !== 'completed',
+              'and the structured item is never a success');
+          }
+        }
+
+        // The pure rule, on the SAME data, so the two cannot drift.
+        const pure = evaluateRunCompletionEvidence({
+          runStatus: 'completed',
+          runId: leafRun.id,
+          runTicketId: leafRun.ticketId,
+          runCompletionAuthorityHash: expectedHash,
+          decision: rebound(baseline, {
+            runId: leafRun.id, ticketId: leafRun.ticketId,
+            objectiveContractHash: 'e'.repeat(64)
+          })
+        });
+        assertThat(pure.reason === 'completion_authority_mismatch',
+          'and the shared rule says the same thing about the same facts');
+
+        // No decision was synthesized to paper over the refusal.
+        assertThat(Number((await store.pool.query(
+          `SELECT count(*) AS n FROM ${store.table('run_consequences')} WHERE run_id = $1`,
+          [leafRun.id])).rows[0].n) === 1,
+          'no second decision is synthesized for a mismatched leaf');
+        assertThat((await store.getRun(leafRun.id)).leaseOwner === null,
+          'and no scheduler claim is taken by projection');
+      }
+
+      // ── A GENERIC RUN IS UNAFFECTED ─────────────────────────────────────
+      //
+      // The projection returns a generic Run's own status before it ever
+      // reaches the evaluator, so supplying structured authority cannot make a
+      // Run without one fail. Asserted rather than assumed, because that is the
+      // exact regression this correction could have caused.
+      {
+        const genericTicket = await store.createTicket({
+          objective: `generic projection ${STAMP}`,
+          status: 'open',
+          assignmentTargetType: 'agent',
+          assignmentTargetId: seeded.agents.workerA.id,
+          executionMode: 'agent'
+        });
+        const created = await store.createRunsAndStartTicket({
+          ticketId: genericTicket.id,
+          runDrafts: [{
+            ticketId: genericTicket.id,
+            agentId: seeded.agents.workerA.id,
+            agentName: seeded.agents.workerA.name,
+            status: 'pending',
+            executionMode: 'agent'
+          }],
+          runEventPayload: () => ({ source: ACTOR })
+        });
+        const genericRun = created.runs[0];
+        assertThat(!genericRun.completionAuthoritySnapshot,
+          'the generic Run carries no structured completion authority');
+        await setRunStatus(genericRun.id, 'completed');
+        let genericRefusal = null;
+        try {
+          await store.transitionTicketAfterRun({ runId: genericRun.id });
+        } catch (error) { genericRefusal = error; }
+        assertThat(genericRefusal === null,
+          'a generic Run with no declared authority still projects without refusal');
       }
 
       // ── DECISION CONFLICTS WITH RUN STATUS ──────────────────────────────
