@@ -158,12 +158,22 @@ const MUTATIONS = Object.freeze([
   {
     name: 'owned-path-scope-broadened',
     suite: 'allocation-scope-authority-test.js',
-    file: 'server.js',
+    // RE-AIMED. This previously targeted `server.js`, where the containment rule
+    // used to live. `350809f` moved it to `runtime/authority-paths.js` so the
+    // enforced rule and every operator-visible listing (admin dashboard, oquery
+    // CLI) could not drift, and reformatted it across two lines — so the anchor
+    // matched nothing and the suite refused to run rather than silently passing.
+    //
+    // What remains in server.js is `matchedOwnedRootForEntry`, which is
+    // DISPLAY-ONLY and documents itself as merely reusing this containment
+    // shape. Aiming at that copy would mutate a label, not an authority, and
+    // the out-of-scope write would still be refused.
+    file: 'runtime/authority-paths.js',
     contract: 'an allocated run may mutate only inside its own owned paths',
     // Broaden the containment check so every path counts as owned. Admission still
     // works and the in-scope positive control stays green — only the out-of-scope
     // scenario catches an allocated agent writing into a peer's territory.
-    find: '    return normalizedPath === normalizedOwnedPath.slice(0, -1) || normalizedPath.startsWith(normalizedOwnedPath);',
+    find: '    return normalizedPath === normalizedOwnedPath.slice(0, -1) ||\n      normalizedPath.startsWith(normalizedOwnedPath);',
     replace: '    return Boolean(normalizedOwnedPath) || normalizedPath === normalizedPath;',
     expect: 'an allocated run writes outside its owned scope unopposed'
   },

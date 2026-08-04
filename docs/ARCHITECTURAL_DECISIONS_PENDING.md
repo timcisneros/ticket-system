@@ -5503,26 +5503,52 @@ duplicated external send is not.
 required evidence exist. Automatic retransmission of an ambiguous started
 request is unsupported.
 
-## suite-mutation-test Has a Stale Anchor in server.js (recorded 2026-08-04)
+## suite-mutation-test Stale Anchor: closed 2026-08-04
 
-**Status:** open, pre-existing, out of scope for the session that found it.
+**Status:** closed. Supersedes the entry recorded when the failure was only
+observed, not diagnosed.
 
-`scripts/suite-mutation-test.js` fails before completing:
+The `owned-path-scope-broadened` mutation aimed at `server.js`, where the owned
+-path containment rule used to live. `350809f` moved it to
+`runtime/authority-paths.js` so the enforced rule and every operator-visible
+listing (admin dashboard, oquery CLI) could not drift, and reformatted it across
+two lines. **The invariant still exists — only the textual anchor was stale.**
+
+What remains in `server.js` is `matchedOwnedRootForEntry`, which documents
+itself as display-only and as merely reusing this containment shape. Aiming
+there would mutate a label rather than an authority, and the out-of-scope write
+would still be refused, so the mutation would have survived while looking
+repaired.
+
+Re-aimed at `runtime/authority-paths.js`; killed by
+`allocation-scope-authority-test.js` in 5.5s. Unmodified control passes, source
+is restored and SHA-256-verified, and an equivalent refactor of the same
+function produces no false hit.
+
+## auto-retry Attempt Ceiling Is Not Actually Covered (recorded 2026-08-04)
+
+**Status:** open, pre-existing, revealed by the repair above. Out of scope for
+the session that found it.
+
+With the whole mutation suite able to run for the first time, one mutation
+survives:
 
 ```
-FAIL: mutation "owned-path-scope-broadened" expected exactly one occurrence of
-its anchor in server.js, found 0. The runtime moved; re-aim the mutation.
+── auto-retry-ignores-attempt-ceiling
+   removes: automatic retry stops at the ticket attempt ceiling
+   so that: a ticket at its ceiling is retried one more time
+   suite:   auto-retry-bounds-test.js
+   ✗ SURVIVED — the suite passed with the contract removed.
 ```
 
-The suite is self-reporting a stale mutation anchor, which is the failure mode
-it is designed to produce rather than a defect in the runtime. Confirmed
-identical at `1cedfc4` in a detached worktree, and `server.js` last changed in
-`2d69407` (2026-08-02), so it predates the dispatch-ownership work.
+`auto-retry-bounds-test.js` does cover the POLICY FLAG — the neighbouring
+`auto-retry-ignores-policy-flag` mutation is killed — but not the ATTEMPT
+CEILING. A ticket already at its ceiling being retried once more is invisible to
+it.
 
-It also requires a clean tree by design ("this tool edits tracked source in
-place"), so it cannot run during a session with uncommitted changes — which is
-why it was not caught earlier in this branch's work. Re-aiming the anchor is a
-separate task.
+This was masked, not introduced: the stale anchor made the suite refuse to start,
+so no mutation in the file ran at all. Repairing one anchor is what made the
+other hole observable, which is the argument for the tool existing. 53/54 killed.
 
 ## Duplicate-Dispatch Outcome Anomaly: closed 2026-08-04
 
