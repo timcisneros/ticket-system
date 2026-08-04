@@ -5503,6 +5503,27 @@ duplicated external send is not.
 required evidence exist. Automatic retransmission of an ambiguous started
 request is unsupported.
 
+## suite-mutation-test Has a Stale Anchor in server.js (recorded 2026-08-04)
+
+**Status:** open, pre-existing, out of scope for the session that found it.
+
+`scripts/suite-mutation-test.js` fails before completing:
+
+```
+FAIL: mutation "owned-path-scope-broadened" expected exactly one occurrence of
+its anchor in server.js, found 0. The runtime moved; re-aim the mutation.
+```
+
+The suite is self-reporting a stale mutation anchor, which is the failure mode
+it is designed to produce rather than a defect in the runtime. Confirmed
+identical at `1cedfc4` in a detached worktree, and `server.js` last changed in
+`2d69407` (2026-08-02), so it predates the dispatch-ownership work.
+
+It also requires a clean tree by design ("this tool edits tracked source in
+place"), so it cannot run during a session with uncommitted changes — which is
+why it was not caught earlier in this branch's work. Re-aiming the anchor is a
+separate task.
+
 ## Duplicate-Dispatch Outcome Anomaly: closed 2026-08-04
 
 **Status:** closed. Supersedes the "unreproduced" entry recorded earlier the
