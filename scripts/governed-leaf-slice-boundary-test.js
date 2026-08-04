@@ -265,9 +265,16 @@ const persistAt = guard.indexOf('blockGovernedRunForSiblingRead');
 const throwAt = guard.indexOf("error.code = 'GOVERNED_SIBLING_READ_BLOCKED'");
 assert.ok(persistAt > 0 && throwAt > 0 && persistAt < throwAt,
   'the block is persisted before the refusal is raised');
-// Terminal for the execution, not an ordinary tool error the loop can continue past.
-assert.ok(guard.includes("error.failureKind = 'no_progress'"),
-  'a sibling block stops the worker execution');
+// The refusal carries an honest failure kind. `no_progress` was borrowed from a
+// different contract and classified nothing: triage maps only a closed set that
+// never included it, so it produced the same `runtime_failed` outcome a generic
+// fault does. The value is kept — dropping it would make `buildRunFailure`
+// return null and lose the durable code and sibling detail — but it now
+// describes this refusal rather than implying unhonoured progress semantics.
+assert.ok(guard.includes("error.failureKind = 'sibling_dependency_blocked'"),
+  'a sibling block carries an honest failure kind, not a borrowed one');
+assert.equal(guard.includes("error.failureKind = 'no_progress'"), false,
+  'and never reintroduces the inert no_progress classification');
 // Non-structured Runs return before any resolution happens.
 assert.ok(guard.includes('!run.leafRunBinding || !run.governedExecution) return;'),
   'historical and non-structured Runs are untouched by the guard');

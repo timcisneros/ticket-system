@@ -5525,109 +5525,41 @@ Re-aimed at `runtime/authority-paths.js`; killed by
 is restored and SHA-256-verified, and an equivalent refactor of the same
 function produces no false hit.
 
-## Sibling Refusal's `failureKind: 'no_progress'` Is Inert (recorded 2026-08-04)
+## Sibling Refusal's failureKind: closed 2026-08-04
 
-**Status:** open, pre-existing, design question — not changed here.
+**Status:** closed. Supersedes the entry recorded when the value was only known
+to be inert.
 
-`assertGovernedSiblingReadAllowed` sets `error.failureKind = 'no_progress'`
-(server.js) with a comment saying the outcome is terminal for the execution.
-Flipping it to `runtime_failed` produces **no observable difference** in the
-durable record: the Run's triage carries `reasonCode: 'runtime_failed'` either
-way, with identical `requiredDecision: 'review_failure'`, `allowedActions` and
-`prohibitedActions: ['automatic_retry']`.
+**Verdict: FAILURE_KIND IS ADVISORY BUT OBSERVABLE METADATA** — and the
+specific value `no_progress` was inert on the sibling-dependency path.
 
-Demonstrated by mutation against
-`scripts/governed-sibling-dependency-postgres-test.js`: the mutation SURVIVES
-even against an assertion on the retry prohibition, because both failure kinds
-map to the same triage classification.
+Consumer inventory. `buildRunTriage` maps `failureKind` to a reason code for a
+CLOSED set only: `protected_path`, `provider_error`, and the runtime-budget
+kinds (`runtime_budget_insufficient`, `runtime_budget_exhausted`,
+`runtime_duration_exhausted`, `deterministic_infeasibility`). A few call sites
+test `protected_path` or `workspace_error` directly. Nothing anywhere reads
+`no_progress` as a failure kind — the three writes have no matching read, and
+`model:no_progress` is an unrelated EVENT type. So it controlled no durable
+classification, no retry eligibility, no aggregation and no completion
+semantics; anything unmapped falls through to `runtime_failed`.
 
-The coordination refusal IS distinguished durably — by the governed progress
-block's `reason`, `siblingDependency` and `blockHash`, all of which are
-mutation-proved. What is not distinguished is the triage reason code. Whether a
-coordination refusal deserves its own triage classification is a product
-decision, not a repair to make silently inside a session scoped to projections.
+But the field is not inert as a FIELD: `buildRunFailure` returns a record only
+when `error.failureKind` is set, or for three specific codes. With it removed,
+the sibling refusal falls through every branch and returns **null**, losing the
+durable `GOVERNED_SIBLING_READ_BLOCKED` code and the sibling detail. Deleting
+it would therefore have destroyed observable evidence to remove a misleading
+label.
 
-## auto-retry Attempt Ceiling: closed 2026-08-04
+Minimal correction: keep the field, replace the borrowed value with
+`sibling_dependency_blocked`, which describes this refusal instead of implying
+churn/progress semantics the system does not honour. Triage, retry, aggregation
+and completion are unchanged — unmapped kinds already produced `runtime_failed`.
+No new triage category was invented.
 
-**Status:** closed. Supersedes the entry recorded when the mutation was only
-observed to survive.
-
-**Verdict: AUTO-RETRY CEILING IS ENFORCED BUT UNPROVEN.**
-
-The mutation aimed at `attemptCount >= maxAttempts` in
-`assessAutoRetryAfterFailureIfPolicyAllows` (server.js). That comparison is not
-the ceiling. Instrumenting the decision showed the relaxed pre-check assessing
-the retry ELIGIBLE and proceeding into run creation, where it was refused by a
-different authority entirely:
-
-```
-RUN_BUDGET_EXHAUSTED: ticket 3 already has 2 of 2 admitted attempts
-```
-
-raised inside run admission in `persistence/postgres/store.js`. The run counts
-`auto-retry-bounds-test` asserts are therefore held by the durable authority no
-matter what the pre-check decides — so that suite could never have caught the
-mutation, and the server-side comparison is redundant defence in depth rather
-than the enforcement point.
-
-**Attempt semantics, now asserted rather than assumed:** `maxAttempts` bounds
-TOTAL admitted attempts, not retries — the initial execution is attempt 1. An
-attempt is counted per allocation plan when the Run carries one and per Run
-otherwise, so a multi-Run structured batch is ONE attempt (otherwise a two-leaf
-plan would exhaust a ceiling of 2 on its first execution).
-
-`scripts/auto-retry-attempt-ceiling-test.js` owns the invariant at the
-authority that enforces it: below / exactly at / above the ceiling, a batch
-straddling the ceiling refused atomically, one allocation plan counted as one
-attempt, and the ceiling re-derived from durable rows by a fresh store handle.
-The mutation is re-aimed there and killed.
-
-## Sibling Refusal's `failureKind: 'no_progress'` Is Inert (recorded 2026-08-04)
-
-**Status:** open, pre-existing, design question — not changed here.
-
-`assertGovernedSiblingReadAllowed` sets `error.failureKind = 'no_progress'`
-(server.js) with a comment saying the outcome is terminal for the execution.
-Flipping it to `runtime_failed` produces **no observable difference** in the
-durable record: the Run's triage carries `reasonCode: 'runtime_failed'` either
-way, with identical `requiredDecision: 'review_failure'`, `allowedActions` and
-`prohibitedActions: ['automatic_retry']`.
-
-Demonstrated by mutation against
-`scripts/governed-sibling-dependency-postgres-test.js`: the mutation SURVIVES
-even against an assertion on the retry prohibition, because both failure kinds
-map to the same triage classification.
-
-The coordination refusal IS distinguished durably — by the governed progress
-block's `reason`, `siblingDependency` and `blockHash`, all of which are
-mutation-proved. What is not distinguished is the triage reason code. Whether a
-coordination refusal deserves its own triage classification is a product
-decision, not a repair to make silently inside a session scoped to projections.
-
-## auto-retry Attempt Ceiling Is Not Actually Covered (recorded 2026-08-04)
-
-**Status:** open, pre-existing, revealed by the repair above. Out of scope for
-the session that found it.
-
-With the whole mutation suite able to run for the first time, one mutation
-survives:
-
-```
-── auto-retry-ignores-attempt-ceiling
-   removes: automatic retry stops at the ticket attempt ceiling
-   so that: a ticket at its ceiling is retried one more time
-   suite:   auto-retry-bounds-test.js
-   ✗ SURVIVED — the suite passed with the contract removed.
-```
-
-`auto-retry-bounds-test.js` does cover the POLICY FLAG — the neighbouring
-`auto-retry-ignores-policy-flag` mutation is killed — but not the ATTEMPT
-CEILING. A ticket already at its ceiling being retried once more is invisible to
-it.
-
-This was masked, not introduced: the stale anchor made the suite refuse to start,
-so no mutation in the file ran at all. Repairing one anchor is what made the
-other hole observable, which is the argument for the tool existing. 53/54 killed.
+The coordination refusal continues to be distinguished where it always was: the
+canonical progress block's reason, sibling allocation item, sibling Run,
+requested path, `siblingDependencyBlocked` flag and hash. Automatic retry
+remains prohibited through the triage owner, not through this field.
 
 ## Duplicate-Dispatch Outcome Anomaly: closed 2026-08-04
 

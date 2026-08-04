@@ -19751,9 +19751,25 @@ async function assertGovernedSiblingReadAllowed(run, requestedPath) {
     `run ${run.id} may not read ${resolved.sibling.requestedPath}: allocation item ` +
     `${resolved.sibling.siblingAllocationItemId} is not verified complete`);
   error.code = 'GOVERNED_SIBLING_READ_BLOCKED';
-  // Terminal for this execution: the worker loop must stop rather than treat
-  // this as an ordinary tool error and continue.
-  error.failureKind = 'no_progress';
+  // ADVISORY METADATA, AND DELIBERATELY NOT `no_progress`.
+  //
+  // `failureKind` classifies nothing here. `buildRunTriage` maps only a closed
+  // set — `protected_path`, `provider_error`, and the runtime-budget kinds —
+  // and `no_progress` is in none of them, so it fell through to the same
+  // `runtime_failed` triage a generic fault produces. Mutating it to
+  // `runtime_failed` changed no durable result at all, which is what made the
+  // value misleading: it named a churn/progress classification the system does
+  // not honour on this path.
+  //
+  // It is not simply dropped, because the field is what KEEPS the durable
+  // failure record: with no `failureKind`, `buildRunFailure` falls through
+  // every branch and returns null, losing the code and the sibling detail
+  // below. So it carries an honest description instead of a borrowed one.
+  //
+  // What is terminal for the execution is the throw, not this value. What
+  // distinguishes the coordination refusal is the canonical progress block —
+  // its reason, sibling identity, siblingDependencyBlocked flag and hash.
+  error.failureKind = 'sibling_dependency_blocked';
   error.detail = {
     reason: 'undeclared_sibling_dependency',
     blockHash: persisted.block.blockHash,

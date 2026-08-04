@@ -264,6 +264,27 @@ async function main() {
       assertThat(String(readerAfter.error || '').includes('is not verified complete'),
         'the durable error names the coordination refusal, not a generic fault');
 
+      // THE DURABLE FAILURE RECORD SURVIVES, AND IS HONEST ABOUT ITSELF.
+      //
+      // `failureKind` classifies nothing on this path — triage maps only a
+      // closed set that never included `no_progress`, so supplying it produced
+      // exactly the `runtime_failed` outcome a generic fault produces. But the
+      // field is what keeps the failure record alive: without it
+      // `buildRunFailure` returns null and the code and sibling detail below
+      // vanish. So it is asserted as observable metadata, not as authority.
+      const readerReplay = await store.readRunReplay(readerRun.id);
+      const failureRecord = readerReplay && readerReplay.snapshot
+        ? readerReplay.snapshot.failure || null
+        : null;
+      assertThat(failureRecord !== null,
+        'the refusal leaves a durable failure record');
+      assertThat(failureRecord.code === 'GOVERNED_SIBLING_READ_BLOCKED',
+        `the record carries the coordination refusal code (${failureRecord.code})`);
+      assertThat(failureRecord.kind === 'sibling_dependency_blocked',
+        `and an honest failure kind (${failureRecord.kind})`);
+      assertThat(failureRecord.kind !== 'no_progress',
+        'never the borrowed no_progress classification that governed nothing');
+
       const readerConsequence = await store.getRunConsequence(readerRun.id);
       const readerDecision = readerConsequence && readerConsequence.consequence
         ? readerConsequence.consequence.completionDecision
