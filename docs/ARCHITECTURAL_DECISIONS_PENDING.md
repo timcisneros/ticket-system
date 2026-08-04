@@ -5525,6 +5525,57 @@ Re-aimed at `runtime/authority-paths.js`; killed by
 is restored and SHA-256-verified, and an equivalent refactor of the same
 function produces no false hit.
 
+## Structured-Leaf Terminal-State Representability (recorded 2026-08-04)
+
+Classification of the nine terminal states, from source and from the refusals
+the database actually raises. Recorded because several are NOT missing tests —
+they are states the system refuses to represent, and the refusal is the proof.
+
+| # | State | Classification |
+|---|---|---|
+| 1 | valid completed leaf + canonical decision | production path |
+| 2 | completed, decision missing | controlled fixture (status written, evidence withheld) |
+| 3 | decision bound to wrong Run/Ticket | controlled fixture (internally valid, wrongly bound) |
+| 4 | completion-authority mismatch | controlled fixture; **not observable in Ticket projection** |
+| 5 | decision conflicts with Run status | controlled fixture |
+| 6 | replay-integrity failure | production path (existing corruption scenario) |
+| 7 | verified_progress_exhausted | production path |
+| 8 | undeclared_sibling_dependency | production path |
+| 9 | uncontained replay corruption | controlled fixture |
+
+Findings that changed how these must be proved:
+
+* **A stored decision cannot be corrupted in place.**
+  `normalizeCompletionDecision` recomputes `decisionHash` over every other
+  field, so editing `runId` in the database yields
+  `COMPLETION_DECISION_INVALID` — a different failure than the binding rule
+  under test. Cases 3-5 need a decision that is internally consistent and
+  wrongly bound, built through the canonical builder.
+* **One malformed decision per Run, by construction.** `run_consequences` is
+  keyed by `run_id`, requires `ticket_id` to match the Run's through a
+  composite foreign key, and is append-only (the evidence-mutation trigger
+  refuses UPDATE and DELETE). Cases cannot be staged by overwriting; each needs
+  its own admitted Run.
+* **Terminal Runs cannot be reopened**, so one Run cannot serve two malformed
+  cases in sequence.
+* **Case 4 is structurally unobservable in Ticket projection.** That projection
+  passes `runCompletionAuthorityHash: null`, and the shared rule treats a null
+  comparison as "no opinion" rather than a mismatch — deliberately, so it does
+  not refuse Runs nobody holds evidence against. The mismatch rule belongs to
+  allocation-item reconciliation, which supplies the hash. Asserting a
+  Ticket-projection refusal would describe a refusal that surface does not make.
+
+`COMPLETION_EVIDENCE_MISSING` is ONE code carrying DIFFERENT closed reasons
+(`completion_decision_missing`, `completion_decision_stale`,
+`completion_authority_mismatch`, `completion_decision_conflicts_run`). A
+projection collapsing them would still refuse, and would still pass a test
+asserting only the code, so the reason is asserted every time.
+
+**Still open from this matrix:** fresh-process (stop-server/restart) projection
+for cases 1, 6, 7 and 9; cross-surface parity across Ticket page, Run Detail,
+Ticket/runtime APIs, allocation reconciliation, parent aggregate and CLI; and
+the restart/scheduler before-and-after count matrix.
+
 ## Sibling Refusal's failureKind: closed 2026-08-04
 
 **Status:** closed. Supersedes the entry recorded when the value was only known
