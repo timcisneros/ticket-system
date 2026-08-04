@@ -180,6 +180,7 @@ const TESTS = Object.freeze([
   { file: "governed-transport-correlation-test.js", status: "required" },
   { file: "governed-request-claim-classification-test.js", status: "required" },
   { file: "governed-sibling-dependency-postgres-test.js", status: "required" },
+  { file: "auto-retry-attempt-ceiling-test.js", status: "required" },
   { file: "governed-verified-progress-lifecycle-postgres-test.js", status: "required" },
   { file: "governed-no-progress-withholding-postgres-test.js", status: "required" },
   { file: "governed-evidence-integrity-postgres-test.js", status: "required" },

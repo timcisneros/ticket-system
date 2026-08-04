@@ -711,14 +711,27 @@ const MUTATIONS = Object.freeze([
   },
   {
     name: 'auto-retry-ignores-attempt-ceiling',
-    suite: 'auto-retry-bounds-test.js',
-    file: 'server.js',
+    suite: 'auto-retry-attempt-ceiling-test.js',
+    // RE-AIMED. This previously mutated `attemptCount >= maxAttempts` in
+    // `assessAutoRetryAfterFailureIfPolicyAllows` and SURVIVED, because that
+    // comparison is not the ceiling. Instrumenting the decision showed the
+    // relaxed pre-check assessing the retry ELIGIBLE and proceeding, only to be
+    // refused by run admission in the store:
+    //
+    //   RUN_BUDGET_EXHAUSTED: ticket 3 already has 2 of 2 admitted attempts
+    //
+    // So the run counts `auto-retry-bounds-test` asserts are held by the
+    // durable authority no matter what the pre-check decides. The server-side
+    // comparison is redundant defence in depth; mutating it removes no
+    // enforcement, which is exactly why nothing failed.
+    file: 'persistence/postgres/store.js',
     contract: 'automatic retry stops at the ticket attempt ceiling',
-    // An off-by-one rather than a deletion: retries still stop eventually, just one
-    // attempt late. "It terminated" is not the contract; the boundary is.
-    find: "  if (attemptCount >= maxAttempts) return { eligible: false, reason: 'max_attempts_exhausted' };",
-    replace: "  if (attemptCount > maxAttempts) return { eligible: false, reason: 'max_attempts_exhausted' };",
-    expect: 'a ticket at its ceiling is retried one more time'
+    // An off-by-one rather than a deletion: admission still stops eventually,
+    // just one attempt late. "It terminated" is not the contract; the boundary
+    // is.
+    find: '            admittedCount + requestedAttemptCount > maxAttempts) {',
+    replace: '            admittedCount + requestedAttemptCount > maxAttempts + 1) {',
+    expect: 'a ticket at its ceiling admits one more attempt'
   },
   {
     name: 'auto-retry-accepts-any-failure-reason',
