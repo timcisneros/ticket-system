@@ -5503,34 +5503,55 @@ duplicated external send is not.
 required evidence exist. Automatic retransmission of an ambiguous started
 request is unsupported.
 
-## Equal-Timestamp Claim Collision Has No Constructible Scenario (recorded 2026-08-03)
+## Unreproduced Duplicate-Dispatch Outcome Under Pool Contention (recorded 2026-08-04)
 
-**Status:** open — coverage gap, with the reason it resisted construction.
+**Status:** open, not reproduced, not diagnosed. Recorded rather than dismissed.
 
-Governed request starts are now bound to the append-only `position` of the
-`run.lease_acquired` event that authorized them, and classification compares
-those identities. Reverting the classifier to the previous TIMESTAMP comparison
-still passes every suite, because ordinary runs never produce the collision the
-identity guards against.
+Once, in `governed-leaf-production-path-postgres-test` running concurrently
+with three other Postgres suites, the duplicate-concurrency block observed ONE
+transport call but NO caller reporting `received`. The same concurrent
+configuration then passed 78 further runs (and the suite passed 30/30
+sequentially), so the trigger is not known and no fix is claimed.
 
-The weakness is real and was demonstrated directly: with a later claim acquired
-in the same millisecond as an earlier request start, `startedAt < claimAt` is
-false and the classifier answers `request_in_flight` where identity answers
-`request_delivery_uncertain` — a recovering caller told a winner is mid-flight
-with a request nobody will finish. Clock order is also not append order.
+What is known:
 
-**Why no test forces it.** Three separate integrity mechanisms refuse to build
-the inconsistent state: the event chain-shape constraint rejects a synthetic
-`run.lease_acquired` row, `position` is generated and cannot be supplied, and
-the reservation's own constraints reject a rewritten `started_at`. That
-resistance is desirable — it is why claim identity is trustworthy — but it means
-the collision cannot be staged through any supported or unsupported path
-reachable from a test.
+* it is a report/observability question, not a dedup failure — the invariants
+  that matter held: one transport call, one reservation row, ordinal 1;
+* the same concurrent configuration passed on the pre-change tree, so claim
+  validation adding one `isRunExecutorActive` round trip per attempt at entry
+  may have widened an existing window rather than created a new one. That is a
+  hypothesis, not a finding — a single non-reproducing observation cannot
+  distinguish the two.
 
-**What would close it.** A contract-level test over the classification predicate
-alone, with claim identity and timestamps supplied as data, in the manner of
-`governed-transport-correlation-test`. That requires extracting the predicate
-from `runGovernedLeafRequest` into a pure function first.
+The assertion now inlines the per-caller outcomes in its failure message so a
+recurrence is diagnosable from a single log instead of a bare count.
+
+## Governed Claim Ownership: closed 2026-08-03
+
+**Status:** closed. Recorded because the path to it corrected two of my own
+earlier claims.
+
+Request starts are bound to the append-only `position` of the
+`run.lease_acquired` event the INITIATING attempt resolved at entry, validated
+transactionally against the governing claim. A superseded claim is refused
+(`ECONOMIC_REQUEST_STALE_CLAIM_ATTEMPT` /
+`governed_leaf_stale_claim_attempt`) rather than silently rebound to whatever
+claim is newest at write time.
+
+Two corrections along the way:
+
+* comparing `started_at` against the claim timestamp was described as claim
+  identity in an earlier handoff. It is not — `clock_timestamp()` has finite
+  resolution and clock order is not append order;
+* deriving the claim inside the store was described as making the binding "a
+  fact rather than an inference". It removed caller trust but introduced a
+  different error: a caller that began under claim A, paused, and resumed after
+  reclaim would have its request recorded against claim B.
+
+The equal-timestamp collision that the database refuses to stage — three
+integrity mechanisms reject it — is now proved as data by
+`scripts/governed-request-claim-classification-test.js`, against a pure
+classifier that takes no timestamps at all and says so by source assertion.
 
 ## Parent–Fixture Hash Handshake: NOT REQUIRED (recorded and closed 2026-08-03)
 

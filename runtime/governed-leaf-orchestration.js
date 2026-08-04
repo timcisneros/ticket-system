@@ -131,6 +131,59 @@ function selectRunProviderPath(run) {
 
 // ── One provider-request opportunity ────────────────────────────────────────
 
+// ── The recovery classifier, as a pure rule ─────────────────────────────────
+//
+// Extracted so it can be proved with values the relational constraints
+// deliberately make impossible to stage. The database refuses to build a
+// reservation whose start instant collides with a later claim — three separate
+// mechanisms reject it — which is exactly why the earlier timestamp comparison
+// looked correct in every real run while being wrong in principle.
+//
+// IT TAKES NO TIMESTAMPS. Not as an optimization: accepting one would reopen
+// the possibility of deciding by clock order, and the whole point is that claim
+// ownership is an identity question. Two claims can share a millisecond, and
+// append order is not clock order.
+const GOVERNED_RECOVERY_CLASSIFICATIONS = Object.freeze([
+  'reused_durable_response',
+  'request_in_flight',
+  'request_delivery_uncertain',
+  'request_authority_integrity_failure'
+]);
+
+function classifyGovernedRequestRecovery({
+  durableResponsePresent = false,
+  requestStarted = false,
+  startedClaimEventPosition = null,
+  currentClaimEventPosition = null,
+  currentExecutorLive = false,
+  legacyUnbound = false
+} = {}) {
+  // A durable response outranks every claim question: the answer exists, so
+  // whose claim produced it changes nothing about what to do with it.
+  if (durableResponsePresent) return 'reused_durable_response';
+  if (!requestStarted) return null;
+
+  // A row that predates the binding cannot prove which claim started it. It is
+  // treated as an earlier attempt rather than the current one, because assuming
+  // otherwise would report a live winner for work whose initiator may be gone.
+  if (legacyUnbound || startedClaimEventPosition === null) {
+    return 'request_delivery_uncertain';
+  }
+  // A started request in the new format must name its claim, and that claim
+  // must be resolvable. Neither being true is an integrity problem, not a
+  // recovery decision.
+  if (!Number.isSafeInteger(startedClaimEventPosition) ||
+      startedClaimEventPosition <= 0 ||
+      currentClaimEventPosition === null ||
+      !Number.isSafeInteger(currentClaimEventPosition)) {
+    return 'request_authority_integrity_failure';
+  }
+  if (startedClaimEventPosition !== currentClaimEventPosition) {
+    return 'request_delivery_uncertain';
+  }
+  return currentExecutorLive ? 'request_in_flight' : null;
+}
+
 async function runGovernedLeafRequest({
   repository,
   run,
@@ -154,6 +207,19 @@ async function runGovernedLeafRequest({
     refuse('governed_leaf_authority_absent',
       `run ${run.id} is not a governed leaf run`);
   }
+
+  // THE CLAIM THIS ATTEMPT IS RUNNING UNDER, resolved at entry.
+  //
+  // Resolved here rather than at request start, because that is the point where
+  // this orchestration attempt begins and therefore the claim it genuinely
+  // holds. Reading it later would ask "what is the newest claim now", which is
+  // a different question and answers it with whatever reclaim may have happened
+  // while this attempt was paused.
+  //
+  // It is carried as an EXPECTATION, not an authority: the store matches it
+  // against the append-only event log and refuses a superseded claim.
+  const entryExecutor = await repository.isRunExecutorActive(run.id);
+  const attemptClaimEventPosition = entryExecutor.currentClaimEventPosition;
 
   // 1. Reserve, or idempotently re-report an existing reservation for THIS
   //    logical opportunity. Duplicate orchestration never advances the ordinal.
@@ -231,13 +297,17 @@ async function runGovernedLeafRequest({
       // earlier attempt rather than the current one: the claim that started it
       // is unrecoverable, and assuming it is current would resurrect the bug
       // this replaced.
-      const startedUnderCurrentClaim =
-        reservation.startedClaimEventPosition !== null &&
-        reservation.startedClaimEventPosition !== undefined &&
-        executor.currentClaimEventPosition !== null &&
-        reservation.startedClaimEventPosition === executor.currentClaimEventPosition;
+      const classification = classifyGovernedRequestRecovery({
+        durableResponsePresent: false,
+        requestStarted: true,
+        startedClaimEventPosition: reservation.startedClaimEventPosition === undefined
+          ? null
+          : reservation.startedClaimEventPosition,
+        currentClaimEventPosition: executor.currentClaimEventPosition,
+        currentExecutorLive: executor.active === true
+      });
 
-      if (executor.active && !startedUnderCurrentClaim) {
+      if (executor.active && classification === 'request_delivery_uncertain') {
         return outcome('request_delivery_uncertain', {
           possiblyDispatched: true,
           reservationId: reservation.id,
@@ -323,9 +393,21 @@ async function runGovernedLeafRequest({
   let startResult;
   try {
     startResult = await repository.markEconomicRequestStarted({
-      reservationId: reservation.id
+      reservationId: reservation.id,
+      expectedClaimEventPosition: attemptClaimEventPosition
     });
   } catch (error) {
+    if (error && error.code === 'ECONOMIC_REQUEST_STALE_CLAIM_ATTEMPT') {
+      // This attempt's claim was superseded before it could start the request.
+      // Nothing was sent and nothing was recorded; the claim that now governs
+      // the Run will make its own decision about this reservation.
+      return outcome('reservation_refused', {
+        reservationId: reservation.id,
+        ordinal,
+        failureReason: 'governed_leaf_stale_claim_attempt',
+        failureDetail: error.message
+      });
+    }
     if (error && error.code === 'ECONOMIC_REQUEST_ALREADY_STARTED') {
       // Another caller won the race and is still working. This one contacts no
       // provider and — importantly — does NOT settle: the winner owns this
@@ -461,6 +543,8 @@ async function settleFromDurableFacts(repository, reservation, reportedUsage = n
 }
 
 module.exports = {
+  GOVERNED_RECOVERY_CLASSIFICATIONS,
+  classifyGovernedRequestRecovery,
   GOVERNED_LEAF_OUTCOMES,
   GOVERNED_LEAF_REFUSALS,
   GovernedLeafOrchestrationError,

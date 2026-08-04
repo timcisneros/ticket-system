@@ -498,8 +498,17 @@ async function main() {
     // a closed outcome and never a second request. A caller that merely LOST
     // the start race must not settle — the winner owns the outcome and will
     // report metered usage.
+    // The outcomes are inlined in the failure message because this assertion
+    // has failed once under heavy cross-suite pool contention (one transport
+    // call, no caller reporting `received`) and was not reproducible in 78
+    // subsequent concurrent runs. Without the outcomes a recurrence is another
+    // unreproducible bare count; with them it is diagnosable from one log.
+    const dupOutcomes = JSON.stringify(duplicated.map(r => r.status === 'fulfilled'
+      ? { status: r.value.status, ordinal: r.value.ordinal,
+          failureReason: r.value.failureReason || null }
+      : { rejected: String(r.reason && r.reason.message).slice(0, 160) }));
     assert.equal(dupOk.filter(r => r.value.status === 'received').length, 1,
-      'exactly one duplicate caller performed the dispatch');
+      `exactly one duplicate caller performed the dispatch; outcomes: ${dupOutcomes}`);
     for (const other of dupReserved.filter(r => r.value.status !== 'received')) {
       assert.ok(
         ['reused_durable_response', 'already_dispatched_unresolved']
@@ -787,6 +796,142 @@ async function main() {
     assert.equal(duplicateCalls.length, 0, 'the duplicate makes zero transport calls');
     assert.equal(duplicate.settlementReceiptHash, null,
       'the duplicate performs zero settlement');
+
+    // ── A STALE CALLER MAY NOT BIND ITS REQUEST TO A LATER CLAIM ──────────
+    //
+    // The race: a caller begins under claim A, pauses before starting its
+    // request, the Run is reclaimed as B, and the caller resumes. Reading "the
+    // newest claim" at write time would record the request against B — a claim
+    // it never ran under — and a later reader comparing identities would then
+    // call that request current and report a live winner for work whose
+    // initiator is gone.
+    //
+    // No pause is simulated: the same state is reached by superseding the claim
+    // between reservation and start, which is what a pause would produce.
+    {
+      const staleTicket = await admitLeafSet('Governed leaf stale claim');
+      const staleRun = await store.getRun(
+        (await store.listRunsForTicket({ ticketId: staleTicket.ticket.id })).runs[0].id);
+      const claimA = await store.claimPendingRun({
+        leaseOwner: 'stale-claim-proof', leaseDurationMs: 60000,
+        eligibleRunIds: [staleRun.id]
+      });
+      assert.ok(claimA, 'claim A acquired');
+      const positionA = (await store.isRunExecutorActive(staleRun.id))
+        .currentClaimEventPosition;
+
+      const staleReservation = await store.prepareAndReserveNextGovernedRunRequest({
+        runId: staleRun.id, logicalSourceIdentity: recSource,
+        canonicalBody: workerBody('stale claim work'),
+        endpointIdentity: ENDPOINT
+      });
+
+      // Supersede claim A with a genuine reclaim under the SAME process owner,
+      // so nothing but the claim identity distinguishes them.
+      await store.pool.query(
+        `UPDATE ${store.table('runs')} SET status = 'pending', lease_owner = NULL,
+                lease_expires_at = NULL, revision = revision + 1
+          WHERE id = $1`, [staleRun.id]);
+      const claimB = await store.claimPendingRun({
+        leaseOwner: 'stale-claim-proof', leaseDurationMs: 60000,
+        eligibleRunIds: [staleRun.id]
+      });
+      assert.ok(claimB, 'claim B acquired by the same process owner');
+      const positionB = (await store.isRunExecutorActive(staleRun.id))
+        .currentClaimEventPosition;
+      assert.notEqual(positionA, positionB, 'the two claims have distinct identities');
+
+      await assert.rejects(
+        () => store.markEconomicRequestStarted({
+          reservationId: staleReservation.reservation.id,
+          expectedClaimEventPosition: positionA
+        }),
+        error => error.code === 'ECONOMIC_REQUEST_STALE_CLAIM_ATTEMPT',
+        'the stale caller is refused rather than silently rebound to claim B');
+
+      const untouched = (await store.pool.query(
+        `SELECT state, started_at, started_claim_event_position
+           FROM ${store.table('economic_request_reservations')} WHERE id = $1`,
+        [staleReservation.reservation.id])).rows[0];
+      assert.equal(untouched.state, 'reserved',
+        'the reservation was not transitioned by the stale caller');
+      assert.equal(untouched.started_at, null, 'and never marked started');
+      assert.equal(untouched.started_claim_event_position, null,
+        'and was NOT bound to claim B');
+
+      // The legitimate holder of claim B may start the same unstarted
+      // reservation — an unstarted reservation is recoverable, and inventing
+      // delivery uncertainty before transport began would strand it.
+      const startedUnderB = await store.markEconomicRequestStarted({
+        reservationId: staleReservation.reservation.id,
+        expectedClaimEventPosition: positionB
+      });
+      assert.ok(startedUnderB, 'claim B may start the unstarted reservation');
+      const boundRow = (await store.pool.query(
+        `SELECT started_claim_event_position
+           FROM ${store.table('economic_request_reservations')} WHERE id = $1`,
+        [staleReservation.reservation.id])).rows[0];
+      assert.equal(Number(boundRow.started_claim_event_position), Number(positionB),
+        'and the request is bound to claim B exactly once');
+    }
+
+    // ── THE ORCHESTRATION CARRIES ITS OWN CLAIM, NOT THE NEWEST ───────────
+    //
+    // Above proves the STORE refuses a stale claim. This proves the caller
+    // actually supplies one: the claim is superseded between the orchestration
+    // resolving its token and reaching request start, which is exactly the
+    // window a paused caller occupies. If the orchestration passed nothing, the
+    // store would bind whatever claim is newest and the request would proceed
+    // under authority this attempt never held.
+    {
+      const raceTicket = await admitLeafSet('Governed leaf caller race');
+      const raceRun = await store.getRun(
+        (await store.listRunsForTicket({ ticketId: raceTicket.ticket.id })).runs[0].id);
+      assert.ok(await store.claimPendingRun({
+        leaseOwner: 'caller-race-proof', leaseDurationMs: 60000,
+        eligibleRunIds: [raceRun.id]
+      }), 'the Run is claimed before orchestration begins');
+      const claimedRun = await store.getRun(raceRun.id);
+
+      // Supersede the claim AFTER the orchestration has resolved its token and
+      // reserved, before it can start the request.
+      const realPrepare = store.prepareAndReserveNextGovernedRunRequest.bind(store);
+      store.prepareAndReserveNextGovernedRunRequest = async (...args) => {
+        const prepared = await realPrepare(...args);
+        await store.pool.query(
+          `UPDATE ${store.table('runs')} SET status = 'pending', lease_owner = NULL,
+                  lease_expires_at = NULL, revision = revision + 1
+            WHERE id = $1`, [raceRun.id]);
+        await store.claimPendingRun({
+          leaseOwner: 'caller-race-proof', leaseDurationMs: 60000,
+          eligibleRunIds: [raceRun.id]
+        });
+        return prepared;
+      };
+
+      let raced;
+      try {
+        raced = await runGoverned(claimedRun, recSource, {
+          transport: recordingTransport(), prompt: 'caller race work'
+        });
+      } finally {
+        store.prepareAndReserveNextGovernedRunRequest = realPrepare;
+      }
+
+      assert.equal(raced.status, 'reservation_refused',
+        'the orchestration is refused when its own claim was superseded');
+      assert.equal(raced.failureReason, 'governed_leaf_stale_claim_attempt',
+        'and refused for the stale claim, not some incidental reason');
+
+      const racedRow = (await store.pool.query(
+        `SELECT state, started_claim_event_position
+           FROM ${store.table('economic_request_reservations')}
+          WHERE run_id = $1 ORDER BY id DESC LIMIT 1`, [raceRun.id])).rows[0];
+      assert.equal(racedRow.state, 'reserved',
+        'the reservation was never started under the newer claim');
+      assert.equal(racedRow.started_claim_event_position, null,
+        'and carries no claim binding at all');
+    }
 
     const midFlight = await store.pool.query(
       `SELECT r.state, r.settled_micro_usd, a.reserved_micro_usd, a.settled_micro_usd

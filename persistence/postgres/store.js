@@ -3596,6 +3596,9 @@ class PostgresRuntimeStore {
   // concurrent caller is refused.
   async markEconomicRequestStarted({
     reservationId,
+    // The claim the CALLER believes it is running under. Validated, never
+    // trusted: see the check below.
+    expectedClaimEventPosition = null,
     eventType = 'ticket.economic_request_started'
   }, { client = null } = {}) {
     const id = positiveSafeInteger(reservationId, 'reservationId');
@@ -3604,26 +3607,58 @@ class PostgresRuntimeStore {
       // The conditional predicate is the whole guarantee: `state = 'reserved'`
       // can only be true for one caller, because the row lock serializes them
       // and the winner leaves the row in `request_started`.
-      // THE CLAIM THAT AUTHORIZES THIS START, derived here rather than accepted
-      // from the caller. A caller-supplied attempt identity would be an
-      // assertion about authority made by the party seeking it; the store reads
-      // the Run's newest `run.lease_acquired` event inside this transaction, so
-      // the binding is a fact about the claim that is live at the moment the
-      // request starts.
+      // THE CLAIM THE CALLER RAN UNDER, VALIDATED — not whichever claim happens
+      // to be newest when this statement executes.
+      //
+      // Reading the newest claim internally was subtly wrong. A caller that
+      // began under claim 10, paused, and resumed after the Run was reclaimed
+      // as claim 11 would have its request recorded against 11 — a claim it
+      // never ran under — and a later reader comparing identities would then
+      // call that request current and report a live winner for work whose
+      // initiator is gone.
+      //
+      // So the caller states which claim it believes it holds, and this
+      // transaction refuses unless that is still the governing claim for THIS
+      // Run. The value is never used as authority on the caller's say-so: it is
+      // matched against the append-only event log, and a superseded claim is a
+      // refusal rather than a silent substitution.
+      if (expectedClaimEventPosition !== null) {
+        const expected = positiveSafeInteger(
+          expectedClaimEventPosition, 'expectedClaimEventPosition');
+        const governing = await connection.query(
+          `SELECT max(claim.position) AS current_position
+             FROM ${this.table('events')} AS claim
+             JOIN ${this.table('economic_request_reservations')} AS reservation
+               ON reservation.run_id = claim.run_id
+            WHERE reservation.id = $1 AND claim.type = 'run.lease_acquired'`,
+          [id]);
+        const current = governing.rows[0].current_position === null
+          ? null
+          : Number(governing.rows[0].current_position);
+        if (current === null || current !== expected) {
+          const error = new Error(
+            `reservation ${id} cannot start under claim ${expected}: the ` +
+            `governing claim is ${current === null ? 'absent' : current}`);
+          error.code = 'ECONOMIC_REQUEST_STALE_CLAIM_ATTEMPT';
+          error.detail = { reservationId: id, expected, current };
+          throw error;
+        }
+      }
+
       const won = await connection.query(
         `UPDATE ${this.table('economic_request_reservations')} AS reservation
          SET state = 'request_started',
              started_at = clock_timestamp(),
-             started_claim_event_position = (
+             started_claim_event_position = COALESCE($2::bigint, (
                SELECT max(claim.position) FROM ${this.table('events')} AS claim
                 WHERE claim.run_id = reservation.run_id
                   AND claim.type = 'run.lease_acquired'
-             ),
+             )),
              revision = revision + 1,
              updated_at = clock_timestamp()
          WHERE reservation.id = $1 AND reservation.state = 'reserved'
          RETURNING *`,
-        [id]
+        [id, expectedClaimEventPosition === null ? null : Number(expectedClaimEventPosition)]
       );
       if (won.rowCount === 0) {
         const current = await connection.query(
