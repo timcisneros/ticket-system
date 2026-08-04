@@ -262,77 +262,10 @@ async function runGovernedLeafRequest({
   switch (reservation.state) {
     case 'reserved':
       break; // A first start may still be attempted.
-    case 'request_started': {
-      // ACTIVE IS NOT ABANDONED.
-      //
-      // The bytes may already have reached the provider, so this is never
-      // re-dispatched. But whether it may be SETTLED depends on something this
-      // reservation cannot know: is the executor that started it still alive?
-      //
-      // Settling an active request would charge the reserved maximum while the
-      // winner is mid-flight, discard the metered usage it is about to report,
-      // and close books the winner still owns. So the Run's lease decides,
-      // using the same predicate the canonical recovery path uses.
-      const executor = await repository.isRunExecutorActive(run.id);
-
-      // WHICH CLAIM ATTEMPT STARTED THIS REQUEST?
-      //
-      // Two situations look identical through a lease OWNER and need opposite
-      // answers. A duplicate racing a live winner inside one process shares
-      // that process's owner string, and so does a recovery after a crash when
-      // the same process reclaims the Run. Comparing owners answered "it is me"
-      // for both, and told a legitimate duplicate its request might have been
-      // lost when in fact a winner was mid-flight with it.
-      //
-      // The discriminator is the CLAIM, compared BY IDENTITY. Timestamps cannot
-      // do this: `clock_timestamp()` has finite resolution, so a claim acquired
-      // in the same millisecond as an earlier request start compares as
-      // not-earlier and the recovering caller is told a winner is mid-flight
-      // with a request nobody will finish. Clock order is not append order
-      // either. The event id is unique per acquisition and identical for every
-      // caller within one claim, which is exactly the distinction needed. The
-      // event `position` is APPEND order, so it is unaffected by clock skew.
-      //
-      // A request with NO binding predates this rule. It is treated as an
-      // earlier attempt rather than the current one: the claim that started it
-      // is unrecoverable, and assuming it is current would resurrect the bug
-      // this replaced.
-      const classification = classifyGovernedRequestRecovery({
-        durableResponsePresent: false,
-        requestStarted: true,
-        startedClaimEventPosition: reservation.startedClaimEventPosition === undefined
-          ? null
-          : reservation.startedClaimEventPosition,
-        currentClaimEventPosition: executor.currentClaimEventPosition,
-        currentExecutorLive: executor.active === true
+    case 'request_started':
+      return await resolveStartedRequest({
+        repository, run, reservation, ordinal, logicalSourceIdentity
       });
-
-      if (executor.active && classification === 'request_delivery_uncertain') {
-        return outcome('request_delivery_uncertain', {
-          possiblyDispatched: true,
-          reservationId: reservation.id,
-          ordinal,
-          failureReason: 'governed_request_delivery_uncertain',
-          failureDetail:
-            `run ${run.id} request ${ordinal} (${logicalSourceIdentity}) was ` +
-            'started but holds no durable response; delivery cannot be proven ' +
-            'and automatic retransmission is unsupported'
-        });
-      }
-      if (executor.active) {
-        return outcome('request_in_flight', {
-          possiblyDispatched: true,
-          reservationId: reservation.id,
-          ordinal,
-          failureReason: 'governed_leaf_request_in_flight',
-          failureDetail:
-            `run ${run.id} is still executing under lease ${executor.leaseOwner}`
-        });
-      }
-      // The executor is durably gone and this caller holds the Run under the
-      // existing lease authority. Conservative settlement is permitted.
-      return await closeUnconfirmed(repository, reservation, ordinal);
-    }
     case 'response_persisted': {
       const settled = await settleFromDurableFacts(repository, reservation);
       return outcome('reused_durable_response', {
@@ -397,6 +330,16 @@ async function runGovernedLeafRequest({
       expectedClaimEventPosition: attemptClaimEventPosition
     });
   } catch (error) {
+    if (error && error.code === 'ECONOMIC_REQUEST_CLAIM_POSITION_INVALID') {
+      // Nothing was started and nothing was sent. The attempt cannot prove
+      // which claim it holds, so it may not dispatch under any claim.
+      return outcome('reservation_refused', {
+        reservationId: reservation.id,
+        ordinal,
+        failureReason: 'governed_leaf_claim_authority_invalid',
+        failureDetail: error.message
+      });
+    }
     if (error && error.code === 'ECONOMIC_REQUEST_STALE_CLAIM_ATTEMPT') {
       // This attempt's claim was superseded before it could start the request.
       // Nothing was sent and nothing was recorded; the claim that now governs
@@ -409,18 +352,27 @@ async function runGovernedLeafRequest({
       });
     }
     if (error && error.code === 'ECONOMIC_REQUEST_ALREADY_STARTED') {
-      // Another caller won the race and is still working. This one contacts no
-      // provider and — importantly — does NOT settle: the winner owns this
-      // reservation's outcome, and settling here would discard the metered
-      // usage the winner is about to report and charge the maximum instead.
-      // A genuinely abandoned start is settled by the recovery branch above,
-      // on a later invocation, when no winner is live.
-      return outcome('already_dispatched_unresolved', {
-        possiblyDispatched: true,
-        reservationId: reservation.id,
-        ordinal,
-        failureReason: 'governed_leaf_start_lost',
-        failureDetail: 'another caller holds dispatch authority for this request'
+      // THIS CALLER IS AN OBSERVER, and which KIND of observer is not something
+      // the losing race tells it.
+      //
+      // Losing the start transition previously returned
+      // `already_dispatched_unresolved` directly. That name is also what
+      // `closeUnconfirmed` returns for a request that was ABANDONED and
+      // conservatively settled at the reserved maximum — so a caller that
+      // merely lost a race to a live winner was indistinguishable, in its own
+      // reported status, from one reporting an unrecoverable request. It also
+      // meant a loser never consulted the claim-aware classifier that every
+      // other observer goes through, so the two entry points into "somebody
+      // else started this" could disagree.
+      //
+      // Both now resolve through ONE authority against freshly read state: the
+      // winner may already have persisted its response while this caller was
+      // losing the race, in which case the truthful answer is the durable
+      // response, not a race report.
+      const current = await repository.getEconomicReservation(reservation.id);
+      return await resolveStartedRequest({
+        repository, run, reservation: current || reservation, ordinal,
+        logicalSourceIdentity, concurrentStartObserved: true
       });
     }
     throw error;
@@ -498,6 +450,133 @@ async function runGovernedLeafRequest({
     ordinal,
     settlementReceiptHash
   });
+}
+
+// THE ONE AUTHORITY FOR "SOMEBODY ALREADY STARTED THIS REQUEST".
+//
+// Reached from both places a caller can discover a started request it does not
+// own: finding one already durable on entry, and losing the atomic start race.
+// Those had separate answers, and only one of them consulted claim identity —
+// so the same situation could be reported two different ways depending on how
+// narrowly the caller lost.
+//
+// The dispatch OWNER never arrives here. It holds its authority linearly from
+// the start transition through transport and response persistence to its own
+// returned result, so it can never be told its own live request belongs to
+// somebody else.
+async function resolveStartedRequest({
+  repository, run, reservation, ordinal, logicalSourceIdentity,
+  // TRUE only when THIS call just lost the atomic start transition. That is
+  // first-hand evidence that a concurrent owner exists right now — stronger
+  // than any lease read, and evidence a caller arriving later does not have.
+  concurrentStartObserved = false
+}) {
+  // The winner may have finished while this caller was losing the race.
+  if (reservation.state === 'response_persisted' || reservation.state === 'settled') {
+    const settled = await settleFromDurableFacts(repository, reservation);
+    return outcome('reused_durable_response', {
+      possiblyDispatched: true,
+      reservationId: reservation.id,
+      ordinal,
+      responseIdentity: reservation.responseIdentity,
+      responseHash: reservation.responseHash,
+      settlementReceiptHash: reservation.state === 'settled' && reservation.settlementReceipt
+        ? reservation.settlementReceipt.receiptHash
+        : settled
+    });
+  }
+
+    // ACTIVE IS NOT ABANDONED.
+    //
+    // The bytes may already have reached the provider, so this is never
+    // re-dispatched. But whether it may be SETTLED depends on something this
+    // reservation cannot know: is the executor that started it still alive?
+    //
+    // Settling an active request would charge the reserved maximum while the
+    // winner is mid-flight, discard the metered usage it is about to report,
+    // and close books the winner still owns. So the Run's lease decides,
+    // using the same predicate the canonical recovery path uses.
+    const executor = await repository.isRunExecutorActive(run.id);
+
+    // WHICH CLAIM ATTEMPT STARTED THIS REQUEST?
+    //
+    // Two situations look identical through a lease OWNER and need opposite
+    // answers. A duplicate racing a live winner inside one process shares
+    // that process's owner string, and so does a recovery after a crash when
+    // the same process reclaims the Run. Comparing owners answered "it is me"
+    // for both, and told a legitimate duplicate its request might have been
+    // lost when in fact a winner was mid-flight with it.
+    //
+    // The discriminator is the CLAIM, compared BY IDENTITY. Timestamps cannot
+    // do this: `clock_timestamp()` has finite resolution, so a claim acquired
+    // in the same millisecond as an earlier request start compares as
+    // not-earlier and the recovering caller is told a winner is mid-flight
+    // with a request nobody will finish. Clock order is not append order
+    // either. The event id is unique per acquisition and identical for every
+    // caller within one claim, which is exactly the distinction needed. The
+    // event `position` is APPEND order, so it is unaffected by clock skew.
+    //
+    // A request with NO binding predates this rule. It is treated as an
+    // earlier attempt rather than the current one: the claim that started it
+    // is unrecoverable, and assuming it is current would resurrect the bug
+    // this replaced.
+    const classification = classifyGovernedRequestRecovery({
+      durableResponsePresent: false,
+      requestStarted: true,
+      startedClaimEventPosition: reservation.startedClaimEventPosition === undefined
+        ? null
+        : reservation.startedClaimEventPosition,
+      currentClaimEventPosition: executor.currentClaimEventPosition,
+      currentExecutorLive: executor.active === true
+    });
+
+    if (executor.active && classification === 'request_delivery_uncertain') {
+      return outcome('request_delivery_uncertain', {
+        possiblyDispatched: true,
+        reservationId: reservation.id,
+        ordinal,
+        failureReason: 'governed_request_delivery_uncertain',
+        failureDetail:
+          `run ${run.id} request ${ordinal} (${logicalSourceIdentity}) was ` +
+          'started but holds no durable response; delivery cannot be proven ' +
+          'and automatic retransmission is unsupported'
+      });
+    }
+    if (executor.active) {
+      return outcome('request_in_flight', {
+        possiblyDispatched: true,
+        reservationId: reservation.id,
+        ordinal,
+        failureReason: 'governed_leaf_request_in_flight',
+        failureDetail:
+          `run ${run.id} is still executing under lease ${executor.leaseOwner}`
+      });
+    }
+    // A CALLER THAT JUST LOST THE RACE MAY NEVER SETTLE.
+    //
+    // Below this point the lease says no executor is live. For a caller
+    // arriving later that means the request was abandoned and may be closed
+    // conservatively. For a caller that lost the start transition inside this
+    // very call it means nothing of the sort: the winner is demonstrably
+    // running, and is simply not holding a lease this read can see — an
+    // unleased Run, a lease held by another process, or one that expired while
+    // the winner was mid-flight. Settling here would charge the reserved
+    // maximum, discard the metered usage the winner is about to report, and
+    // close books the winner still owns.
+    if (concurrentStartObserved) {
+      return outcome('request_in_flight', {
+        possiblyDispatched: true,
+        reservationId: reservation.id,
+        ordinal,
+        failureReason: 'governed_leaf_request_in_flight',
+        failureDetail:
+          `run ${run.id} request ${ordinal} (${logicalSourceIdentity}) is held ` +
+          'by a concurrent caller that won the start transition'
+      });
+    }
+    // The executor is durably gone and this caller holds the Run under the
+    // existing lease authority. Conservative settlement is permitted.
+    return await closeUnconfirmed(repository, reservation, ordinal);
 }
 
 // A request that reached the provider but produced no durable response still

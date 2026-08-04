@@ -3623,8 +3623,22 @@ class PostgresRuntimeStore {
       // matched against the append-only event log, and a superseded claim is a
       // refusal rather than a silent substitution.
       if (expectedClaimEventPosition !== null) {
-        const expected = positiveSafeInteger(
-          expectedClaimEventPosition, 'expectedClaimEventPosition');
+        // A MALFORMED expected position is an authority integrity failure, not
+        // a generic argument error. It is coded so the orchestration can return
+        // a closed outcome instead of letting an uncoded throw escape as an
+        // unattributable rejection — the caller still gets refused either way,
+        // but only a coded refusal is classifiable.
+        let expected;
+        try {
+          expected = positiveSafeInteger(
+            expectedClaimEventPosition, 'expectedClaimEventPosition');
+        } catch (invalid) {
+          const error = new Error(
+            `expected claim event position is not a usable claim identity: ${invalid.message}`);
+          error.code = 'ECONOMIC_REQUEST_CLAIM_POSITION_INVALID';
+          error.detail = { reservationId: id };
+          throw error;
+        }
         const governing = await connection.query(
           `SELECT max(claim.position) AS current_position
              FROM ${this.table('events')} AS claim

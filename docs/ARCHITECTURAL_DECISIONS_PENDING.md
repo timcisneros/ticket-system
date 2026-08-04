@@ -5503,28 +5503,42 @@ duplicated external send is not.
 required evidence exist. Automatic retransmission of an ambiguous started
 request is unsupported.
 
-## Unreproduced Duplicate-Dispatch Outcome Under Pool Contention (recorded 2026-08-04)
+## Duplicate-Dispatch Outcome Anomaly: closed 2026-08-04
 
-**Status:** open, not reproduced, not diagnosed. Recorded rather than dismissed.
+**Status:** closed. Supersedes the "unreproduced" entry recorded earlier the
+same day, which was honest about not knowing the cause and is replaced now that
+the cause is proved rather than guessed.
 
-Once, in `governed-leaf-production-path-postgres-test` running concurrently
-with three other Postgres suites, the duplicate-concurrency block observed ONE
-transport call but NO caller reporting `received`. The same concurrent
-configuration then passed 78 further runs (and the suite passed 30/30
-sequentially), so the trigger is not known and no fix is claimed.
+The observation — one transport, one reservation, one ordinal, and NO caller
+reporting `received` — is reproduced deterministically by a barrier that holds
+the dispatch owner at a chosen boundary instead of racing the scheduler. Two
+distinct defects were behind it:
 
-What is known:
+1. **A rejected owner vanished from the accounting.** The duplicate-concurrency
+   test filtered to FULFILLED outcomes, so an owner whose post-transport
+   persistence threw contributed nothing and left a bare count with no
+   explanation. Every caller is now accounted for, rejections included with
+   their error code. The runtime behaviour here was and remains correct: a
+   response that could not be made durable is one no caller may claim.
 
-* it is a report/observability question, not a dedup failure — the invariants
-  that matter held: one transport call, one reservation row, ordinal 1;
-* the same concurrent configuration passed on the pre-change tree, so claim
-  validation adding one `isRunExecutorActive` round trip per attempt at entry
-  may have widened an existing window rather than created a new one. That is a
-  hypothesis, not a finding — a single non-reproducing observation cannot
-  distinguish the two.
+2. **A caller that lost the start race reported `already_dispatched_unresolved`
+   — the same status `closeUnconfirmed` returns for an ABANDONED request it
+   settled at the reserved maximum.** Worse, the losing path never consulted the
+   claim-aware classifier that every other observer goes through, so the two
+   ways of discovering "somebody else started this" could disagree. Both now
+   resolve through one authority, `resolveStartedRequest`.
 
-The assertion now inlines the per-caller outcomes in its failure message so a
-recurrence is diagnosable from a single log instead of a bare count.
+The correction that mattered most is narrow: a caller that just lost the atomic
+start transition has FIRST-HAND evidence of a live concurrent owner, which is
+strictly stronger than a lease read. Unifying the two paths naively made such a
+caller settle books the winner still owned whenever the lease could not see the
+winner — an unleased Run, another process's lease, or one expired mid-flight.
+`concurrentStartObserved` keeps that distinction explicit.
+
+The dispatch owner never enters this authority at all. It holds its result
+linearly from the start transition through transport and durable persistence to
+its own returned outcome, so it can never be told its own live request belongs
+to somebody else.
 
 ## Governed Claim Ownership: closed 2026-08-03
 

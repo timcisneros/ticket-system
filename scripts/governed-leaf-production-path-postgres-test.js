@@ -392,9 +392,10 @@ async function main() {
     const withoutKey = async () => null;
 
     const runGoverned = (run, logicalSourceIdentity, {
-      transport, credentials = withKey, runtimeMaximum = 8, prompt = 'do the work'
+      transport, credentials = withKey, runtimeMaximum = 8, prompt = 'do the work',
+      repository = store
     }) => runGovernedLeafRequest({
-      repository: store,
+      repository,
       run,
       logicalSourceIdentity,
       canonicalBody: workerBody(prompt),
@@ -510,10 +511,14 @@ async function main() {
     assert.equal(dupOk.filter(r => r.value.status === 'received').length, 1,
       `exactly one duplicate caller performed the dispatch; outcomes: ${dupOutcomes}`);
     for (const other of dupReserved.filter(r => r.value.status !== 'received')) {
+      // `already_dispatched_unresolved` is NOT accepted here. That name means
+      // "started, no confirmed response, and I settled it conservatively" —
+      // which is exactly what a caller racing a live winner must never do. A
+      // duplicate that loses the start transition is an observer of a request
+      // somebody else owns.
       assert.ok(
-        ['reused_durable_response', 'already_dispatched_unresolved']
-          .includes(other.value.status),
-        `a duplicate caller reports a closed outcome, got ${other.value.status}`);
+        ['reused_durable_response', 'request_in_flight'].includes(other.value.status),
+        `a duplicate caller reports an observer outcome, got ${other.value.status}`);
       assert.equal(other.value.possiblyDispatched, true,
         'a duplicate caller never claims the request was undispatched');
     }
@@ -523,6 +528,492 @@ async function main() {
     assert.equal(dupFinal.settledMicroUsd < dupFinal.reservedMaxMicroUsd ||
       dupFinal.settlementReceipt.usageSource === 'authorized_maximum_assumed', true,
       'settlement came from the winner, not from a losing caller guessing');
+
+    // ── DETERMINISTIC DISPATCH OWNERSHIP ───────────────────────────────────
+    //
+    // The block above races two callers and relies on the scheduler to
+    // interleave them. That reproduced a real observation exactly once in
+    // ~80 concurrent runs — one transport, one reservation, and NO caller
+    // reporting `received` — and never again. A proof that depends on winning
+    // a race is not a proof, and the missing information was not in the
+    // assertion but in what the test threw away: it filtered to FULFILLED
+    // outcomes, so a caller whose promise REJECTED disappeared from the
+    // accounting entirely and left a bare count with no explanation.
+    //
+    // These scenarios remove the scheduler from the question. A barrier holds
+    // the dispatch owner at a chosen boundary while the observer runs to
+    // completion, so each ownership timing is exercised on every run, and every
+    // caller is accounted for including rejections.
+
+    // Suspends specific repository calls without changing their behaviour. The
+    // prototype chain keeps `this` on the real store, so decorated methods are
+    // the production ones.
+    const barrierRepository = (hooks) => {
+      const proxy = Object.create(store);
+      for (const [method, hook] of Object.entries(hooks)) {
+        proxy[method] = (...args) => hook(store[method].bind(store), ...args);
+      }
+      return proxy;
+    };
+    const signal = () => {
+      let open; const opened = new Promise(resolve => { open = resolve; });
+      let arrive; const arrived = new Promise(resolve => { arrive = resolve; });
+      return { opened, arrived, open, arrive };
+    };
+
+    // Records every observable authority transition for one caller. Rejections
+    // are recorded, never dropped.
+    const traceCaller = (callerId) => {
+      const trace = {
+        callerId, claimEventPosition: null, reservationId: null, ordinal: null,
+        sourceIdentity: null, admission: null, startTransition: null,
+        dispatchAuthority: false, requestReplayIdentity: null,
+        transportCaptureIdentity: null, responseReplayIdentity: null,
+        outcome: null, error: null, errorCode: null, finishedAt: null
+      };
+      trace.repository = (extra = {}) => barrierRepository({
+        isRunExecutorActive: async (real, ...args) => {
+          const executor = await real(...args);
+          if (trace.claimEventPosition === null) {
+            trace.claimEventPosition = executor.currentClaimEventPosition;
+          }
+          return executor;
+        },
+        prepareAndReserveNextGovernedRunRequest: async (real, ...args) => {
+          try {
+            const prepared = await real(...args);
+            trace.admission = `reserved:${prepared.reservation.state}`;
+            trace.reservationId = prepared.reservation.id;
+            trace.ordinal = prepared.ordinal;
+            trace.sourceIdentity = prepared.reservation.logicalSourceIdentity;
+            trace.requestReplayIdentity = prepared.reservation.exactRequestHash;
+            return prepared;
+          } catch (error) {
+            trace.admission = `refused:${error.code || 'unknown'}`;
+            throw error;
+          }
+        },
+        markEconomicRequestStarted: async (real, ...args) => {
+          try {
+            const started = await real(...args);
+            trace.startTransition = 'won';
+            trace.dispatchAuthority = true;
+            return started;
+          } catch (error) {
+            trace.startTransition = `lost:${error.code || 'unknown'}`;
+            throw error;
+          }
+        },
+        markEconomicResponsePersisted: async (real, ...args) => {
+          const persisted = await real(...args);
+          trace.responseReplayIdentity = args[0].responseIdentity;
+          return persisted;
+        },
+        ...extra
+      });
+      return trace;
+    };
+
+    // Accounts for BOTH callers. A rejection is a reportable state, not an
+    // absence: the anomaly this replaces was invisible precisely because a
+    // rejected caller contributed nothing to the accounting.
+    const settleCallers = async (traces, promises) => {
+      const results = await Promise.allSettled(promises);
+      results.forEach((result, index) => {
+        const trace = traces[index];
+        trace.finishedAt = index;
+        if (result.status === 'fulfilled') {
+          // A caller settled earlier in the scenario contributes its recorded
+          // transitions without re-reporting an outcome.
+          trace.outcome = result.value === null ? trace.outcome : result.value.status;
+          trace.value = result.value === null ? trace.value : result.value;
+        } else {
+          trace.outcome = 'rejected';
+          trace.error = String(result.reason && result.reason.message).slice(0, 200);
+          trace.errorCode = (result.reason && result.reason.code) || null;
+        }
+      });
+      return traces;
+    };
+    const report = traces => JSON.stringify(traces.map(t => ({
+      callerId: t.callerId, claim: t.claimEventPosition, reservation: t.reservationId,
+      source: t.sourceIdentity, ordinal: t.ordinal, admission: t.admission,
+      start: t.startTransition, dispatchAuthority: t.dispatchAuthority,
+      requestReplay: t.requestReplayIdentity, response: t.responseReplayIdentity,
+      outcome: t.outcome, error: t.error, errorCode: t.errorCode
+    })), null, 1);
+
+    // Durable accounting for one Run, asserted identically in every timing.
+    const ledgerOf = async runId => {
+      const one = async (sql, params) =>
+        (await store.pool.query(sql, params)).rows;
+      const reservations = await one(
+        `SELECT id, state, model_request_ordinal, started_claim_event_position,
+                response_identity, settlement_receipt
+           FROM ${store.table('economic_request_reservations')} WHERE run_id = $1`, [runId]);
+      const events = await one(
+        `SELECT type FROM ${store.table('events')} WHERE run_id = $1 ORDER BY position`, [runId]);
+      const runRow = await store.getRun(runId);
+      return {
+        reservations,
+        settlements: reservations.filter(r => r.settlement_receipt !== null).length,
+        responses: reservations.filter(r => r.response_identity !== null).length,
+        events: events.map(e => e.type),
+        runState: runRow.status
+      };
+    };
+
+    // ── Timing 1: duplicate arrives BEFORE transport ───────────────────────
+    //
+    // The owner is held immediately after it wins the atomic start transition
+    // and before any byte leaves. The observer therefore always meets an
+    // already-started request with no durable response.
+    {
+      const ownRun = await store.getRun((await store.listRunsForTicket({
+        ticketId: (await admitLeafSet('Governed leaf dispatch ownership')).ticket.id
+      })).runs[0].id);
+      // Production executes a governed leaf under a claim; both callers run
+      // inside that one claim, which is the case the claim classifier must
+      // read as "same attempt" rather than as a recovery.
+      assert.ok(await store.claimPendingRun({
+        leaseOwner: 'dispatch-ownership-proof', leaseDurationMs: 60_000,
+        eligibleRunIds: [ownRun.id]
+      }), 'the Run is claimed before either caller enters');
+      const t = recordingTransport();
+      const owner = traceCaller('A-owner');
+      const observer = traceCaller('B-observer');
+      const held = signal();
+
+      const ownerRepository = owner.repository({
+        markEconomicRequestStarted: async (real, ...args) => {
+          try {
+            const started = await real(...args);
+            owner.startTransition = 'won';
+            owner.dispatchAuthority = true;
+            held.arrive();
+            await held.opened;       // hold the owner at dispatch authority
+            return started;
+          } catch (error) {
+            owner.startTransition = `lost:${error.code || 'unknown'}`;
+            throw error;
+          }
+        }
+      });
+
+      const ownerPromise = runGoverned(ownRun, 'model-request:agent:1:provider',
+        { transport: t, repository: ownerRepository });
+      await held.arrived;            // the owner now holds dispatch authority
+
+      assert.equal(t.calls.length, 0,
+        'holding at dispatch authority means no byte has left yet');
+
+      const observerResult = await runGoverned(ownRun, 'model-request:agent:1:provider',
+        { transport: t, repository: observer.repository() });
+
+      assert.equal(t.calls.length, 0,
+        'an observer meeting a started request performs NO transport');
+      assert.equal(observer.dispatchAuthority, false,
+        'the observer never acquired dispatch authority');
+      assert.equal(observerResult.status, 'request_in_flight',
+        `the observer reports the live winner, got ${observerResult.status}`);
+      assert.equal(observerResult.failureReason, 'governed_leaf_request_in_flight');
+      assert.equal(observerResult.possiblyDispatched, true,
+        'the observer never claims the request was undispatched');
+
+      held.open();
+      const traces = await settleCallers([owner, observer],
+        [ownerPromise, Promise.resolve(observerResult)]);
+
+      assert.equal(owner.outcome, 'received',
+        `the dispatch owner carries its own result, got ${owner.outcome}: ` +
+        `${owner.error || ''}\n${report(traces)}`);
+      assert.equal(owner.dispatchAuthority, true);
+      assert.equal(t.calls.length, 1,
+        `exactly one transport across both callers\n${report(traces)}`);
+      assert.equal(owner.value.text, '{"ok":true}',
+        'the owner returns the transport result it obtained');
+      assert.ok(owner.value.responseHash && owner.value.settlementReceiptHash,
+        'the owner carries its response through durable persistence');
+      assert.equal(owner.ordinal, observer.ordinal,
+        'both callers describe the SAME logical request');
+      assert.equal(owner.claimEventPosition, observer.claimEventPosition,
+        'both callers ran under one claim position');
+      assert.notEqual(owner.claimEventPosition, null, 'the claim position resolved');
+
+      const ledger = await ledgerOf(ownRun.id);
+      assert.equal(ledger.reservations.length, 1, `one reservation\n${report(traces)}`);
+      assert.equal(ledger.responses, 1, 'one durable model response');
+      assert.equal(ledger.settlements, 1, 'no duplicate settlement');
+      assert.equal(Number(ledger.reservations[0].model_request_ordinal), 1, 'one ordinal');
+      assert.equal(Number(ledger.reservations[0].started_claim_event_position),
+        Number(owner.claimEventPosition),
+        'the durable binding names the claim the owner actually ran under');
+      assert.equal(traces.some(x => x.outcome === 'request_delivery_uncertain'), false,
+        'no caller reports delivery uncertainty during one live claim');
+    }
+
+    // ── Timing 2: duplicate arrives while the transport is UNRESOLVED ──────
+    //
+    // The owner is held after it has the transport response but before the
+    // durable response replay exists. This is the window where the response is
+    // real but unrecoverable, and it must not turn the owner into an observer
+    // of its own request nor let the observer take over.
+    {
+      const midRun = await store.getRun((await store.listRunsForTicket({
+        ticketId: (await admitLeafSet('Governed leaf mid-transport')).ticket.id
+      })).runs[0].id);
+      assert.ok(await store.claimPendingRun({
+        leaseOwner: 'mid-transport-proof', leaseDurationMs: 60_000,
+        eligibleRunIds: [midRun.id]
+      }), 'the Run executes under a claim, as production does');
+      const t = recordingTransport();
+      const owner = traceCaller('A-owner');
+      const observer = traceCaller('B-observer');
+      const held = signal();
+
+      const ownerRepository = owner.repository({
+        markEconomicResponsePersisted: async (real, ...args) => {
+          held.arrive();
+          await held.opened;         // hold AFTER transport, BEFORE durable replay
+          const persisted = await real(...args);
+          owner.responseReplayIdentity = args[0].responseIdentity;
+          return persisted;
+        }
+      });
+
+      const ownerPromise = runGoverned(midRun, 'model-request:agent:1:provider',
+        { transport: t, repository: ownerRepository });
+      await held.arrived;
+
+      assert.equal(t.calls.length, 1, 'the owner has performed its single transport');
+      const midReservation = (await store.pool.query(
+        `SELECT state, response_identity FROM ${store.table('economic_request_reservations')}
+          WHERE run_id = $1`, [midRun.id])).rows[0];
+      assert.equal(midReservation.state, 'request_started',
+        'the response is not durable yet');
+      assert.equal(midReservation.response_identity, null, 'and no replay row exists');
+
+      const observerResult = await runGoverned(midRun, 'model-request:agent:1:provider',
+        { transport: t, repository: observer.repository() });
+
+      assert.equal(t.calls.length, 1,
+        'the observer performs NO second transport while one is unresolved');
+      assert.equal(observerResult.status, 'request_in_flight',
+        `an unresolved transport under a live claim is in flight, got ` +
+        `${observerResult.status}`);
+      assert.notEqual(observerResult.status, 'request_delivery_uncertain',
+        'a live owner is never reported as uncertain delivery');
+      assert.equal(observer.dispatchAuthority, false,
+        'the observer never acquires dispatch authority mid-transport');
+
+      held.open();
+      const traces = await settleCallers([owner, observer],
+        [ownerPromise, Promise.resolve(observerResult)]);
+
+      assert.equal(owner.outcome, 'received',
+        `the owner still owns its response after the pause, got ${owner.outcome}: ` +
+        `${owner.error || ''}\n${report(traces)}`);
+      assert.equal(owner.value.responseHash,
+        require('node:crypto').createHash('sha256').update('{"ok":true}').digest('hex'),
+        'and returns the hash of the bytes it actually received');
+      assert.equal(t.calls.length, 1, `still exactly one transport\n${report(traces)}`);
+
+      const ledger = await ledgerOf(midRun.id);
+      assert.equal(ledger.reservations.length, 1, 'one reservation');
+      assert.equal(ledger.responses, 1, 'exactly one durable response');
+      assert.equal(ledger.settlements, 1, 'no duplicate settlement');
+    }
+
+    // ── Timing 3: duplicate arrives AFTER the durable response ─────────────
+    {
+      const lateRun = await store.getRun((await store.listRunsForTicket({
+        ticketId: (await admitLeafSet('Governed leaf late duplicate')).ticket.id
+      })).runs[0].id);
+      assert.ok(await store.claimPendingRun({
+        leaseOwner: 'late-duplicate-proof', leaseDurationMs: 60_000,
+        eligibleRunIds: [lateRun.id]
+      }), 'the Run executes under a claim, as production does');
+      const t = recordingTransport();
+      const owner = traceCaller('A-owner');
+      const late = traceCaller('B-late');
+
+      const ownerResult = await runGoverned(lateRun, 'model-request:agent:1:provider',
+        { transport: t, repository: owner.repository() });
+      assert.equal(ownerResult.status, 'received', 'the owner completed normally');
+
+      const lateResult = await runGoverned(lateRun, 'model-request:agent:1:provider',
+        { transport: t, repository: late.repository() });
+
+      assert.equal(lateResult.status, 'reused_durable_response',
+        `a caller arriving after the durable response reuses it, got ${lateResult.status}`);
+      assert.equal(t.calls.length, 1, 'and performs NO second transport');
+      assert.equal(late.dispatchAuthority, false, 'and acquires no dispatch authority');
+      assert.equal(lateResult.responseHash, ownerResult.responseHash,
+        'the reused response is the owner’s response');
+
+      const ledger = await ledgerOf(lateRun.id);
+      assert.equal(ledger.reservations.length, 1, 'one reservation');
+      assert.equal(ledger.responses, 1, 'one durable response');
+      assert.equal(ledger.settlements, 1, 'no duplicate settlement');
+    }
+
+    // ── Timing 4: the observer LOSES THE START RACE ────────────────────────
+    //
+    // Timings 1–3 all have the observer arrive when the start is already
+    // durable, so it decides at step 2 and never reaches the lost-race path at
+    // all. That left the entire `ECONOMIC_REQUEST_ALREADY_STARTED` branch —
+    // the one a real duplicate hits — uncovered by deterministic proof.
+    //
+    // Here the observer reserves FIRST, while the request is still merely
+    // reserved, and is then held. The owner wins the start underneath it. When
+    // the observer resumes, its own start transition fails, which is the exact
+    // situation the branch exists for.
+    for (const ownerFinishes of [false, true]) {
+      const raceRun = await store.getRun((await store.listRunsForTicket({
+        ticketId: (await admitLeafSet(
+          `Governed leaf lost start race ${ownerFinishes}`)).ticket.id
+      })).runs[0].id);
+      assert.ok(await store.claimPendingRun({
+        leaseOwner: 'lost-start-race-proof', leaseDurationMs: 60_000,
+        eligibleRunIds: [raceRun.id]
+      }), 'the Run executes under a claim, as production does');
+      const t = recordingTransport();
+      const owner = traceCaller('A-owner');
+      const observer = traceCaller('B-loser');
+      const reserved = signal();
+      const ownerHeld = signal();
+
+      const observerRepository = observer.repository({
+        prepareAndReserveNextGovernedRunRequest: async (real, ...args) => {
+          const prepared = await real(...args);
+          observer.admission = `reserved:${prepared.reservation.state}`;
+          observer.reservationId = prepared.reservation.id;
+          observer.ordinal = prepared.ordinal;
+          observer.sourceIdentity = prepared.reservation.logicalSourceIdentity;
+          observer.requestReplayIdentity = prepared.reservation.exactRequestHash;
+          assert.equal(prepared.reservation.state, 'reserved',
+            'the observer reserved BEFORE the request was started');
+          reserved.arrive();
+          await reserved.opened;   // hold between reservation and start
+          return prepared;
+        }
+      });
+
+      const observerPromise = runGoverned(raceRun, 'model-request:agent:1:provider',
+        { transport: t, repository: observerRepository });
+      await reserved.arrived;
+
+      // The owner now wins the start underneath the held observer.
+      const ownerRepository = owner.repository(ownerFinishes ? {} : {
+        markEconomicResponsePersisted: async (real, ...args) => {
+          ownerHeld.arrive();
+          await ownerHeld.opened;
+          return real(...args);
+        }
+      });
+      const ownerPromise = runGoverned(raceRun, 'model-request:agent:1:provider',
+        { transport: t, repository: ownerRepository });
+
+      if (ownerFinishes) {
+        const ownerResult = await ownerPromise;
+        assert.equal(ownerResult.status, 'received', 'the owner completed');
+      } else {
+        await ownerHeld.arrived;   // owner holds an undurable response
+      }
+
+      reserved.open();             // the loser resumes into a started request
+      const observerResult = await observerPromise;
+
+      assert.equal(observer.startTransition, 'lost:ECONOMIC_REQUEST_ALREADY_STARTED',
+        `the observer genuinely lost the start transition, got ` +
+        `${observer.startTransition}`);
+      assert.equal(observer.dispatchAuthority, false,
+        'a caller that lost the start transition holds no dispatch authority');
+      assert.equal(t.calls.length, 1,
+        'losing the start race NEVER produces a second transport');
+
+      if (ownerFinishes) {
+        // The winner finished while this caller was losing: the truthful answer
+        // is the durable response, not a race report.
+        assert.equal(observerResult.status, 'reused_durable_response',
+          `a loser whose winner already finished reuses the durable response, ` +
+          `got ${observerResult.status}`);
+        assert.ok(observerResult.responseHash, 'and carries the response identity');
+      } else {
+        // The winner is mid-flight. This caller may report that and NOTHING
+        // else — above all it may not settle books the winner still owns.
+        assert.equal(observerResult.status, 'request_in_flight',
+          `a loser racing a live winner reports in flight, got ` +
+          `${observerResult.status}`);
+        assert.equal(observerResult.failureReason, 'governed_leaf_request_in_flight');
+        const midway = await store.getEconomicReservation(observer.reservationId);
+        assert.equal(midway.state, 'request_started',
+          'the loser did not settle the winner’s reservation');
+        assert.equal(midway.settlementReceipt, null,
+          'and wrote no settlement receipt');
+        ownerHeld.open();
+        const ownerResult = await ownerPromise;
+        assert.equal(ownerResult.status, 'received',
+          `the held owner still carries its own result, got ${ownerResult.status}`);
+      }
+
+      const traces = await settleCallers([owner, observer],
+        [Promise.resolve(null), Promise.resolve(observerResult)]);
+      const ledger = await ledgerOf(raceRun.id);
+      assert.equal(ledger.reservations.length, 1, `one reservation\n${report(traces)}`);
+      assert.equal(ledger.responses, 1, 'exactly one durable response');
+      assert.equal(ledger.settlements, 1, 'no duplicate settlement');
+      assert.equal(t.calls.length, 1, 'exactly one transport');
+    }
+
+    // ── The anomaly itself, forced ─────────────────────────────────────────
+    //
+    // The owner's post-transport persistence fails. This reproduces the exact
+    // shape of the original observation — one transport, one reservation, one
+    // ordinal, no caller reporting `received` — deterministically, and proves
+    // it is a REJECTED owner rather than a misclassified one. The runtime
+    // behaviour is correct and deliberately unchanged: the response was
+    // received but could not be made durable, so no caller may claim it was.
+    // What was wrong was an accounting that made a rejected caller vanish.
+    {
+      const failRun = await store.getRun((await store.listRunsForTicket({
+        ticketId: (await admitLeafSet('Governed leaf owner persistence failure')).ticket.id
+      })).runs[0].id);
+      assert.ok(await store.claimPendingRun({
+        leaseOwner: 'persistence-failure-proof', leaseDurationMs: 60_000,
+        eligibleRunIds: [failRun.id]
+      }), 'the Run executes under a claim, as production does');
+      const t = recordingTransport();
+      const owner = traceCaller('A-owner');
+
+      const ownerRepository = owner.repository({
+        markEconomicResponsePersisted: async () => {
+          const error = new Error('fixture: durable response persistence unavailable');
+          error.code = 'FIXTURE_RESPONSE_PERSISTENCE_UNAVAILABLE';
+          throw error;
+        }
+      });
+
+      const traces = await settleCallers([owner], [
+        runGoverned(failRun, 'model-request:agent:1:provider',
+          { transport: t, repository: ownerRepository })
+      ]);
+
+      assert.equal(t.calls.length, 1, 'the transport did occur');
+      assert.equal(owner.dispatchAuthority, true, 'the owner did hold dispatch authority');
+      assert.equal(owner.outcome, 'rejected',
+        `the owner REJECTED rather than returning an outcome\n${report(traces)}`);
+      assert.equal(owner.errorCode, 'FIXTURE_RESPONSE_PERSISTENCE_UNAVAILABLE',
+        'and the rejection is attributable, not anonymous');
+
+      // The durable record stays truthful: started, no response, no settlement.
+      const ledger = await ledgerOf(failRun.id);
+      assert.equal(ledger.reservations.length, 1, 'one reservation');
+      assert.equal(ledger.reservations[0].state, 'request_started',
+        'the reservation records a started request');
+      assert.equal(ledger.responses, 0, 'and no durable response was invented');
+      assert.equal(ledger.settlements, 0, 'and nothing was settled on a lost response');
+    }
 
     // ── Multi-request sequencing ───────────────────────────────────────────
 
@@ -873,6 +1364,127 @@ async function main() {
         [staleReservation.reservation.id])).rows[0];
       assert.equal(Number(boundRow.started_claim_event_position), Number(positionB),
         'and the request is bound to claim B exactly once');
+
+      // ── The remaining claim-identity integrity cases ────────────────────
+      //
+      // Every one of these must refuse BEFORE any transport and leave the
+      // reservation exactly as it was. A position is only meaningful as the
+      // identity of a `run.lease_acquired` event on THIS Run; anything else is
+      // an integrity failure, never a weaker match.
+      {
+        const foreign = await admitLeafSet('Governed leaf foreign claim');
+        const foreignRun = await store.getRun(
+          (await store.listRunsForTicket({ ticketId: foreign.ticket.id })).runs[0].id);
+        assert.ok(await store.claimPendingRun({
+          leaseOwner: 'foreign-claim-proof', leaseDurationMs: 60_000,
+          eligibleRunIds: [foreignRun.id]
+        }), 'a Run on a DIFFERENT Ticket is claimed');
+        const foreignPosition = Number((await store.pool.query(
+          `SELECT max(position) AS p FROM ${store.table('events')}
+            WHERE run_id = $1 AND type = 'run.lease_acquired'`, [foreignRun.id])).rows[0].p);
+        assert.ok(Number.isSafeInteger(foreignPosition) && foreignPosition > 0);
+
+        // A sibling Run on the SAME Ticket, claimed, so its position is a real
+        // lease position that is nonetheless not this reservation's authority.
+        const siblingRun = await store.getRun(runs[1].id);
+        await store.pool.query(
+          `UPDATE ${store.table('runs')} SET status = 'pending', lease_owner = NULL,
+                  lease_expires_at = NULL, revision = revision + 1 WHERE id = $1`,
+          [siblingRun.id]);
+        await store.claimPendingRun({
+          leaseOwner: 'sibling-claim-proof', leaseDurationMs: 60_000,
+          eligibleRunIds: [siblingRun.id]
+        });
+        const siblingPosition = Number((await store.pool.query(
+          `SELECT max(position) AS p FROM ${store.table('events')}
+            WHERE run_id = $1 AND type = 'run.lease_acquired'`, [siblingRun.id])).rows[0].p);
+
+        // A real event position on THIS Run that is not a lease acquisition.
+        const nonLeasePosition = Number((await store.pool.query(
+          `SELECT min(position) AS p FROM ${store.table('events')}
+            WHERE run_id = $1 AND type <> 'run.lease_acquired'`, [staleRun.id])).rows[0].p);
+        assert.ok(Number.isSafeInteger(nonLeasePosition) && nonLeasePosition > 0,
+          'the Run has a non-lease event to test with');
+
+        // A fresh unstarted reservation to attack.
+        const target = await store.prepareAndReserveNextGovernedRunRequest({
+          runId: staleRun.id,
+          logicalSourceIdentity: 'model-request:agent:9:provider',
+          canonicalBody: workerBody('claim integrity'),
+          endpointIdentity: ENDPOINT,
+          runtimeModelRequestMaximum: 8
+        });
+
+        for (const [label, position, expectedCode] of [
+          ['a claim position from another Ticket', foreignPosition,
+            'ECONOMIC_REQUEST_STALE_CLAIM_ATTEMPT'],
+          ['a claim position from a sibling Run', siblingPosition,
+            'ECONOMIC_REQUEST_STALE_CLAIM_ATTEMPT'],
+          ['a position naming a non-lease event', nonLeasePosition,
+            'ECONOMIC_REQUEST_STALE_CLAIM_ATTEMPT'],
+          ['a position that does not exist', 9_999_999,
+            'ECONOMIC_REQUEST_STALE_CLAIM_ATTEMPT'],
+          ['a zero position', 0, 'ECONOMIC_REQUEST_CLAIM_POSITION_INVALID'],
+          ['a negative position', -5, 'ECONOMIC_REQUEST_CLAIM_POSITION_INVALID'],
+          ['a non-integer position', 2.5, 'ECONOMIC_REQUEST_CLAIM_POSITION_INVALID'],
+          ['a non-numeric position', 'newest', 'ECONOMIC_REQUEST_CLAIM_POSITION_INVALID']
+        ]) {
+          let refused = null;
+          try {
+            await store.markEconomicRequestStarted({
+              reservationId: target.reservation.id, expectedClaimEventPosition: position
+            });
+          } catch (error) { refused = error; }
+          assert.ok(refused, `${label} must be refused, not accepted`);
+          assert.equal(refused.code, expectedCode,
+            `${label} refuses with ${expectedCode}, got ${refused.code}: ${refused.message}`);
+
+          const untouched = await store.getEconomicReservation(target.reservation.id);
+          assert.equal(untouched.state, 'reserved',
+            `${label} leaves the reservation unstarted`);
+          assert.equal(untouched.startedClaimEventPosition, null,
+            `${label} writes no claim binding`);
+        }
+
+        // The legitimate current claim still starts it — the refusals above are
+        // rejections of wrong authority, not a jammed reservation.
+        const legitimate = Number((await store.pool.query(
+          `SELECT max(position) AS p FROM ${store.table('events')}
+            WHERE run_id = $1 AND type = 'run.lease_acquired'`, [staleRun.id])).rows[0].p);
+        const startedOk = await store.markEconomicRequestStarted({
+          reservationId: target.reservation.id, expectedClaimEventPosition: legitimate
+        });
+        assert.equal(startedOk.reservation.state, 'request_started');
+        assert.equal(Number(startedOk.reservation.startedClaimEventPosition), legitimate,
+          'and binds to the claim that actually governs the Run');
+
+        // ── A binding MUTATED after request start is not trusted ───────────
+        //
+        // The durable binding is the authority a later caller reads. If it can
+        // be rewritten to the current claim, a request started by a vanished
+        // attempt would masquerade as the live one and its delivery
+        // uncertainty would disappear.
+        // The revision trigger refuses a silent rewrite, so the tamper has to
+        // advance the revision like any legitimate write. That is the point:
+        // the binding cannot be altered invisibly, and even an alteration that
+        // satisfies the trigger is still not read as current authority.
+        await store.pool.query(
+          `UPDATE ${store.table('economic_request_reservations')}
+              SET started_claim_event_position = $2, revision = revision + 1
+            WHERE id = $1`,
+          [target.reservation.id, legitimate - 1]);
+        const tampered = await store.getEconomicReservation(target.reservation.id);
+        assert.equal(Number(tampered.startedClaimEventPosition), legitimate - 1,
+          'the binding was mutated for the purposes of this proof');
+        const afterTamper = await runGoverned(
+          await store.getRun(staleRun.id), 'model-request:agent:9:provider',
+          { transport: recordingTransport() });
+        assert.equal(afterTamper.status, 'request_delivery_uncertain',
+          `a mutated binding is never read as the current claim, got ` +
+          `${afterTamper.status}`);
+        assert.equal(afterTamper.possiblyDispatched, true,
+          'and the request is still reported as possibly dispatched');
+      }
     }
 
     // ── THE ORCHESTRATION CARRIES ITS OWN CLAIM, NOT THE NEWEST ───────────
