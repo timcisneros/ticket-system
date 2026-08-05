@@ -1,3 +1,24 @@
+## `oquery replay` Crashes Before Governed Block Detail (recorded 2026-08-05)
+
+Closing the rows 3/4 CLI cells found a CLI defect rather than finishing them.
+
+`node scripts/oquery.js replay <runId>` throws
+`TypeError: governed.requests is not iterable` at oquery.js:601 and exits 1,
+before reaching the block-detail printing at 679-691. On a governed structured
+leaf the surrounding governed fields render `undefined`, so `governed` exists
+without the shape that loop assumes.
+
+The command still emits Run identity, Ticket identity and
+`blocked by a persisted progress decision: verified_progress_exhausted` first;
+`governed-blocked-restart-postgres-test` asserts exactly that, plus the crash
+itself, so a fix will fail the assertion and prompt the fuller cell rather than
+silently widening what the row claims.
+
+Rows 3 and 4 are therefore **PARTIAL — BLOCKED BY DEFECT**. The five-row matrix
+is NOT complete. Smallest fix — guard the iteration or populate `requests` —
+is recorded in `docs/TERMINAL_PROJECTION_READER_CONTRACTS.md` §4b and needs a
+session authorised to change CLI behaviour.
+
 ## CLI Applicability Was Misclassified for Rows 3 and 4 (corrected 2026-08-05)
 
 Closing the CLI cell surfaced an error in my own §4 audit.

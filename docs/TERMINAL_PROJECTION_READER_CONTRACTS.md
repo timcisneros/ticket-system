@@ -256,6 +256,51 @@ NOT APPLICABLE now fails.
 Rows 3 and 4 CLI assertions are **not written** — that is new reader work, and
 the session that found this misclassification was scoped to row 1.
 
+## 4b. `oquery replay` crashes before printing governed block detail
+
+**Defect, found 2026-08-05 while closing the rows 3 and 4 CLI cells. Not fixed —
+the session was scoped to asserting readers, not changing CLI behaviour.**
+
+Command: `node scripts/oquery.js replay <runId>` (OPERC_URL + cached session).
+
+§4a established that `cmdReplay` prints `progress.block.reason`, `blockHash`,
+`blockedAt`, `cutoff.cutoffIdentity`, `churnDecisionHash`,
+`progressPolicyHash` and the sibling `requestedPath` /
+`siblingAllocationItemId` at oquery.js:679-691. **Those lines are real and
+unreachable for a governed structured leaf.** The command throws first:
+
+```
+/home/timcis/Documents/ticket-system/scripts/oquery.js:601
+            for (const request of governed.requests) {
+TypeError: governed.requests is not iterable
+```
+
+exiting 1. On the affected Run the surrounding governed fields print
+`undefined` (`authorized route`, `economic authority`, `pricing entry`,
+`worker account #undefined`), so `governed` exists without the shape the loop
+at line 601 assumes.
+
+**What the command does emit before dying**, and what the blocked-restart suite
+therefore asserts:
+
+```
+Replay: Run #<id> failed
+ticket #<ticketId> agent <name> model <model>
+run <id> is blocked by a persisted progress decision: verified_progress_exhausted
+```
+
+That is real operator-visible output proving the CLI reaches the block
+authority. The block DETAIL fields cannot be asserted until the crash is fixed.
+
+**Corrected classification:** rows 3 and 4 are **PARTIAL — BLOCKED BY DEFECT**,
+not APPLICABLE — ASSERTED and not NOT APPLICABLE. The suite pins the crash
+itself, so a fix will fail that assertion and prompt the fuller cell.
+
+**Smallest correction (not applied):** guard the iteration —
+`for (const request of governed.requests || [])` — or populate `requests` for
+governed leaf Runs that have none. That is a CLI change and needs its own
+session.
+
 ## 5. Page semantic-section contract
 
 Assert by `<dt>` label and its sibling `<dd>`, never by whole-page substring —
@@ -468,7 +513,7 @@ Suites: **L** lifecycle · **B** blocked-restart · **S** sibling-dependency ·
 | Run-events API | ✔ L | ✔ C | ✔ B | ✔ S | ✔ C |
 | reconciliation | `completion_verified` L | `completion_unsuccessful` C | `governed_progress_blocked` B | `governed_sibling_dependency_blocked` S | refuses first |
 | parent aggregate | ✔ L | ✔ C | ✔ B | ✔ S | refuses first |
-| CLI | APPLICABLE — ASSERTED, L | NOT APPLICABLE §4 | APPLICABLE — NOT ASSERTED §4a | APPLICABLE — NOT ASSERTED §4a | NOT APPLICABLE §4 |
+| CLI | APPLICABLE — ASSERTED, L | NOT APPLICABLE §4 | PARTIAL — BLOCKED BY DEFECT §4b, B | PARTIAL — BLOCKED BY DEFECT §4b | NOT APPLICABLE §4 |
 | completion authority | decision + matching hash L | none; not required C | none B | none S | none |
 | integrity-failure authority | absent L | `POSTGRES_REPLAY_INTEGRITY_FAILURE` C | absent B | absent S | refusal envelope C |
 | progress block + blockHash | absent L | absent C | ✔ exact hash B | absent S | n/a |

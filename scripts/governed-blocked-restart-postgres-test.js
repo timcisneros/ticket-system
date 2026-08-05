@@ -31,7 +31,9 @@ const {
   durableRunCounts,
   findRuntimeRun,
   durableTerminalCounts,
+  fullTerminalCounts,
   pageSection,
+  runOquery,
   waitForSchedulerQuiescence
 } = require('./fixtures/terminal-projection-restart');
 const {
@@ -491,6 +493,57 @@ async function main() {
           !Object.prototype.hasOwnProperty.call(runtimeLeaf, 'siblingAllocationItemId'),
         'and no sibling item or path fields');
 
+
+        // ── CLI READER: BLOCKED BY A DEFECT IN `oquery replay` ─────────
+        //
+        // The audit records rows 3 and 4 as CLI-APPLICABLE because `cmdReplay`
+        // prints `progress.block.reason`, `blockHash`, `blockedAt`,
+        // `cutoff.cutoffIdentity`, `churnDecisionHash` and `progressPolicyHash`
+        // (oquery.js:679-691). Those lines are real. They are also UNREACHABLE
+        // for a governed structured leaf: the command throws at oquery.js:601
+        //
+        //   TypeError: governed.requests is not iterable
+        //
+        // and exits 1 long before it gets there. On this Run the surrounding
+        // governed fields print `undefined` — authorized route, economic
+        // authority, pricing entry — so `governed` exists without the shape the
+        // loop assumes.
+        //
+        // What the command DOES emit before dying is asserted here, because it
+        // is real operator-visible output and proves the CLI reaches the block
+        // authority at all. The block-detail fields are NOT asserted: they
+        // cannot be produced without changing CLI behaviour, which this session
+        // is not scoped to do. Recorded in
+        // docs/TERMINAL_PROJECTION_READER_CONTRACTS.md.
+        const countsBeforeCli = await fullTerminalCounts(store, run.ticketId);
+        const cliBlock = await runOquery(['replay', String(runId)],
+          { baseUrl: second.baseUrl, cookie });
+        assertThat(cliBlock.text.includes(`Replay: Run #${runId}`),
+          `oquery replay names the exact target Run (#${runId})`);
+        assertThat(cliBlock.text.includes(`ticket #${run.ticketId}`),
+          `and the exact Ticket (#${run.ticketId})`);
+        assertThat(cliBlock.text.includes(
+          `blocked by a persisted progress decision: verified_progress_exhausted`),
+        'and states the exact governed block reason it is blocked by');
+        assertThat(!cliBlock.text.includes('undeclared_sibling_dependency'),
+          'and never the sibling reason');
+        assertThat(!cliBlock.text.includes('POSTGRES_REPLAY_INTEGRITY_FAILURE'),
+          'nor any replay-integrity authority');
+        // THE DEFECT ITSELF, pinned so a fix is noticed rather than silently
+        // changing what this row can claim.
+        assertThat(cliBlock.code === 1 &&
+          cliBlock.text.includes('governed.requests is not iterable'),
+        `oquery replay still crashes at oquery.js:601 before printing block ` +
+        `detail (exit ${cliBlock.code}) — rows 3 and 4 cannot assert blockHash ` +
+        'until that is fixed');
+
+        // NO SIDE EFFECTS, even from a crashing read.
+        const countsAfterCli = await fullTerminalCounts(store, run.ticketId);
+        const cliDrift = countDelta(countsBeforeCli, countsAfterCli);
+        assertThat(cliDrift.length === 0,
+          `the CLI read creates no durable fact (${cliDrift.join(', ')})`);
+        assertThat(countsAfterCli.runRevisions === countsBeforeCli.runRevisions,
+          'and moves no Run revision');
 
         // ── PAGE SEMANTIC SECTIONS (row 3) ─────────────────────────────
         //

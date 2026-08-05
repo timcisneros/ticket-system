@@ -227,7 +227,43 @@ function pageSection(html, label) {
     .replace(/\s+/g, ' ').trim();
 }
 
+// Runs the real oquery command path — never an internal formatter.
+//
+// oquery is an HTTP operator client: it reads `OPERC_URL` and a cached session
+// from `OPERC_COOKIE_PATH`. The cold server's cookie is written where the CLI
+// looks for it, so the invocation is the one an operator would make.
+async function runOquery(argv, { baseUrl, cookie }) {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { spawn } = require('node:child_process');
+  const cookiePath = path.join(os.tmpdir(),
+    `oquery-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.cookie`);
+  fs.writeFileSync(cookiePath, String(cookie).replace(/^sessionId=/, ''));
+  try {
+    return await new Promise(resolve => {
+      const child = spawn(process.execPath,
+        [path.join(__dirname, '..', 'oquery.js'), ...argv],
+        {
+          cwd: path.join(__dirname, '..', '..'),
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: { ...process.env, OPERC_URL: baseUrl, OPERC_COOKIE_PATH: cookiePath }
+        });
+      let text = '';
+      child.stdout.on('data', chunk => { text += chunk.toString(); });
+      child.stderr.on('data', chunk => { text += chunk.toString(); });
+      // ANSI stripped so substring assertions are stable.
+      child.on('close', code => resolve({
+        code, text: text.replace(/\u001b\[[0-9;]*m/g, '')
+      }));
+    });
+  } finally {
+    fs.rmSync(cookiePath, { force: true });
+  }
+}
+
 module.exports = {
+  runOquery,
   pageSection,
   fullTerminalCounts,
   findRuntimeRun,
