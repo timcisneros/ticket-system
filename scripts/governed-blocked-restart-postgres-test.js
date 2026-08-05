@@ -425,15 +425,18 @@ async function main() {
         'and reports this exact Run on this exact Ticket');
         assertThat(runState.status !== 'completed',
           `with a non-success disposition (${runState.status})`);
-        // SURFACE LIMITATION, REPORTED RATHER THAN ASSERTED AWAY.
+        // NAME CORRECTION. An earlier revision of this suite concluded the
+        // Run-state API "does not own block authority" because no top-level
+        // `governedProgressBlock` key exists. That was wrong: the reader DOES
+        // carry the complete per-Run block, under `verifiedProgress.block`
+        // (blockHash, reason, churnDecisionHash, siblingDependency). See
+        // docs/TERMINAL_PROJECTION_READER_CONTRACTS.md §2.2.
         //
-        // The Run-state API does NOT expose `governedProgressBlock`. It reports
-        // identity and lifecycle; the block authority is not part of its
-        // contract. That is a limitation of this reader, not a disagreement
-        // with reconciliation — what would be wrong is this API claiming
-        // SUCCESS while the block says otherwise, which is asserted above.
-        // Asserting the block were present would assert a field the reader does
-        // not own. Recorded in docs/ARCHITECTURAL_DECISIONS_PENDING.md.
+        // The assertion below is kept because it is still true and still
+        // meaningful — nothing publishes a top-level `governedProgressBlock` —
+        // but it must not be read as "this reader has no block authority".
+        // Asserting the real field is listed in that document's checklist and
+        // is deliberately not added in the audit session that found it.
         assertThat(runState.governedProgressBlock === undefined ||
           runState.governedProgressBlock === null,
         'the Run-state API does not own block authority — limitation, not conflict');

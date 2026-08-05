@@ -1,3 +1,27 @@
+## Run-State API Reader Contract (corrected 2026-08-05)
+
+**Supersedes the entry titled "Run-State API Does Not Own Block or Integrity
+Authority", which was wrong.**
+
+That entry concluded `GET /api/runs/:id/state` carries no block authority
+because no top-level `governedProgressBlock` key exists. The reader DOES carry
+the complete per-Run governed block — at `verifiedProgress.block`, including
+`blockHash`, `reason`, `churnDecisionHash` and `siblingDependency`. The earlier
+conclusion searched for the wrong key name and recorded absence as a contract.
+
+What IS absent from that route is `replayAvailability`; replay availability is
+a Run-page concern. `replaySummary` is `null` when the replay cannot be read.
+
+The definitive, payload-verified audit of every terminal reader — ownership
+table, actual field paths, five-row applicability matrix, CLI applicability,
+page semantic sections, existing fixture map, mutation-owner map and the
+enumerated remaining checklist (24 reader cells, 9 mutation cases) — is:
+
+**`docs/TERMINAL_PROJECTION_READER_CONTRACTS.md`**
+
+Terminal reader-parity register entries below remain OPEN; that document is the
+blueprint for closing them, not a claim that they are closed.
+
 # Architectural Decisions Pending
 
 This is the **canonical register of open integrity defects, deferred work, and pending
