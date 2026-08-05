@@ -32,7 +32,8 @@
 const assert = require('node:assert/strict');
 const {
   buildGovernedProgressBlock,
-  GovernedProgressBlockError
+  GovernedProgressBlockError,
+  normalizeGovernedProgressBlock
 } = require('../runtime/governed-progress-block-contract');
 const {
   deriveLeafItemDisposition
@@ -167,6 +168,67 @@ const siblingDependency = {
   'a sibling-dependency block may not omit them');
   passed += 1;
   console.log('  ok a sibling-dependency block may NOT omit sibling details');
+}
+
+// ── A TAMPERED BLOCK REFUSES INSTEAD OF BEING DISPLAYED ────────────────────
+//
+// `projectBlock` normalizes the stored block on read and documents that this
+// "re-verifies that the stored block hash covers its own fields. A tampered
+// block refuses here instead of being displayed." Nothing proved that claim: a
+// mutation making `normalizeGovernedProgressBlock` short-circuit whenever a
+// blockHash was present SURVIVED every suite, because none of them ever
+// presented a tampered block.
+//
+// This is the distinction the whole block authority rests on. `blockHash` is
+// not a label carried alongside the block — it is a hash OVER the block, so a
+// stored row whose reason or sibling facts were edited while keeping the old
+// hash must fail closed. Otherwise an edited block would be projected to
+// operators as though it were the decision of record.
+{
+  const stored = buildGovernedProgressBlock({
+    ticketId: TICKET_ID,
+    runId: RUN_ID,
+    allocationPlanId: 1,
+    allocationItemId: ITEM_ID,
+    cutoff,
+    verifiedProgressProjectionHash: 'f'.repeat(64),
+    churnDecision: churn('verified_progress_exhausted'),
+    progressPolicyHash: 'c'.repeat(64),
+    siblingDependency: null,
+    executionEpochAt: '2026-08-03T00:00:00.000Z',
+    blockedAt: '2026-08-04T00:00:00.000Z'
+  });
+
+  // Re-reading an untouched block is fine — the guarantee is not "refuse
+  // everything".
+  const reread = normalizeGovernedProgressBlock(stored);
+  ok(reread.blockHash === stored.blockHash,
+    'an untouched stored block re-reads with the identical hash');
+
+  for (const [label, edit] of [
+    ['its reason', { reason: 'undeclared_sibling_dependency' }],
+    ['its blocked instant', { blockedAt: '2026-08-05T00:00:00.000Z' }],
+    ['its policy hash', { progressPolicyHash: '7'.repeat(64) }],
+    ['its churn-decision hash', { churnDecisionHash: '6'.repeat(64) }]
+  ]) {
+    const tampered = { ...stored, ...edit };
+    let refused = null;
+    try {
+      normalizeGovernedProgressBlock(tampered);
+    } catch (error) { refused = error; }
+    assert.ok(refused, `editing ${label} while keeping the old hash must refuse`);
+    passed += 1;
+    console.log(`  ok a block with edited ${label} was edited refuses on read`);
+  }
+
+  // And the hash itself cannot simply be replaced to make an edit agree.
+  let rehashRefused = null;
+  try {
+    normalizeGovernedProgressBlock({ ...stored, blockHash: '5'.repeat(64) });
+  } catch (error) { rehashRefused = error; }
+  assert.ok(rehashRefused, 'a substituted block hash refuses too');
+  passed += 1;
+  console.log('  ok a substituted block hash refuses on read');
 }
 
 // ── NOT YET COVERED HERE: deriveLeafItemDisposition ────────────────────────

@@ -5569,6 +5569,48 @@ Replaced with the real runtime route.
   covers the BLOCK SHAPE separation but not the disposition mapping; its
   canonical leaf-run binding shape was not established in budget.
 
+## Governed Progress Block-Hash Ownership: closed 2026-08-04
+
+**Verdict: GOVERNED PROGRESS BLOCK HASH HAS ONE CANONICAL PROJECTION OWNER** —
+`projectBlock` in `runtime/verified-progress-projection.js`, reached through
+`readTicketVerifiedProgressProjection`. Production callers: the Ticket runtime
+API (`serializeTicketRuntimeState`) and the Ticket detail page, which the source
+comments describe as "the single canonical seam so the page, the API and the
+CLI cannot disagree".
+
+**Two different hashes, previously conflated.**
+
+| Hash | Meaning | Owner |
+|---|---|---|
+| `completionDecisionHash` | identifies the completion DECISION | `deriveLeafItemDisposition` → `structuredAllocationLeafExecution.items[]` |
+| `governedProgressBlock.blockHash` | hash OVER the block's own fields | `projectBlock` → run-level verified-progress projection |
+
+A previous entry treated the decision-hash coverage as though it closed
+block-hash propagation. It did not. Closed now at the real owner: dropping the
+block hash, replacing it with the churn-decision hash, or reconstructing it from
+a constant are all caught by `verified-progress-projection-postgres-test`, as
+are dropping the reason and dropping sibling authority.
+
+**What each reader actually owns, corrected.** The TICKET-level projection is a
+SUMMARY — run IDs grouped by closed stop reason
+(`blockedForVerifiedProgressExhaustion`,
+`blockedForUndeclaredSiblingDependency`, …), named per reason because the
+reasons are not interchangeable. It does NOT carry per-Run `blockHash`; that is
+the RUN-level projection. `governed-blocked-restart-postgres-test` therefore
+asserts REASON MEMBERSHIP on the Ticket runtime API — that this Run appears
+under verified-progress exhaustion and under neither sibling dependency nor
+duration exhaustion — rather than asserting a hash the reader does not expose.
+
+**A documented guarantee that nothing proved.** `projectBlock` states that
+normalizing on read "re-verifies that the stored block hash covers its own
+fields. A tampered block refuses here instead of being displayed." A mutation
+short-circuiting `normalizeGovernedProgressBlock` whenever a `blockHash` was
+present SURVIVED every suite — no suite ever presented a tampered block.
+`verified-progress-terminal-mapping-test` now edits a stored block's reason,
+blocked instant, policy hash and churn-decision hash while keeping the old hash,
+and substitutes the hash itself; all five refuse on read. The mutation is now
+caught.
+
 ## Run-State API Does Not Own Block or Integrity Authority (recorded 2026-08-04)
 
 **Status:** recorded surface limitation, not a defect.

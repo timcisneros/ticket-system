@@ -378,6 +378,38 @@ async function main() {
         assertThat(runtimeLeaf.runId === runId,
           'and the inspected entry is this Run, not a sibling');
 
+        // ── BLOCK AUTHORITY LIVES IN `verifiedProgress`, NOT IN THE ITEM ───
+        //
+        // Two different hashes, and conflating them was the gap this closes.
+        // `structuredAllocationLeafExecution.items[].completionDecisionHash`
+        // identifies the completion DECISION. The governed progress block's own
+        // immutable `blockHash` is projected separately by `projectBlock`
+        // through `readTicketVerifiedProgressProjection`, surfaced here as
+        // `verifiedProgress`. A reader that exposed only the decision hash
+        // would carry no block authority at all.
+        const vp = runtimePayload.verifiedProgress;
+        assertThat(Boolean(vp), 'the Ticket runtime API carries a verifiedProgress projection');
+
+        // WHAT THIS READER ACTUALLY OWNS. The ticket-level projection is a
+        // SUMMARY: run IDs grouped by closed stop reason, deliberately named
+        // per reason rather than as one "blocked" count because the reasons
+        // call for different human responses. It does NOT carry each Run's
+        // `blockHash` — that is the RUN-level `projectBlock`, asserted at its
+        // own owner in verified-progress-projection-postgres-test.
+        //
+        // So the block authority this API owns is REASON MEMBERSHIP, and it is
+        // asserted as such. Claiming a blockHash here would assert a field this
+        // reader does not expose.
+        assertThat(Array.isArray(vp.blockedForVerifiedProgressExhaustion) &&
+          vp.blockedForVerifiedProgressExhaustion.map(Number).includes(Number(runId)),
+        'and lists this Run under verified-progress exhaustion');
+        assertThat(!(vp.blockedForUndeclaredSiblingDependency || [])
+          .map(Number).includes(Number(runId)),
+        'and NOT under sibling dependency — the reasons are not interchangeable');
+        assertThat(!(vp.blockedForCumulativeExecutionDuration || [])
+          .map(Number).includes(Number(runId)),
+        'nor under duration exhaustion');
+
         // The same authority through the Run-state API, which is a DIFFERENT
         // reader from the events endpoint below and may not stand in for it.
         const runStateApi = await second.request(
