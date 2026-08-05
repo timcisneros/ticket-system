@@ -5582,10 +5582,34 @@ Findings that changed how these must be proved:
 projection collapsing them would still refuse, and would still pass a test
 asserting only the code, so the reason is asserted every time.
 
-**Still open from this matrix:** fresh-process (stop-server/restart) projection
-for cases 1, 6, 7 and 9; cross-surface parity across Ticket page, Run Detail,
-Ticket/runtime APIs, allocation reconciliation, parent aggregate and CLI; and
-the restart/scheduler before-and-after count matrix.
+**Closed 2026-08-04:** case 6 (replay-integrity failure) and case 9
+(uncontained corruption) now have fresh-process proofs, and case 8
+(sibling dependency) has cross-surface parity after restart. The uncontained
+case previously read its corruption in the SAME process that applied it, which
+proves a refusal but not that it survives a restart — a refusal depending on
+the corrupting process still being alive would be a cache, not an authority. A
+fourth server now reads it cold.
+
+The contained/uncontained distinction is proved to be the DISPOSITION rather
+than the presence of corruption: contained renders 200 stating
+`replay_unavailable_integrity_failure`; uncontained refuses closed with HTTP 500
+naming `POSTGRES_REPLAY_INTEGRITY_FAILURE` and a sanitized reason. The refusal
+MAY name the integrity code — that is what it is refusing about — but it never
+borrows the contained vocabulary, never claims `replay_available`, never
+terminalizes the Run, and never records an integrity event to explain itself.
+
+**No-side-effect scoping, learned the hard way.** A Ticket-scoped count matrix
+reported large drift across the sibling-dependency restart and looked like
+projection side effects. It was not: that scenario deliberately leaves the
+SIBLING executing, so its ordinary progress showed up as drift. Terminal-Run
+scope is the honest measurement when a neighbour is still live; Ticket scope is
+right only when the whole batch is terminal. Both helpers exist for that reason.
+
+**Still open from this matrix:** fresh-process projection for case 1 (valid
+structured completion) and case 7 (`verified_progress_exhausted`); the
+remaining surfaces (Ticket API, Run/runtime API and CLI) for cases other than
+replay-integrity and sibling dependency; and the no-side-effect matrix for
+those two cases.
 
 ## Sibling Refusal's failureKind: closed 2026-08-04
 

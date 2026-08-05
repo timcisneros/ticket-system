@@ -27,6 +27,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { withHarness, createAsserter } = require('./postgres-test-harness');
 const {
+  countDelta,
+  durableRunCounts,
+  waitForSchedulerQuiescence
+} = require('./fixtures/terminal-projection-restart');
+const {
   progressControlPolicy,
   seedGovernedStructuredTicket
 } = require('./governed-structured-fixture');
@@ -348,6 +353,10 @@ async function main() {
       //
       // Read back by a server that never saw the execution. Nothing here may be
       // recomputed from the corrupt-free convenience of an in-memory cache.
+      // SCOPED TO THE TERMINAL RUN, not the Ticket. The sibling is deliberately
+      // still executing its own work in this scenario, so Ticket-scoped counts
+      // would report its ordinary progress as projection side effects.
+      const countsBeforeRestart = await durableRunCounts(store, readerRun.id);
       const fresh = await startServer({ env: serverEnv });
       try {
         const reBlock = await blockOf(readerRun.id);
@@ -372,6 +381,98 @@ async function main() {
           'restart and projection create no provider request, reservation or receipt');
         assertThat(await readerTransports() === transportsAtBlock,
           'and no transport is attributable to the reader during projection');
+        // ── THE SAME AUTHORITY ON EVERY OPERATOR SURFACE ─────────────────
+        //
+        // The durable block is proved above; this proves the surfaces an
+        // operator actually reads agree with it. A page that rendered a
+        // coordination refusal as an ordinary failure, or that quietly showed
+        // it as completed, would pass every assertion made so far.
+        const cookie = await fresh.login();
+
+        const runPage = await fresh.request('GET', `/runs/${readerRun.id}`, { cookie });
+        assertThat(runPage.statusCode === 200,
+          `the blocked Run detail page renders — it is inspectable ` +
+          `(${runPage.statusCode})`);
+        const runBody = String(runPage.body || '');
+        assertThat(runBody.includes('undeclared_sibling_dependency'),
+          'and states the exact sibling-dependency reason');
+        assertThat(runBody.includes('handover.md'),
+          'and preserves the exact requested path');
+        assertThat(!runBody.includes('verified_progress_exhausted'),
+          'without borrowing the verified-progress block vocabulary');
+        assertThat(!runBody.includes('POSTGRES_REPLAY_INTEGRITY_FAILURE'),
+          'and without borrowing replay-integrity authority');
+        assertThat(!/\bcompleted\b/.test(runBody.split('undeclared_sibling_dependency')[0]
+          .slice(-200)),
+        'and never presents the blocked leaf as completed');
+
+        const ticketPage = await fresh.request(
+          'GET', `/tickets/${readerRun.ticketId}`, { cookie });
+        assertThat(ticketPage.statusCode === 200,
+          'the Ticket page renders over a sibling-blocked leaf');
+        assertThat(!/COMPLETION_EVIDENCE_MISSING/.test(String(ticketPage.body || '')),
+          'with no completion-evidence refusal attributed to the blocked leaf');
+
+        const eventsApi = await fresh.request(
+          'GET', `/api/runs/${readerRun.id}/events`, { cookie });
+        assertThat(eventsApi.statusCode === 200,
+          'the Run events API projects over the blocked Run');
+        assertThat(String(eventsApi.body || '').includes('run.progress_blocked'),
+          'and exposes the durable block event rather than inferring from status');
+
+        // The parent aggregate never reports success over a blocked child.
+        const plan = await store.getAllocationPlanForTicket(readerRun.ticketId);
+        const items = (plan && plan.aggregateDecision && plan.aggregateDecision.items) || [];
+        const blockedItem = items.find(i => Number(i.runId) === Number(readerRun.id));
+        if (blockedItem) {
+          assertThat(blockedItem.itemStatus !== 'completed',
+            `the aggregate never projects the blocked leaf as completed ` +
+            `(${blockedItem.itemStatus})`);
+          // A decision MAY exist — unlike the replay-corruption case, this leaf
+          // terminalized through the ordinary path and recorded one. What it
+          // may never do is claim the objective was met, so the disposition is
+          // asserted rather than the decision's absence.
+          const blockedConsequence = await store.getRunConsequence(readerRun.id);
+          const blockedDecision = blockedConsequence && blockedConsequence.consequence
+            ? blockedConsequence.consequence.completionDecision
+            : null;
+          if (blockedDecision) {
+            assertThat(blockedDecision.completionDisposition !== 'completed',
+              `the blocked leaf's decision never claims completion ` +
+              `(${blockedDecision.completionDisposition})`);
+            assertThat(blockedDecision.runId === readerRun.id,
+              'and is bound to this Run, not borrowed from a sibling');
+          } else {
+            assertThat(true, 'no completion decision exists for the blocked leaf');
+          }
+        }
+        const ticketRow = (await store.pool.query(
+          `SELECT status FROM ${store.table('tickets')} WHERE id = $1`,
+          [readerRun.ticketId])).rows[0];
+        assertThat(ticketRow.status !== 'completed',
+          'and the parent Ticket cannot project completed over a blocked child');
+
+        // A neighbouring sibling keeps its OWN reason, and never inherits this
+        // leaf's missing completion evidence.
+        const siblingRows = (await store.pool.query(
+          `SELECT id, body->>'error' AS reason FROM ${store.table('runs')}
+            WHERE ticket_id = $1 AND id <> $2`,
+          [readerRun.ticketId, readerRun.id])).rows;
+        for (const row of siblingRows) {
+          const reason = String(row.reason || '');
+          assertThat(!/COMPLETION_EVIDENCE_MISSING|without a completion decision/
+            .test(reason),
+          `sibling ${row.id} does not inherit missing completion evidence`);
+          assertThat(!reason.includes('handover.md'),
+            `sibling ${row.id} does not inherit the blocked leaf's requested path`);
+        }
+
+        // ── THE PROJECTION READS CREATED NOTHING ─────────────────────────
+        const countsAfterSurfaces = await durableRunCounts(store, readerRun.id);
+        const surfaceDrift = countDelta(countsBeforeRestart, countsAfterSurfaces);
+        assertThat(surfaceDrift.length === 0,
+          `restart and every surface read create no durable facts ` +
+          `(${surfaceDrift.join(', ')})`);
       } finally {
         await fresh.stop();
       }

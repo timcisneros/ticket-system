@@ -39,6 +39,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { withHarness, createAsserter } = require('./postgres-test-harness');
 const {
+  countDelta,
+  durableTerminalCounts,
+  waitForSchedulerQuiescence
+} = require('./fixtures/terminal-projection-restart');
+const {
   seedGovernedStructuredTicket,
   progressControlPolicy
 } = require('./governed-structured-fixture');
@@ -312,6 +317,7 @@ async function main() {
       // read. It previously could not start at all: the projector demanded a
       // completion decision from a leaf that truthfully has none, so one corrupt
       // leaf made the whole Ticket unserviceable and took its siblings with it.
+      let uncontainedRunId = null;
       const third = await startServer({ env });
       try {
         assertThat(true, 'a fresh server STARTS against a Ticket holding a failed leaf');
@@ -392,9 +398,10 @@ async function main() {
             `UPDATE ${store.table('replay_snapshots')}
                 SET snapshot = $2::jsonb, revision = revision + 1
               WHERE run_id = $1`, [siblingId, JSON.stringify(siblingTampered)]);
-          const siblingPage = await third.request('GET', `/runs/${siblingId}`, { cookie });
+            const siblingPage = await third.request('GET', `/runs/${siblingId}`, { cookie });
           assertThat(siblingPage.statusCode !== 200,
             'a Run with UNRECORDED corruption still fails closed — it is not hidden');
+          uncontainedRunId = siblingId;
         }
 
         // ── No completion decision was required OR fabricated ────────────
@@ -461,6 +468,87 @@ async function main() {
           'and the corrupted replay is still untouched');
       } finally {
         await third.stop();
+      }
+
+      // ── UNCONTAINED CORRUPTION, READ BY A PROCESS THAT NEVER SAW IT ─────
+      //
+      // Above, the uncontained corruption was applied and read inside ONE
+      // server. That proves the refusal, but not that it survives a restart —
+      // and a refusal that depends on the corrupting process still being alive
+      // would be a cache, not an authority. Here a fourth server starts against
+      // a database it has never read, with a Run whose transcript is corrupt
+      // and whose integrity failure was never recorded.
+      //
+      // The distinction under test is the DISPOSITION, not the presence of
+      // corruption: the contained leaf stays failed-and-inspectable, while the
+      // uncontained one refuses closed. A restart must not blur them, and must
+      // not quietly terminalize the uncontained Run into the tidy contained
+      // shape.
+      if (uncontainedRunId !== null) {
+        const beforeUncontained = await durableTerminalCounts(store, run.ticketId);
+        const uncontainedRowBefore = (await store.pool.query(
+          `SELECT status, lease_owner, revision FROM ${store.table('runs')} WHERE id = $1`,
+          [uncontainedRunId])).rows[0];
+
+        const fourth = await startServer({ env });
+        try {
+          await waitForSchedulerQuiescence(store, run.ticketId);
+          const cookie = await fourth.login();
+
+          const page = await fourth.request('GET', `/runs/${uncontainedRunId}`, { cookie });
+          assertThat(page.statusCode !== 200,
+            `a fresh process still refuses the uncontained Run closed ` +
+            `(status ${page.statusCode})`);
+          const body = String(page.body || '');
+          assertThat(!body.includes('uncontained corruption'),
+            'and exposes none of the corrupt replay content');
+          assertThat(!body.includes('replay_unavailable_integrity_failure'),
+            'it does not borrow the CONTAINED integrity-failure vocabulary');
+          assertThat(!body.includes('replay_available'),
+            'and does not claim replay is available');
+          // THE REFUSAL MAY NAME THE INTEGRITY CODE. That is what it is
+          // refusing about, and naming it is honest reporting — it is the
+          // CONTAINED vocabulary above that would be a fabrication, because no
+          // containment was ever recorded for this Run. What the refusal must
+          // not do is RECORD one, which the durable checks below cover.
+          assertThat(page.statusCode === 500,
+            `the refusal is a closed server-side refusal (${page.statusCode})`);
+          assertThat(body.includes('POSTGRES_REPLAY_INTEGRITY_FAILURE'),
+            'and names the integrity code it is refusing about');
+          assertThat(/integrity check failed/i.test(body),
+            'with a sanitized reason rather than replay content');
+
+          // The contained leaf is unaffected by the neighbouring uncontained
+          // damage — the two dispositions stay separate after restart.
+          const containedPage = await fourth.request('GET', `/runs/${runId}`, { cookie });
+          assertThat(containedPage.statusCode === 200,
+            'while the CONTAINED failure remains inspectable in the same process');
+          assertThat(String(containedPage.body || '')
+            .includes('replay_unavailable_integrity_failure'),
+          'and still states its own containment authority');
+
+          // The refusal is not a terminalization: nothing was repaired,
+          // rewritten or recorded to make the page renderable.
+          const uncontainedRowAfter = (await store.pool.query(
+            `SELECT status, lease_owner, revision FROM ${store.table('runs')} WHERE id = $1`,
+            [uncontainedRunId])).rows[0];
+          assertThat(uncontainedRowAfter.status === uncontainedRowBefore.status,
+            'the refusing read does not terminalize the uncontained Run');
+          assertThat(Number(uncontainedRowAfter.revision) ===
+            Number(uncontainedRowBefore.revision),
+          'and does not advance its revision');
+          assertThat(uncontainedRowAfter.lease_owner === null,
+            'and takes no lease on it');
+          assertThat(await integrityEvents() === 1,
+            'and records no second integrity event to explain itself');
+
+          const afterUncontained = await durableTerminalCounts(store, run.ticketId);
+          const drift = countDelta(beforeUncontained, afterUncontained);
+          assertThat(drift.length === 0,
+            `restart and refusing reads create no durable facts (${drift.join(', ')})`);
+        } finally {
+          await fourth.stop();
+        }
       }
 
       console.log(`  (${assertThat.count()} corruption containment assertions)`);
