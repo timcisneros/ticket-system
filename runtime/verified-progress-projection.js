@@ -185,6 +185,10 @@ function projectBlock(storedBlock) {
 // legitimately has nothing to show, while a governed Run with malformed
 // progress state has something wrong that must not be rendered as absence.
 
+// Terminal lifecycle states, named locally so this module does not depend on a
+// contract it otherwise has no reason to import.
+const TERMINAL_RUN_STATUSES = Object.freeze(['completed', 'failed', 'interrupted']);
+
 function projectRunVerifiedProgress({
   run,
   evaluation = null,
@@ -209,6 +213,9 @@ function projectRunVerifiedProgress({
     return deepFreeze({
       runId: run.id === undefined ? null : run.id,
       ticketId: run.ticketId === undefined ? null : run.ticketId,
+      // Carried so the Ticket-level grouping can tell a terminal Run from a
+      // running one. Live churn is a progress signal, not a terminal block.
+      runStatus: run.status === undefined ? null : run.status,
       allocationPlanId: run.allocationPlanId || null,
       allocationItemId: run.leafRunBinding.allocationItemId || null,
       policy,
@@ -238,6 +245,7 @@ function projectRunVerifiedProgress({
 
   return deepFreeze({
     runId: run.id === undefined ? null : run.id,
+    runStatus: run.status === undefined ? null : run.status,
     ticketId: run.ticketId === undefined ? null : run.ticketId,
     allocationPlanId: projection.allocationPlanId,
     allocationItemId: projection.allocationItemId,
@@ -347,9 +355,25 @@ function projectTicketVerifiedProgress(runProjections = []) {
     // A persisted block is the authoritative stop. Where a Run is blocked, the
     // STORED reason is used rather than the freshly evaluated one: the block is
     // the decision of record, and a later evaluation must not restate it.
+    // A PERSISTED BLOCK IS THE ONLY TERMINAL BLOCK AUTHORITY.
+    //
+    // The fallback to a freshly evaluated churn decision is live-progress
+    // reporting for a Run still executing: it answers "is this Run currently
+    // stalling", which is useful while work continues. It is NOT a terminal
+    // classification, and applying it to a terminal Run produced a real
+    // contradiction — a COMPLETED Run, holding no persisted block, whose final
+    // window truthfully evaluated to `blocked` / `verified_progress_exhausted`,
+    // was listed under `blockedForVerifiedProgressExhaustion` while Run-state
+    // and the durable row both reported no block.
+    //
+    // A Run's declared work can be satisfied in the same window that produced
+    // no NEW verified progress; that is history, not a block. So the fallback
+    // is restricted to nonterminal Runs, and a terminal Run contributes a
+    // blocked reason only from its own durable block.
+    const terminal = TERMINAL_RUN_STATUSES.includes(projection.runStatus);
     const reason = projection.block
       ? projection.block.reason
-      : (projection.decision && projection.decision.decision === 'blocked'
+      : (!terminal && projection.decision && projection.decision.decision === 'blocked'
         ? projection.decision.reason
         : null);
 

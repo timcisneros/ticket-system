@@ -691,24 +691,30 @@ async function main() {
               .includes('POSTGRES_REPLAY_INTEGRITY_FAILURE'),
           'and no integrity failure owns it');
 
-          // TICKET-LEVEL SUMMARY IS NOT ASSERTED HERE — DEFECT RECORDED.
+          // ── HISTORICAL CHURN DOES NOT CLASSIFY A COMPLETED RUN ────────
           //
-          // `/api/tickets/:id/runtime`.verifiedProgress lists this COMPLETED
-          // Run under `blockedForVerifiedProgressExhaustion`, while its durable
-          // `governedProgressBlock` is null and the Run-state reader agrees
-          // there is no block. The two readers disagree about the authority
-          // class for the same Run.
+          // This Run's final progress window truthfully evaluated to
+          // `blocked` / `verified_progress_exhausted` — it produced no NEW
+          // verified progress — and its declared work was satisfied in that
+          // same window. The Ticket summary previously fell back to that live
+          // churn decision whenever no block was persisted, so a COMPLETED Run
+          // holding no block was listed as blocked while Run-state and the
+          // durable row both said otherwise.
           //
-          // Cause (runtime/verified-progress-projection.js:344-350): when no
-          // block is persisted the grouping falls back to the FRESHLY EVALUATED
-          // churn decision, and a completed Run's final window legitimately
-          // evaluates to blocked/verified_progress_exhausted.
-          //
-          // No assertion is made either way. Asserting the current behaviour
-          // would lock in the contradiction; asserting the corrected behaviour
-          // would fail against unmodified production. Recorded in
-          // docs/TERMINAL_PROJECTION_READER_CONTRACTS.md §10 with the smallest
-          // proposed correction, for a session authorised to change production.
+          // The fallback is now restricted to nonterminal Runs, so a terminal
+          // Run contributes a blocked reason only from its own durable block.
+          // The churn history remains visible on the Run page under its
+          // "Churn decision" heading; it simply no longer classifies.
+          const ticketVp = JSON.parse(ticketApi.body).verifiedProgress;
+          for (const list of ['blockedForVerifiedProgressExhaustion',
+            'blockedForUndeclaredSiblingDependency',
+            'blockedForCumulativeExecutionDuration',
+            'blockedForRepeatedNoOp']) {
+            assertThat(!(ticketVp[list] || []).map(Number).includes(Number(runId)),
+              `the completed Run appears in no ${list} group`);
+          }
+          assertThat(runtimeLeaf.dispositionReason === 'completion_verified',
+            'and reconciliation still reports verified completion');
 
           // ── NOTHING WAS CREATED BY PROJECTING ─────────────────────────
           await waitForSchedulerQuiescence(store, run.ticketId);
