@@ -118,6 +118,117 @@ async function main() {
       // failed Run with no completion decision through this same projection and
       // proves it renders.
 
+      // ── THE NON-SUCCESS HALF, DRIVEN THROUGH THE SAME TRANSITION ──────
+      //
+      // The note above deferred this to the corruption suite. That suite proves
+      // a failed Run RENDERS, but it never re-invokes `transitionTicketAfterRun`
+      // — its restart phase only reads durable rows. So `projectedStatus`'s
+      // `not_applicable` branch, the one that decides what a terminal
+      // non-success Run projects, had no owner: mutating it to return
+      // `completed`, or to throw COMPLETION_EVIDENCE_MISSING, broke nothing.
+      //
+      // A terminal Run cannot be reopened, so each case needs its own admitted
+      // Run rather than reusing the one above. That constraint is the reason
+      // the contrast was deferred; it is satisfied here instead of worked
+      // around.
+      let caseSeq = 0;
+      const freshLeaf = async label => {
+        caseSeq += 1;
+        const admitted = await seedGovernedStructuredTicket(store, {
+          stamp: `${STAMP}-${caseSeq}-${label}`,
+          actor: ACTOR,
+          workspaceRoot,
+          leafPostconditions: (item, owned) => [
+            { type: 'folder_exists', path: `${owned}/alpha` }
+          ]
+        });
+        return store.getRun(admitted.runIds[0]);
+      };
+      const driveTo = async (targetRun, status) => {
+        const current = (await store.pool.query(
+          `SELECT status FROM ${store.table('runs')} WHERE id = $1`,
+          [targetRun.id])).rows[0].status;
+        if (current !== 'running') {
+          await store.pool.query(
+            `UPDATE ${store.table('runs')}
+                SET status = 'running', current_phase = 'mutation',
+                    body = body || jsonb_build_object('status', 'running'),
+                    started_at = COALESCE(started_at, clock_timestamp()),
+                    completed_at = NULL, revision = revision + 1
+              WHERE id = $1`, [targetRun.id]);
+        }
+        await store.pool.query(
+          `UPDATE ${store.table('runs')}
+              SET status = $2, current_phase = 'terminalization',
+                  body = body || jsonb_build_object('status', $2::text),
+                  completed_at = COALESCE(completed_at, clock_timestamp()),
+                  lease_owner = NULL, lease_expires_at = NULL,
+                  revision = revision + 1
+            WHERE id = $1`, [targetRun.id, status]);
+      };
+      const spendOf = async ticketId => {
+        const one = async sql => Number((await store.pool.query(sql, [ticketId])).rows[0].n);
+        const runIds = `SELECT id FROM ${store.table('runs')} WHERE ticket_id = $1`;
+        return {
+          reservations: await one(
+            `SELECT count(*) AS n FROM ${store.table('economic_request_reservations')}
+              WHERE run_id IN (${runIds})`),
+          receipts: await one(
+            `SELECT count(*) AS n FROM ${store.table('operation_receipts')}
+              WHERE run_id IN (${runIds})`),
+          decisions: await one(
+            `SELECT count(*) AS n FROM ${store.table('run_consequences')}
+              WHERE run_id IN (${runIds})`),
+          leases: await one(
+            `SELECT count(*) AS n FROM ${store.table('events')}
+              WHERE ticket_id = $1 AND type = 'run.lease_acquired'`),
+          runs: await one(
+            `SELECT count(*) AS n FROM ${store.table('runs')} WHERE ticket_id = $1`)
+        };
+      };
+
+      for (const [label, status] of [
+        ['a failed Run with no decision', 'failed'],
+        ['an interrupted Run with no decision', 'interrupted']
+      ]) {
+        const leaf = await freshLeaf(label.replace(/[^a-z]/gi, '').slice(0, 10));
+        await driveTo(leaf, status);
+        const before = await spendOf(leaf.ticketId);
+
+        let refusal = null;
+        try {
+          await store.transitionTicketAfterRun({ runId: leaf.id });
+        } catch (error) { refusal = error; }
+
+        // COMPLETION EVIDENCE IS NOT OWED BY A RUN THAT NEVER CLAIMED SUCCESS.
+        assertThat(refusal === null,
+          `${label} transitions without a completion-evidence refusal ` +
+          `(${refusal && refusal.code})`);
+        const ticketAfter = (await store.pool.query(
+          `SELECT status FROM ${store.table('tickets')} WHERE id = $1`,
+          [leaf.ticketId])).rows[0].status;
+        // THE EXACT PROJECTED STATUS, not merely "not completed".
+        //
+        // `projectedStatus` decides what a terminal non-success Run
+        // contributes, and the Ticket target is derived from it: a failed Run
+        // projects `failed`, an interrupted Run reopens rather than completing.
+        // Asserting only inequality left the branch unowned — sibling Runs kept
+        // the Ticket off `completed` no matter what this Run projected.
+        const expectedTicket = status === 'failed' ? 'failed' : 'in_progress';
+        assertThat(ticketAfter === expectedTicket,
+          `${label} projects the Ticket ${expectedTicket} (${ticketAfter})`);
+        assertThat(ticketAfter !== 'completed',
+          `${label} never projects the Ticket completed (${ticketAfter})`);
+        assertThat((await store.getRun(leaf.id)).status === status,
+          `${label} keeps its own terminal status`);
+
+        const after = await spendOf(leaf.ticketId);
+        assertThat(JSON.stringify(after) === JSON.stringify(before),
+          `${label} synthesizes no decision and creates no run, lease, ` +
+          `reservation or receipt (${JSON.stringify(before)} -> ` +
+          `${JSON.stringify(after)})`);
+      }
+
       console.log(`  (${assertThat.count()} malformed-completion assertions)`);
     });
 

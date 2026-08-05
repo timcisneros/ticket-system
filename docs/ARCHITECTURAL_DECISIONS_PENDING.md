@@ -1,3 +1,33 @@
+## REGRESSION: structured-allocation-leaf-run-postgres-test fails since da5af60 (2026-08-05)
+
+**Status:** open, undetected for several sessions, found by widening containment.
+
+```
+Error: Run 10 cannot project its ticket: completion_authority_mismatch
+```
+
+Bisected: the suite **PASSES** at `da5af60^` and **FAILS** from `da5af60`
+("Validate completion authority in structured ticket projection") onward. That
+commit made Ticket projection compare the Run's admitted
+`completionAuthoritySnapshot.objectiveContractHash` against the decision's,
+instead of passing `null`.
+
+**The production behaviour is correct; the fixture is stale.** The suite builds
+its completion decision through `buildCompletionDecision({ run: { ...run,
+completionAuthoritySnapshot: authority, ... } })` — substituting a fixture
+authority that differs from the Run's stored snapshot. That was invisible while
+the projection compared nothing. It is now exactly the mismatch the corrected
+projection exists to refuse.
+
+**Fix required (test-only):** build the fixture decision against the Run's own
+admitted authority, or store the same authority on the Run. No production
+change.
+
+**Why it went undetected:** this suite has not appeared in any session gate
+list or containment list since the change. Every gate ran green while it was
+failing. Worth treating as a lesson about containment lists derived from the
+suites a session happens to touch.
+
 ## Completion Evidence Is Owed Only by a Completion Claim (closed 2026-08-05)
 
 `deriveLeafItemDisposition` reported `completion_decision_missing` for any
