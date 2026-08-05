@@ -570,15 +570,15 @@ Balances come from the durable account row, never from summing reservations.
 The durable lifecycle vocabulary is used verbatim; there is no overloaded
 `governed: true`.
 
-## Tranche 5 — Coordination and Verified-Progress Controls
+## Tranche 5 — Coordination and Verified-Progress Controls — COMPLETE
 
-**NOT COMPLETE — verified-progress credit is unresolved.** Bounded coordination
-signals and churn termination are implemented and enforced from durable evidence.
-Verified-progress ACCOUNTING is not: production cannot credit a newly satisfied
-admitted declared-work fact, because the evidence prerequisite it depends on does
-not exist durably. See "Verified progress requires an unimplemented evidence
-prerequisite" below. No recursive delegation and no generic decision-claim
-registry were introduced.
+**COMPLETE.** Bounded coordination signals and churn termination are implemented
+and enforced from durable evidence, and verified-progress ACCOUNTING is wired end
+to end: production derives a satisfied-fact mapping from
+`governed_postcondition_evidence` and credits a newly satisfied admitted
+declared-work fact. The evidence prerequisite that once blocked this was built
+rather than deferred — see "Verified progress is credited in production" below.
+No recursive delegation and no generic decision-claim registry were introduced.
 
 ### The authority chain
 
@@ -695,77 +695,56 @@ The three pieces that DO exist:
 * a canonical objective compiler — `buildObjectiveContract`, which yields
   `folder_exists` and `path_absent` postconditions for recognized objectives.
 
-The piece that does NOT exist is the durable substrate. `run:postcondition_completed`
-claims are written by `recordRunEvent` into `replay_snapshots`: ONE MUTABLE ROW PER
-RUN (`run_id PRIMARY KEY`, a `revision` counter), whose items are stamped
-`capturedAt: new Date()` — the process clock — and carry no per-item monotonic
-identity. The append-only events path, `buildRunPostconditionEvidence`, returns
-`null` unless `executionMode === 'workflow'`, and governed structured leaf Runs
-are `agent`. No migration defines a postcondition table or column.
+**The fourth piece now exists too.** The durable substrate is
+`governed_postcondition_evidence` (migration 035, extended by 036's evidence-batch
+boundary and 037's baseline). It is append-only, carries a monotonic id and a
+database timestamp, and is bounded by the `postconditionEvidenceCutoff` dimension
+of the same one-statement cutoff that bounds receipts, reservations and budget
+charges.
 
-That substrate cannot satisfy Tranche 5's evaluation discipline:
+The objection recorded when this was deferred was correct, and was honoured rather
+than worked around. `replay_snapshots` is one mutable row per Run, stamped with the
+process clock and carrying no per-item identity: it can express no cutoff, would
+revert ordering authority to the process clock, and is rewritten in place. It
+remains presentation and replay state and is not authority here. The substrate was
+therefore built as a separate append-only table, and no second postcondition
+evaluator was created — the canonical evaluator's verdict is what the evidence
+records.
 
-* **no cutoff is expressible** — there is no `id <= N` to bound, so a claim
-  appended moments ago is indistinguishable from one that preceded the
-  evaluation;
-* **ordering authority would be the process clock** — precisely what the
-  execution-epoch work removed as authority;
-* **the row is rewritten in place**, so "later facts do not rewrite an existing
-  evaluation" cannot hold the way it does for the hash-chained event log.
+### Verified progress is credited in production
 
-Wiring it anyway would inject process-clock-ordered, non-cutoff-bounded,
-rewritable evidence into the one path this tranche made durable, cutoff-stable
-and restart-deterministic — breaking the stable-cutoff proof, the
-database-time proof, and the A3 closure that rests on both.
+`evaluateGovernedRunProgress` accepts `satisfiedFactIdentitiesByReceiptId`, and
+`prepareAndReserveNextGovernedRunRequest` now supplies it: it calls
+`readGovernedFactTransitions` under the evaluation's own cutoff and passes the
+derived mapping. Production no longer passes `null`.
 
-**The prerequisite.** A durable, append-only, database-ordered postcondition-result
-record — a typed-evidence seam that writes deterministic postcondition results to
-an ordered table with a monotonic id and a database timestamp, the way
-`operation_receipts` and `events` already do. That belongs to the typed-evidence
-work, not to churn control: building it inside Tranche 5 would create a second
-postcondition authority, which is the thing this tranche exists to avoid.
+* `verifiedProgressCount` reflects real transitions;
+* the consecutive no-progress streak resets on verified progress;
+* `verified_progress_exhausted` now means what it says — no newly satisfied
+  admitted declared-work fact across the tolerated windows.
 
-**Until it exists**, on the governed structured leaf path:
+Two further truthfulness rules from the same tranche are load-bearing on that
+reading:
 
-* `verifiedProgressCount` is always 0;
-* the consecutive no-progress streak grows on every governed window;
-* a Run stops at `maximumConsecutiveNoProgressWindows` with reason
-  `verified_progress_exhausted` **whether or not it advanced declared work**;
-* that reason is therefore NOT evidence that no declared work advanced, and must
-  not be read as such.
+* **Incomplete evidence refuses rather than counting as zero progress.** A batch
+  that committed receipts but recorded no verdicts is refused as
+  `fact_evidence_incomplete`, so "we did not record it" can never be read as "it
+  did not advance".
+* **A durable response alone is not proof it reached execution.** Only an answer
+  delivered to execution is churn-eligible, where delivery is observable, so a
+  persistence or recovery interruption is never attributed to model churn.
 
-### Verified progress is not yet credited in production
-
-The classification, the four levels and the tolerance arithmetic are complete and
-enforced. What is NOT wired is the last input: `evaluateGovernedRunProgress` accepts
-`satisfiedFactIdentitiesByReceiptId`, a mapping from durable receipt identities to the
-declared-work facts they newly satisfy, and **no production caller supplies it today**.
-`prepareAndReserveNextGovernedRunRequest` passes `null`, which becomes an empty map.
-
-The consequence is exact and should not be understated:
-
-* `verifiedProgressCount` is always 0 on the production path;
-* the consecutive no-progress streak therefore grows on every governed window;
-* a governed structured leaf Run is effectively bounded at
-  `maximumConsecutiveNoProgressWindows` provider requests, and stops with reason
-  `verified_progress_exhausted` **whether or not it actually advanced declared work**.
-
-The direction of this error is conservative — it stops spending earlier than the policy
-intends and can never overspend — which is why it is not a safety defect. It is a
-TRUTHFULNESS limit: for a Run that genuinely advanced, `verified_progress_exhausted` is
-the wrong explanation, and the Ticket summary will show `totalVerifiedProgressFacts: 0`.
-
-Deriving that mapping from typed evidence is deliberately out of Tranche 5's frozen
-scope: the evidence-to-declared-fact derivation belongs with the typed-evidence work, not
-with churn control. Until it is wired, read verified-progress counts as "not measured",
-not as "nothing happened".
+Proved by `governed-verified-progress-credit-postgres-test` (deterministic
+transitions), `governed-verified-progress-lifecycle-postgres-test` (real server,
+per-window credit authorizing the next request),
+`governed-no-progress-withholding-postgres-test` (real server, the withholding
+direction) and `governed-required-persistence-postgres-test` (the delivery and
+incomplete-evidence rules).
 
 ### Not implemented
 
 Recorded explicitly so no reader infers otherwise:
 
-* derivation of `satisfiesDeclaredFactIdentities` from typed evidence — the seam accepts
-  it, production does not yet supply it (see above);
 * dependency DAGs;
 * sibling waiting or ordering;
 * shared-decision registry;
@@ -792,8 +771,6 @@ Tranche 2A: COMPLETE
 Tranche 2B: COMPLETE
 Tranche 3: COMPLETE
 Tranche 4: COMPLETE
-Tranche 5: SUBSTANTIALLY COMPLETE — authorizing and withholding
-            directions both proven in production; crash/restart
-            integrity scenarios outstanding
+Tranche 5: COMPLETE
 Tranche 6: NOT STARTED
 ```

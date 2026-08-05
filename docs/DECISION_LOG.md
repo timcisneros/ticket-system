@@ -1,6 +1,52 @@
 # Decision Log
 
+## Tranche 5 closed — the verified-progress substrate was built (2026-08-05)
+
+**Supersedes "Verified progress has no durable evidence substrate (2026-08-02)"**
+below. That entry is retained unaltered as the dated record of why the work
+stopped; this entry records what changed.
+
+The 2026-08-02 decision named a prerequisite and declined to fake it: a durable,
+append-only, database-ordered postcondition-result record. It was subsequently
+built — `governed_postcondition_evidence` (migration 035), with 036's
+evidence-batch boundary and 037's baseline. It carries a monotonic id and a
+database timestamp and is bounded by the `postconditionEvidenceCutoff` dimension
+of the same one-statement cutoff that already bounded receipts, reservations and
+budget charges.
+
+**Every objection in the superseded entry was honoured, not worked around.**
+`replay_snapshots` was not promoted to authority; it remains presentation and
+replay state. No second postcondition evaluator was written — the canonical
+evaluator's verdict is what the evidence records, and
+`prepareAndReserveNextGovernedRunRequest` derives the satisfied-fact mapping from
+that evidence rather than accepting one from a caller. The stable-cutoff proof,
+the database-time proof and the A3 closure that rests on both are intact.
+
+**Three further truthfulness rules closed in the same tranche**, each of which
+made a persisted reason mean what it says:
+
+* **Missing evidence is not evidence of no progress.** A batch that committed
+  receipts but recorded no verdicts is refused as `fact_evidence_incomplete`
+  rather than counted as zero progress.
+* **A durable response is not proof it reached execution.** Only an answer
+  delivered to execution is churn-eligible, where delivery is observable, so a
+  persistence or recovery interruption is no longer attributed to model churn.
+* **Historical churn does not make a completed Run blocked**, and block authority
+  comes only from a persisted canonical block — never from status, churn history
+  or a re-derivation after the cutoff.
+
+**A3 is unchanged by this entry.** It remains CLOSED FOR GOVERNED STRUCTURED LEAF
+RESOURCE ACCOUNTING only. The repository-wide remainder is still open.
+
+Tranche 5 is COMPLETE. Tranche 6 — Controlled Evaluation and Product Decision —
+is NOT STARTED.
+
+
 ## Verified progress has no durable evidence substrate (2026-08-02)
+
+**SUPERSEDED 2026-08-05** — see "Tranche 5 closed — the verified-progress
+substrate was built" above. The prerequisite named here was built; this entry
+is retained unaltered as the dated record of why the work stopped.
 
 The Tranche 5 merge-readiness audit found that production never credits verified
 progress, and that the gap cannot be closed inside Tranche 5.

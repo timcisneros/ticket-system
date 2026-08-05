@@ -1,3 +1,63 @@
+## Tranche 5 Register: CLOSED (2026-08-05)
+
+Final closure audit. Every Tranche 5 entry in this register now ends in exactly
+one truthful state. No entry reads "partially proved", "mostly closed",
+"source-audited only", "pending matrix", "future mutation" or "known gap".
+
+**CLOSED — with canonical owner and proving suite**
+
+| Entry | Canonical owner | Proving suite |
+|---|---|---|
+| Terminal reader parity (five-row matrix) | reader surfaces + `deriveLeafItemDisposition` | `docs/TERMINAL_PROJECTION_READER_CONTRACTS.md` §11; blocked-restart, sibling-dependency, replay-corruption suites |
+| Governed block CLI normalization | `scripts/oquery.js` via `normalizeGovernedProgressBlock` | `governed-blocked-restart-postgres-test`, `governed-sibling-dependency-postgres-test` |
+| `oquery replay` governed payload contract | `scripts/oquery.js` | same |
+| CLI applicability for rows 3 and 4 | reader matrix | same |
+| Completion-authority projection parity | `transitionTicketAfterRun`, `deriveLeafItemDisposition` | `structured-allocation-leaf-run-postgres-test`, `completion-decision-postgres-test` |
+| `projectedStatus` non-success mapping | `persistence/postgres/store.js` | `structured-allocation-leaf-run-postgres-test` |
+| Delivery uncertainty vs concurrent duplicate | `classifyGovernedRequestRecovery` | `governed-leaf-production-path-postgres-test`, `governed-pre-transport-restart-postgres-test` |
+| Governed claim ownership | `markEconomicRequestStarted` | `governed-leaf-production-path-postgres-test` |
+| Duplicate-dispatch outcome anomaly | `resolveStartedRequest` | same |
+| Transport attribution / deterministic fixtures | hermetic transport preload | restart suites |
+| Governed progress block-hash ownership | `governed-progress-block-contract.js` | `verified-progress-terminal-mapping-test` |
+| Sibling refusal `failureKind` | sibling-read preflight | `governed-sibling-dependency-postgres-test` |
+| Blocked-projection mutation sensitivity | `verified-progress-projection.js` | `verified-progress-terminal-mapping-test` |
+| Stale foreign-authority expectations | leaf reconciliation | `structured-allocation-leaf-run-postgres-test` |
+| Completion evidence owed only by a completion claim | `_recordCompletionDecisionEvidence` | `malformed-completion-projection-postgres-test` |
+| Run-State API reader contract | `/api/runs/:id/state` | terminal reader fixtures |
+| suite-mutation-test stale anchor | `scripts/suite-mutation-test.js` | itself, 54/54 |
+| Required-persistence matrix | 24 inventoried writes | `governed-required-persistence-postgres-test` |
+| Unconsumed-response false churn | `isChurnEligibleWindow`, `readGovernedRunProgressState` | `governed-required-persistence-postgres-test` row 5.4; `governed-no-progress-withholding-postgres-test` |
+| Startup-repair persistence proofs | `repairRunTerminalization` | `governed-required-persistence-postgres-test` Phases 11-12 |
+
+**SUPERSEDED**
+
+* "Verified progress has no durable evidence substrate (2026-08-02)" in
+  `docs/DECISION_LOG.md` — superseded 2026-08-05 by the substrate that entry
+  named as its prerequisite (migrations 035-037). The entry is retained unaltered
+  as a dated record.
+* "Terminal Reader Parity: five-row matrix complete except the CLI cell" —
+  superseded by the CLOSED entry above.
+
+**RETAINED OUTSIDE TRANCHE 5**
+
+* *Governed Response-Hash Tamper Has No Scenario* — a coverage gap on the Tranche
+  4 governed response-rehydration guard, with its exact reason recorded at that
+  entry. Not a Tranche 5 completion criterion and not a known defect.
+* *Structured Allocation Leaf-Run Retry Boundary*, *complete:true Under
+  Per-Response Action Caps*, *Workspace Operation Error Handling*, *Event Log
+  Stream Semantics*, *Process-execution GA release blockers*, *Execution-Governance
+  Audit* — pre-existing entries owned by other tranches or workstreams.
+
+**OPEN MERGE BLOCKERS**
+
+None.
+
+**A3 scope, restated unchanged.** A3 is CLOSED FOR GOVERNED STRUCTURED LEAF
+RESOURCE ACCOUNTING only. The repository-wide remainder remains open. This
+closure does not broaden it.
+
+---
+
 ## Governed Required-Persistence Matrix: CLOSED (2026-08-05)
 
 **Status:** CLOSED. No row remains DEFECT, UNTESTED, SOURCE-ONLY or PENDING.
@@ -5734,7 +5794,32 @@ Open questions for the diagnosis:
 
 ## Governed Response-Hash Tamper Has No Scenario (recorded 2026-08-02)
 
-**Status:** open — test-coverage gap, not a known defect.
+**Status: RETAINED OUTSIDE TRANCHE 5** — test-coverage gap, not a known defect,
+and not a Tranche 5 completion criterion.
+
+**Exact reason for retention.** The guard is `rehydrateGovernedResponseText` in
+`server.js`, which belongs to the Tranche 4 governed request/response contract:
+it rehydrates a durable response and verifies it against the hash the reservation
+recorded at dispatch. Tranche 5 added coordination and verified-progress control
+on top of that contract and did not change the guard. The gap surfaced during
+Tranche 5 work, which is why it is recorded here, but closing it proves a Tranche
+4 rehydration invariant rather than any Tranche 5 criterion.
+
+**What is established by source.** The guard exists and fails closed:
+`GOVERNED_RESPONSE_REHYDRATION_CONFLICT` is raised with
+`failureKind = 'resume_rejected'`, which `buildFailureMetadata` carries into the
+terminal failure record as its `kind`. The earlier attempt also established
+observationally that with the transcript tampered the Run executed nothing — no
+injected action ran and no second request was issued.
+
+**What remains unproven** is only the durable disposition: whether the conflict
+terminalizes the attempt or is retried first. That was left UNRESOLVED rather
+than guessed, and the scenario was removed rather than committed failing.
+
+**What would close it**, unchanged: determine where a rehydration conflict lands
+in the attempt lifecycle, assert the durable integrity signal alongside the
+already-observed absence of effects, and mutation-test removal of the hash check
+against it.
 
 Governed recovery rehydrates request 1's transcript from canonical response
 replay and verifies it against the response hash the reservation recorded at

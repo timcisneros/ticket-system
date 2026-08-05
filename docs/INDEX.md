@@ -9,9 +9,15 @@
   open integrity defects, deferred work, and pending architectural decisions. Read before starting
   work that touches runtime enforcement, feasibility, recovery, or objective interpretation.
 - [`STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md`](STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md)
-  — structured allocation and governed model economics through Tranche 5, including the verified
-  progress authority chain, the coordination boundaries that were deliberately NOT built, and the
-  precise scope of the A3 closure (governed structured leaf execution only).
+  — structured allocation and governed model economics through Tranche 5 (COMPLETE; Tranche 6 NOT
+  STARTED), including the verified progress authority chain, the coordination boundaries that were
+  deliberately NOT built, and the precise scope of the A3 closure (governed structured leaf
+  execution only).
+- [`GOVERNED_REQUIRED_PERSISTENCE_MATRIX.md`](GOVERNED_REQUIRED_PERSISTENCE_MATRIX.md) — every
+  durable write in the governed leaf lifecycle, its classification, what happens when it does not
+  commit, and which partial states PostgreSQL makes structurally impossible.
+- [`TERMINAL_PROJECTION_READER_CONTRACTS.md`](TERMINAL_PROJECTION_READER_CONTRACTS.md) — which
+  terminal authority each operator reader owns, and the five-row reader-parity matrix.
 - [`POSTGRES_CUTOVER.md`](POSTGRES_CUTOVER.md) — current PostgreSQL authority/coordination contract.
 - [`PROCESS_EXECUTION_CONTRACT.md`](PROCESS_EXECUTION_CONTRACT.md) — default-off, executor-free
   bounded process-operation authority, request, outcome, evidence, and snapshot contract.
