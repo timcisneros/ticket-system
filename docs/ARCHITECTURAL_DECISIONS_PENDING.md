@@ -1,3 +1,29 @@
+## Terminal Reader Parity: five-row matrix complete except the CLI cell (2026-08-05)
+
+Closed this session:
+
+* **Ticket timeline classified for all five rows** — APPLICABLE — RAW HISTORY
+  ONLY. It owns `entries` and a `sourceSummary` of durable record counts and
+  repeats no reconciliation reason, item status, block authority or replay
+  availability. Asserted for the history it owns, and asserted NOT to carry the
+  other readers' vocabulary, so it can never be used as their evidence.
+* **Semantic page sections for rows 1, 3 and 4** — via a `pageSection(html,
+  label)` helper that reads one `<dt>`/`<dd>` pair. This is what separates a
+  completed Run's historical "Churn decision" text from its terminal authority;
+  a page-wide substring check cannot. Row 4's Final Blocking Reason renders the
+  operator-facing refusal, which names the requested path and sibling item
+  directly — richer than the machine code, and asserted as such.
+* **Rows 2 and 5 complete no-side-effect matrices** — 16 counters including
+  integrity containment events and per-Run revisions, captured with the Ticket
+  quiescent around every applicable read. Exact values recorded in
+  `docs/TERMINAL_PROJECTION_READER_CONTRACTS.md` §11; zero drift, and for row 5
+  `runRevisions` byte-identical, proving the refusals terminalize, repair and
+  reclaim nothing.
+
+**Still open — one cell.** The CLI valid-completion row is classified
+APPLICABLE in §4 but was not executed. Rows 2-5 remain NOT APPLICABLE with their
+source-backed reasons. That is the only unfilled cell in the matrix.
+
 ## Stale Foreign-Authority Expectations: closed 2026-08-05
 
 Supersedes the entry that recorded this as an open regression. Both the

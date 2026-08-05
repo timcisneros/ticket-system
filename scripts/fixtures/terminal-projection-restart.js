@@ -176,7 +176,60 @@ function findRuntimeRun(payload, runId) {
   return matches[0];
 }
 
+// The complete terminal count matrix for one Ticket, including the facts a
+// corruption row needs that the general counter omits: integrity containment
+// events and per-Run revisions, where a projection that quietly terminalized or
+// repaired something would show up.
+async function fullTerminalCounts(store, ticketId) {
+  const base = await durableTerminalCounts(store, ticketId);
+  const scalar = async sql =>
+    Number((await store.pool.query(sql, [ticketId])).rows[0].n);
+  const runIdsSql = `SELECT id FROM ${store.table('runs')} WHERE ticket_id = $1`;
+  const revisions = (await store.pool.query(
+    `SELECT id, revision FROM ${store.table('runs')} WHERE ticket_id = $1 ORDER BY id`,
+    [ticketId])).rows.map(r => `${r.id}:${r.revision}`).join(',');
+  return {
+    ...base,
+    integrityEvents: await scalar(
+      `SELECT count(*) AS n FROM ${store.table('events')}
+        WHERE ticket_id = $1 AND type = 'run.integrity_terminalized'`),
+    terminalizedEvents: await scalar(
+      `SELECT count(*) AS n FROM ${store.table('events')}
+        WHERE ticket_id = $1 AND type = 'run.terminalized'`),
+    evidenceBatches: await scalar(
+      `SELECT count(*) AS n FROM ${store.table('governed_postcondition_evidence')}
+        WHERE run_id IN (${runIdsSql})`),
+    runRevisions: revisions
+  };
+}
+
+// SECTION-SCOPED PAGE READING.
+//
+// Run detail renders definition lists: a `<dt>` label followed by its `<dd>`
+// value. Whole-page substring checks conflate a CURRENT terminal disposition
+// with historical or diagnostic vocabulary that legitimately appears elsewhere
+// on the same page — the "Churn decision" section on a completed Run is the
+// standing example. This returns one section's value so an assertion can name
+// the section it means.
+//
+// Returns null when the label is absent, which callers must distinguish from an
+// empty value.
+function pageSection(html, label) {
+  const source = String(html || '');
+  const labelAt = source.indexOf(`>${label}<`);
+  if (labelAt < 0) return null;
+  const ddAt = source.indexOf('<dd', labelAt);
+  if (ddAt < 0) return null;
+  const open = source.indexOf('>', ddAt);
+  const close = source.indexOf('</dd>', open);
+  if (open < 0 || close < 0) return null;
+  return source.slice(open + 1, close).replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+}
+
 module.exports = {
+  pageSection,
+  fullTerminalCounts,
   findRuntimeRun,
   durableRunCounts,
   durableTerminalCounts,

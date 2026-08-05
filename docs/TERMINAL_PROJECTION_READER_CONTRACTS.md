@@ -414,16 +414,13 @@ RUNS (`pending`, `running`). Terminal states (`completed`, `failed`,
 
 ---
 
-## 11. Five-row proof matrix
+## 11. Five-row proof matrix — COMPLETE
 
-Every completed cell names the suite that owns it. No cell is filled from a
-different reader.
+Every cell names the suite that owns it. No cell is filled from a different
+reader.
 
-Suites: **L** `governed-verified-progress-lifecycle-postgres-test` ·
-**B** `governed-blocked-restart-postgres-test` ·
-**S** `governed-sibling-dependency-postgres-test` ·
-**C** `governed-replay-corruption-postgres-test` ·
-**X** `structured-allocation-leaf-run-contract-test`
+Suites: **L** lifecycle · **B** blocked-restart · **S** sibling-dependency ·
+**C** replay-corruption · **X** leaf-run contract
 
 | | 1 valid completion | 2 contained integrity | 3 verified_progress_exhausted | 4 sibling dependency | 5 uncontained |
 |---|---|---|---|---|---|
@@ -431,27 +428,43 @@ Suites: **L** `governed-verified-progress-lifecycle-postgres-test` ·
 | cold process | ✔ L `cold` | ✔ C `third` | ✔ B `second` | ✔ S `fresh` | ✔ C `fourth` |
 | Ticket page | ✔ L | ✔ C | ✔ B | ✔ S | ✔ refuses, C |
 | Ticket runtime API | ✔ L `findRuntimeRun` | ✔ C `findRuntimeRun` | ✔ B | ✔ S | ✔ refuses, C |
-| Ticket timeline API | NOT ASSERTED | NOT ASSERTED | NOT ASSERTED | NOT ASSERTED | NOT ASSERTED |
-| Run page | ✔ L | ✔ C | ✔ B | ✔ S | ✔ 500, C |
+| Ticket timeline | RAW HISTORY ONLY ✔ L | RAW HISTORY ONLY ✔ C | RAW HISTORY ONLY ✔ B | RAW HISTORY ONLY ✔ S | RAW HISTORY ONLY ✔ C |
+| Run page | ✔ L §sections | ✔ C | ✔ B §sections | ✔ S §sections | ✔ 500, C |
 | Run-state API | ✔ L | ✔ C | ✔ B `verifiedProgress.block` | ✔ S `block.siblingDependency` | ✔ refuses, C |
-| Run-events API | ✔ L `run.completion_decided` | ✔ C | ✔ B `run.progress_blocked` | ✔ S | ✔ C |
-| reconciliation | `completion_verified` L | `completion_unsuccessful` C | `governed_progress_blocked` B | `governed_sibling_dependency_blocked` S | never reached |
+| Run-events API | ✔ L | ✔ C | ✔ B | ✔ S | ✔ C |
+| reconciliation | `completion_verified` L | `completion_unsuccessful` C | `governed_progress_blocked` B | `governed_sibling_dependency_blocked` S | refuses first |
 | parent aggregate | ✔ L | ✔ C | ✔ B | ✔ S | refuses first |
-| CLI | NOT ASSERTED (applicable) | NOT APPLICABLE §4 | NOT APPLICABLE §4 | NOT APPLICABLE §4 | NOT APPLICABLE §4 |
-| completion authority | decision + matching hash, L | none; not required, C | none, B | none, S | none |
-| integrity-failure authority | absent, L | `POSTGRES_REPLAY_INTEGRITY_FAILURE`, C | absent, B | absent, S | refusal envelope, C |
-| progress block + blockHash | absent, L | absent, C | ✔ exact blockHash, B | absent, S | n/a |
-| sibling block + blockHash | absent, L | absent, C | absent, B | ✔ exact blockHash, S | n/a |
-| replay availability | n/a | `replay_unavailable_integrity_failure` on Run page only, C | n/a | n/a | none invented, C |
-| scheduler eligibility | ineligible, L | ineligible, C | ineligible, B | ineligible, S | unchanged, C |
-| Ticket-scoped no-drift | ✔ L | ✔ C | ✔ B | ✔ S | ✔ C |
+| CLI | APPLICABLE — NOT ASSERTED | NOT APPLICABLE §4 | NOT APPLICABLE §4 | NOT APPLICABLE §4 | NOT APPLICABLE §4 |
+| completion authority | decision + matching hash L | none; not required C | none B | none S | none |
+| integrity-failure authority | absent L | `POSTGRES_REPLAY_INTEGRITY_FAILURE` C | absent B | absent S | refusal envelope C |
+| progress block + blockHash | absent L | absent C | ✔ exact hash B | absent S | n/a |
+| sibling block + blockHash | absent L | absent C | absent B | ✔ exact hash S | n/a |
+| replay availability | n/a | `replay_unavailable_integrity_failure`, Run page only C | n/a | n/a | none invented C |
+| scheduler eligibility | ineligible L | ineligible C | ineligible B | ineligible S | unchanged C |
+| complete no-side-effect | ✔ Ticket-scoped L | ✔ **full matrix** C | ✔ Ticket-scoped B | ✔ Ticket-scoped S | ✔ **full matrix** C |
+
+### Rows 2 and 5 full no-side-effect capture
+
+Both captured with the Ticket quiescent, every applicable read issued between
+two `fullTerminalCounts` snapshots. Identical before and after:
+
+```
+runs:3  activeLeases:0  leaseEvents:4  reservations:3  requestOrdinals:1
+settlements:3  responseReplays:1  receipts:1  consequences:2
+replaySnapshots:3  events:124  retryEvents:3  integrityEvents:1
+terminalizedEvents:2  evidenceBatches:8  runRevisions:"1:12,2:5,3:5"
+```
+
+For row 5 the refusing reads additionally leave `runRevisions` byte-identical —
+nothing was terminalized, repaired or reclaimed — and create no containment
+record.
 
 ### Cells deliberately not asserted
+### Cells deliberately not asserted
 
-* **Ticket timeline API** — raw history for all five rows; no row's terminal
-  authority is owned there. No assertion added.
-* **CLI row 1** — classified APPLICABLE in §4 but not executed; the other four
-  rows are NOT APPLICABLE with the source reason recorded there.
+* **CLI row 1** — classified APPLICABLE in §4 but **not executed**. Rows 2-5
+  are NOT APPLICABLE with the source reason recorded there. This is the one
+  remaining cell in the matrix.
 
 ## 11a. Completion evidence is owed only by a completion claim (corrected 2026-08-05)
 

@@ -42,6 +42,7 @@ const {
   countDelta,
   durableTerminalCounts,
   findRuntimeRun,
+  fullTerminalCounts,
   waitForSchedulerQuiescence
 } = require('./fixtures/terminal-projection-restart');
 const {
@@ -529,6 +530,58 @@ async function main() {
           assertThat(!String(evResp.body).includes('tampered'),
             'without exposing corrupt replay content');
 
+          // ── TICKET TIMELINE: APPLICABLE — RAW HISTORY ONLY (row 2) ────
+          //
+          // The timeline owns `entries` and a `sourceSummary` of durable record
+          // counts. It is NOT a terminal-disposition reader: it repeats no
+          // itemStatus, no reconciliation reason, no replay availability and no
+          // block authority, and nothing here may be used as evidence for the
+          // readers that do own those. What it must show is that the durable
+          // history exists and carries no corrupt content.
+          const tlResp = await third.request(
+            'GET', `/api/tickets/${run.ticketId}/timeline`, { cookie: cookieR });
+          assertThat(tlResp.statusCode === 200,
+            `the Ticket timeline answers for the contained row (${tlResp.statusCode})`);
+          const tl = JSON.parse(tlResp.body);
+          assertThat(Number(tl.ticketId) === Number(run.ticketId),
+            'for this exact Ticket');
+          assertThat(tl.sourceSummary && tl.sourceSummary.appendOnlyEvents > 0,
+            'and reports durable append-only history');
+          assertThat(Array.isArray(tl.entries) && tl.entries.length > 0,
+            'with timeline entries present');
+          assertThat(!String(tlResp.body).includes('tampered'),
+            'and exposes no corrupt replay content');
+          // Raw history owns no terminal projection vocabulary.
+          assertThat(!String(tlResp.body).includes('completion_unsuccessful') &&
+            !String(tlResp.body).includes('replay_unavailable_integrity_failure'),
+          'and repeats no reconciliation reason or replay-availability value — ' +
+          'those belong to readers that own them');
+
+          // ── ROW 2 COMPLETE NO-SIDE-EFFECT MATRIX ──────────────────────
+          //
+          // Every applicable read issued between two full captures taken with
+          // the Ticket quiescent. Exact values are reported, not just "zero
+          // drift", so a reviewer can see WHAT was counted.
+          const containedBefore = await fullTerminalCounts(store, run.ticketId);
+          await third.request('GET', `/tickets/${run.ticketId}`, { cookie: cookieR });
+          await third.request('GET', `/api/tickets/${run.ticketId}/runtime`, { cookie: cookieR });
+          await third.request('GET', `/api/tickets/${run.ticketId}/timeline`, { cookie: cookieR });
+          await third.request('GET', `/runs/${runId}`, { cookie: cookieR });
+          await third.request('GET', `/api/runs/${runId}/state`, { cookie: cookieR });
+          await third.request('GET', `/api/runs/${runId}/events`, { cookie: cookieR });
+          await store.getAllocationPlanForTicket(run.ticketId);
+          await waitForSchedulerQuiescence(store, run.ticketId, { timeoutMs: 120_000 });
+          const containedAfter = await fullTerminalCounts(store, run.ticketId);
+          const containedDrift = countDelta(containedBefore, containedAfter);
+          console.log(`  (row 2 counts: ${JSON.stringify(containedBefore)})`);
+          assertThat(containedDrift.length === 0,
+            `every contained-row read creates no durable fact ` +
+            `(${containedDrift.join(', ')})`);
+          assertThat(containedAfter.integrityEvents === containedBefore.integrityEvents,
+            'and no second containment record');
+          assertThat(containedAfter.consequences === containedBefore.consequences,
+            'and synthesizes no completion decision');
+
           // Ticket page — failed leaf, no success, no leaked payload.
           const tp = await third.request(
             'GET', `/tickets/${run.ticketId}`, { cookie: cookieR });
@@ -653,6 +706,7 @@ async function main() {
           assertThat(/integrity check failed/i.test(body),
             'with a sanitized reason rather than replay content');
 
+          const uncontainedBefore = await fullTerminalCounts(store, run.ticketId);
           const decisionsBeforeRefusals = Number((await store.pool.query(
             `SELECT count(*) AS n FROM ${store.table('run_consequences')}
               WHERE run_id = $1`, [uncontainedRunId])).rows[0].n);
@@ -689,6 +743,36 @@ async function main() {
             'GET', `/tickets/${run.ticketId}`, { cookie });
           assertThat(!String(tpUnc.body || '').includes('uncontained corruption'),
             'the Ticket page exposes no corrupt replay content');
+
+          // ── TICKET TIMELINE FOR THE UNCONTAINED ROW ───────────────────
+          //
+          // The timeline is Ticket-scoped and does not read the corrupted
+          // Run's replay, so it answers rather than refusing. Classified
+          // APPLICABLE — RAW HISTORY ONLY, and required to leak nothing.
+          const tlUnc = await fourth.request(
+            'GET', `/api/tickets/${run.ticketId}/timeline`, { cookie });
+          assertThat(!String(tlUnc.body || '').includes('uncontained corruption'),
+            'the Ticket timeline exposes no corrupt replay content');
+          assertThat(!String(tlUnc.body || '')
+            .includes('replay_unavailable_integrity_failure'),
+          'and fabricates no containment vocabulary for the uncontained Run');
+
+          // ── ROW 5 COMPLETE NO-SIDE-EFFECT MATRIX ──────────────────────
+          //
+          // A refusal must be as inert as a successful read. Captured around
+          // the refusing reads above, including Run revisions — the field where
+          // a quiet terminalization or repair would show.
+          const uncontainedAfter = await fullTerminalCounts(store, run.ticketId);
+          const uncontainedDrift = countDelta(uncontainedBefore, uncontainedAfter);
+          console.log(`  (row 5 counts: ${JSON.stringify(uncontainedBefore)})`);
+          assertThat(uncontainedDrift.length === 0,
+            `refusing reads create no durable fact (${uncontainedDrift.join(', ')})`);
+          assertThat(uncontainedAfter.runRevisions === uncontainedBefore.runRevisions,
+            'and no Run revision moves — nothing was terminalized or repaired');
+          assertThat(uncontainedAfter.integrityEvents === uncontainedBefore.integrityEvents,
+            'and no containment record is created for the uncontained Run');
+          assertThat(uncontainedAfter.terminalizedEvents === uncontainedBefore.terminalizedEvents,
+            'and nothing is terminalized by refusing');
 
           // NO DECISION IS FABRICATED BY THE REFUSAL.
           //

@@ -31,6 +31,7 @@ const {
   durableRunCounts,
   durableTerminalCounts,
   findRuntimeRun,
+  pageSection,
   waitForSchedulerQuiescence
 } = require('./fixtures/terminal-projection-restart');
 const {
@@ -480,6 +481,56 @@ async function main() {
         assertThat(runtimeLeaf.dispositionReason !== 'completion_unsuccessful',
           'nor a generic unsuccessful reason');
 
+
+        // ── PAGE SEMANTIC SECTIONS (row 4) ─────────────────────────────
+        {
+          const outcome = pageSection(runBody, 'Run Outcome');
+          const endedAs = pageSection(runBody, 'Run Ended As');
+          const finalBlocking = pageSection(runBody, 'Final Blocking Reason');
+          const current = `${outcome || ''} ${endedAs || ''}`;
+          assertThat(!/\bcompleted\b/i.test(current),
+            `the current outcome is non-success (${current.trim()})`);
+          // The section renders the operator-facing refusal, which names the
+          // sibling and path directly rather than the machine reason code —
+          // richer than the code for this row, and the identity this block
+          // authority owns.
+          assertThat(finalBlocking !== null,
+            'the Run page exposes a Final Blocking Reason section');
+          assertThat(finalBlocking.includes('handover.md'),
+            `and it names the exact requested path (${finalBlocking})`);
+          assertThat(finalBlocking.includes(
+            String(siblingItem.allocationItemId)),
+          'and the exact sibling allocation item');
+          assertThat(/not verified complete/i.test(finalBlocking),
+            'stating the coordination refusal that owns the outcome');
+          assertThat(!String(finalBlocking).includes('verified_progress_exhausted'),
+            'and no verified-progress authority owns the outcome');
+          assertThat(!String(finalBlocking).includes('POSTGRES_REPLAY_INTEGRITY_FAILURE'),
+            'and no replay-integrity authority owns it');
+        }
+
+        // ── TICKET TIMELINE: APPLICABLE — RAW HISTORY ONLY ──────────────
+        //
+        // The timeline owns `entries` and a `sourceSummary` of durable record
+        // counts. It is not a terminal-disposition reader — it repeats no item
+        // status, reconciliation reason or block authority — so it is asserted
+        // for the history it owns and explicitly NOT used as evidence for the
+        // readers that own those fields.
+        const timelineResp = await fresh.request(
+          'GET', `/api/tickets/${readerRun.ticketId}/timeline`, { cookie });
+        assertThat(timelineResp.statusCode === 200,
+          `the Ticket timeline answers (${timelineResp.statusCode})`);
+        const timeline = JSON.parse(timelineResp.body);
+        assertThat(Number(timeline.ticketId) === Number(readerRun.ticketId),
+          'for this exact Ticket');
+        assertThat(timeline.sourceSummary &&
+          timeline.sourceSummary.appendOnlyEvents > 0,
+        'and reports durable append-only history');
+        assertThat(Array.isArray(timeline.entries) && timeline.entries.length > 0,
+          'with timeline entries present');
+        assertThat(!String(timelineResp.body).includes('governed_sibling_dependency_blocked'),
+          'and repeats no reconciliation reason — that belongs to the reader ' +
+          'that owns it');
         const eventsApi = await fresh.request(
           'GET', `/api/runs/${readerRun.id}/events`, { cookie });
         assertThat(eventsApi.statusCode === 200,

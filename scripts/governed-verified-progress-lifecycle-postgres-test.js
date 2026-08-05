@@ -34,6 +34,7 @@ const {
   countDelta,
   durableTerminalCounts,
   findRuntimeRun,
+  pageSection,
   waitForSchedulerQuiescence
 } = require('./fixtures/terminal-projection-restart');
 const {
@@ -615,6 +616,54 @@ async function main() {
             'and the page borrows no sibling-dependency authority');
           assertThat(runBody.includes('completed'),
             'while presenting the Run as completed');
+
+          // ── PAGE SEMANTIC SECTIONS (row 1) ────────────────────────────
+          //
+          // This page renders `verified_progress_exhausted` under a historical
+          // "Churn decision" heading for a COMPLETED Run — the final window
+          // produced no new verified progress while the declared work was
+          // satisfied. Section reading is what separates that history from the
+          // terminal authority; a page-wide substring check cannot.
+          {
+            const outcome = pageSection(runBody, 'Run Outcome');
+            const endedAs = pageSection(runBody, 'Run Ended As');
+            const churn = pageSection(runBody, 'Churn decision');
+            assertThat(outcome !== null || endedAs !== null,
+              'the Run page exposes a current-outcome section');
+            assertThat(/completed/i.test(`${outcome || ''} ${endedAs || ''}`),
+              `the current outcome is completed (${outcome} / ${endedAs})`);
+            if (runBody.includes('verified_progress_exhausted')) {
+              assertThat(churn !== null &&
+                churn.includes('verified_progress_exhausted'),
+              'and verified-progress text appears in the historical Churn ' +
+              'decision section, which owns it');
+              assertThat(!String(outcome || '').includes('verified_progress_exhausted') &&
+                !String(endedAs || '').includes('verified_progress_exhausted'),
+              'and never in the current-outcome section');
+            }
+            assertThat(!String(`${outcome || ''} ${endedAs || ''}`)
+              .includes('undeclared_sibling_dependency'),
+            'no sibling/path authority owns the outcome');
+            assertThat(!String(`${outcome || ''} ${endedAs || ''}`)
+              .includes('POSTGRES_REPLAY_INTEGRITY_FAILURE'),
+            'and no integrity authority owns it');
+          }
+
+          // ── TICKET TIMELINE: APPLICABLE — RAW HISTORY ONLY ────────────
+          const timelineResp = await cold.request(
+            'GET', `/api/tickets/${run.ticketId}/timeline`, { cookie });
+          assertThat(timelineResp.statusCode === 200,
+            `the Ticket timeline answers (${timelineResp.statusCode})`);
+          const timeline = JSON.parse(timelineResp.body);
+          assertThat(Number(timeline.ticketId) === Number(run.ticketId),
+            'for this exact Ticket');
+          assertThat(timeline.sourceSummary &&
+            timeline.sourceSummary.appendOnlyEvents > 0,
+          'and reports durable append-only history');
+          assertThat(Array.isArray(timeline.entries) && timeline.entries.length > 0,
+            'with timeline entries present');
+          assertThat(!String(timelineResp.body).includes('completion_verified'),
+            'and repeats no reconciliation reason — raw history owns none');
 
           const eventsApi = await cold.request(
             'GET', `/api/runs/${runId}/events`, { cookie });

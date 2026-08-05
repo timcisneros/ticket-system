@@ -31,6 +31,7 @@ const {
   durableRunCounts,
   findRuntimeRun,
   durableTerminalCounts,
+  pageSection,
   waitForSchedulerQuiescence
 } = require('./fixtures/terminal-projection-restart');
 const {
@@ -490,6 +491,53 @@ async function main() {
           !Object.prototype.hasOwnProperty.call(runtimeLeaf, 'siblingAllocationItemId'),
         'and no sibling item or path fields');
 
+
+        // ── PAGE SEMANTIC SECTIONS (row 3) ─────────────────────────────
+        //
+        // Sections, not page-wide substrings: this page legitimately renders
+        // churn history alongside the terminal authority, so only the section
+        // that OWNS the current outcome may be read as the current outcome.
+        {
+          const outcome = pageSection(runBody, 'Run Outcome');
+          const endedAs = pageSection(runBody, 'Run Ended As');
+          const finalBlocking = pageSection(runBody, 'Final Blocking Reason');
+          assertThat(outcome !== null || endedAs !== null,
+            'the Run page exposes a current-outcome section');
+          const current = `${outcome || ''} ${endedAs || ''}`;
+          assertThat(!/\bcompleted\b/i.test(current),
+            `the current outcome is non-success (${current.trim()})`);
+          assertThat(finalBlocking !== null &&
+            finalBlocking.includes('verified_progress_exhausted'),
+          `Final Blocking Reason names verified-progress exhaustion ` +
+          `(${finalBlocking})`);
+          assertThat(!String(finalBlocking).includes('undeclared_sibling_dependency'),
+            'and no sibling/path authority owns the outcome');
+          assertThat(!String(finalBlocking).includes('POSTGRES_REPLAY_INTEGRITY_FAILURE'),
+            'and no replay-integrity authority owns it');
+        }
+
+        // ── TICKET TIMELINE: APPLICABLE — RAW HISTORY ONLY ──────────────
+        //
+        // The timeline owns `entries` and a `sourceSummary` of durable record
+        // counts. It is not a terminal-disposition reader — it repeats no item
+        // status, reconciliation reason or block authority — so it is asserted
+        // for the history it owns and explicitly NOT used as evidence for the
+        // readers that own those fields.
+        const timelineResp = await second.request(
+          'GET', `/api/tickets/${run.ticketId}/timeline`, { cookie });
+        assertThat(timelineResp.statusCode === 200,
+          `the Ticket timeline answers (${timelineResp.statusCode})`);
+        const timeline = JSON.parse(timelineResp.body);
+        assertThat(Number(timeline.ticketId) === Number(run.ticketId),
+          'for this exact Ticket');
+        assertThat(timeline.sourceSummary &&
+          timeline.sourceSummary.appendOnlyEvents > 0,
+        'and reports durable append-only history');
+        assertThat(Array.isArray(timeline.entries) && timeline.entries.length > 0,
+          'with timeline entries present');
+        assertThat(!String(timelineResp.body).includes('governed_progress_blocked'),
+          'and repeats no reconciliation reason — that belongs to the reader ' +
+          'that owns it');
         const eventsApi = await second.request(
           'GET', `/api/runs/${runId}/events`, { cookie });
         assertThat(eventsApi.statusCode === 200,
