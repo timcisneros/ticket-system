@@ -494,50 +494,72 @@ async function main() {
         'and no sibling item or path fields');
 
 
-        // ── CLI READER: BLOCKED BY A DEFECT IN `oquery replay` ─────────
+        // ── CLI READER: APPLICABLE — ASSERTED (row 3) ──────────────────
         //
-        // The audit records rows 3 and 4 as CLI-APPLICABLE because `cmdReplay`
-        // prints `progress.block.reason`, `blockHash`, `blockedAt`,
-        // `cutoff.cutoffIdentity`, `churnDecisionHash` and `progressPolicyHash`
-        // (oquery.js:679-691). Those lines are real. They are also UNREACHABLE
-        // for a governed structured leaf: the command throws at oquery.js:601
-        //
-        //   TypeError: governed.requests is not iterable
-        //
-        // and exits 1 long before it gets there. On this Run the surrounding
-        // governed fields print `undefined` — authorized route, economic
-        // authority, pricing entry — so `governed` exists without the shape the
-        // loop assumes.
-        //
-        // What the command DOES emit before dying is asserted here, because it
-        // is real operator-visible output and proves the CLI reaches the block
-        // authority at all. The block-detail fields are NOT asserted: they
-        // cannot be produced without changing CLI behaviour, which this session
-        // is not scoped to do. Recorded in
-        // docs/TERMINAL_PROJECTION_READER_CONTRACTS.md.
+        // `oquery replay <runId>` used to die at oquery.js:601 on
+        // `governed.requests`, a field the governed authority envelope never
+        // had, before it could print the durable block. With the CLI reading
+        // the envelope this route actually returns, the block section is
+        // reachable and every value is compared against the persisted block.
         const countsBeforeCli = await fullTerminalCounts(store, run.ticketId);
         const cliBlock = await runOquery(['replay', String(runId)],
           { baseUrl: second.baseUrl, cookie });
+        assertThat(cliBlock.code === 0,
+          `oquery replay exits successfully (${cliBlock.code})`);
         assertThat(cliBlock.text.includes(`Replay: Run #${runId}`),
-          `oquery replay names the exact target Run (#${runId})`);
+          `and names the exact target Run (#${runId})`);
         assertThat(cliBlock.text.includes(`ticket #${run.ticketId}`),
           `and the exact Ticket (#${run.ticketId})`);
-        assertThat(cliBlock.text.includes(
-          `blocked by a persisted progress decision: verified_progress_exhausted`),
-        'and states the exact governed block reason it is blocked by');
+        assertThat(cliBlock.text.includes('progress block'),
+          'and prints the governed progress block section');
+        // SCOPED TO THE BLOCK LINE. The reason also appears in the earlier
+        // one-line summary, so a whole-output check passed even with the reason
+        // stripped from the block section itself.
+        const blockLine = cliBlock.text.split('\n')
+          .find(line => line.includes('progress block')) || '';
+        assertThat(blockLine.includes('verified_progress_exhausted'),
+          `the block line itself carries the exact reason (${blockLine.trim()})`);
+        assertThat(blockLine.includes(blockBefore.blockHash),
+          'and the block line carries the exact hash');
+        assertThat(cliBlock.text.includes(blockBefore.blockHash),
+          'and the EXACT persisted blockHash');
+        assertThat(cliBlock.text.includes(blockBefore.churnDecisionHash),
+          'the exact churn-decision hash');
+        assertThat(cliBlock.text.includes(blockBefore.progressPolicyHash),
+          'the exact progress-policy hash');
+        assertThat(cliBlock.text.includes(blockBefore.cutoff.cutoffIdentity),
+          'and the exact cutoff identity');
+        assertThat(cliBlock.text.includes(blockBefore.blockedAt),
+          'and the exact blockedAt instant');
+        // A progress block owns no sibling authority; the CLI must not invent one.
+        assertThat(!cliBlock.text.includes('sibling read'),
+          'and prints NO sibling read — that is a different block class');
         assertThat(!cliBlock.text.includes('undeclared_sibling_dependency'),
-          'and never the sibling reason');
+          'nor the sibling reason');
         assertThat(!cliBlock.text.includes('POSTGRES_REPLAY_INTEGRITY_FAILURE'),
           'nor any replay-integrity authority');
-        // THE DEFECT ITSELF, pinned so a fix is noticed rather than silently
-        // changing what this row can claim.
-        assertThat(cliBlock.code === 1 &&
-          cliBlock.text.includes('governed.requests is not iterable'),
-        `oquery replay still crashes at oquery.js:601 before printing block ` +
-        `detail (exit ${cliBlock.code}) — rows 3 and 4 cannot assert blockHash ` +
-        'until that is fixed');
+        // The CLI value equals what Run-state independently reports.
+        assertThat(rsBlock.blockHash === blockBefore.blockHash,
+          'and the CLI, Run-state and the persisted block agree on the hash');
+        if (runtimeLeaf.completionDecisionHash) {
+          assertThat(blockBefore.blockHash !== runtimeLeaf.completionDecisionHash,
+            'the printed blockHash is not the completion-decision hash');
+        }
 
-        // NO SIDE EFFECTS, even from a crashing read.
+        // TARGET SELECTION across a multi-Run Ticket.
+        const neighbourRows = (await store.pool.query(
+          `SELECT id FROM ${store.table('runs')} WHERE ticket_id = $1 AND id <> $2`,
+          [run.ticketId, runId])).rows;
+        for (const row of neighbourRows) {
+          const neighbour = await store.getRun(Number(row.id));
+          const nb = neighbour && neighbour.governedProgressBlock;
+          if (nb && nb.blockHash !== blockBefore.blockHash) {
+            assertThat(!cliBlock.text.includes(nb.blockHash),
+              `and never a neighbour's blockHash (run ${row.id})`);
+          }
+        }
+
+        // NO SIDE EFFECTS FROM THE CLI READ.
         const countsAfterCli = await fullTerminalCounts(store, run.ticketId);
         const cliDrift = countDelta(countsBeforeCli, countsAfterCli);
         assertThat(cliDrift.length === 0,

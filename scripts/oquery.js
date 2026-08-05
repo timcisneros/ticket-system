@@ -496,6 +496,66 @@ async function cmdMutations(args) {
   });
 }
 
+// The governed authority envelope carries no request list — per-request
+// lifecycle lives in the Ticket runtime's governedEconomics projection. So an
+// ABSENT `requests` is truthful and prints nothing.
+//
+// A PRESENT non-array is a different thing entirely: the response does not match
+// any shape this command understands, and coercing it with `|| []` would report
+// "no requests" for a payload that might describe several. That refuses loudly
+// instead, which is why this is a helper rather than a default.
+// One renderer for the durable governed block, used whether it arrives inside
+// the `verifiedProgress` projection or as the raw `governedProgressBlock` field.
+// It prints only what the block itself carries and invents nothing: a
+// verified-progress block has no sibling section, and a sibling-dependency block
+// prints its exact path and item.
+function printGovernedProgressBlock(block) {
+  if (!block || typeof block !== 'object') return;
+  console.log(`  ${dim('progress block')} ${block.reason} ${dim(block.blockHash)}`);
+  console.log(`    ${dim('blocked at')} ${block.blockedAt} ` +
+    `${dim('cutoff ' + (block.cutoff ? block.cutoff.cutoffIdentity : 'unavailable'))}`);
+  console.log(`    ${dim('decision')} ${block.churnDecisionHash} ` +
+    `${dim('policy ' + block.progressPolicyHash)}`);
+  if (block.verifiedProgressProjectionHash) {
+    console.log(`    ${dim('projection')} ${block.verifiedProgressProjectionHash}`);
+  }
+  if (block.siblingDependency) {
+    const sibling = block.siblingDependency;
+    console.log(`    ${dim('sibling read')} ${sibling.requestedPath} ` +
+      `owned by item #${sibling.siblingAllocationItemId} ` +
+      `${dim('(' + sibling.siblingCompletionState + ')')}`);
+    console.log(`    ${dim('sibling completion')} ` +
+      `${sibling.siblingCompletionDecisionHash || 'no completion decision'}`);
+  }
+  console.log(`    ${dim('note')} blocked runs are not automatically ` +
+    'reopened; there is no retry, reroute or replan');
+}
+
+function printGovernedRequests(governed) {
+  if (!Object.prototype.hasOwnProperty.call(governed, 'requests')) return;
+  const requests = governed.requests;
+  if (requests === null || requests === undefined) return;
+  if (!Array.isArray(requests)) {
+    throw new Error(
+      'governed.requests is present but not an array — the replay response ' +
+      'does not match a shape this command can read');
+  }
+  for (const request of requests) {
+    console.log(`  ${dim('request')} #${request.modelRequestOrdinal} ` +
+      `${request.lifecycle} reservation #${request.reservationId}`);
+    console.log(`    ${dim('logical source')} ${request.logicalSourceIdentity}`);
+    console.log(`    ${dim('exact request')} ${request.exactRequestHash}`);
+    if (request.responseHash) {
+      console.log(`    ${dim('response')} ${request.responseHash}`);
+    }
+    if (request.settlementReceiptHash) {
+      console.log(`    ${dim('receipt')} ${request.settlementReceiptHash} ` +
+        `${request.usageSource} settled ${request.settledMicroUsd} uUSD ` +
+        `of ${request.reservedMicroUsd} reserved`);
+    }
+  }
+}
+
 async function cmdReplay(args) {
   const runId = parseInt(args._[0] || args.id || '');
   if (!runId) return console.log(red('Usage: oquery replay <run-id>'));
@@ -587,31 +647,29 @@ async function cmdReplay(args) {
             // Tranche 4: the captured authority and durable request lifecycle.
           const governed = run.governedExecution || null;
           if (governed) {
+            // READ THE ENVELOPE THIS ROUTE ACTUALLY RETURNS.
+            //
+            // These lines previously read a flat shape that
+            // `run.governedExecution` never had — `authorizedRouteReference`,
+            // `economicAuthorityHash`, `pricingEntryHash`, `workerAccountId`
+            // and, fatally, `requests`. The first four rendered `undefined`;
+            // the fifth threw `TypeError: governed.requests is not iterable`
+            // and killed the command before it could print the durable
+            // governed block below.
+            //
+            // The canonical envelope (runtime/governed-run-authority-contract.js)
+            // carries the three policy hashes plus the retained decisions as
+            // OBJECTS: routingDecision, economicAuthority, pricingEntry. It has
+            // no request list at all — per-request lifecycle belongs to the
+            // Ticket runtime's governedEconomics projection, not here — so its
+            // absence is truthful, not missing data.
             console.log(`  ${dim('governed role')} ${governed.role}`);
-            console.log(`  ${dim('authorized route')} ${governed.authorizedRouteReference}`);
-            console.log(`  ${dim('immutable target')} ${governed.immutableDispatchTarget}`);
-            console.log(`  ${dim('target evidence')} ${governed.targetEvidenceHash}`);
-            console.log(`  ${dim('routing decision')} ${governed.routingDecisionHash}`);
-            console.log(`  ${dim('economic authority')} ${governed.economicAuthorityHash}`);
-            console.log(`  ${dim('pricing entry')} ${governed.pricingEntryHash}`);
-            console.log(`  ${dim('worker account')} #${governed.workerAccountId} ` +
-              `max ${governed.maximumProviderRequests} requests, ` +
-              `cap ${governed.authorizedOutputTokens} output tokens, ` +
-              `<= ${governed.maximumPerRequestMicroUsd} uUSD each`);
-            for (const request of governed.requests) {
-              console.log(`  ${dim('request')} #${request.modelRequestOrdinal} ` +
-                `${request.lifecycle} reservation #${request.reservationId}`);
-              console.log(`    ${dim('logical source')} ${request.logicalSourceIdentity}`);
-              console.log(`    ${dim('exact request')} ${request.exactRequestHash}`);
-              if (request.responseHash) {
-                console.log(`    ${dim('response')} ${request.responseHash}`);
-              }
-              if (request.settlementReceiptHash) {
-                console.log(`    ${dim('receipt')} ${request.settlementReceiptHash} ` +
-                  `${request.usageSource} settled ${request.settledMicroUsd} uUSD ` +
-                  `of ${request.reservedMicroUsd} reserved`);
-              }
-            }
+            console.log(`  ${dim('role routing policy')} ${governed.roleRoutingPolicyHash}`);
+            console.log(`  ${dim('economic policy')} ${governed.economicPolicyHash}`);
+            console.log(`  ${dim('pricing catalog')} ${governed.pricingCatalogHash}`);
+            console.log(`  ${dim('economic account')} #${governed.economicAccountId}`);
+            console.log(`  ${dim('governed authority')} ${governed.governedExecutionHash}`);
+            printGovernedRequests(governed);
           }
         } else {
             item.evidenceRequirements.forEach(requirement => {
@@ -625,6 +683,21 @@ async function cmdReplay(args) {
         // Read from the canonical seam the page and API use — the CLI computes
         // nothing of its own.
         const progress = run.verifiedProgress || null;
+        // THE DURABLE BLOCK IS READABLE WITHOUT THE PROJECTION.
+        //
+        // `verifiedProgress` is a PROJECTION built by the Run-state serializer
+        // and the Run detail page. The export domain this command reads returns
+        // raw Run rows, which carry the canonical durable `governedProgressBlock`
+        // instead. Depending on the projection meant a governed structured leaf
+        // printed no block at all here, even though its terminal authority was
+        // sitting in the payload.
+        //
+        // Neither source is invented: both are the same durable block, and the
+        // projection is preferred when present so this command keeps agreeing
+        // with the API when it reads that shape.
+        if (!progress && run.governedProgressBlock) {
+          printGovernedProgressBlock(run.governedProgressBlock);
+        }
         if (progress) {
           const policy = progress.policy;
           console.log(`  ${dim('progress policy')} ${policy.progressPolicyHash}`);

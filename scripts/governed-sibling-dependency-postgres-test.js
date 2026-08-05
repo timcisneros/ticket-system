@@ -31,7 +31,9 @@ const {
   durableRunCounts,
   durableTerminalCounts,
   findRuntimeRun,
+  fullTerminalCounts,
   pageSection,
+  runOquery,
   waitForSchedulerQuiescence
 } = require('./fixtures/terminal-projection-restart');
 const {
@@ -481,6 +483,63 @@ async function main() {
         assertThat(runtimeLeaf.dispositionReason !== 'completion_unsuccessful',
           'nor a generic unsuccessful reason');
 
+
+        // ── CLI READER: APPLICABLE — ASSERTED (row 4) ──────────────────
+        //
+        // Same real command as row 3, `oquery replay <runId>`. The sibling
+        // block's own fields are asserted against the persisted block: this row
+        // is distinguished from a verified-progress block by carrying sibling
+        // and path identity, and the CLI must show exactly that.
+        const cliCountsBefore = await fullTerminalCounts(store, readerRun.ticketId);
+        const cliSibling = await runOquery(['replay', String(readerRun.id)],
+          { baseUrl: fresh.baseUrl, cookie });
+        assertThat(cliSibling.code === 0,
+          `oquery replay exits successfully (${cliSibling.code})`);
+        assertThat(cliSibling.text.includes(`Replay: Run #${readerRun.id}`),
+          `and names the exact blocked reader Run (#${readerRun.id})`);
+        assertThat(cliSibling.text.includes(`ticket #${readerRun.ticketId}`),
+          `and the exact Ticket (#${readerRun.ticketId})`);
+        assertThat(cliSibling.text.includes('undeclared_sibling_dependency'),
+          'with the exact sibling-dependency reason');
+        assertThat(cliSibling.text.includes(block.blockHash),
+          'and the EXACT persisted blockHash');
+        assertThat(cliSibling.text.includes(block.blockedAt),
+          'and the exact blockedAt instant');
+        assertThat(cliSibling.text.includes(block.cutoff.cutoffIdentity),
+          'and the exact cutoff identity');
+        assertThat(cliSibling.text.includes(block.churnDecisionHash),
+          'and the exact churn-decision hash');
+        assertThat(cliSibling.text.includes('sibling read'),
+          'and prints the sibling-read section this block class owns');
+        assertThat(cliSibling.text.includes('handover.md'),
+          'naming the exact requested path');
+        assertThat(cliSibling.text.includes(
+          `#${block.siblingDependency.siblingAllocationItemId}`),
+        'and the exact sibling allocation item');
+        // The sibling RUN id is not printed by this command; recorded as not
+        // exposed rather than demanded (blueprint §4a).
+        assertThat(!cliSibling.text.includes('verified_progress_exhausted'),
+          'and never classifies this as verified-progress exhaustion');
+        assertThat(!cliSibling.text.includes('POSTGRES_REPLAY_INTEGRITY_FAILURE'),
+          'nor claims replay-integrity authority');
+        assertThat(rsBlock.blockHash === block.blockHash,
+          'the CLI, Run-state and the persisted block agree on the hash');
+
+        // TARGET SELECTION: the sibling Run must not be the one reported.
+        const siblingBlockRow = await store.getRun(siblingRun.id);
+        if (siblingBlockRow && siblingBlockRow.governedProgressBlock &&
+            siblingBlockRow.governedProgressBlock.blockHash !== block.blockHash) {
+          assertThat(!cliSibling.text.includes(
+            siblingBlockRow.governedProgressBlock.blockHash),
+          'and never the neighbouring Run’s blockHash');
+        }
+
+        const cliCountsAfter = await fullTerminalCounts(store, readerRun.ticketId);
+        const cliSibDrift = countDelta(cliCountsBefore, cliCountsAfter);
+        assertThat(cliSibDrift.length === 0,
+          `the CLI read creates no durable fact (${cliSibDrift.join(', ')})`);
+        assertThat(cliCountsAfter.runRevisions === cliCountsBefore.runRevisions,
+          'and moves no Run revision');
 
         // ── PAGE SEMANTIC SECTIONS (row 4) ─────────────────────────────
         {

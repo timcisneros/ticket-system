@@ -1,23 +1,35 @@
-## `oquery replay` Crashes Before Governed Block Detail (recorded 2026-08-05)
+## `oquery replay` Governed Payload Contract: repaired 2026-08-05
 
-Closing the rows 3/4 CLI cells found a CLI defect rather than finishing them.
+Supersedes the entry recording the crash as an open blocker.
 
-`node scripts/oquery.js replay <runId>` throws
-`TypeError: governed.requests is not iterable` at oquery.js:601 and exits 1,
-before reaching the block-detail printing at 679-691. On a governed structured
-leaf the surrounding governed fields render `undefined`, so `governed` exists
-without the shape that loop assumes.
+**Verdict: OQUERY CONSUMED OPTIONAL GOVERNED FIELDS AS REQUIRED** — the server
+serializer omitted nothing; `cmdReplay` read a governed shape that does not
+exist. Three CLI-side mismatches, all repaired in `scripts/oquery.js`:
 
-The command still emits Run identity, Ticket identity and
-`blocked by a persisted progress decision: verified_progress_exhausted` first;
-`governed-blocked-restart-postgres-test` asserts exactly that, plus the crash
-itself, so a fix will fail the assertion and prompt the fuller cell rather than
-silently widening what the row claims.
+* `governed.requests` was never a field on the authority envelope — iterating it
+  threw and killed the command before the block section. Absence is now
+  truthful and silent; a PRESENT non-array refuses loudly rather than being
+  coerced with `|| []`, which would report "no requests" for a payload that
+  might describe several.
+* the flat names `authorizedRouteReference`, `economicAuthorityHash`,
+  `pricingEntryHash`, `workerAccountId` rendered `undefined`; the envelope
+  carries `roleRoutingPolicyHash`, `economicPolicyHash`, `pricingCatalogHash`,
+  `economicAccountId` and `governedExecutionHash`.
+* `run.verifiedProgress` is a PROJECTION the `/api/export?domain=runs` payload
+  never returns; that payload carries the durable `governedProgressBlock`. The
+  block now renders from either source, so terminal block authority no longer
+  depends on an unrelated projection or on the request/pricing sections.
 
-Rows 3 and 4 are therefore **PARTIAL — BLOCKED BY DEFECT**. The five-row matrix
-is NOT complete. Smallest fix — guard the iteration or populate `requests` —
-is recorded in `docs/TERMINAL_PROJECTION_READER_CONTRACTS.md` §4b and needs a
-session authorised to change CLI behaviour.
+Rows 3 and 4 are **APPLICABLE — ASSERTED** through `oquery replay <runId>`, with
+exact reason, blockHash, blockedAt, cutoffIdentity, churn and policy hashes
+compared against the persisted block and Run-state, target-Run selection proved
+against neighbours, and zero durable drift including Run revisions. The sibling
+RUN id is not printed and is recorded as not exposed rather than added.
+
+**Open:** two CLI mutations remain unaimed — a malformed non-array `requests`
+(no fixture supplies one) and a progress block inventing sibling authority (the
+obvious mutation is vacuous because a progress block's `siblingDependency` is
+null). Recorded rather than claimed.
 
 ## CLI Applicability Was Misclassified for Rows 3 and 4 (corrected 2026-08-05)
 
