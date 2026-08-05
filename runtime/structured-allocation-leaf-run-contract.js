@@ -114,6 +114,14 @@ const LEAF_ITEM_DISPOSITION_REASONS = Object.freeze([
   'run_nonterminal',
   'completion_verified',
   'completion_blocked',
+  // Tranche 5: governed BLOCKING is a different authority from
+  // `completion_blocked`, which production already emits for
+  // VERIFICATION_UNAVAILABLE and infrastructure failure. Collapsing them would
+  // make "the verifier could not run" and "the coordination controls stopped
+  // this Run" the same fact. Each governed block reason gets its own item
+  // reason, derived from the durable block rather than from the decision.
+  'governed_progress_blocked',
+  'governed_sibling_dependency_blocked',
   'completion_unsuccessful',
   'completion_decision_missing',
   'completion_decision_stale',
@@ -629,6 +637,21 @@ function evaluateRunCompletionEvidence({
   return { result: 'valid', reason: 'completion_verified' };
 }
 
+// The item reason a DURABLE governed block implies, or null when the Run holds
+// none. The block's own reason vocabulary is the authority; anything
+// unrecognized yields null rather than a guess, so an unknown block can never
+// silently become a known one.
+function governedBlockItemReason(block) {
+  if (!block || typeof block !== 'object') return null;
+  if (block.reason === 'undeclared_sibling_dependency') {
+    return 'governed_sibling_dependency_blocked';
+  }
+  if (typeof block.reason === 'string' && block.reason.length > 0) {
+    return 'governed_progress_blocked';
+  }
+  return null;
+}
+
 function deriveLeafItemDisposition({
   binding,
   runId,
@@ -636,7 +659,19 @@ function deriveLeafItemDisposition({
   runStatus,
   runDeclaredWorkHash,
   runCompletionAuthorityHash,
-  decision = null
+  decision = null,
+  // THE DURABLE GOVERNED BLOCK, when the Run holds one.
+  //
+  // Reconciliation previously received no block at all, so a Run stopped by the
+  // coordination controls arrived here indistinguishable from one that merely
+  // failed: its completion decision says `incomplete` /
+  // `RUN_EXECUTION_FAILED`, which is the same thing an ordinary unsuccessful
+  // execution says. The block was durable and readable the whole time — it was
+  // simply never passed in.
+  //
+  // It is NOT inferred from status, from a churn decision, or from an
+  // incomplete disposition. Only a persisted block counts.
+  governedProgressBlock = null
 }) {
   const bound = normalizeLeafRunBinding(binding, {
     expectedRunId: runId,
@@ -682,6 +717,20 @@ function deriveLeafItemDisposition({
     // Only a completion CLAIM is unresolved by missing evidence.
     return decided('interrupted', null, evidence.reason);
   }
+  // A GOVERNED BLOCK OUTRANKS THE GENERIC UNSUCCESSFUL READING — but never a
+  // successful completion, and never a replay-integrity failure, both of which
+  // are decided by their own authorities below and above.
+  //
+  // Placed after the evidence integrity checks so a malformed decision is still
+  // reported as malformed: a block explains why execution stopped, it does not
+  // excuse evidence that does not belong to this Run.
+  const blockReason = governedBlockItemReason(governedProgressBlock);
+  if (blockReason && evidence.result !== 'valid' &&
+      !['stale', 'authority_mismatch', 'conflicts_with_run', 'missing']
+        .includes(evidence.result)) {
+    return decided(status === 'interrupted' ? 'interrupted' : 'failed', null, blockReason);
+  }
+
   if (evidence.result === 'not_applicable' && !decision) {
     // A terminal non-success Run with NO decision is truthfully itself.
     // Reported with the historical reason so existing consumers keep the
@@ -712,7 +761,14 @@ function deriveLeafItemDisposition({
       : decided('interrupted', null, 'completion_decision_conflicts_run');
   }
   if (disposition === 'blocked') {
+    // `blocked` here is the COMPLETION-DECISION sense — verification
+    // unavailable or infrastructure failed — not governed blocking.
     return decided('failed', decisionHash, 'completion_blocked');
+  }
+  // A governed block explains an otherwise generic unsuccessful decision.
+  if (blockReason) {
+    return decided(status === 'interrupted' ? 'interrupted' : 'failed',
+      decisionHash, blockReason);
   }
   return decided(
     status === 'interrupted' ? 'interrupted' : 'failed',

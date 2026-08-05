@@ -466,24 +466,26 @@ async function main() {
         // Structured item result, from the reader that owns it.
         assertThat(runtimeLeaf.itemStatus === 'failed',
           `the structured item result is failed (${runtimeLeaf.itemStatus})`);
-        // CONTRADICTION WITH THE BLUEPRINT, RESOLVED IN FAVOUR OF SOURCE.
+        // RECONCILIATION NOW CARRIES THE GOVERNED BLOCK AUTHORITY.
         //
-        // docs/TERMINAL_PROJECTION_READER_CONTRACTS.md predicted
-        // `completion_blocked` here. Production does not produce it: a
-        // progress-blocked leaf's completion decision carries
-        // `completionDisposition: 'incomplete'` with
-        // `reasonCode: 'RUN_EXECUTION_FAILED'`, so `deriveLeafItemDisposition`
-        // takes its generic branch and reports `completion_unsuccessful`.
-        // `completion_blocked` requires a literal `blocked` disposition, which
-        // only the synthetic contract fixture supplies.
+        // Previously this reader could not distinguish a governed block from an
+        // ordinary unsuccessful run: a blocked leaf's completion decision says
+        // `incomplete` / `RUN_EXECUTION_FAILED`, exactly what a plain failure
+        // says, and the durable block was never passed to
+        // `deriveLeafItemDisposition`. It is now, so the item names the
+        // authority that actually stopped the Run.
         //
-        // The consequence is recorded rather than papered over: at ITEM level
-        // this reader cannot distinguish a governed progress block from an
-        // ordinary unsuccessful run. The block distinction is carried solely by
-        // `verifiedProgress.block`, asserted above. See §10 of that document.
-        assertThat(runtimeLeaf.dispositionReason === 'completion_unsuccessful',
-          `the item reason is the generic unsuccessful one, not a block-specific ` +
-          `reason (${runtimeLeaf.dispositionReason})`);
+        // `completion_blocked` is deliberately NOT reused: production already
+        // emits it for VERIFICATION_UNAVAILABLE and infrastructure failure, and
+        // collapsing the two would make "the verifier could not run" and "the
+        // coordination controls stopped this Run" the same fact.
+        assertThat(runtimeLeaf.dispositionReason === 'governed_progress_blocked',
+          `the item names the governed progress block ` +
+          `(${runtimeLeaf.dispositionReason})`);
+        assertThat(runtimeLeaf.dispositionReason !== 'completion_unsuccessful',
+          'and is no longer indistinguishable from an ordinary failure');
+        assertThat(runtimeLeaf.dispositionReason !== 'completion_blocked',
+          'nor borrows the verification-unavailable blocked reason');
         assertThat(!Object.prototype.hasOwnProperty.call(runtimeLeaf, 'requestedPath') &&
           !Object.prototype.hasOwnProperty.call(runtimeLeaf, 'siblingAllocationItemId'),
         'and no sibling item or path fields');

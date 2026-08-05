@@ -470,6 +470,15 @@ async function main() {
         const runtimeLeaf = findRuntimeRun(runtimePayload, readerRun.id);
         assertThat(runtimeLeaf.itemStatus !== 'completed',
           `the structured item never completes (${runtimeLeaf.itemStatus})`);
+        // Reconciliation carries the SIBLING block authority specifically —
+        // distinct from a verified-progress block and from an ordinary failure.
+        assertThat(runtimeLeaf.dispositionReason === 'governed_sibling_dependency_blocked',
+          `the item names the sibling-dependency block ` +
+          `(${runtimeLeaf.dispositionReason})`);
+        assertThat(runtimeLeaf.dispositionReason !== 'governed_progress_blocked',
+          'and never the verified-progress block reason');
+        assertThat(runtimeLeaf.dispositionReason !== 'completion_unsuccessful',
+          'nor a generic unsuccessful reason');
 
         const eventsApi = await fresh.request(
           'GET', `/api/runs/${readerRun.id}/events`, { cookie });

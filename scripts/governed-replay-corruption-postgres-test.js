@@ -438,6 +438,40 @@ async function main() {
             `(reason: ${reason.slice(0, 80) || 'none'})`);
         }
 
+        // ── AN ORDINARY UNSUCCESSFUL LEAF IS NOT A GOVERNED BLOCK ───────
+        //
+        // The counterpart to the governed-block rows. These siblings failed for
+        // their own reasons and hold NO durable governed block, so
+        // reconciliation must keep calling them generically unsuccessful.
+        // Without this, making every incomplete decision "blocked" — or
+        // reconstructing a block from a replay-integrity failure — would look
+        // like an improvement while erasing the distinction the block reasons
+        // exist to carry.
+        {
+          const cookie2 = await third.login();
+          const runtime = JSON.parse((await third.request(
+            'GET', `/api/tickets/${run.ticketId}/runtime`, { cookie: cookie2 })).body);
+          const items = (runtime.structuredAllocationLeafExecution || {}).items || [];
+          assertThat(items.length > 0, 'the Ticket runtime reports leaf items');
+          for (const item of items) {
+            const blocked = await store.getRun(Number(item.runId));
+            if (blocked && blocked.governedProgressBlock) continue;
+            assertThat(item.dispositionReason !== 'governed_progress_blocked' &&
+              item.dispositionReason !== 'governed_sibling_dependency_blocked',
+            `run ${item.runId} holds no durable block, so its item reason is ` +
+            `not a governed block reason (${item.dispositionReason})`);
+          }
+          const corruptItem = items.find(i => Number(i.runId) === Number(runId));
+          assertThat(Boolean(corruptItem), 'the corrupt leaf appears as an item');
+          assertThat(corruptItem.dispositionReason !== 'governed_progress_blocked',
+            `a replay-integrity failure is never reconstructed as a governed ` +
+            `block (${corruptItem.dispositionReason})`);
+          const plainSibling = items.find(i => Number(i.runId) !== Number(runId) &&
+            i.dispositionReason === 'completion_unsuccessful');
+          assertThat(Boolean(plainSibling),
+            'an ordinary unsuccessful sibling keeps completion_unsuccessful');
+        }
+
         // ── THE AGGREGATE FOLLOWS TRANCHE 3 FAILED-CHILD RULES ───────────
         const plan = await store.getAllocationPlanForTicket(run.ticketId);
         const items = (plan && plan.aggregateDecision && plan.aggregateDecision.items) || [];

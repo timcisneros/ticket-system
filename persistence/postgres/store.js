@@ -3114,7 +3114,13 @@ class PostgresRuntimeStore {
           runCompletionAuthorityHash: current.run.completionAuthoritySnapshot
             ? current.run.completionAuthoritySnapshot.objectiveContractHash
             : null,
-          decision: decisionByRunId.get(current.run.id) || null
+          decision: decisionByRunId.get(current.run.id) || null,
+          // The DURABLE governed block, when the Run holds one. Reconciliation
+          // received no block before, so a Run stopped by the coordination
+          // controls was indistinguishable here from one that merely failed —
+          // both arrive with an `incomplete` / `RUN_EXECUTION_FAILED` decision.
+          // Nothing is inferred: only a persisted block is passed.
+          governedProgressBlock: current.run.governedProgressBlock || null
         });
         return {
           allocationItemId: item.allocationItemId,
