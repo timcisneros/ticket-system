@@ -679,6 +679,53 @@ is refused rather than defaulted.
 
 ---
 
+## 3a. Phase 1 verdict — the real-server harness (session 4)
+
+**EXISTING HARNESS REQUIRES A TEST-ONLY ADAPTER.**
+
+`scripts/postgres-test-harness.js` supplies everything structural the runner
+needs: `withHarness` gives a real store, schema, workspace root and
+`startServer({ env, serverOptions })`, which spawns the actual server with a
+preload via `NODE_OPTIONS`. Ticket creation goes through the real form POST to
+`/tickets` carrying `objective`, `assignmentTargetType`, `assignmentTargetId`,
+`assignmentMode`, `declaredWork` and `ownedOutputPaths` — the single seam that
+reaches all five paths without bypassing a branch condition.
+
+**What was missing is the hermetic provider boundary for the ungoverned arms,
+and finding it exposed a safety gap in the existing preload.**
+
+The two provider paths use different transports:
+
+| Path | Arms | Transport |
+|---|---|---|
+| governed | B, C | `https.request` via `createOpenAiGovernedTransport`, which has a documented `httpsRequest` injection seam |
+| ungoverned | A, A2a, A2b | **`global.fetch`** — `server.js` `callOpenAI` issues `fetch('https://api.openai.com/v1/responses', …)` |
+
+`hermetic-governed-transport-preload.js` documented a second guarantee: a KILL
+SWITCH making "Node's real `https.request` and `http.request` throw for any
+non-localhost host". **That guarantee did not cover `fetch`.** `fetch` is
+undici, which has its own HTTP stack and never calls `https.request`. Verified
+directly: with both `http.request` and `https.request` replaced by throwing
+stubs, `fetch('https://api.openai.com/v1/responses')` **completed and neither
+stub was called**.
+
+So a real-server suite exercising an *ungoverned* Run was protected from the
+network only if it happened to stub `global.fetch` itself. Several do, and they
+are unaffected — their own override is installed after the preload and still
+wins. But the stated guarantee was narrower than its comment claimed, and the
+Tranche 6 arms A/A2a/A2b would have run straight through it.
+
+The preload now guards `globalThis.fetch` on the same non-localhost rule, so the
+guarantee holds for every transport this runtime can actually use. All twelve
+suites that load the preload pass unchanged.
+
+This is a **test-infrastructure correction, not a production change** —
+production is supposed to call the provider. It is recorded here because it
+determines the runner's design: one fixture provider can serve all five arms
+only once the ungoverned transport is interceptable at the same boundary.
+
+---
+
 ## 5a. The normalized cost method
 
 One method, every arm:

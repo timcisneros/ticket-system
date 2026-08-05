@@ -245,6 +245,41 @@ https.get = guard(https.get, 'https.get');
 http.request = guard(http.request, 'http.request');
 http.get = guard(http.get, 'http.get');
 
+// AND `fetch`, WHICH THE ABOVE DOES NOT COVER.
+//
+// The comment at the top of this file says the kill switch makes "Node's real
+// `https.request` and `http.request` throw for any non-localhost host". That is
+// true and it is not enough. `fetch` is undici, which has its own HTTP stack
+// and never calls `https.request`, so a guarded process still reaches the
+// network through it — verified directly: with both `http.request` and
+// `https.request` replaced by throwing stubs, `fetch('https://api.openai.com…')`
+// completed and neither stub was called.
+//
+// This matters because the UNGOVERNED provider path uses exactly that: server.js
+// `callOpenAI` issues `fetch('https://api.openai.com/v1/responses', …)`. The
+// governed transport's injection seam does not apply to it, so a real-server
+// suite exercising an ungoverned Run was protected only if it happened to stub
+// `global.fetch` itself. Suites that do so remain unaffected — their own
+// override still wins, because it is installed after this preload.
+//
+// Guarding it here makes the stated guarantee true for every transport this
+// runtime can actually use, rather than for the two it used when the comment
+// was written.
+const realFetch = globalThis.fetch;
+if (typeof realFetch === 'function') {
+  globalThis.fetch = function guardedFetch(input, init) {
+    const target = typeof input === 'string' ? input
+      : (input && typeof input.url === 'string' ? input.url : null);
+    let host = null;
+    try { host = target ? new URL(target).hostname : null; } catch (_) { host = null; }
+    if (host && !LOCAL_HOSTS.has(String(host).replace(/:\d+$/, ''))) {
+      return Promise.reject(new Error(
+        `UNEXPECTED_EXTERNAL_NETWORK_REQUEST via fetch to ${host}`));
+    }
+    return realFetch.call(this, input, init);
+  };
+}
+
 // A credential must never reach a hermetic child. Boolean only — the value is
 // never read, printed, or recorded.
 // The governed transport refuses to build a request without a non-empty key, so
