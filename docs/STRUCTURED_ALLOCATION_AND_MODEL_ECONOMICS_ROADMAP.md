@@ -763,6 +763,13 @@ latency, cost, and churn. Use the evidence to decide whether to retain, revise,
 or stop the structured allocation path. This tranche is not implemented by
 Tranche 1.
 
+**BEGUN 2026-08-05 — protocol design only.** The controlled-evaluation protocol
+is `docs/STRUCTURED_ALLOCATION_CONTROLLED_EVALUATION.md`: comparison arms,
+controlled variables, ten scenario families, metric definitions bound to durable
+authority, repetition requirements and retain/revise/stop thresholds fixed in
+advance. No comparison has been run, no verdict exists, and no production
+behaviour has changed. Six prerequisites are recorded there and block execution.
+
 ## Roadmap status
 
 ```text
@@ -772,5 +779,5 @@ Tranche 2B: COMPLETE
 Tranche 3: COMPLETE
 Tranche 4: COMPLETE
 Tranche 5: COMPLETE
-Tranche 6: NOT STARTED
+Tranche 6: IN PROGRESS — protocol design; no comparison run, no verdict
 ```

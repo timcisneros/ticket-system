@@ -1,3 +1,43 @@
+## Tranche 6 Controlled Evaluation: BEGUN (2026-08-05)
+
+**Status:** protocol design only. Not complete, no verdict, no production change.
+
+Protocol: `docs/STRUCTURED_ALLOCATION_CONTROLLED_EVALUATION.md`.
+
+**Phase 1 verdict: TRANCHE 6 REQUIRES A CONTROLLED-EVALUATION PROTOCOL.** The
+roadmap's Tranche 6 section is four sentences fixing five dimensions and three
+outcomes; it defines no baseline, arm, threshold, repetition rule or decision
+rule. The existing `*-experiment.js` / `*-benchmark.js` scripts are ad-hoc
+research harnesses, several JSON-era, none classified by
+`scripts/test-manifest.js` (which governs `scripts/*-test.js` only). They are not
+authority for this evaluation.
+
+**Phase 8 verdict: MINIMAL EVALUATION INSTRUMENTATION REQUIRED** — two read-only
+gaps. `settled_micro_usd` exists only on governed runs, so the direct arms have
+no durable money figure and their token usage must be priced from the same
+captured pricing catalog and reported as derived; and no Ticket-scoped
+cross-arm aggregation reader exists. Neither requires an execution-semantics
+change, a new column or a new event.
+
+**A third existing baseline was found and is required, not optional.** A group
+ticket in `allocated` or `dynamic` mode WITHOUT `declaredWork` does not reach the
+Tranche 1-5 machinery: it takes the legacy v1 `buildAllocatedOwnershipPlan` path
+with a generic subtask and no planner call. It is multi-agent but ungoverned, so
+it isolates parallelism from planner-plus-governance. Without it, any structured
+advantage could be attributed to parallelism alone.
+
+**Recorded confounder, not resolved:** governed execution is entangled with the
+structured path. No governed single-Run arm exists today. Either governance is
+accepted as part of "the structured path" and stated, or the arm is built. This
+is prerequisite 6 and must not be resolved by silence.
+
+**Six prerequisites block execution**, listed in the protocol. The most important
+is an independent postcondition oracle: scoring completion truthfulness with the
+same completion authority under evaluation would guarantee agreement and prove
+nothing.
+
+---
+
 ## Tranche 5 Register: CLOSED (2026-08-05)
 
 Final closure audit. Every Tranche 5 entry in this register now ends in exactly
