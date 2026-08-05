@@ -557,6 +557,88 @@ assert.equal(verified.itemStatus, 'completed');
 assert.equal(verified.completionDecisionHash, 'd'.repeat(64));
 assert.equal(verified.reason, 'completion_verified');
 
+// ── BLOCKED LEAVES KEEP THEIR OWN AUTHORITY ────────────────────────────────
+//
+// `deriveLeafItemDisposition` is the single production mapping from a Run's
+// terminal facts to an allocation-item disposition — reconciliation in
+// persistence/postgres/store.js is its only caller — so this is where "a
+// blocked leaf projects blocked, never completed" has to be proved.
+//
+// It is asserted HERE rather than in the cold-restart suites on purpose. Those
+// suites restart a server and re-read durable rows; they never invoke this
+// mapping, so mutating it could not make them fail. Splitting the
+// responsibility keeps each suite testing what it actually executes:
+//
+//   restart suites → the block survives a cold process, byte for byte
+//   this contract  → the block MAPS to the right terminal disposition
+//
+// The two block reasons are carried by the Run's governed progress block, not
+// by the completion decision; what the decision contributes is the disposition
+// itself. Both block kinds must therefore arrive as a non-success item that
+// still names its own decision, and neither may be promoted to `completed`.
+{
+  const blockedDecision = decisionFor(3001, admitted.ticketId, 'blocked', AUTHORITY, 'b');
+  const blocked = deriveLeafItemDisposition(runFacts('failed', {
+    decision: blockedDecision
+  }));
+  // THE REASON IS THE AUTHORITY, NOT THE STATUS. A blocked leaf projects
+  // itemStatus `failed` — `blocked` is not a leaf item status — so what
+  // separates a coordination/churn block from an ordinary unsuccessful
+  // decision is the reason `completion_blocked` alongside the decision hash.
+  // Asserting a `blocked` itemStatus would have been asserting a status this
+  // contract does not have.
+  assert.equal(blocked.itemStatus, 'failed',
+    'a blocked decision projects a non-success item');
+  assert.notEqual(blocked.itemStatus, 'completed',
+    'and never completes it');
+  assert.equal(blocked.reason, 'completion_blocked',
+    'and is distinguished from a generic unsuccessful decision by its reason');
+  const unsuccessful = deriveLeafItemDisposition(runFacts('failed', {
+    decision: decisionFor(3001, admitted.ticketId, 'incomplete', AUTHORITY, 'e')
+  }));
+  assert.equal(unsuccessful.reason, 'completion_unsuccessful',
+    'an ordinary unsuccessful decision carries a DIFFERENT reason');
+  assert.notEqual(unsuccessful.reason, blocked.reason,
+    'so a block cannot be read as an ordinary failure, nor the reverse');
+  assert.equal(blocked.completionDecisionHash, blockedDecision.decisionHash,
+    'the item names the exact decision it was derived from — the hash is not dropped');
+  assert.equal(blocked.allocationItemId, alpha.allocationItemId,
+    'and is bound to the exact allocation item');
+  assert.equal(blocked.runId, 3001, 'and to the exact Run');
+
+  // A blocked leaf carries no sibling authority through this mapping. The
+  // sibling/path facts live on the progress block, and an item disposition that
+  // invented them would let a churn block be read as a coordination refusal.
+  assert.equal(Object.prototype.hasOwnProperty.call(blocked, 'siblingDependencyBlocked'),
+    false, 'a leaf disposition carries no siblingDependencyBlocked flag');
+  assert.equal(Object.prototype.hasOwnProperty.call(blocked, 'siblingAllocationItemId'),
+    false, 'nor a sibling allocation item');
+  assert.equal(Object.prototype.hasOwnProperty.call(blocked, 'requestedPath'),
+    false, 'nor a requested path');
+  assert.deepEqual(Object.keys(blocked).sort(),
+    ['allocationItemId', 'completionDecisionHash', 'itemStatus', 'reason', 'runId'],
+    'the disposition exposes exactly its own fields and invents no authority');
+
+  // A blocked decision on a Run that DID complete is still not a completion.
+  const blockedOnCompleted = deriveLeafItemDisposition(runFacts('completed', {
+    decision: blockedDecision
+  }));
+  assert.notEqual(blockedOnCompleted.itemStatus, 'completed',
+    'a blocked decision never completes an item even for a completed Run');
+  assert.equal(blockedOnCompleted.reason, 'completion_blocked',
+    'and keeps the block reason regardless of the Run lifecycle');
+
+  // And the opposite direction still works, so the rule above is not simply
+  // refusing everything.
+  const stillCompletes = deriveLeafItemDisposition(runFacts('completed', {
+    decision: decisionFor(3001, admitted.ticketId, 'completed', AUTHORITY)
+  }));
+  assert.equal(stillCompletes.itemStatus, 'completed',
+    'a genuinely completed leaf still completes');
+  assert.notEqual(stillCompletes.completionDecisionHash, blocked.completionDecisionHash,
+    'and the two dispositions name genuinely different decisions');
+}
+
 // Stale, conflicting and mismatched evidence can never complete an item.
 const stale = deriveLeafItemDisposition(runFacts('completed', {
   decision: decisionFor(3002, admitted.ticketId, 'completed', AUTHORITY)

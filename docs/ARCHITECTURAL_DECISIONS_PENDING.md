@@ -5569,21 +5569,47 @@ Replaced with the real runtime route.
   covers the BLOCK SHAPE separation but not the disposition mapping; its
   canonical leaf-run binding shape was not established in budget.
 
-## Blocked-Restart Read Phase Is Not Mutation-Sensitive (recorded 2026-08-04)
+## Blocked-Projection Mutation Sensitivity: closed 2026-08-04
 
-**Status:** partially addressed. `scripts/verified-progress-terminal-mapping-test.js`
-now owns the block-shape half at contract level: a verified-progress block may
-NOT carry sibling details and a sibling-dependency block may NOT omit them, in
-both directions, with distinct hashes. That closes "a progress block gains
-sibling-dependency authority" at its real owner.
+**Status:** closed. Supersedes the entry recording that three mutations
+survived the cold-restart suite.
 
-The other two — a block projecting completed, and block authority or hash
-disappearing — remain uncovered by a mutation-sensitive test, for the reason
-originally recorded: the restart suite reads durable projections while
-`projectedStatus` and `deriveLeafItemDisposition` run only inside
-`transitionTicketAfterRun` and reconciliation, which a cold read phase never
-invokes. Forcing a restart suite to call a transition to catch a mutation would
-make it test something it is not about.
+They survived structurally, not carelessly: restart suites re-read durable rows
+and never invoke `deriveLeafItemDisposition` or `projectedStatus`, so mutating
+the mapping could not make them fail. Forcing a restart suite to call a
+transition purely to catch a mutation would have made it test something it is
+not about.
+
+The mapping is now asserted in `structured-allocation-leaf-run-contract-test`,
+which already owned the canonical valid fixture (`runFacts`, `alphaBinding`,
+`decisionFor`) — reused rather than reinterpreted, so there is no second
+reading of the input contract.
+
+**The reason is the authority, not the status.** A blocked decision projects
+itemStatus `failed`; `blocked` is not a leaf item status. What separates a
+coordination or churn block from an ordinary unsuccessful decision is the
+reason `completion_blocked` alongside the preserved decision hash. An earlier
+draft asserted a `blocked` itemStatus — that would have asserted a status this
+contract does not have.
+
+Mutations caught at `deriveLeafItemDisposition` (7 of 8):
+
+| Mutation | Result |
+|---|---|
+| blocked leaf maps to completed | CAUGHT |
+| blocked leaf loses its decision hash | CAUGHT |
+| block reason collapses into generic failure | CAUGHT |
+| disposition invents sibling authority fields | CAUGHT |
+| progress block may carry sibling details | CAUGHT |
+| sibling block may omit sibling details | CAUGHT |
+| sibling block loses its requested path | CAUGHT |
+| both block kinds hash identically | SURVIVED — mis-premised |
+
+The survivor is not a gap. It forced `churnDecisionHash` to a constant on the
+assumption that the churn hash is what separates the two block kinds. It is
+not: the block hash covers `reason` and `siblingDependency` independently, so
+the two blocks still hash differently with a degraded churn hash. That is a
+stronger property than the mutation assumed.
 
 ## Structured-Leaf Terminal-State Representability (recorded 2026-08-04)
 
