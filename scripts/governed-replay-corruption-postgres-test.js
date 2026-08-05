@@ -41,6 +41,7 @@ const { withHarness, createAsserter } = require('./postgres-test-harness');
 const {
   countDelta,
   durableTerminalCounts,
+  findRuntimeRun,
   waitForSchedulerQuiescence
 } = require('./fixtures/terminal-projection-restart');
 const {
@@ -438,6 +439,94 @@ async function main() {
             `(reason: ${reason.slice(0, 80) || 'none'})`);
         }
 
+        // ── CONTAINED INTEGRITY ROW: EVERY READER, INDEPENDENTLY ────────
+        //
+        // Each route is called on its own and asserted on its own fields. No
+        // reader stands in for another: the events endpoint is raw history and
+        // is not evidence for Run-state, and Run-state exposes no
+        // `replayAvailability` (that is a Run-page concern) so none is
+        // required of it. Paths are those recorded in
+        // docs/TERMINAL_PROJECTION_READER_CONTRACTS.md §2.
+        {
+          // Read only once the whole Ticket is durably quiescent. Without this
+          // the target item can still project `running` — the aggregate falls
+          // back to the plan item's status until reconciliation settles — and
+          // the row would be asserted against a state still in motion.
+          await waitForSchedulerQuiescence(store, run.ticketId, { timeoutMs: 120_000 });
+          const cookieR = await third.login();
+
+          // Ticket runtime API — target item only, located by Run ID.
+          const trBody = (await third.request(
+            'GET', `/api/tickets/${run.ticketId}/runtime`, { cookie: cookieR }));
+          assertThat(trBody.statusCode === 200,
+            'the Ticket runtime API projects over the integrity-failed leaf');
+          const trPayload = JSON.parse(trBody.body);
+          const item = findRuntimeRun(trPayload, runId);
+          assertThat(item.itemStatus === 'failed',
+            `the target item is failed (${item.itemStatus})`);
+          assertThat(Number(item.runId) === Number(runId),
+            'and is this exact Run, not a sibling');
+          assertThat(item.itemStatus !== 'completed',
+            'with no fabricated completion success');
+          assertThat(item.dispositionReason !== 'governed_progress_blocked' &&
+            item.dispositionReason !== 'governed_sibling_dependency_blocked',
+          `and NO governed block authority attributed to it ` +
+          `(${item.dispositionReason})`);
+          assertThat(item.completionDecisionHash === null ||
+            item.completionDecisionHash === undefined,
+          'and no completion decision hash it never earned');
+
+          // A completed Run must never be grouped from churn; here nothing on
+          // this Ticket holds a persisted block, so no group may name any Run.
+          const vpR = trPayload.verifiedProgress || {};
+          for (const list of ['blockedForVerifiedProgressExhaustion',
+            'blockedForUndeclaredSiblingDependency']) {
+            assertThat(!(vpR[list] || []).map(Number).includes(Number(runId)),
+              `the integrity-failed leaf is absent from ${list}`);
+          }
+
+          // Run-state API — its own documented fields (§2.2).
+          const rsResp = await third.request(
+            'GET', `/api/runs/${runId}/state`, { cookie: cookieR });
+          assertThat(rsResp.statusCode === 200,
+            `the Run-state API projects the failed Run (${rsResp.statusCode})`);
+          const rs = JSON.parse(rsResp.body);
+          assertThat(Number(rs.id) === Number(runId) &&
+            Number(rs.ticketId) === Number(run.ticketId),
+          'reporting this exact Run on this exact Ticket');
+          assertThat(rs.status === 'failed', `with failed status (${rs.status})`);
+          assertThat(!rs.verifiedProgress || !rs.verifiedProgress.block,
+            'and NO governed progress or sibling block');
+          assertThat(rs.completionDecisionIntegrity === null ||
+            rs.completionDecisionIntegrity.status !== 'verified',
+          'and completion-decision integrity manufactures no success');
+          // The reader withholds replay data rather than serving corruption.
+          assertThat(rs.replaySummary === null,
+            'and withholds the replay summary entirely rather than serving it');
+          assertThat(!String(JSON.stringify(rs)).includes('tampered'),
+            'exposing no corrupt replay content anywhere in the payload');
+
+          // Run-events API — raw durable history, not a Run-state substitute.
+          const evResp = await third.request(
+            'GET', `/api/runs/${runId}/events`, { cookie: cookieR });
+          assertThat(evResp.statusCode === 200, 'the Run-events API answers');
+          const evTypes = (JSON.parse(evResp.body).events || []).map(e => e.type);
+          assertThat(evTypes.includes('run.terminalized') ||
+            evTypes.some(t => /integrity/i.test(t)),
+          'and carries the durable terminalization/integrity history');
+          assertThat(!String(evResp.body).includes('tampered'),
+            'without exposing corrupt replay content');
+
+          // Ticket page — failed leaf, no success, no leaked payload.
+          const tp = await third.request(
+            'GET', `/tickets/${run.ticketId}`, { cookie: cookieR });
+          assertThat(tp.statusCode === 200, 'the Ticket page renders');
+          assertThat(!/COMPLETION_EVIDENCE_MISSING/.test(String(tp.body || '')),
+            'with no completion-evidence refusal attributed to this leaf');
+          assertThat(!String(tp.body || '').includes('tampered'),
+            'and no corrupt replay payload');
+        }
+
         // ── AN ORDINARY UNSUCCESSFUL LEAF IS NOT A GOVERNED BLOCK ───────
         //
         // The counterpart to the governed-block rows. These siblings failed for
@@ -551,6 +640,57 @@ async function main() {
             'and names the integrity code it is refusing about');
           assertThat(/integrity check failed/i.test(body),
             'with a sanitized reason rather than replay content');
+
+          const decisionsBeforeRefusals = Number((await store.pool.query(
+            `SELECT count(*) AS n FROM ${store.table('run_consequences')}
+              WHERE run_id = $1`, [uncontainedRunId])).rows[0].n);
+
+          // ── EVERY APPLICABLE READER REFUSES CLOSED ────────────────────
+          //
+          // Called independently. The row must not collapse into the CONTAINED
+          // row: no reader may invent containment vocabulary, a timestamp, an
+          // ordinary failed projection, or a completion decision for a Run
+          // whose integrity failure was never recorded.
+          const rsUnc = await fourth.request(
+            'GET', `/api/runs/${uncontainedRunId}/state`, { cookie });
+          assertThat(rsUnc.statusCode !== 200,
+            `the Run-state API refuses closed (${rsUnc.statusCode})`);
+          const rsUncBody = String(rsUnc.body || '');
+          assertThat(rsUncBody.includes('POSTGRES_REPLAY_INTEGRITY_FAILURE'),
+            'naming the integrity code it refuses about');
+          assertThat(!rsUncBody.includes('replay_unavailable_integrity_failure'),
+            'without borrowing the CONTAINED vocabulary');
+          assertThat(!rsUncBody.includes('replay_available'),
+            'and without claiming replay is available');
+          assertThat(!rsUncBody.includes('uncontained corruption'),
+            'and exposing no corrupt replay content');
+          assertThat(!/"status"\s*:\s*"(completed|failed)"/.test(rsUncBody),
+            'and manufacturing no ordinary completed or failed projection');
+
+          const evUnc = await fourth.request(
+            'GET', `/api/runs/${uncontainedRunId}/events`, { cookie });
+          assertThat(!String(evUnc.body || '').includes('uncontained corruption'),
+            'the Run-events API exposes no corrupt replay content');
+
+          // The Ticket-level readers must not manufacture a projection either.
+          const tpUnc = await fourth.request(
+            'GET', `/tickets/${run.ticketId}`, { cookie });
+          assertThat(!String(tpUnc.body || '').includes('uncontained corruption'),
+            'the Ticket page exposes no corrupt replay content');
+
+          // NO DECISION IS FABRICATED BY THE REFUSAL.
+          //
+          // This Run terminalized normally BEFORE its replay was corrupted, so
+          // it legitimately holds a completion decision of its own — asserting
+          // zero would be asserting the fixture, not the contract. What must
+          // hold is that the refusing reads add none, so the count is compared
+          // across them.
+          const decisionsAfterRefusals = Number((await store.pool.query(
+            `SELECT count(*) AS n FROM ${store.table('run_consequences')}
+              WHERE run_id = $1`, [uncontainedRunId])).rows[0].n);
+          assertThat(decisionsAfterRefusals === decisionsBeforeRefusals,
+            `the refusing reads fabricate no completion decision ` +
+            `(${decisionsBeforeRefusals} -> ${decisionsAfterRefusals})`);
 
           // The contained leaf is unaffected by the neighbouring uncontained
           // damage — the two dispositions stay separate after restart.

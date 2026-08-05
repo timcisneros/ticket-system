@@ -414,27 +414,66 @@ RUNS (`pending`, `running`). Terminal states (`completed`, `failed`,
 
 ---
 
-## 11. Implementation status
+## 11. Five-row proof matrix
 
-Rows 1, 3 and 4 implemented against their real readers; reconciliation now
-carries governed block authority for rows 3 and 4. Rows 2 and 5 reader cells
-and the CLI row remain unimplemented; their blueprint entries in §3 and §8
-remain valid.
+Every completed cell names the suite that owns it. No cell is filled from a
+different reader.
 
-**Corrected blueprint cells.** Rows 3–4 "reconciliation" are now **CAN** — they
-report `governed_progress_blocked` / `governed_sibling_dependency_blocked`, not
-the generic unsuccessful reason recorded earlier.
+Suites: **L** `governed-verified-progress-lifecycle-postgres-test` ·
+**B** `governed-blocked-restart-postgres-test` ·
+**S** `governed-sibling-dependency-postgres-test` ·
+**C** `governed-replay-corruption-postgres-test` ·
+**X** `structured-allocation-leaf-run-contract-test`
 
-Mutations owned and caught (restore verified by SHA-256):
+| | 1 valid completion | 2 contained integrity | 3 verified_progress_exhausted | 4 sibling dependency | 5 uncontained |
+|---|---|---|---|---|---|
+| origin | production | controlled fixture | production | production | controlled fixture |
+| cold process | ✔ L `cold` | ✔ C `third` | ✔ B `second` | ✔ S `fresh` | ✔ C `fourth` |
+| Ticket page | ✔ L | ✔ C | ✔ B | ✔ S | ✔ refuses, C |
+| Ticket runtime API | ✔ L `findRuntimeRun` | ✔ C `findRuntimeRun` | ✔ B | ✔ S | ✔ refuses, C |
+| Ticket timeline API | NOT ASSERTED | NOT ASSERTED | NOT ASSERTED | NOT ASSERTED | NOT ASSERTED |
+| Run page | ✔ L | ✔ C | ✔ B | ✔ S | ✔ 500, C |
+| Run-state API | ✔ L | ✔ C | ✔ B `verifiedProgress.block` | ✔ S `block.siblingDependency` | ✔ refuses, C |
+| Run-events API | ✔ L `run.completion_decided` | ✔ C | ✔ B `run.progress_blocked` | ✔ S | ✔ C |
+| reconciliation | `completion_verified` L | `completion_decision_missing` C | `governed_progress_blocked` B | `governed_sibling_dependency_blocked` S | never reached |
+| parent aggregate | ✔ L | ✔ C | ✔ B | ✔ S | refuses first |
+| CLI | NOT ASSERTED (applicable) | NOT APPLICABLE §4 | NOT APPLICABLE §4 | NOT APPLICABLE §4 | NOT APPLICABLE §4 |
+| completion authority | decision + matching hash, L | none; not required, C | none, B | none, S | none |
+| integrity-failure authority | absent, L | `POSTGRES_REPLAY_INTEGRITY_FAILURE`, C | absent, B | absent, S | refusal envelope, C |
+| progress block + blockHash | absent, L | absent, C | ✔ exact blockHash, B | absent, S | n/a |
+| sibling block + blockHash | absent, L | absent, C | absent, B | ✔ exact blockHash, S | n/a |
+| replay availability | n/a | `replay_unavailable_integrity_failure` on Run page only, C | n/a | n/a | none invented, C |
+| scheduler eligibility | ineligible, L | ineligible, C | ineligible, B | ineligible, S | unchanged, C |
+| Ticket-scoped no-drift | ✔ L | ✔ C | ✔ B | ✔ S | ✔ C |
+
+### Cells deliberately not asserted
+
+* **Ticket timeline API** — raw history for all five rows; no row's terminal
+  authority is owned there. No assertion added.
+* **CLI row 1** — classified APPLICABLE in §4 but not executed; the other four
+  rows are NOT APPLICABLE with the source reason recorded there.
+
+## 12. Mutation ownership
+
+Caught at the owner that executes the code, restore verified by SHA-256.
 
 | Mutation | Owner | Suite |
 |---|---|---|
-| reconciliation ignores a real progress block | store reconciliation | blocked-restart |
-| reconciliation ignores a real sibling block | store reconciliation | sibling |
-| every incomplete decision treated as blocked | `governedBlockItemReason` | replay-corruption |
-| progress block gains sibling authority | `governedBlockItemReason` | blocked-restart |
-| sibling block collapses to progress block | `governedBlockItemReason` | sibling |
-| replay-integrity failure becomes a governed block | `deriveLeafItemDisposition` | replay-corruption |
-| completed Run grouped from churn fallback | `projectTicketVerifiedProgress` | lifecycle |
-| persisted progress block leaves the summary | `projectTicketVerifiedProgress` | blocked-restart |
-| persisted sibling block leaves the summary | `projectTicketVerifiedProgress` | sibling |
+| reconciliation ignores a real progress block | store reconciliation | B |
+| reconciliation ignores a real sibling block | store reconciliation | S |
+| every incomplete decision treated as blocked | `governedBlockItemReason` | C |
+| progress block gains sibling authority | `governedBlockItemReason` | B |
+| sibling block collapses to progress block | `governedBlockItemReason` | S |
+| replay-integrity failure becomes a governed block | `deriveLeafItemDisposition` | C |
+| completed Run grouped from churn fallback | `projectTicketVerifiedProgress` | L |
+| persisted progress block leaves the summary | `projectTicketVerifiedProgress` | B |
+| persisted sibling block leaves the summary | `projectTicketVerifiedProgress` | S |
+| contained corruption becomes uncontained | `hasPersistedReplayIntegrityDisposition` | C |
+| uncontained corruption becomes contained | `readRunReplayForProjection` | C |
+| corrupt replay payload exposed | `replaySnapshotFromRow` | C |
+| runtime helper inspects a sibling | `findRuntimeRun` | C |
+| projection drops block hash | `projectBlock` | B |
+| projection drops sibling authority | `projectBlock` | S |
+| item loses `completion_verified` | `deriveLeafItemDisposition` | L |
+| item loses completion-decision hash | `deriveLeafItemDisposition` | L |
+| tampered block accepted on read | `normalizeGovernedProgressBlock` | mapping test |
