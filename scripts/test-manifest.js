@@ -182,6 +182,7 @@ const TESTS = Object.freeze([
   { file: "governed-sibling-dependency-postgres-test.js", status: "required" },
   { file: "auto-retry-attempt-ceiling-test.js", status: "required" },
   { file: "malformed-completion-binding-postgres-test.js", status: "required" },
+  { file: "verified-progress-terminal-mapping-test.js", status: "required" },
   { file: "governed-verified-progress-lifecycle-postgres-test.js", status: "required" },
   { file: "governed-no-progress-withholding-postgres-test.js", status: "required" },
   { file: "governed-evidence-integrity-postgres-test.js", status: "required" },

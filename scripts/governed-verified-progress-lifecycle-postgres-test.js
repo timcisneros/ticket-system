@@ -620,10 +620,33 @@ async function main() {
           assertThat(eventsApi.statusCode === 200, 'the Run events API projects');
           assertThat(String(eventsApi.body || '').includes('run.completion_decided'),
             'and exposes the durable completion-decision event');
+          // THE REAL TICKET API. There is no `GET /api/tickets/:id` route; the
+          // canonical readers are `/api/tickets/:id/runtime` and
+          // `/api/tickets/:id/timeline`. A previous assertion accepted 200 OR
+          // 404 against the non-existent route, which passed by hitting the
+          // 404 and proved nothing about any surface.
           const ticketApi = await cold.request(
-            'GET', `/api/tickets/${run.ticketId}`, { cookie });
-          assertThat([200, 404].includes(ticketApi.statusCode),
-            `the Ticket API answers without an error envelope (${ticketApi.statusCode})`);
+            'GET', `/api/tickets/${run.ticketId}/runtime`, { cookie });
+          assertThat(ticketApi.statusCode === 200,
+            `the Ticket runtime API projects over the completed leaf ` +
+            `(${ticketApi.statusCode})`);
+          // Only the status is asserted. Field-level claims on this payload
+          // are deliberately NOT made: it reports every Run on the Ticket and
+          // carries per-Run `error` fields, so whole-payload substring checks
+          // pass or fail for reasons belonging to SIBLINGS rather than to this
+          // leaf — the same over-broad mistake corrected earlier for the churn
+          // badge. Establishing its real per-Run shape ran past this session's
+          // budget and is recorded as open.
+
+          const runStateApi = await cold.request(
+            'GET', `/api/runs/${runId}/state`, { cookie });
+          assertThat(runStateApi.statusCode === 200,
+            `the Run runtime-state API projects (${runStateApi.statusCode})`);
+          const runStateBody = String(runStateApi.body || '');
+          assertThat(runStateBody.includes('completed'),
+            'and reports the completed disposition');
+          assertThat(!runStateBody.includes('undeclared_sibling_dependency'),
+            'without borrowing sibling-block authority');
 
           // ── NOTHING WAS CREATED BY PROJECTING ─────────────────────────
           await waitForSchedulerQuiescence(store, run.ticketId);

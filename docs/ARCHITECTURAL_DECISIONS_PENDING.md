@@ -5525,27 +5525,65 @@ Re-aimed at `runtime/authority-paths.js`; killed by
 is restored and SHA-256-verified, and an equivalent refactor of the same
 function produces no false hit.
 
+## Terminal Projection Surface Inventory (recorded 2026-08-04)
+
+**Verdict on the mapping owner: VERIFIED-PROGRESS TERMINAL MAPPING HAS ONE
+CANONICAL OWNER** — `deriveLeafItemDisposition` in
+`runtime/structured-allocation-leaf-run-contract.js`, whose only production
+caller is `persistence/postgres/store.js` (structured reconciliation).
+
+**Verdict on CLI: CANONICAL CLI RUN INSPECTION EXISTS** — `scripts/oquery.js`
+reads `runConsequence.completionDecision` and prints execution, verification and
+objective dispositions. It is not yet asserted by any terminal-projection suite.
+
+**Surface inventory correction.** Earlier sessions treated
+`/api/runs/:id/events` as though it covered the Run/runtime API. It does not —
+they are separate routes with separate contracts. The actual readers are:
+
+| Surface | Route / owner |
+|---|---|
+| Ticket page | `GET /tickets/:id` |
+| Ticket API | `GET /api/tickets/:id/runtime`, `/api/tickets/:id/timeline` |
+| Run page | `GET /runs/:id` |
+| Run/runtime API | `GET /api/runs/:id/state` (via `readRuntimeRunAuthority`) |
+| Run events API | `GET /api/runs/:id/events` — distinct contract |
+| Reconciliation | `deriveLeafItemDisposition` |
+| Parent aggregate | allocation plan `aggregateDecision.items` |
+| CLI | `scripts/oquery.js` |
+
+**There is no `GET /api/tickets/:id`.** A previous assertion accepted 200 OR 404
+against that non-existent route; it passed by hitting the 404 and proved nothing.
+Replaced with the real runtime route.
+
+**Still open, explicitly:**
+
+* per-Run field assertions on `/api/tickets/:id/runtime` — its payload reports
+  every Run and carries per-Run `error` fields, so whole-payload substring
+  checks pass or fail for reasons belonging to SIBLINGS. Only the status code is
+  asserted. The correct fix is to assert the leaf's own entry once its shape is
+  established.
+* `/api/runs/:id/state` is asserted only for valid completion.
+* CLI is asserted for no row.
+* `deriveLeafItemDisposition` mapping assertions (blocked leaf projects
+  `blocked`, never `completed`) — `scripts/verified-progress-terminal-mapping-test.js`
+  covers the BLOCK SHAPE separation but not the disposition mapping; its
+  canonical leaf-run binding shape was not established in budget.
+
 ## Blocked-Restart Read Phase Is Not Mutation-Sensitive (recorded 2026-08-04)
 
-**Status:** open, coverage gap, honestly reported rather than papered over.
+**Status:** partially addressed. `scripts/verified-progress-terminal-mapping-test.js`
+now owns the block-shape half at contract level: a verified-progress block may
+NOT carry sibling details and a sibling-dependency block may NOT omit them, in
+both directions, with distinct hashes. That closes "a progress block gains
+sibling-dependency authority" at its real owner.
 
-`governed-blocked-restart-postgres-test` now asserts that the blocked leaf's
-allocation item and parent Ticket never project completed. Those assertions DO
-execute (the item projects `failed`), but they read DURABLE stored projections,
-while `projectedStatus` runs only inside `transitionTicketAfterRun` — which the
-suite's read-only restart phase never invokes. So mutations to the projection
-mapping survive this suite.
-
-Three focused mutations survived for this reason and are NOT claimed as covered:
-
-* verified-progress block projects completed;
-* governed block authority disappears from the Run;
-* progress block gains sibling-dependency authority.
-
-The projection mapping itself IS covered — by the malformed-completion suites,
-which call `transitionTicketAfterRun` directly, where the equivalent mutations
-are caught. What is missing is a mutation aimed at the read-only restart path,
-which needs either a projection call in that phase or a different anchor.
+The other two — a block projecting completed, and block authority or hash
+disappearing — remain uncovered by a mutation-sensitive test, for the reason
+originally recorded: the restart suite reads durable projections while
+`projectedStatus` and `deriveLeafItemDisposition` run only inside
+`transitionTicketAfterRun` and reconciliation, which a cold read phase never
+invokes. Forcing a restart suite to call a transition to catch a mutation would
+make it test something it is not about.
 
 ## Structured-Leaf Terminal-State Representability (recorded 2026-08-04)
 
