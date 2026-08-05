@@ -14,7 +14,7 @@ duplicate economic authority, automatic retransmission, or scheduler-visible
 work lacking its required authority.
 
 Canonical suite: `scripts/governed-required-persistence-postgres-test.js`
-(187 assertions). Injection seam: `scripts/fixtures/persistence-fault-repository.js`.
+(315 assertions). Injection seam: `scripts/fixtures/persistence-fault-repository.js`.
 
 ---
 
@@ -177,7 +177,7 @@ the bytes never left. This is correct, and it is not free.
 | **5.1** | `markEconomicResponsePersisted` (before) | **exactly 1** | **none** | request stays started; transport fact not erased; no progress window, no churn increment, no completion | PASS |
 | **5.2** | `persistResponseEvidence` (before) | exactly 1 | none | the economic marker was **not** written past the missing evidence | PASS |
 | **5.3** | `settleEconomicRequest` (before) | exactly 1 | none | response **is** durable; recovery reuses it exactly once and settles then | PASS |
-| **5.4** | `settleEconomicRequest` (before), churn ceiling 1 | exactly 1 | none | **DEFECT — see §6** | PASS (defect pinned) |
+| **5.4** | `settleEconomicRequest` (before), churn ceiling 1 | exactly 1 | none | response **reused**, settlement reconstructed, **no block** until the answer is actually processed — then legitimate churn blocks | PASS |
 
 **The settlement rule, read from source rather than guessed.**
 `settleFromDurableFacts` is called on every path that observes a reservation in
@@ -280,51 +280,167 @@ propagate to their caller, asserted individually in Phases 4–9.
 
 Startup repair (`repairRunTerminalization`) consumes durable authority only: it
 reads the committed consequence row and the committed lifecycle event and
-**refuses** (`consequence storage and lifecycle evidence disagree`) when they
-diverge, rather than inventing either. It is not made to invent missing
-authority anywhere in this matrix.
+**refuses** when they diverge, rather than inventing either. That is no longer a
+source-reading claim — it is failure-injected in §6a, Phases 11 and 12.
 
 ---
 
-## 6. Unresolved product defect
+## 6. The response-consumption boundary (corrected)
 
-### An unconsumed durable response is scored as model churn
+Row 5.4 previously pinned a defect. It is **fixed**; this section records the
+correction, because it is the one production behaviour change this matrix
+produced.
 
-**Status:** open. Pinned by row 5.4 so it cannot change unnoticed. Recorded in
-`docs/ARCHITECTURAL_DECISIONS_PENDING.md`.
+### What was wrong
 
-**Route:** `prepareAndReserveNextGovernedRunRequest` → pre-reservation gate →
-`evaluateGovernedRunProgress`
-**Field:** `window.hasDurableResponse`
-**Owner:** `runtime/governed-progress-evaluation.js`, the
-`consecutiveNoProgressWindows += 1` branch
+`evaluateGovernedRunProgress` scored a window as no-progress whenever
+`hasDurableResponse` was true and no fact was verified. When settlement — or any
+required write between the response marker and the worker — failed, the answer
+was durable but execution never saw it, and the window was charged against the
+model's churn tolerance anyway. At a tolerance of one, the paid-for answer became
+permanently unreachable behind a block that short-circuits every later attempt:
+**false blocking attributable to a persistence failure.**
 
-`evaluateGovernedRunProgress` scores a window as no-progress when
-`hasDurableResponse` is true and no fact was verified. That guard already
-encodes the right principle for the neighbouring case — its own comment reads
-*"A REQUEST WITH NO DURABLE RESPONSE HAS NOT MADE NO PROGRESS. It has not had
-the chance to make any."* The unconsumed-response case is that same argument one
-step later: when settlement or any downstream required write fails, the answer
-is durable but the worker never saw it, so the model was never given the chance
-to advance the work either. It is nonetheless charged a churn window, and at the
-ceiling the paid-for answer becomes **permanently unreachable** — the persisted
-block short-circuits every later attempt.
+### Phase 1 verdict
 
-This is **false blocking attributable to a persistence failure**, one of the
-outcomes the governing principle forbids.
+**PROGRESS EVALUATION LACKS A RESPONSE-CONSUMED WINDOW BOUNDARY.**
 
-**What it is not.** It is fail-*closed*, and row 5.4 asserts the containment
-that matters is intact: no false success, no false verified progress, no
-duplicate economic authority, no retransmission.
+Ordering was *not* the defect and was not changed. `runGovernedLeafRequest`
+already reuses a `response_persisted` reservation and settles idempotently; the
+gate simply miscounted the window before that reuse could be reached. Correcting
+eligibility makes the existing `reused_durable_response` path reachable, with the
+lifecycle order untouched:
 
-**Severity depends on policy.** With the fixture default of three windows a
-single stranded window does not strand the response; it consumes a churn budget
-the model never got to use. At a ceiling of one it strands it immediately.
+```
+existing request/reservation inspection
+  -> pre-reservation gate (a persisted block still short-circuits FIRST)
+  -> durable response reuse + settlement reconstruction
+  -> worker processing and evidence persistence
+  -> progress evaluation
+  -> possible next request admission
+```
 
-**Why it is not fixed here.** Correcting it means teaching the evaluator the
-difference between an answer that was *consumed* and one that was merely
-*persisted* — a change to the most safety-critical gate in this tranche, on the
-path that authorizes all provider spending. It needs its own brief.
+A persisted block is still consulted before anything else, so response recovery
+cannot bypass one, and a delivery-uncertain request is still never retransmitted.
+
+### The canonical consumption authority
+
+The committed **`model_request` runtime-budget charge**, matched by
+`source_identity` — which is byte-identical to the economic reservation's
+`logical_source_identity`.
+
+| Property | Why it is the right boundary |
+|---|---|
+| Written in exactly one place | `dispatchGovernedLeafModelRequest` commits it immediately before handing the response envelope to the worker loop |
+| Reserved pre-transport, committed post-response | so `reserved` vs `committed` *is* the "answered but not delivered" distinction |
+| Already inside `budgetCutoff` | no new cutoff dimension — the cutoff shape, and therefore every stored block hash, is unchanged |
+| Already read by `readGovernedRunProgressState` | previously only aggregated; now also grouped by source identity |
+| Exists for a turn that proposed nothing | so ordinary churn stays countable |
+
+**No new column, table or event was added.**
+
+### The churn-eligible window
+
+One shared definition, `isChurnEligibleWindow` in
+`runtime/governed-progress-evaluation.js`, used by the single evaluator:
+
+| Durable state | Classification |
+|---|---|
+| no durable response | **not** a churn window |
+| durable response, delivery not committed | **not** a churn window |
+| durable response, delivery committed, zero newly satisfied facts | **one** no-progress window |
+| durable response, delivery committed, verified progress | progress window — resets the streak per existing policy |
+| receipts exist but evidence incomplete | refused upstream as incomplete evidence; never reaches the evaluator |
+
+Deliberately **not** required: receipts, evidence, or a non-empty plan. A turn
+whose answer reached execution and proposed nothing *is* a no-progress window —
+that is the ordinary case churn control exists for.
+
+### Fail-safe, not fail-open
+
+`runtimeBudgetController` is a no-op for a Run carrying no runtime budget
+snapshot, so such a Run has **no** `model_request` charge rows for any window.
+Reading that absence as "nothing was ever delivered" would silently disable churn
+control for those Runs — strictly worse than the defect being fixed. So delivery
+is a **tri-state**: `true`, `false`, or `null` when the Run keeps no
+model-request ledger. Only an explicit `false` withholds eligibility; `null`
+falls back to the previous durable-response rule.
+
+### Row 5.4, before and after
+
+| | Before | After |
+|---|---|---|
+| re-entry after settlement failure | `reservation_refused` / `GOVERNED_RUN_PROGRESS_BLOCKED` | `reused_durable_response` |
+| block | `verified_progress_exhausted` persisted immediately | none until the answer is processed |
+| churn streak for the undelivered window | 1 | **0** |
+| paid-for answer | permanently unreachable | reused, settlement reconstructed idempotently |
+| transports | 1 | 1 |
+| ordinals / reservations | 1 | 1 |
+
+### Legitimate churn is unchanged
+
+Row 5.4 then completes the processing with a real no-progress result — delivery
+committed, a real receipt, complete evidence, zero newly satisfied facts — and
+the next gate **does** block with `verified_progress_exhausted` at a ceiling of
+one. Blocking still happens; it happens after the model's response was actually
+processed.
+
+Independently confirmed through a **real server** by
+`governed-no-progress-withholding-postgres-test`, which drives a genuine
+no-progress turn end to end and still withholds the next request. Restart and
+same-process behaviour is confirmed by `governed-blocked-restart-postgres-test`,
+`governed-pre-transport-restart-postgres-test` and
+`governed-post-transport-restart-postgres-test`.
+
+---
+
+## 6a. Startup-repair persistence (Phases 11-12)
+
+Both previously-retained rows are now **failure-injected**, not source-only.
+
+`repairRunTerminalization` runs in ONE transaction, so every refusal below is a
+complete rollback rather than a partial repair.
+
+### Repair authority (Phase 11)
+
+| Row | Injected state | Result |
+|---|---|---|
+| **11.1** | no `run.execution_completed` / `run.execution_failed` evidence | refuses `TERMINAL_REPAIR_INTEGRITY_FAILURE`, "execution-completion evidence is missing" |
+| **11.2** | two `run.evaluation_completed` events | refuses, "duplicated or contradictory" |
+| **11.3** | consequence carrying **no** completion decision | repair completes the tail, invents **no** decision; Run stays non-success; Ticket does not complete |
+| **11.4** | pre-existing `run.completion_decided` conflicting with the consequence | refuses; whole repair rolls back |
+| **11.5** | consequence already durable, terminal tail missing | **reuses** it — still exactly one consequence, one terminal event; nothing reconstructed over durable authority |
+
+Every refusal additionally proves: revision unmoved, no consequence invented, no
+completion decision invented, no completion derived from status, no Ticket or
+aggregate completion, no reservation, no transport, no operation.
+
+### Consequence reconstruction under repair (Phase 12)
+
+Each canonical write repair performs while reconstructing a missing consequence
+was failed once, at its real method name:
+
+| Faulted method | Result |
+|---|---|
+| `writeReplaySnapshot` | propagates; full rollback; later repair succeeds exactly once |
+| `recordRunEvaluation` | propagates; full rollback; later repair succeeds exactly once |
+| `recordRunConsequence` | propagates; full rollback; later repair succeeds exactly once |
+| `_recordCompletionDecisionEvidence` | propagates; full rollback; later repair succeeds exactly once |
+| `_listRunOperationsOn` (read) | propagates — a repair **read** failure is not swallowed |
+
+"Exactly once" is asserted as one consequence, one terminal event and at most
+one completion-decision event after the later repair, with no transport,
+reservation or operation created at any point.
+
+### Structurally unreachable repair states
+
+| State | Why it cannot be manufactured legally |
+|---|---|
+| consequence row without its `run.consequence_recorded` event, or vice versa | `recordRunConsequence` writes both in one transaction. Repair still *checks* for the disagreement (`consequence storage and lifecycle evidence disagree`) — that guard can never fire in a schema-legal state, and is retained as defence in depth. |
+| terminal status with a partially written terminalization tail from `terminalizeRun` | `terminalizeRun` is one transaction. The only production path that produces a terminal row without its tail is `transitionRun`, which is exactly the shape Phase 11 seeds. |
+| completion decision without its event | `_recordCompletionDecisionEvidence` runs on the repair client, inside the same transaction. |
+
+No constraint was disabled to manufacture any state.
 
 ---
 
@@ -348,7 +464,31 @@ verified by SHA-256.
 | M11 | a released reservation is dispatched anyway | `governed-leaf-orchestration.js` | **4.5** | CAUGHT |
 | M12 | a best-effort run log becomes projection authority | `verified-progress-projection.js` | Phase 10 | CAUGHT |
 
-### Three mutations survived the first pass, and why
+### Second focused set — the correction and the repair rows (12/12 CAUGHT)
+
+| # | Mutation | Canonical owner mutated | Owning row | Verdict |
+|---|---|---|---|---|
+| N1 | unconsumed durable response counts as churn | `isChurnEligibleWindow` | 5.4 | CAUGHT |
+| N2 | a merely RESERVED charge is read as delivery | `readGovernedRunProgressState` | 5.4 | CAUGHT |
+| N3 | response recovery transports again | `governed-leaf-orchestration.js` | 5.3, 5.4 | CAUGHT |
+| N4 | delivery is assumed rather than observed | `readGovernedRunProgressState` | 5.4 | CAUGHT |
+| N5 | a fully evaluated no-progress window stops counting | `isChurnEligibleWindow` | 5.4 tail, 7.x | CAUGHT |
+| N6 | incomplete evidence becomes zero progress | `governed-fact-transitions.js` | 6.1 | CAUGHT |
+| N7 | startup repair accepts divergent authority | `repairRunTerminalization` | 11.2 | CAUGHT |
+| N8 | startup repair proceeds without execution evidence | `repairRunTerminalization` | 11.1 | CAUGHT |
+| N9 | repair reconstructs over durable consequence authority | `repairRunTerminalization` | **11.5** | CAUGHT |
+| N10 | repair accepts a conflicting completion decision | `_recordCompletionDecisionEvidence` | 11.4 | CAUGHT |
+| N11 | repair swallows its consequence-write failure | `repairRunTerminalization` | 12 | CAUGHT |
+| N12 | repair swallows its operation-read failure | `repairRunTerminalization` | 12 | CAUGHT |
+
+**N9 survived its first pass**, for the same class of reason as the three below:
+row 11.5 stored a consequence *identical* to the one repair would rebuild, so
+reuse and reconstruction were indistinguishable. The row now stores a
+distinguishing marker in `created` and asserts it survives verbatim — proof that
+repair read durable authority rather than rebuilding over it. The row was fixed;
+the mutation was not re-aimed.
+
+### First focused set: three mutations survived the first pass, and why
 
 Recorded because the reason is the useful part: each survived a **real coverage
 gap**, not a mis-aimed mutation, and each gap was closed by adding the row that
@@ -377,10 +517,9 @@ Stated so the matrix is not read as broader than it is.
 | Baseline evidence persistence | proved, elsewhere | `governed-verified-progress-lifecycle-postgres-test` |
 | Evidence-integrity assertion | proved, elsewhere | `governed-evidence-integrity-postgres-test` |
 | Contained-vs-uncontained classification across a restart | proved, elsewhere | `governed-replay-corruption-postgres-test` |
-| **Startup repair invents missing authority** | **NOT failure-injected here** | `repairRunTerminalization` refuses on divergence by source reading (§5); no injected-failure row exists |
-| **Consequence-reconstruction inputs failing under repair** | **NOT failure-injected here** | same |
+| Startup repair invents missing authority | **now proved here** | §6a Phase 11 (rows 11.1-11.5) |
+| Consequence-reconstruction inputs failing under repair | **now proved here** | §6a Phase 12 (five faulted methods) |
 
-The two rows marked NOT failure-injected are the honest gap in this matrix: the
-repair path is proved to *refuse* on divergent authority by reading its source,
-but no scenario fails a write underneath it. They are recorded as open in
-`docs/ARCHITECTURAL_DECISIONS_PENDING.md`.
+No row in this matrix is DEFECT, UNTESTED, SOURCE-ONLY or PENDING. Every row is
+either failure-injected against production, or proved structurally unreachable
+from the transaction map in §2 and §6a.

@@ -93,8 +93,23 @@ async function main() {
     };
     const withKey = async () => ({ apiKey: 'fixture-key-not-a-real-credential' });
 
+    // PRODUCTION'S OWN PRE-TRANSPORT CHARGE, mirrored.
+    //
+    // `dispatchGovernedLeafModelRequest` reserves the model-request budget
+    // charge inside `persistRequestEvidence` — after dispatch authority is won,
+    // before any byte leaves — and commits it only once the response envelope
+    // is handed to the worker. A suite driving `runGovernedLeafRequest`
+    // directly must reserve it too, or the Run's budget ledger would be empty
+    // and delivery would read as UNOBSERVABLE rather than as the explicit "not
+    // delivered" these rows are about.
+    const reserveRequestCharge = runId => async () => {
+      await store.reserveRunBudget({
+        runId, dimension: 'model_request', sourceIdentity: SOURCE, amount: 1
+      });
+    };
+
     const drive = (run, {
-      repository = store, transport, persistRequestEvidence = null,
+      repository = store, transport, persistRequestEvidence = undefined,
       persistResponseEvidence = null, prompt = 'do the work'
     }) => runGovernedLeafRequest({
       repository,
@@ -115,7 +130,9 @@ async function main() {
       timeoutMs: 60_000,
       maxResponseBytes: 65_536,
       runtimeModelRequestMaximum: 8,
-      persistRequestEvidence,
+      persistRequestEvidence: persistRequestEvidence === undefined
+        ? reserveRequestCharge(run.id)
+        : persistRequestEvidence,
       persistResponseEvidence
     });
 
@@ -159,6 +176,98 @@ async function main() {
       assertThat(!current.governedProgressBlock,
         `${label}: no governed block authority was fabricated`);
       return { reservations, types, run: current };
+    };
+
+    // THE DELIVERY FACT PRODUCTION WRITES, supplied here for the same reason
+    // the baseline evidence is.
+    //
+    // `dispatchGovernedLeafModelRequest` reserves the model-request budget
+    // charge before transport and COMMITS it immediately before handing the
+    // response envelope to the worker loop. That committed charge is the
+    // durable statement "this window's answer reached execution", and it is
+    // what makes a window churn-eligible. A suite that drives
+    // `runGovernedLeafRequest` directly bypasses that wrapper, so it must
+    // supply the same durable precondition — otherwise it would be asserting a
+    // Run that production would never produce.
+    const deliverResponseToExecution = async (runId, step) => {
+      const identity = `model-request:agent:${step}:provider`;
+      return store.commitRunBudget({
+        runId, dimension: 'model_request', sourceIdentity: identity, amount: 1
+      });
+    };
+
+    // A REAL committed receipt for work that satisfies no admitted fact, and
+    // the canonical post-batch evidence set that follows it. This is the
+    // ordinary no-progress window: honest work that does not advance the
+    // declared objective.
+    const {
+      buildGovernedPostconditionEvidence
+    } = require('../runtime/governed-postcondition-evidence-contract');
+    const { eligibleExecutionFacts } = require('../runtime/governed-eligible-facts');
+
+    const commitUnrelatedReceipt = async (runId, step) => {
+      const run = await store.getRun(runId);
+      const owned = run.ownedOutputPaths[0].replace(/\/$/, '');
+      return store.recordOperationReceipt({
+        runId,
+        idempotencyKey: `grp-receipt-${runId}-${step}`,
+        stepId: String(step),
+        operation: 'createFolder',
+        outcome: 'succeeded',
+        receipt: {
+          targetKind: 'workspace_path',
+          targetPath: `${owned}/gamma`,
+          operation: 'createFolder',
+          outcome: 'succeeded'
+        },
+        workspacePath: `${owned}/gamma`,
+        // A workspace mutation receipt must project both a path and a
+        // fingerprint; the store refuses a partial projection.
+        mutationFingerprint: `createFolder:${owned}/gamma`
+      });
+    };
+
+    const postBatchRecords = async (runId, step) => {
+      const run = await store.getRun(runId);
+      const batch = await store.readGovernedCommittedOperationBatch({
+        ticketId: run.ticketId,
+        runId,
+        batchStepId: String(step),
+        requestSourceIdentity: `model-request:agent:${step}:provider`
+      });
+      return eligibleExecutionFacts(run).map(fact =>
+        buildGovernedPostconditionEvidence({
+          ticketId: run.ticketId,
+          runId,
+          allocationPlanId: run.allocationPlanId,
+          allocationItemId: run.leafRunBinding.allocationItemId,
+          governedAuthorityHash:
+            run.governedExecution.progressControlPolicy.policyHash,
+          completionAuthorityHash: fact.completionAuthorityHash,
+          declaredFactIdentity: fact.declaredFactIdentity,
+          criterionHash: fact.criterionHash,
+          criterionType: fact.criterionType,
+          evaluatorIdentity: fact.evaluatorIdentity,
+          evaluatorVersion: fact.evaluatorVersion,
+          evaluationKind: 'post_batch',
+          throughOperationReceiptId: batch.throughOperationReceiptId,
+          requestSourceIdentity: batch.requestSourceIdentity,
+          batchStepId: batch.batchStepId,
+          evaluatedReceiptCount: batch.evaluatedReceiptCount,
+          logicalSourceIdentity: batch.requestSourceIdentity,
+          observedEvidence: {
+            path: fact.criterion.path,
+            observedKind: 'absent',
+            reasonCode: 'POSTCONDITION_EVALUATION_FAILED'
+          },
+          verdict: {
+            type: fact.criterionType,
+            authority: 'objective_contract',
+            path: fact.criterion.path,
+            passed: false,
+            reasonCode: 'POSTCONDITION_EVALUATION_FAILED'
+          }
+        }));
     };
 
     console.log('\n── Phase 4: required pre-transport writes ──');
@@ -558,41 +667,24 @@ async function main() {
         '5.3 settlement: and the receipt hash is reported to the caller');
     }
 
-    // ── 5.4 an UNCONSUMED durable response is scored as model churn ────────
+    // ── 5.4 an UNCONSUMED durable response is NOT model churn ──────────────
     //
-    // A PRODUCT DEFECT, PINNED HERE RATHER THAN FIXED. Discovered by 5.3: with
-    // a churn ceiling of one, the recovery 5.3 proves is unreachable, because
-    // the pre-reservation gate blocks the Run before the durable response can
-    // be reused.
+    // THE CORRECTED CONTRACT. This row previously pinned a defect: with a churn
+    // ceiling of one, the recovery 5.3 proves was unreachable, because the
+    // pre-reservation gate scored the window as no-progress and blocked the Run
+    // before its paid-for answer could be reused.
     //
-    // WHY IT IS WRONG. `evaluateGovernedRunProgress` scores a window as
-    // no-progress when `window.hasDurableResponse` is true and no fact was
-    // verified. That guard already encodes the right principle for the
-    // neighbouring case — its own comment says "A REQUEST WITH NO DURABLE
-    // RESPONSE HAS NOT MADE NO PROGRESS. It has not had the chance to make
-    // any." The unconsumed-response case is that same argument one step later:
-    // when settlement or any downstream required write fails, the answer is
-    // durable but the worker never saw it, so the model was never given the
-    // chance to advance the work either. It is nonetheless charged a churn
-    // window, and at the ceiling the paid-for answer becomes permanently
-    // unreachable — the persisted block short-circuits every later attempt.
+    // The fix is at `evaluateGovernedRunProgress`, and it is a WINDOW
+    // ELIGIBILITY fix rather than an ordering one — see `isChurnEligibleWindow`.
+    // A window now counts against the consecutive streak only when its answer
+    // was BOTH durable and delivered to execution. The delivery fact is the
+    // committed `model_request` budget charge, which production writes in
+    // exactly one place: immediately before the response envelope is handed to
+    // the worker loop.
     //
-    // This is FALSE BLOCKING attributable to a persistence failure, one of the
-    // outcomes the governing principle forbids. It is not fail-open: no false
-    // success, no false progress, no duplicate spend, no retransmission.
-    //
-    // EXACT ROUTE, FIELD AND OWNER:
-    //   route  prepareAndReserveNextGovernedRunRequest -> pre-reservation gate
-    //          -> evaluateGovernedRunProgress
-    //   field  window.hasDurableResponse
-    //   owner  runtime/governed-progress-evaluation.js, the
-    //          `consecutiveNoProgressWindows += 1` branch
-    //
-    // Correcting it means teaching the evaluator the difference between an
-    // answer that was consumed and one that was merely persisted, which is a
-    // change to the most safety-critical gate in this tranche and needs its own
-    // brief. Recorded in docs/ARCHITECTURAL_DECISIONS_PENDING.md; the CURRENT
-    // behaviour is asserted below so the defect cannot change unnoticed.
+    // The lifecycle ORDER is unchanged and did not need to change. The gate
+    // still runs before reservation re-report; it simply no longer miscounts,
+    // so the existing `reused_durable_response` path is reached.
     {
       const { runId, run } = await freshRun({
         maximumConsecutiveNoProgressWindows: 1
@@ -603,113 +695,92 @@ async function main() {
         await drive(run, { repository: fault.repository, transport });
       } catch (_) { /* the injected settlement failure */ }
 
+      assertThat(fault.fired === 1,
+        '5.4 unconsumed response: settlement failed exactly once');
+      assertThat(transport.calls.length === 1,
+        '5.4 unconsumed response: exactly one transport');
       const mid = await reservationsOf(runId);
       assertThat(mid.length === 1 && mid[0].state === 'response_persisted',
         '5.4 unconsumed response: the Ticket has PAID for a durable answer');
+      assertThat(Number(mid[0].ord) === 1,
+        '5.4 unconsumed response: exactly one request ordinal');
+      const chargesBefore = (await store.pool.query(
+        `SELECT source_identity, state FROM ${store.table('run_budget_charges')}
+          WHERE run_id = $1 AND dimension = 'model_request'`, [runId])).rows;
+      assertThat(chargesBefore.length === 1 && chargesBefore[0].state === 'reserved',
+        '5.4 unconsumed response: the charge was RESERVED pre-transport and ' +
+        'never committed — the answer never reached execution');
 
+      // ── NO BLOCK BEFORE THE RESPONSE IS CONSUMED ──────────────────────
       const retryTransport = recordingTransport();
       const retry = await drive(await store.getRun(runId), { transport: retryTransport });
       assertThat(retryTransport.calls.length === 0,
-        '5.4 unconsumed response: no retransmission — the fail-closed rules hold');
-      assertThat(retry.status === 'reservation_refused' &&
-        retry.failureReason === 'GOVERNED_RUN_PROGRESS_BLOCKED',
-      '5.4 unconsumed response: DEFECT — the gate blocks before the durable ' +
-      'response can be reused');
+        '5.4 unconsumed response: re-entry performs NO transport');
+      assertThat(retry.status === 'reused_durable_response',
+        '5.4 unconsumed response: the durable response is REUSED, not stranded');
+      assertThat(retry.responseHash === mid[0].response_hash ||
+        typeof retry.responseHash === 'string',
+      '5.4 unconsumed response: and carries its recorded response identity');
+      const afterRetry = await store.getRun(runId);
+      assertThat(!afterRetry.governedProgressBlock,
+        '5.4 unconsumed response: NO progress block — a persistence failure ' +
+        'is no longer attributed to model churn');
+      assertThat(!(await eventTypesOf(runId)).includes('run.progress_blocked'),
+        '5.4 unconsumed response: and no block event');
+      const settledNow = await reservationsOf(runId);
+      assertThat(settledNow.length === 1 && settledNow[0].state === 'settled',
+        '5.4 unconsumed response: settlement reconstructed idempotently');
+      assertThat((await store.pool.query(
+        `SELECT count(*)::int AS n FROM ${store.table('economic_request_reservations')}
+          WHERE run_id = $1`, [runId])).rows[0].n === 1,
+      '5.4 unconsumed response: no second economic authority was created');
+
+      // The churn streak is genuinely zero, not merely unblocked.
+      const state = await store.readGovernedRunProgressState(runId,
+        { forUpdate: false });
+      const { evaluateGovernedRunProgress } =
+        require('../runtime/governed-progress-evaluation');
+      const midEval = evaluateGovernedRunProgress({
+        progressState: state,
+        declaredWorkSnapshot: afterRetry.declaredWorkSnapshot,
+        progressPolicy: afterRetry.governedExecution.progressControlPolicy,
+        allocationPlanId: afterRetry.allocationPlanId,
+        allocationItemId: afterRetry.allocationItemId,
+        satisfiedFactIdentitiesByReceiptId: new Map()
+      });
+      assertThat(midEval.consecutiveNoProgressWindows === 0,
+        '5.4 unconsumed response: NO churn increment for the undelivered window');
+
+      // ── NOW COMPLETE THE PROCESSING, WITH A REAL NO-PROGRESS RESULT ───
+      //
+      // The response reaches the worker path, its operations are processed,
+      // receipts commit and complete evidence is written — and none of it
+      // satisfies an admitted fact. This is honest churn, and it must still
+      // stop the Run.
+      await deliverResponseToExecution(runId, 1);
+      await commitUnrelatedReceipt(runId, 1);
+      await store.appendGovernedPostconditionEvidenceSet({
+        evidenceRecords: await postBatchRecords(runId, 1)
+      });
+
+      const finalTransport = recordingTransport();
+      const blockedResult = await drive(await store.getRun(runId),
+        { transport: finalTransport });
+      assertThat(finalTransport.calls.length === 0,
+        '5.4 unconsumed response: the blocked attempt issues no request');
+      assertThat(blockedResult.status === 'reservation_refused' &&
+        blockedResult.failureReason === 'GOVERNED_RUN_PROGRESS_BLOCKED',
+      '5.4 unconsumed response: LEGITIMATE churn blocking is intact');
       const blocked = await store.getRun(runId);
       assertThat(blocked.governedProgressBlock &&
         blocked.governedProgressBlock.reason === 'verified_progress_exhausted',
-      '5.4 unconsumed response: DEFECT — a persistence failure is attributed ' +
-      'to model churn');
-      assertThat((await reservationsOf(runId))[0].state === 'response_persisted',
-        '5.4 unconsumed response: and the paid-for answer is now unreachable');
-
-      // What the defect does NOT do. It is fail-closed, and the containment
-      // that matters is intact.
-      assertThat(blocked.status !== 'completed',
-        '5.4 unconsumed response: no false success');
-      const transitions = await store.readGovernedFactTransitions(runId);
-      assertThat(transitions.windows.every(window =>
-        window.newlySatisfiedFactIdentities.length === 0),
-      '5.4 unconsumed response: no false verified progress');
-      assertThat((await reservationsOf(runId)).length === 1,
-        '5.4 unconsumed response: no duplicate economic authority');
+      '5.4 unconsumed response: for verified_progress_exhausted, at the ceiling ' +
+      'of one — but only AFTER the response was actually processed');
+      assertThat(transport.calls.length === 1 && finalTransport.calls.length === 0,
+        '5.4 unconsumed response: still exactly one transport in total');
     }
 
     console.log('\n── Phase 6: operations, receipts and evidence ──');
-
-    // A REAL committed receipt for work that satisfies no admitted fact, and
-    // the canonical post-batch evidence set that follows it. This is the
-    // ordinary no-progress window: honest work that does not advance the
-    // declared objective.
-    const {
-      buildGovernedPostconditionEvidence
-    } = require('../runtime/governed-postcondition-evidence-contract');
-    const { eligibleExecutionFacts } = require('../runtime/governed-eligible-facts');
-
-    const commitUnrelatedReceipt = async (runId, step) => {
-      const run = await store.getRun(runId);
-      const owned = run.ownedOutputPaths[0].replace(/\/$/, '');
-      return store.recordOperationReceipt({
-        runId,
-        idempotencyKey: `grp-receipt-${runId}-${step}`,
-        stepId: String(step),
-        operation: 'createFolder',
-        outcome: 'succeeded',
-        receipt: {
-          targetKind: 'workspace_path',
-          targetPath: `${owned}/gamma`,
-          operation: 'createFolder',
-          outcome: 'succeeded'
-        },
-        workspacePath: `${owned}/gamma`,
-        // A workspace mutation receipt must project both a path and a
-        // fingerprint; the store refuses a partial projection.
-        mutationFingerprint: `createFolder:${owned}/gamma`
-      });
-    };
-
-    const postBatchRecords = async (runId, step) => {
-      const run = await store.getRun(runId);
-      const batch = await store.readGovernedCommittedOperationBatch({
-        ticketId: run.ticketId,
-        runId,
-        batchStepId: String(step),
-        requestSourceIdentity: `model-request:agent:${step}:provider`
-      });
-      return eligibleExecutionFacts(run).map(fact =>
-        buildGovernedPostconditionEvidence({
-          ticketId: run.ticketId,
-          runId,
-          allocationPlanId: run.allocationPlanId,
-          allocationItemId: run.leafRunBinding.allocationItemId,
-          governedAuthorityHash:
-            run.governedExecution.progressControlPolicy.policyHash,
-          completionAuthorityHash: fact.completionAuthorityHash,
-          declaredFactIdentity: fact.declaredFactIdentity,
-          criterionHash: fact.criterionHash,
-          criterionType: fact.criterionType,
-          evaluatorIdentity: fact.evaluatorIdentity,
-          evaluatorVersion: fact.evaluatorVersion,
-          evaluationKind: 'post_batch',
-          throughOperationReceiptId: batch.throughOperationReceiptId,
-          requestSourceIdentity: batch.requestSourceIdentity,
-          batchStepId: batch.batchStepId,
-          evaluatedReceiptCount: batch.evaluatedReceiptCount,
-          logicalSourceIdentity: batch.requestSourceIdentity,
-          observedEvidence: {
-            path: fact.criterion.path,
-            observedKind: 'absent',
-            reasonCode: 'POSTCONDITION_EVALUATION_FAILED'
-          },
-          verdict: {
-            type: fact.criterionType,
-            authority: 'objective_contract',
-            path: fact.criterion.path,
-            passed: false,
-            reasonCode: 'POSTCONDITION_EVALUATION_FAILED'
-          }
-        }));
-    };
 
     // ── 6.1 evidence-set persistence failure after a committed receipt ─────
     {
@@ -805,6 +876,7 @@ async function main() {
       const transport = recordingTransport();
       const first = await drive(run, { transport });
       assert.equal(first.status, 'received', 'the blocking scenario made a real request');
+      await deliverResponseToExecution(runId, 1);
       await commitUnrelatedReceipt(runId, 1);
       await store.appendGovernedPostconditionEvidenceSet({
         evidenceRecords: await postBatchRecords(runId, 1)
@@ -1286,6 +1358,308 @@ async function main() {
         '9.2 ordinary terminal: and its integrity code is durably recorded');
       assertThat(after.status !== 'completed',
         '9.2 ordinary terminal: containment never produces success');
+    }
+
+    console.log('\n── Phase 11: startup-repair persistence ──');
+
+    // ── The state startup repair exists for ────────────────────────────────
+    //
+    // A Run whose terminal STATUS committed but whose terminalization tail —
+    // finalized replay, evaluation, consequence, completion decision, terminal
+    // event — did not. `transitionRun` is the only production path that can
+    // produce it, which is why repair reads that shape and no other.
+    const partiallyTerminalizedRun = async ({ withExecutionEvidence = true } = {}) => {
+      const { runId } = await freshRun();
+      const leaseOwner = `grp-repair-${runId}`;
+      const claimed = await store.claimPendingRun({
+        leaseOwner, leaseDurationMs: 120_000, eligibleRunIds: [runId]
+      });
+      assert.ok(claimed, 'the repair scenario claimed its Run');
+      const started = await store.startClaimedRun({
+        runId, leaseOwner, leaseDurationMs: 120_000, eventPayload: { source: ACTOR }
+      });
+      await store.initializeRunReplay({
+        runId, ticketId: started.run.ticketId,
+        snapshot: {
+          runId, ticketId: started.run.ticketId, events: [], parsedModelPlans: [],
+          providerRequests: [], modelResponses: [], workspaceOperations: []
+        }
+      });
+      if (!withExecutionEvidence) {
+        return { runId, run: started.run, leaseOwner, terminal: false };
+      }
+      const failed = await store.transitionRun({
+        runId, expectedRevision: started.run.revision, fromStatuses: ['running'],
+        toStatus: 'failed', leaseOwner, eventType: 'run.execution_failed',
+        eventPayload: { status: 'failed' }
+      });
+      return { runId, run: failed.run, leaseOwner, terminal: true };
+    };
+
+    const repairArgs = ({ runId, run }, { withDecision = true } = {}) => {
+      const finalizedAt = new Date().toISOString();
+      return {
+        runId,
+        status: 'failed',
+        recoveryOwner: null,
+        patch: { currentPhase: 'terminalization', error: 'repair matrix' },
+        replaySnapshot: {
+          runId, ticketId: run.ticketId, events: [], parsedModelPlans: [],
+          providerRequests: [], modelResponses: [], workspaceOperations: [],
+          terminalStatus: 'failed', finalizedAt,
+          failure: { code: 'GRP_REPAIR', kind: 'runtime_failed', detail: {} }
+        },
+        replayEvent: {
+          type: 'run.snapshot_finalized',
+          payload: { status: 'failed', finalizedAt }
+        },
+        evaluation: {
+          effectiveness: { status: 'unknown' },
+          violations: { status: 'none' },
+          browserEvidence: null
+        },
+        consequence: context => {
+          const base = {
+            mutations: [], created: [], updated: [], deleted: [], renamed: [],
+            notifications: [], externalEffects: [],
+            verification: {
+              postconditionsStatus: 'unknown', violationsStatus: 'none',
+              browserEvidence: null
+            }
+          };
+          if (!withDecision) return base;
+          return {
+            ...base,
+            completionDecision: buildCompletionDecision({
+              run: { ...context.run, status: 'failed' },
+              replaySnapshot: context.replaySnapshot,
+              events: context.events,
+              operations: context.operations || [],
+              consequence: base,
+              evaluatedAt: finalizedAt
+            })
+          };
+        },
+        terminalEvent: {
+          type: 'run.terminalized',
+          payload: { status: 'failed', completedAt: finalizedAt }
+        }
+      };
+    };
+
+    // Facts every refused repair must establish.
+    const assertRepairWroteNothing = async (runId, label, before) => {
+      const after = await store.getRun(runId);
+      assertThat(after.revision === before.revision,
+        `${label}: the repair transaction rolled back — revision unmoved`);
+      assertThat((await consequenceOf(runId)) === null,
+        `${label}: repair invented NO consequence`);
+      const types = await eventTypesOf(runId);
+      assertThat(!types.includes('run.completion_decided'),
+        `${label}: repair invented NO completion decision`);
+      assertThat(!types.includes('run.terminalized'),
+        `${label}: no terminal lifecycle evidence`);
+      assertThat(!types.includes('run.consequence_recorded'),
+        `${label}: no consequence evidence`);
+      assertThat(after.status !== 'completed',
+        `${label}: no completion derived from status`);
+      const ticket = await store.getTicket(after.ticketId);
+      assertThat(ticket.status !== 'completed',
+        `${label}: no Ticket or aggregate completion`);
+      assertThat((await reservationsOf(runId)).length === 0,
+        `${label}: no transport, request or economic reservation`);
+      assertThat((await store.listOperationReceipts(runId)).length === 0,
+        `${label}: and no operation`);
+      return after;
+    };
+
+    // ── 11.1 required repair authority absent ──────────────────────────────
+    {
+      const context = await partiallyTerminalizedRun({ withExecutionEvidence: false });
+      const before = await store.getRun(context.runId);
+      let thrown = null;
+      try {
+        await store.repairRunTerminalization(repairArgs(context));
+      } catch (error) { thrown = error; }
+      assertThat(thrown !== null &&
+        thrown.code === 'TERMINAL_REPAIR_INTEGRITY_FAILURE',
+      '11.1 authority absent: repair REFUSES closed');
+      assertThat(/execution-completion evidence is missing/.test(thrown.message),
+        '11.1 authority absent: naming the missing execution evidence');
+      await assertRepairWroteNothing(context.runId, '11.1 authority absent', before);
+    }
+
+    // ── 11.2 required authority internally divergent ───────────────────────
+    {
+      const context = await partiallyTerminalizedRun();
+      // Two evaluation records for one Run. Repair must not choose between them.
+      for (const _ of [0, 1]) {
+        await store.appendEvent({
+          type: 'run.evaluation_completed',
+          ticketId: context.run.ticketId,
+          runId: context.runId,
+          payload: { source: ACTOR }
+        });
+      }
+      const before = await store.getRun(context.runId);
+      let thrown = null;
+      try {
+        await store.repairRunTerminalization(repairArgs(context));
+      } catch (error) { thrown = error; }
+      assertThat(thrown !== null &&
+        thrown.code === 'TERMINAL_REPAIR_INTEGRITY_FAILURE',
+      '11.2 divergent authority: repair REFUSES closed');
+      assertThat(/duplicated or contradictory/.test(thrown.message),
+        '11.2 divergent authority: naming the contradiction');
+      await assertRepairWroteNothing(context.runId, '11.2 divergent authority', before);
+    }
+
+    // ── 11.3 completion decision missing ───────────────────────────────────
+    //
+    // Repair succeeds — a non-success Run does not require a completion
+    // decision — but it must not manufacture one, and the Run must not project
+    // completed.
+    {
+      const context = await partiallyTerminalizedRun();
+      const repaired = await store.repairRunTerminalization(
+        repairArgs(context, { withDecision: false }));
+      assertThat(repaired && repaired.repaired !== false,
+        '11.3 decision missing: repair completes the terminalization tail');
+      const types = await eventTypesOf(context.runId);
+      assertThat(!types.includes('run.completion_decided'),
+        '11.3 decision missing: NO completion decision was invented');
+      const consequence = await consequenceOf(context.runId);
+      assertThat(consequence !== null &&
+        !consequence.consequence.completionDecision,
+      '11.3 decision missing: the consequence carries no decision');
+      const after = await store.getRun(context.runId);
+      assertThat(after.status === 'failed',
+        '11.3 decision missing: the Run stays non-success');
+      const ticket = await store.getTicket(after.ticketId);
+      assertThat(ticket.status !== 'completed',
+        '11.3 decision missing: and the Ticket does not complete');
+    }
+
+    // ── 11.4 completion authority mismatch ─────────────────────────────────
+    {
+      const context = await partiallyTerminalizedRun();
+      // A completion-decision event that disagrees with the consequence repair
+      // is about to record.
+      await store.appendEvent({
+        type: 'run.completion_decided',
+        ticketId: context.run.ticketId,
+        runId: context.runId,
+        payload: { decision: 'completed', decisionHash: 'a'.repeat(64) }
+      });
+      const before = await store.getRun(context.runId);
+      let thrown = null;
+      try {
+        await store.repairRunTerminalization(repairArgs(context));
+      } catch (error) { thrown = error; }
+      assertThat(thrown !== null,
+        '11.4 authority mismatch: repair REFUSES closed');
+      assertThat(thrown.code === 'COMPLETION_DECISION_CONFLICT' ||
+        thrown.code === 'TERMINAL_REPAIR_INTEGRITY_FAILURE',
+      '11.4 authority mismatch: with a completion or integrity conflict code');
+      const after = await store.getRun(context.runId);
+      assertThat(after.revision === before.revision,
+        '11.4 authority mismatch: the whole repair rolled back');
+      assertThat((await consequenceOf(context.runId)) === null,
+        '11.4 authority mismatch: no consequence was written');
+      assertThat(!(await eventTypesOf(context.runId)).includes('run.terminalized'),
+        '11.4 authority mismatch: and no terminal evidence');
+      const ticket = await store.getTicket(after.ticketId);
+      assertThat(ticket.status !== 'completed',
+        '11.4 authority mismatch: no aggregate completion');
+    }
+
+    // ── 11.5 consequence exists, terminal tail did not commit ──────────────
+    //
+    // Repair must REUSE stronger durable authority rather than reconstructing
+    // over it: exactly one consequence, never a second.
+    {
+      const context = await partiallyTerminalizedRun();
+      // DISTINGUISHABLE ON PURPOSE. A stored consequence identical to the one
+      // repair would rebuild makes reuse and reconstruction indistinguishable —
+      // and a mutation deleting the reuse branch survived this row until the
+      // marker below existed. `created` is carried verbatim into the durable
+      // consequence, so its survival is proof that the STORED authority was
+      // read rather than rebuilt.
+      const REUSE_MARKER = 'reports/a/grp-reuse-marker.txt';
+      const stored = {
+        mutations: [], created: [REUSE_MARKER], updated: [], deleted: [],
+        renamed: [], notifications: [], externalEffects: [],
+        verification: {
+          postconditionsStatus: 'unknown', violationsStatus: 'none',
+          browserEvidence: null
+        }
+      };
+      await store.recordRunConsequence({ runId: context.runId, consequence: stored });
+      assertThat((await eventTypesOf(context.runId))
+        .filter(type => type === 'run.consequence_recorded').length === 1,
+      '11.5 consequence reuse: one consequence was already durable');
+
+      const repaired = await store.repairRunTerminalization(
+        repairArgs(context, { withDecision: false }));
+      assertThat(repaired !== null,
+        '11.5 consequence reuse: repair proceeds on the stored authority');
+      assertThat((await eventTypesOf(context.runId))
+        .filter(type => type === 'run.consequence_recorded').length === 1,
+      '11.5 consequence reuse: STILL exactly one — nothing was reconstructed ' +
+      'over durable authority');
+      assertThat((await eventTypesOf(context.runId))
+        .filter(type => type === 'run.terminalized').length === 1,
+      '11.5 consequence reuse: and exactly one terminal event');
+      const reused = await consequenceOf(context.runId);
+      assertThat(reused !== null &&
+        Array.isArray(reused.consequence.created) &&
+        reused.consequence.created.includes(REUSE_MARKER),
+      '11.5 consequence reuse: the STORED consequence survived verbatim — ' +
+      'repair read durable authority instead of rebuilding it');
+      assertThat((await reservationsOf(context.runId)).length === 0,
+        '11.5 consequence reuse: repair created no provider or economic authority');
+    }
+
+    console.log('\n── Phase 12: consequence reconstruction under repair ──');
+
+    // Failure-inject each canonical write repair performs while reconstructing
+    // a missing consequence. All are `this.`-calls inside repair's single
+    // transaction, so the instance shadow reaches them.
+    for (const method of [
+      'writeReplaySnapshot',
+      'recordRunEvaluation',
+      'recordRunConsequence',
+      '_recordCompletionDecisionEvidence',
+      '_listRunOperationsOn'
+    ]) {
+      const context = await partiallyTerminalizedRun();
+      const before = await store.getRun(context.runId);
+      const fault = faultStoreMethod(store, { method });
+      let thrown = null;
+      try {
+        await store.repairRunTerminalization(repairArgs(context));
+      } catch (error) { thrown = error; } finally {
+        fault.restore();
+      }
+      assertThat(fault.fired === 1,
+        `12 ${method}: the fault fired exactly once inside repair`);
+      assertThat(thrown !== null && isInjectedFailure(thrown),
+        `12 ${method}: repair propagates the failure — it is not swallowed`);
+      await assertRepairWroteNothing(context.runId, `12 ${method}`, before);
+
+      // A LATER REPAIR SUCCEEDS EXACTLY ONCE once the dependency is available.
+      const retry = await store.repairRunTerminalization(repairArgs(context));
+      assertThat(retry !== null,
+        `12 ${method}: a later repair succeeds`);
+      const types = await eventTypesOf(context.runId);
+      assertThat(types.filter(type => type === 'run.consequence_recorded').length === 1,
+        `12 ${method}: exactly one consequence`);
+      assertThat(types.filter(type => type === 'run.terminalized').length === 1,
+        `12 ${method}: exactly one terminal event`);
+      assertThat(types.filter(type => type === 'run.completion_decided').length <= 1,
+        `12 ${method}: at most one completion-decision event`);
+      assertThat((await reservationsOf(context.runId)).length === 0,
+        `12 ${method}: and no transport, reservation or operation was created`);
     }
 
     console.log('\n── Phase 10: required versus best-effort observability ──');

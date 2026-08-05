@@ -1,73 +1,74 @@
-## Governed Required-Persistence Matrix (2026-08-05)
+## Governed Required-Persistence Matrix: CLOSED (2026-08-05)
 
-**Status:** matrix PUBLISHED and largely CLOSED; **one product defect OPEN**;
-**two rows RETAINED as not failure-injected**.
+**Status:** CLOSED. No row remains DEFECT, UNTESTED, SOURCE-ONLY or PENDING.
 
 Full proof matrix: `docs/GOVERNED_REQUIRED_PERSISTENCE_MATRIX.md`.
 Canonical suite: `scripts/governed-required-persistence-postgres-test.js`
-(187 assertions). Seam: `scripts/fixtures/persistence-fault-repository.js`,
+(315 assertions). Seam: `scripts/fixtures/persistence-fault-repository.js`,
 entirely outside production source.
 
 Twenty-four durable writes inventoried and classified by tracing consumers and
-recovery role, not by name. Every required write was failure-injected at its
-canonical owner, or shown STRUCTURALLY IMPOSSIBLE to observe partially because
-PostgreSQL commits it with its dependent transition. The most consequential
-structural findings:
+recovery role. Every required write is failure-injected at its canonical owner
+or proved structurally impossible to observe partially because PostgreSQL
+commits it with its dependent transition. The three items left open when the
+matrix was first published are now closed.
 
-* `terminalizeRun` commits terminal status, phase, **lease clearing**,
-  finalized replay snapshot, evaluation, consequence, `run.completion_decided`
-  and the terminal event in ONE transaction. "Terminal status while the lease
-  is held" and "lease released while not yet terminal" are therefore
-  unreachable — `transitionRun` nulls the lease columns in the *same UPDATE
-  statement* that sets the terminal status.
-* The governed block row and its `run.progress_blocked` event share one
-  transaction, so no accepted partial block state exists.
-* The block is persisted in its OWN transaction, deliberately, because the
-  refusal that follows would otherwise roll back the very block that must
-  survive it. That window is proved: a failed block write yields a closed
-  generic refusal, never `GOVERNED_RUN_PROGRESS_BLOCKED`, no fabricated hash,
-  and the next attempt re-decides from durable facts.
-* `readGovernedFactTransitions` REFUSES (`fact_evidence_incomplete`) when a
-  batch committed receipts but recorded no verdicts. "We did not record it" and
-  "it did not advance" genuinely do not stop a Run for the same reason.
+### CLOSED — false churn attribution for unconsumed durable responses
 
-### OPEN DEFECT — an unconsumed durable response is scored as model churn
+`evaluateGovernedRunProgress` scored a window as no-progress on
+`hasDurableResponse` alone. When settlement — or any required write between the
+response marker and the worker — failed, the answer was durable but execution
+never saw it, and the window was charged against the model's churn tolerance
+anyway; at a tolerance of one the paid-for answer became permanently unreachable
+behind a block.
 
-**Route:** `prepareAndReserveNextGovernedRunRequest` → pre-reservation gate →
-`evaluateGovernedRunProgress`
-**Field:** `window.hasDurableResponse`
-**Owner:** `runtime/governed-progress-evaluation.js`, the
-`consecutiveNoProgressWindows += 1` branch
+**Phase 1 verdict: PROGRESS EVALUATION LACKS A RESPONSE-CONSUMED WINDOW
+BOUNDARY.** Ordering was not the defect and was not changed — a persisted block
+is still consulted first, and a delivery-uncertain request is still never
+retransmitted.
 
-When settlement — or any required write downstream of
-`markEconomicResponsePersisted` — fails, the provider's answer is durable but
-the worker never consumed it. The evaluator nonetheless scores that window as
-no-progress, so an infrastructure failure is charged against the model's churn
-tolerance, and at the ceiling the paid-for answer becomes permanently
-unreachable behind a persisted block. That is FALSE BLOCKING attributable to a
-persistence failure.
+**The correction**, at two canonical owners with one shared definition:
 
-The guard already encodes the right principle one step earlier — its own
-comment reads *"A REQUEST WITH NO DURABLE RESPONSE HAS NOT MADE NO PROGRESS. It
-has not had the chance to make any."* An answer that was persisted but never
-consumed is the same argument.
+* `persistence/postgres/store.js` — `readGovernedRunProgressState` now groups
+  `run_budget_charges` by `source_identity` and reports, per window, whether the
+  answer was delivered to execution. Read under the EXISTING `budgetCutoff`, so
+  the cutoff shape and every stored block hash are unchanged. No new column,
+  table or event.
+* `runtime/governed-progress-evaluation.js` — `isChurnEligibleWindow` is the one
+  definition of a churn-eligible window: durable response AND delivery not
+  explicitly absent.
 
-It is fail-CLOSED: no false success, no false verified progress, no duplicate
-economic authority, no retransmission — all asserted by row 5.4, which pins the
-current behaviour so the defect cannot change unnoticed.
+The committed `model_request` budget charge is the boundary because production
+commits it in exactly one place — immediately before the response envelope is
+handed to the worker loop — under the identity the reservation already carries,
+and it exists even for a turn that proposed no actions, so ordinary churn stays
+countable.
 
-NOT fixed here. Teaching the evaluator to distinguish a *consumed* answer from a
-merely *persisted* one changes the gate that authorizes all provider spending,
-and needs its own brief.
+**Fail-safe, not fail-open.** `runtimeBudgetController` is a no-op for a Run with
+no runtime budget snapshot, so delivery is a tri-state: `true`, `false`, or
+`null` when the Run keeps no ledger. Only an explicit `false` withholds
+eligibility; `null` falls back to the previous rule, so churn control can never
+be silently disabled.
 
-### RETAINED — two rows not failure-injected
+Legitimate churn is unchanged and independently confirmed through a real server
+by `governed-no-progress-withholding-postgres-test`.
 
-`repairRunTerminalization` is proved by source reading to consume durable
-authority only, refusing with "consequence storage and lifecycle evidence
-disagree" rather than inventing either. But **no scenario fails a write
-underneath the repair path**, so "startup repair invents missing authority" and
-"consequence-reconstruction inputs fail under repair" are classified and
-argued, not failure-injected. They are the honest gap in this matrix.
+### CLOSED — startup repair and consequence reconstruction
+
+Both previously-retained rows are now failure-injected rather than source-audited
+(matrix §6a). Repair refuses closed on absent execution evidence, on duplicated
+or contradictory evidence, and on a conflicting completion decision; it invents
+no consequence and no completion decision; it reuses a durable consequence
+verbatim instead of rebuilding over it; and a failure at any of
+`writeReplaySnapshot`, `recordRunEvaluation`, `recordRunConsequence`,
+`_recordCompletionDecisionEvidence` or `_listRunOperationsOn` rolls the entire
+repair back, with a later repair succeeding exactly once.
+
+### Retained
+
+Nothing from this matrix. Remaining Tranche 5 work is unrelated to it: final
+broad documentation reconciliation, the complete release checkpoint, and the
+final merge-readiness audit.
 
 ---
 
