@@ -29,6 +29,7 @@ const { withHarness, createAsserter } = require('./postgres-test-harness');
 const {
   countDelta,
   durableRunCounts,
+  durableTerminalCounts,
   waitForSchedulerQuiescence
 } = require('./fixtures/terminal-projection-restart');
 const {
@@ -471,8 +472,36 @@ async function main() {
         const countsAfterSurfaces = await durableRunCounts(store, readerRun.id);
         const surfaceDrift = countDelta(countsBeforeRestart, countsAfterSurfaces);
         assertThat(surfaceDrift.length === 0,
-          `restart and every surface read create no durable facts ` +
-          `(${surfaceDrift.join(', ')})`);
+          `restart and every surface read create no durable facts for the ` +
+          `blocked leaf (${surfaceDrift.join(', ')})`);
+
+        // ── THE TICKET-SCOPED CLOSING READ ──────────────────────────────
+        //
+        // The assertion above is Run-scoped, and on its own it proves only that
+        // the blocked leaf was not restarted — not that projection did no
+        // Ticket-wide work. That distinction matters here because this scenario
+        // deliberately leaves the SIBLING executing, so a Ticket-scoped read
+        // taken now would move for reasons projection does not own.
+        //
+        // So the sibling is allowed to finish first. Once the whole Ticket is
+        // genuinely quiescent, every projection surface is issued again and the
+        // Ticket-scoped counts must not move at all. That is the read that
+        // closes the matrix; narrowing the scope permanently would have been
+        // substituting a weaker claim for the one actually required.
+        await waitForSchedulerQuiescence(store, readerRun.ticketId,
+          { timeoutMs: 180_000 });
+        const quiescedBefore = await durableTerminalCounts(store, readerRun.ticketId);
+        await fresh.request('GET', `/runs/${readerRun.id}`, { cookie });
+        await fresh.request('GET', `/tickets/${readerRun.ticketId}`, { cookie });
+        await fresh.request('GET', `/api/runs/${readerRun.id}/events`, { cookie });
+        await fresh.request('GET', `/runs/${siblingRun.id}`, { cookie });
+        await store.getAllocationPlanForTicket(readerRun.ticketId);
+        await waitForSchedulerQuiescence(store, readerRun.ticketId);
+        const quiescedAfter = await durableTerminalCounts(store, readerRun.ticketId);
+        const ticketDrift = countDelta(quiescedBefore, quiescedAfter);
+        assertThat(ticketDrift.length === 0,
+          `with the Ticket fully quiescent, every projection read creates no ` +
+          `durable fact at Ticket scope (${ticketDrift.join(', ')})`);
       } finally {
         await fresh.stop();
       }

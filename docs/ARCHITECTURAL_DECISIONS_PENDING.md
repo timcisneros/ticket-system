@@ -5525,6 +5525,28 @@ Re-aimed at `runtime/authority-paths.js`; killed by
 is restored and SHA-256-verified, and an equivalent refactor of the same
 function produces no false hit.
 
+## Blocked-Restart Read Phase Is Not Mutation-Sensitive (recorded 2026-08-04)
+
+**Status:** open, coverage gap, honestly reported rather than papered over.
+
+`governed-blocked-restart-postgres-test` now asserts that the blocked leaf's
+allocation item and parent Ticket never project completed. Those assertions DO
+execute (the item projects `failed`), but they read DURABLE stored projections,
+while `projectedStatus` runs only inside `transitionTicketAfterRun` — which the
+suite's read-only restart phase never invokes. So mutations to the projection
+mapping survive this suite.
+
+Three focused mutations survived for this reason and are NOT claimed as covered:
+
+* verified-progress block projects completed;
+* governed block authority disappears from the Run;
+* progress block gains sibling-dependency authority.
+
+The projection mapping itself IS covered — by the malformed-completion suites,
+which call `transitionTicketAfterRun` directly, where the equivalent mutations
+are caught. What is missing is a mutation aimed at the read-only restart path,
+which needs either a projection call in that phase or a different anchor.
+
 ## Structured-Leaf Terminal-State Representability (recorded 2026-08-04)
 
 Classification of the nine terminal states, from source and from the refusals
@@ -5605,11 +5627,38 @@ SIBLING executing, so its ordinary progress showed up as drift. Terminal-Run
 scope is the honest measurement when a neighbour is still live; Ticket scope is
 right only when the whole batch is terminal. Both helpers exist for that reason.
 
-**Still open from this matrix:** fresh-process projection for case 1 (valid
-structured completion) and case 7 (`verified_progress_exhausted`); the
-remaining surfaces (Ticket API, Run/runtime API and CLI) for cases other than
-replay-integrity and sibling dependency; and the no-side-effect matrix for
-those two cases.
+**Closed 2026-08-04 (second pass):** case 1 (valid structured completion) and
+case 7 (`verified_progress_exhausted`) now have cold-process proofs, by
+extending the existing lifecycle and blocked-restart scenarios rather than
+building new ones. Both assert the Run page, Ticket page and Run events API in
+addition to the durable authority.
+
+**No-side-effect scope, corrected.** A previous entry implied the matrix was
+closed on terminal-Run scope. It was not: Run scope proves the terminal leaf was
+not restarted, NOT that projection did no Ticket-wide work. Every case now ends
+with a Ticket-scoped closing read taken after full durable quiescence, with
+every projection surface re-issued against it — zero drift in all four. Where a
+pre-restart baseline moves, the delta is reported and attributed rather than
+scoped away:
+
+* blocked-restart CRASHES a server mid-flight, so its restart is RECOVERY, not
+  projection: the leaf is reclaimed, terminalized and given its completion
+  decision, and interrupted siblings finish. Those rows are execution. The
+  projection claim is made separately against an already-quiescent Ticket.
+* sibling-dependency deliberately leaves the sibling executing, so the sibling
+  is allowed to finish before the Ticket-scoped closing read.
+
+**A completed leaf renders `verified_progress_exhausted` on its Run page**,
+under a "Churn decision" heading. This is not a borrowed authority: the last
+progress window produced no new verified progress and the Run then completed
+because its declared work was satisfied. Both records are true and the churn
+decision is labelled as its own authority. The suite therefore asserts that no
+governed progress BLOCK and no integrity disposition exist for a completed leaf,
+rather than asserting the absence of a string.
+
+**Still open:** the Ticket API and CLI columns for all five rows (only page and
+events API are asserted); and deterministic mutation coverage for the
+verified-progress projection path — see the note below.
 
 ## Sibling Refusal's failureKind: closed 2026-08-04
 

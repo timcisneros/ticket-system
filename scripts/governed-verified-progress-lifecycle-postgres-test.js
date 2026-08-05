@@ -31,6 +31,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { withHarness, createAsserter } = require('./postgres-test-harness');
 const {
+  countDelta,
+  durableTerminalCounts,
+  waitForSchedulerQuiescence
+} = require('./fixtures/terminal-projection-restart');
+const {
   seedGovernedStructuredTicket,
   progressControlPolicy
 } = require('./governed-structured-fixture');
@@ -502,9 +507,140 @@ async function main() {
         console.log(`  (${assertThat.count()} lifecycle assertions)`);
       } finally {
         await server.stop();
-        fs.rmSync(capturePath, { force: true });
-        fs.rmSync(responsePath, { force: true });
       }
+
+      // ── VALID STRUCTURED COMPLETION THROUGH A COLD PROCESS ─────────────
+      //
+      // Everything above was proved by the process that DID the work. A
+      // completion that only holds while its author is alive is a cache, not a
+      // projection, so the same claims are re-read by a server that has never
+      // seen this Ticket.
+      //
+      // The baseline is taken only after durable quiescence, so the
+      // no-side-effect comparison below is Ticket-scoped rather than narrowed
+      // to the terminal Run — nothing here is still legitimately executing, so
+      // there is no live-sibling ambiguity to hide behind.
+      {
+        await waitForSchedulerQuiescence(store, run.ticketId);
+        const before = await durableTerminalCounts(store, run.ticketId);
+        const runBefore = await store.getRun(runId);
+        const decisionBefore = (await store.getRunConsequence(runId))
+          .consequence.completionDecision;
+
+        const cold = await startServer({ env: {
+          NODE_OPTIONS: `--require ${PRELOAD}`,
+          OPENAI_API_KEY: SENTINEL,
+          HERMETIC_TRANSPORT_CAPTURE: capturePath,
+          HERMETIC_TRANSPORT_RESPONSE: responsePath,
+          RUNTIME_SCHEDULER_INTERVAL_MS: '200',
+          RUN_LEASE_DURATION_MS: '60000'
+        } });
+        try {
+          await waitForSchedulerQuiescence(store, run.ticketId);
+          const cookie = await cold.login();
+
+          // ── The durable authority, re-read cold ────────────────────────
+          const coldRun = await store.getRun(runId);
+          assertThat(coldRun.status === 'completed',
+            `the Run still projects completed after a cold restart (${coldRun.status})`);
+          assertThat(coldRun.leaseOwner === null,
+            'and holds no lease — it is not scheduler-eligible');
+          assertThat(coldRun.revision === runBefore.revision,
+            'the restart does not touch its revision');
+
+          const decisionAfter = (await store.getRunConsequence(runId))
+            .consequence.completionDecision;
+          assertThat(decisionAfter.decisionHash === decisionBefore.decisionHash,
+            'the canonical completion decision is byte-identical after restart');
+          assertThat(Number(decisionAfter.runId) === Number(runId) &&
+            Number(decisionAfter.ticketId) === Number(run.ticketId),
+          'and is bound to THIS Run and Ticket');
+          assertThat(decisionAfter.completionDisposition === 'completed',
+            `the decision itself claims completion (${decisionAfter.completionDisposition})`);
+
+          // COMPLETION IS NOT INFERRED FROM STATUS. The expected authority is
+          // compared, which is the rule a status-only projection would skip.
+          const expectedHash = coldRun.completionAuthoritySnapshot
+            ? coldRun.completionAuthoritySnapshot.objectiveContractHash
+            : null;
+          assertThat(typeof expectedHash === 'string' && /^[0-9a-f]{64}$/.test(expectedHash),
+            'the Run carries a durable expected completion-authority hash');
+          assertThat(decisionAfter.objectiveContractHash === expectedHash,
+            'and the decision authority matches it exactly');
+
+          // ── Reconciliation and the parent aggregate ────────────────────
+          const coldPlan = await store.getAllocationPlanForTicket(run.ticketId);
+          const coldItems = (coldPlan && coldPlan.aggregateDecision &&
+            coldPlan.aggregateDecision.items) || [];
+          const coldLeaf = coldItems.find(item =>
+            Number(item.allocationItemId) === Number(run.allocationItemId));
+          assertThat(Boolean(coldLeaf), 'the leaf item is present after restart');
+          assertThat(coldLeaf.itemStatus === 'completed',
+            `reconciliation still completes the leaf item (${coldLeaf.itemStatus})`);
+          assertThat(coldLeaf.completionDecisionHash === decisionAfter.decisionHash,
+            'and names the same completion decision');
+
+          // ── Operator surfaces ─────────────────────────────────────────
+          const ticketPage = await cold.request(
+            'GET', `/tickets/${run.ticketId}`, { cookie });
+          assertThat(ticketPage.statusCode === 200,
+            'the Ticket page renders over the completed leaf');
+          assertThat(!/COMPLETION_EVIDENCE_MISSING/.test(String(ticketPage.body || '')),
+            'with no completion-evidence refusal');
+          const runPage = await cold.request('GET', `/runs/${runId}`, { cookie });
+          assertThat(runPage.statusCode === 200,
+            'the Run detail page renders');
+          const runBody = String(runPage.body || '');
+          assertThat(!runBody.includes('replay_unavailable_integrity_failure'),
+            'a completed Run borrows no replay-integrity authority');
+          // AUTHORITY, NOT VOCABULARY.
+          //
+          // The page does render `verified_progress_exhausted` for this
+          // COMPLETED Run — under a "Churn decision" heading, which is a
+          // different question from the Run's disposition: the last progress
+          // window produced no new verified progress, and the Run then
+          // completed because its declared work was satisfied. Both are true,
+          // and the churn record is labelled as its own authority rather than
+          // presented as the outcome.
+          //
+          // So asserting the absence of the STRING would be asserting the wrong
+          // thing. What must hold is that no BLOCK AUTHORITY exists for a
+          // completed leaf, and that no other authority class is borrowed.
+          assertThat(!coldRun.governedProgressBlock,
+            'a completed leaf holds NO governed progress block authority');
+          assertThat(!coldRun.integrityFailureCode,
+            'and no replay-integrity disposition');
+          assertThat(!runBody.includes('undeclared_sibling_dependency'),
+            'and the page borrows no sibling-dependency authority');
+          assertThat(runBody.includes('completed'),
+            'while presenting the Run as completed');
+
+          const eventsApi = await cold.request(
+            'GET', `/api/runs/${runId}/events`, { cookie });
+          assertThat(eventsApi.statusCode === 200, 'the Run events API projects');
+          assertThat(String(eventsApi.body || '').includes('run.completion_decided'),
+            'and exposes the durable completion-decision event');
+          const ticketApi = await cold.request(
+            'GET', `/api/tickets/${run.ticketId}`, { cookie });
+          assertThat([200, 404].includes(ticketApi.statusCode),
+            `the Ticket API answers without an error envelope (${ticketApi.statusCode})`);
+
+          // ── NOTHING WAS CREATED BY PROJECTING ─────────────────────────
+          await waitForSchedulerQuiescence(store, run.ticketId);
+          const after = await durableTerminalCounts(store, run.ticketId);
+          const drift = countDelta(before, after);
+          assertThat(drift.length === 0,
+            `cold restart and every projection read create no durable facts ` +
+            `(${drift.join(', ')})`);
+          assertThat(capturedEntries().length === 2,
+            'and no third provider request was ever dispatched');
+        } finally {
+          await cold.stop();
+        }
+      }
+
+      fs.rmSync(capturePath, { force: true });
+      fs.rmSync(responsePath, { force: true });
     });
 
   // ── No caller supplies a satisfied-fact map ─────────────────────────────

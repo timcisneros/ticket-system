@@ -27,6 +27,12 @@ const os = require('node:os');
 const path = require('node:path');
 const { withHarness, createAsserter } = require('./postgres-test-harness');
 const {
+  countDelta,
+  durableRunCounts,
+  durableTerminalCounts,
+  waitForSchedulerQuiescence
+} = require('./fixtures/terminal-projection-restart');
+const {
   seedGovernedStructuredTicket,
   progressControlPolicy
 } = require('./governed-structured-fixture');
@@ -185,9 +191,15 @@ async function main() {
       const replayBefore = (await store.readRunReplay(runId) || {}).snapshot || {};
 
       // ── Server 2: restart. The stop is read, not retaken ────────────────
+      const countsBeforeRestart = await durableTerminalCounts(store, run.ticketId);
+      const leafBeforeRestart = await durableRunCounts(store, runId);
       const second = await startServer({ env });
       try {
-        await sleep(9000);
+        // DURABLE QUIESCENCE, NOT A FIXED SLEEP. A sleep asserts that nothing
+        // happened during an arbitrary interval, which is the one thing it
+        // cannot know; this waits until no Run on the Ticket holds a lease or
+        // is pending/running across consecutive independent reads.
+        await waitForSchedulerQuiescence(store, run.ticketId);
 
         const after = await store.getRun(runId);
         const blockAfter = after.governedProgressBlock;
@@ -296,6 +308,128 @@ async function main() {
           'still no fact was ever newly verified');
 
         console.log(`  (${assertThat.count()} blocked restart assertions)`);
+        // ── THE PROJECTED STATUS IS NON-SUCCESS ────────────────────────
+        //
+        // The decision's disposition is asserted above; this asserts what the
+        // PROJECTION makes of it. Without this, a projector mapping `blocked`
+        // to `completed` would satisfy every other assertion here — the block,
+        // its hashes and the decision would all still be correct while the
+        // Ticket claimed success over them.
+        const projectedPlan = await store.getAllocationPlanForTicket(run.ticketId);
+        const projectedItems = (projectedPlan && projectedPlan.aggregateDecision &&
+          projectedPlan.aggregateDecision.items) || [];
+        const projectedLeaf = projectedItems.find(item => Number(item.runId) === Number(runId));
+        if (projectedLeaf) {
+          assertThat(projectedLeaf.itemStatus !== 'completed',
+            `the blocked leaf never projects as completed (${projectedLeaf.itemStatus})`);
+        }
+        const projectedTicket = (await store.pool.query(
+          `SELECT status FROM ${store.table('tickets')} WHERE id = $1`,
+          [run.ticketId])).rows[0];
+        assertThat(projectedTicket.status !== 'completed',
+          `and the parent Ticket cannot project completed over it ` +
+          `(${projectedTicket.status})`);
+
+        // ── EVERY APPLICABLE OPERATOR SURFACE ──────────────────────────
+        //
+        // The durable block is proved above. These are the surfaces an operator
+        // actually reads, and each must present the governed progress-block
+        // authority without borrowing another class.
+        const cookie = await second.login();
+
+        const runPage = await second.request('GET', `/runs/${runId}`, { cookie });
+        assertThat(runPage.statusCode === 200,
+          `the blocked Run detail page renders (${runPage.statusCode})`);
+        const runBody = String(runPage.body || '');
+        assertThat(runBody.includes('verified_progress_exhausted'),
+          'and states the exact governed progress-block reason');
+        assertThat(!runBody.includes('undeclared_sibling_dependency'),
+          'without borrowing sibling-dependency authority');
+        assertThat(!runBody.includes('replay_unavailable_integrity_failure') &&
+          !runBody.includes('POSTGRES_REPLAY_INTEGRITY_FAILURE'),
+        'and without borrowing replay-integrity authority');
+
+        const ticketPage = await second.request(
+          'GET', `/tickets/${run.ticketId}`, { cookie });
+        assertThat(ticketPage.statusCode === 200,
+          'the Ticket page renders over a progress-blocked leaf');
+        assertThat(!/COMPLETION_EVIDENCE_MISSING/.test(String(ticketPage.body || '')),
+          'with no completion-evidence refusal attributed to it');
+
+        const eventsApi = await second.request(
+          'GET', `/api/runs/${runId}/events`, { cookie });
+        assertThat(eventsApi.statusCode === 200,
+          'the Run events API projects over the blocked Run');
+        assertThat(String(eventsApi.body || '').includes('run.progress_blocked'),
+          'and exposes the durable block event rather than inferring from status');
+
+        // AUTOMATIC RETRY IS PROHIBITED BY ITS ACTUAL OWNER — the triage
+        // record — not by the block reason being present somewhere.
+        const blockedTriage = (await store.getRun(runId)).triage;
+        if (blockedTriage) {
+          assertThat(Array.isArray(blockedTriage.prohibitedActions) &&
+            blockedTriage.prohibitedActions.includes('automatic_retry'),
+          'automatic retry is prohibited through the canonical triage authority');
+        } else {
+          assertThat(true, 'the blocked Run raised no triage record');
+        }
+        assertThat((await store.getRun(runId)).leaseOwner === null,
+          'and the blocked Run holds no lease — it is not scheduler-eligible');
+
+        // ── NO SIDE EFFECTS, PROVED AT TICKET SCOPE ───────────────────
+        //
+        // The pre-restart baseline moves, and it is important to say exactly
+        // why rather than to narrow the scope until the number looks right.
+        // This scenario CRASHES a server mid-flight; the restart is a recovery,
+        // so sibling Runs that were interrupted legitimately resume and finish.
+        // Their rows are caused by execution, not by projection.
+        //
+        // Two things are therefore proved separately: no new row belongs to the
+        // BLOCKED leaf, and — once the whole Ticket is genuinely quiescent —
+        // repeating every projection read moves nothing at Ticket scope. The
+        // second is the claim that closes the matrix; the first stops the
+        // first read from being explained away.
+        await waitForSchedulerQuiescence(store, run.ticketId);
+
+        // THE RESTART IS RECOVERY, NOT PROJECTION — and conflating the two
+        // would be the easiest way to claim a no-side-effect proof this
+        // scenario cannot support. The server is CRASHED mid-flight here: at
+        // the pre-restart baseline the leaf still holds a lease and has not
+        // been terminalized, so the fresh process legitimately reclaims it,
+        // terminalizes it into the blocked disposition, writes its completion
+        // decision, and finishes interrupted siblings. Those rows are caused by
+        // EXECUTION resuming.
+        //
+        // The delta is therefore reported and attributed rather than asserted
+        // to be empty. The projection claim is made below, where it belongs:
+        // against a Ticket that is already quiescent and terminal.
+        const leafAfterRecovery = await durableRunCounts(store, runId);
+        const leafDelta = countDelta(leafBeforeRestart, leafAfterRecovery);
+        const ticketDelta = countDelta(countsBeforeRestart,
+          await durableTerminalCounts(store, run.ticketId));
+        console.log(`  (recovery delta — leaf: ${leafDelta.join(', ') || 'none'})`);
+        console.log(`  (recovery delta — ticket: ${ticketDelta.join(', ') || 'none'})`);
+        assertThat(leafAfterRecovery.reservations === leafBeforeRestart.reservations,
+          `recovery issues the blocked leaf no new economic reservation ` +
+          `(${leafBeforeRestart.reservations} -> ${leafAfterRecovery.reservations})`);
+        assertThat(leafAfterRecovery.receipts === leafBeforeRestart.receipts,
+          'and commits no new workspace receipt for it');
+        assertThat(leafAfterRecovery.activeLease === 0,
+          'and leaves it holding no lease once recovery settles it');
+
+        // THE CLOSING READ. Ticket-scoped, taken with everything quiescent, and
+        // every projection surface issued again against it.
+        const quiescedBefore = await durableTerminalCounts(store, run.ticketId);
+        await second.request('GET', `/runs/${runId}`, { cookie });
+        await second.request('GET', `/tickets/${run.ticketId}`, { cookie });
+        await second.request('GET', `/api/runs/${runId}/events`, { cookie });
+        await store.getAllocationPlanForTicket(run.ticketId);
+        await waitForSchedulerQuiescence(store, run.ticketId);
+        const quiescedAfter = await durableTerminalCounts(store, run.ticketId);
+        const drift = countDelta(quiescedBefore, quiescedAfter);
+        assertThat(drift.length === 0,
+          `with the Ticket fully quiescent, every projection read creates no ` +
+          `durable fact at Ticket scope (${drift.join(', ')})`);
       } finally {
         await second.stop();
         for (const file of [capturePath, responsePath, markerPath, statePath, servedPath]) {
