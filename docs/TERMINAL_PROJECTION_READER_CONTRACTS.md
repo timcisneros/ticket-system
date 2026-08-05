@@ -222,6 +222,40 @@ No CLI features are to be added in this tranche to fill cells.
 
 ---
 
+## 4a. CLI applicability — corrected 2026-08-05
+
+§4 classified rows 3 and 4 NOT APPLICABLE. **That was wrong**, and the error is
+instructive: the grep behind it looked for `governedProgressBlock`, which is not
+the payload's field name. The CLI reaches the block through
+`verifiedProgress.block`.
+
+`cmdReplay` (oquery.js:679-691) prints:
+
+```
+progress block <reason> <blockHash>
+  blocked at <blockedAt> cutoff <cutoff.cutoffIdentity>
+  decision <churnDecisionHash> policy <progressPolicyHash>
+  sibling read <requestedPath> owned by item #<siblingAllocationItemId>
+```
+
+Corrected classification:
+
+| Row | CLI | Basis |
+|---|---|---|
+| 1 valid completion | **APPLICABLE — ASSERTED** | `oquery run-state <runId>`; lifecycle suite |
+| 2 contained integrity | NOT APPLICABLE | no `integrityFailureCode`, `replayAvailability` or `POSTGRES_REPLAY_INTEGRITY_FAILURE` anywhere in the file |
+| 3 verified_progress_exhausted | **APPLICABLE — NOT ASSERTED** | `oquery replay` prints block reason and `blockHash` |
+| 4 undeclared_sibling_dependency | **APPLICABLE — NOT ASSERTED** | same command prints `requestedPath` and sibling item |
+| 5 uncontained corruption | NOT APPLICABLE | no projection or refusal seam |
+
+Both directions are pinned by a source contract in the lifecycle suite: the four
+absent symbols must stay absent, the three present ones must stay present, and
+the matrix row is parsed and checked against both. Re-marking rows 3 or 4
+NOT APPLICABLE now fails.
+
+Rows 3 and 4 CLI assertions are **not written** — that is new reader work, and
+the session that found this misclassification was scoped to row 1.
+
 ## 5. Page semantic-section contract
 
 Assert by `<dt>` label and its sibling `<dd>`, never by whole-page substring —
@@ -434,7 +468,7 @@ Suites: **L** lifecycle · **B** blocked-restart · **S** sibling-dependency ·
 | Run-events API | ✔ L | ✔ C | ✔ B | ✔ S | ✔ C |
 | reconciliation | `completion_verified` L | `completion_unsuccessful` C | `governed_progress_blocked` B | `governed_sibling_dependency_blocked` S | refuses first |
 | parent aggregate | ✔ L | ✔ C | ✔ B | ✔ S | refuses first |
-| CLI | APPLICABLE — NOT ASSERTED | NOT APPLICABLE §4 | NOT APPLICABLE §4 | NOT APPLICABLE §4 | NOT APPLICABLE §4 |
+| CLI | APPLICABLE — ASSERTED, L | NOT APPLICABLE §4 | APPLICABLE — NOT ASSERTED §4a | APPLICABLE — NOT ASSERTED §4a | NOT APPLICABLE §4 |
 | completion authority | decision + matching hash L | none; not required C | none B | none S | none |
 | integrity-failure authority | absent L | `POSTGRES_REPLAY_INTEGRITY_FAILURE` C | absent B | absent S | refusal envelope C |
 | progress block + blockHash | absent L | absent C | ✔ exact hash B | absent S | n/a |

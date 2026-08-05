@@ -34,6 +34,7 @@ const {
   countDelta,
   durableTerminalCounts,
   findRuntimeRun,
+  fullTerminalCounts,
   pageSection,
   waitForSchedulerQuiescence
 } = require('./fixtures/terminal-projection-restart');
@@ -765,9 +766,72 @@ async function main() {
           assertThat(runtimeLeaf.dispositionReason === 'completion_verified',
             'and reconciliation still reports verified completion');
 
+          // ── CLI READER: APPLICABLE — ASSERTED ─────────────────────────
+          //
+          // Through the real command path — `node scripts/oquery.js run-state
+          // <runId>` — not by calling a formatter. oquery is an HTTP operator
+          // client: it reads `OPERC_URL` and a cached session from
+          // `OPERC_COOKIE_PATH`, so the cold server's cookie is written where
+          // the CLI looks for it.
+          //
+          // Only what this command OWNS is asserted. `run-state` prints the
+          // three completion dispositions but NOT the decision hash — that is
+          // printed by other commands — so requiring a hash here would be
+          // requiring a field this reader does not emit.
+          const cliCookiePath = path.join(os.tmpdir(),
+            `gvl-oquery-${process.pid}-${STAMP}.cookie`);
+          fs.writeFileSync(cliCookiePath, cookie.replace(/^sessionId=/, ''));
+          const cliOutput = await new Promise(resolve => {
+            const child = require('node:child_process').spawn(
+              process.execPath,
+              [path.join(__dirname, 'oquery.js'), 'run-state', String(runId)],
+              {
+                cwd: path.join(__dirname, '..'),
+                stdio: ['ignore', 'pipe', 'pipe'],
+                env: {
+                  ...process.env,
+                  OPERC_URL: cold.baseUrl,
+                  OPERC_COOKIE_PATH: cliCookiePath
+                }
+              });
+            let text = '';
+            child.stdout.on('data', c => { text += c.toString(); });
+            child.stderr.on('data', c => { text += c.toString(); });
+            child.on('close', code => resolve({ code, text }));
+          });
+          // Strip ANSI so substring assertions are stable.
+          const cliText = cliOutput.text.replace(/\u001b\[[0-9;]*m/g, '');
+          assertThat(cliOutput.code === 0,
+            `oquery run-state exits successfully (${cliOutput.code})`);
+          assertThat(cliText.includes(`Run #${runId}`),
+            `and names the exact Run (#${runId})`);
+          assertThat(cliText.includes(`ticket #${run.ticketId}`),
+            `and the exact Ticket (#${run.ticketId})`);
+          assertThat(/completion decision/.test(cliText),
+            'and prints the completion decision it owns');
+          assertThat(new RegExp(
+            `execution ${decisionAfter.executionDisposition}`).test(cliText),
+          `with the durable execution disposition ` +
+          `(${decisionAfter.executionDisposition})`);
+          assertThat(new RegExp(
+            `verification ${decisionAfter.verificationDisposition}`).test(cliText),
+          `the durable verification disposition ` +
+          `(${decisionAfter.verificationDisposition})`);
+          assertThat(new RegExp(
+            `objective ${decisionAfter.completionDisposition}`).test(cliText),
+          `and the durable objective disposition ` +
+          `(${decisionAfter.completionDisposition})`);
+          // It claims none of the authorities it cannot read (rows 2-5).
+          assertThat(!cliText.includes('verified_progress_exhausted') &&
+            !cliText.includes('undeclared_sibling_dependency') &&
+            !cliText.includes('POSTGRES_REPLAY_INTEGRITY_FAILURE') &&
+            !cliText.includes('replay_unavailable_integrity_failure'),
+          'and claims no block or replay-integrity authority');
+          fs.rmSync(cliCookiePath, { force: true });
+
           // ── NOTHING WAS CREATED BY PROJECTING ─────────────────────────
           await waitForSchedulerQuiescence(store, run.ticketId);
-          const after = await durableTerminalCounts(store, run.ticketId);
+          const after = await fullTerminalCounts(store, run.ticketId);
           const drift = countDelta(before, after);
           assertThat(drift.length === 0,
             `cold restart and every projection read create no durable facts ` +
@@ -782,6 +846,76 @@ async function main() {
       fs.rmSync(capturePath, { force: true });
       fs.rmSync(responsePath, { force: true });
     });
+
+  // ── CLI APPLICABILITY BOUNDARY (rows 2-5) ──────────────────────────────
+  //
+  // Row 1 is asserted above through the real `oquery run-state` command. Rows
+  // 2-5 are NOT APPLICABLE, and that is proved from the CLI's source rather
+  // than by running it against those rows to watch fields be missing — absence
+  // observed once is not a contract.
+  //
+  // oquery is an HTTP operator client over `tickets, runs, logs, history,
+  // plans`. It never reads the seams that own the other four rows' authority,
+  // so it cannot report them and must not be marked as asserting them.
+  {
+    const oquerySource = fs.readFileSync(path.join(__dirname, 'oquery.js'), 'utf8');
+    const executable = oquerySource.split('\n')
+      .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line))
+      .join('\n');
+    // WHAT SOURCE ACTUALLY PROVES ABSENT.
+    //
+    // An earlier revision of §4 also listed the governed block and sibling
+    // authority here. That was wrong: `cmdReplay` prints
+    // `progress.block.reason`, `blockHash`, `blockedAt`, `churnDecisionHash`,
+    // `progressPolicyHash` and `block.siblingDependency.requestedPath` /
+    // `siblingAllocationItemId` (oquery.js:679-691). The grep behind that claim
+    // looked for `governedProgressBlock`, which is not the payload's field
+    // name — the CLI reaches the block through `verifiedProgress.block`.
+    //
+    // So only these are genuinely unreachable by the CLI, and only rows 2 and 5
+    // are NOT APPLICABLE.
+    for (const [row, symbol] of [
+      ['contained replay-integrity containment', 'integrityFailureCode'],
+      ['replay availability', 'replayAvailability'],
+      ['replay-integrity code', 'POSTGRES_REPLAY_INTEGRITY_FAILURE'],
+      ['ticket verified-progress summary seam', 'readTicketVerifiedProgressProjection']
+    ]) {
+      assert.equal(executable.includes(symbol), false,
+        `oquery reads no ${row} authority (${symbol}) — rows 2 and 5 are ` +
+        'NOT APPLICABLE by source, not by observation');
+    }
+
+    // The block and sibling authorities ARE reachable, so the matrix may not
+    // claim they are unreachable. This fails if anyone re-marks them
+    // NOT APPLICABLE.
+    for (const [row, symbol] of [
+      ['governed progress block', 'blockHash'],
+      ['sibling/path block', 'siblingDependency'],
+      ['sibling requested path', 'requestedPath']
+    ]) {
+      assert.equal(executable.includes(symbol), true,
+        `oquery DOES read ${row} authority (${symbol}) — rows 3 and 4 may not ` +
+        'be marked NOT APPLICABLE');
+    }
+
+    // And the documented matrix must not claim otherwise.
+    const contracts = fs.readFileSync(
+      path.join(__dirname, '..', 'docs', 'TERMINAL_PROJECTION_READER_CONTRACTS.md'), 'utf8');
+    const cliRow = contracts.split('\n').find(line => line.startsWith('| CLI |'));
+    assert.ok(cliRow, 'the matrix carries a CLI row');
+    const cells = cliRow.split('|').map(cell => cell.trim());
+    assert.ok(/APPLICABLE — ASSERTED/.test(cells[2]),
+      `the matrix marks valid completion CLI-asserted (${cells[2]})`);
+    for (const [index, label] of [[3, 'contained integrity'], [6, 'uncontained']]) {
+      assert.ok(/NOT APPLICABLE/.test(cells[index]),
+        `matrix CLI cell for ${label} stays NOT APPLICABLE (${cells[index]})`);
+    }
+    for (const [index, label] of [[4, 'verified-progress'], [5, 'sibling dependency']]) {
+      assert.ok(!/NOT APPLICABLE/.test(cells[index]),
+        `matrix CLI cell for ${label} may not claim NOT APPLICABLE — the CLI ` +
+        `reads that authority (${cells[index]})`);
+    }
+  }
 
   // ── No caller supplies a satisfied-fact map ─────────────────────────────
   //

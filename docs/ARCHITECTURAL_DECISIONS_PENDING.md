@@ -1,3 +1,34 @@
+## CLI Applicability Was Misclassified for Rows 3 and 4 (corrected 2026-08-05)
+
+Closing the CLI cell surfaced an error in my own §4 audit.
+
+**Row 1 is now APPLICABLE — ASSERTED.** Executed through the real command path,
+`node scripts/oquery.js run-state <runId>`, against the cold process, with
+`OPERC_URL` and `OPERC_COOKIE_PATH`. Asserted: exit 0, exact Run, exact Ticket,
+and the three durable dispositions. The decision HASH is not asserted because
+`run-state` does not print it — requiring it would demand a field this reader
+does not emit.
+
+**Rows 3 and 4 were misclassified NOT APPLICABLE.** `cmdReplay`
+(oquery.js:679-691) prints `progress.block.reason`, `blockHash`, `blockedAt`,
+`cutoff.cutoffIdentity`, `churnDecisionHash`, `progressPolicyHash`, and
+`block.siblingDependency.requestedPath` / `siblingAllocationItemId`. The grep
+behind the original claim searched for `governedProgressBlock`, which is not the
+payload's field name — the CLI reaches the block through
+`verifiedProgress.block`. Corrected to **APPLICABLE — NOT ASSERTED**.
+
+Rows 2 and 5 remain NOT APPLICABLE, now proved by four symbols that are genuinely
+absent from the whole file: `integrityFailureCode`, `replayAvailability`,
+`POSTGRES_REPLAY_INTEGRITY_FAILURE`, `readTicketVerifiedProgressProjection`.
+
+A source contract pins both directions and parses the matrix row itself, so
+re-marking rows 3 or 4 NOT APPLICABLE, or marking rows 2 or 5 applicable, now
+fails.
+
+**The terminal five-row matrix is therefore NOT complete.** Two CLI cells are
+classified but unasserted. The previous entry claiming one remaining cell is
+superseded.
+
 ## Terminal Reader Parity: five-row matrix complete except the CLI cell (2026-08-05)
 
 Closed this session:
