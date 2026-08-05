@@ -97,7 +97,10 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   // A20 tranche 2 — the shared child-settlement helper that removes the
   // silent-success failure mode from the orphaned suites. Deterministic: it spawns
   // only short-lived `node -e` children.
-  'child-process-settlement-test.js'
+  'child-process-settlement-test.js',
+  // Tranche 6 — the controlled-evaluation harness proofs. Deterministic: it
+  // touches only the filesystem and pure contracts, and needs no database.
+  'structured-allocation-evaluation-test.js'
 ]);
 
 const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([

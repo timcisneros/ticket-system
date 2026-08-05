@@ -192,6 +192,7 @@ const TESTS = Object.freeze([
   { file: "governed-post-transport-restart-postgres-test.js", status: "required" },
   { file: "governed-replay-corruption-postgres-test.js", status: "required" },
   { file: "governed-required-persistence-postgres-test.js", status: "required" },
+  { file: "structured-allocation-evaluation-test.js", status: "required" },
   { file: "malformed-completion-projection-postgres-test.js", status: "required" },
   { file: "governed-planner-dispatch-postgres-test.js", status: "required" },
   { file: "governed-planner-production-path-postgres-test.js", status: "required" },
