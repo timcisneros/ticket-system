@@ -29,6 +29,7 @@ const { withHarness, createAsserter } = require('./postgres-test-harness');
 const {
   countDelta,
   durableRunCounts,
+  findRuntimeRun,
   durableTerminalCounts,
   waitForSchedulerQuiescence
 } = require('./fixtures/terminal-projection-restart');
@@ -355,6 +356,57 @@ async function main() {
           'the Ticket page renders over a progress-blocked leaf');
         assertThat(!/COMPLETION_EVIDENCE_MISSING/.test(String(ticketPage.body || '')),
           'with no completion-evidence refusal attributed to it');
+
+        // ── THE ACTUAL TICKET RUNTIME API, SCOPED TO THIS RUN ──────────
+        //
+        // `/api/tickets/:id/runtime` is the real Ticket API — there is no
+        // `GET /api/tickets/:id`. Its payload reports every Run, so the target
+        // leaf is located by Run ID and only its own fields are inspected; a
+        // sibling's truthful reason must neither satisfy nor fail this.
+        const ticketRuntimeApi = await second.request(
+          'GET', `/api/tickets/${run.ticketId}/runtime`, { cookie });
+        assertThat(ticketRuntimeApi.statusCode === 200,
+          `the Ticket runtime API projects over a blocked leaf ` +
+          `(${ticketRuntimeApi.statusCode})`);
+        const runtimePayload = JSON.parse(ticketRuntimeApi.body);
+        const runtimeLeaf = findRuntimeRun(runtimePayload, runId);
+        assertThat(runtimeLeaf.itemStatus !== 'completed',
+          `the Ticket runtime API never reports the blocked leaf completed ` +
+          `(${runtimeLeaf.itemStatus})`);
+        assertThat(runtimeLeaf.dispositionReason !== 'completion_verified',
+          'and never claims verified completion for it');
+        assertThat(runtimeLeaf.runId === runId,
+          'and the inspected entry is this Run, not a sibling');
+
+        // The same authority through the Run-state API, which is a DIFFERENT
+        // reader from the events endpoint below and may not stand in for it.
+        const runStateApi = await second.request(
+          'GET', `/api/runs/${runId}/state`, { cookie });
+        assertThat(runStateApi.statusCode === 200,
+          `the Run-state API projects the blocked Run (${runStateApi.statusCode})`);
+        // The Run-state payload is the Run itself, flat — `id`, `ticketId`,
+        // `status` — not a wrapper. Identity is asserted so this cannot drift
+        // into reading whichever Run the route happened to return.
+        const runState = JSON.parse(runStateApi.body);
+        assertThat(Number(runState.id) === Number(runId) &&
+          Number(runState.ticketId) === Number(run.ticketId),
+        'and reports this exact Run on this exact Ticket');
+        assertThat(runState.status !== 'completed',
+          `with a non-success disposition (${runState.status})`);
+        // SURFACE LIMITATION, REPORTED RATHER THAN ASSERTED AWAY.
+        //
+        // The Run-state API does NOT expose `governedProgressBlock`. It reports
+        // identity and lifecycle; the block authority is not part of its
+        // contract. That is a limitation of this reader, not a disagreement
+        // with reconciliation — what would be wrong is this API claiming
+        // SUCCESS while the block says otherwise, which is asserted above.
+        // Asserting the block were present would assert a field the reader does
+        // not own. Recorded in docs/ARCHITECTURAL_DECISIONS_PENDING.md.
+        assertThat(runState.governedProgressBlock === undefined ||
+          runState.governedProgressBlock === null,
+        'the Run-state API does not own block authority — limitation, not conflict');
+        assertThat(!runState.integrityFailureCode,
+          'and it claims no replay-integrity authority either');
 
         const eventsApi = await second.request(
           'GET', `/api/runs/${runId}/events`, { cookie });

@@ -5569,6 +5569,32 @@ Replaced with the real runtime route.
   covers the BLOCK SHAPE separation but not the disposition mapping; its
   canonical leaf-run binding shape was not established in budget.
 
+## Run-State API Does Not Own Block or Integrity Authority (recorded 2026-08-04)
+
+**Status:** recorded surface limitation, not a defect.
+
+`GET /api/runs/:id/state` reports Run identity and lifecycle. It does NOT
+expose `governedProgressBlock` or `integrityFailureCode`. A terminal-projection
+suite must therefore not assert those fields on it — doing so would assert a
+field the reader does not own.
+
+What matters is that the limitation never becomes a CONFLICT: this API must not
+claim success while the block or integrity authority says otherwise. That is
+asserted. Whether the Run-state API should carry block authority is a product
+question, not a test repair.
+
+The matrix column for this reader is therefore "identity and non-success
+disposition only" for the block and integrity rows.
+
+**Per-Run scoping is now enforced, with refusals.**
+`findRuntimeRun(payload, runId)` in `scripts/fixtures/terminal-projection-restart.js`
+locates the target leaf in `structuredAllocationLeafExecution.items` and refuses
+when no item matches, when more than one matches, or when the payload carries no
+items at all. The Ticket runtime payload reports EVERY Run, and whole-payload
+substring checks were the recurring mistake of this tranche — they pass or fail
+for reasons belonging to siblings. Mutation-proved: a helper returning a
+different item than the target is caught.
+
 ## Blocked-Projection Mutation Sensitivity: closed 2026-08-04
 
 **Status:** closed. Supersedes the entry recording that three mutations

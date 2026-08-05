@@ -151,7 +151,33 @@ async function durableRunCounts(store, runId) {
   };
 }
 
+// PER-RUN SCOPING, WITH REFUSALS.
+//
+// The Ticket runtime payload reports EVERY Run on the Ticket. Whole-payload
+// substring checks therefore pass or fail for reasons belonging to siblings —
+// a mistake made and corrected more than once in this tranche. This locates the
+// target leaf's own entry in `structuredAllocationLeafExecution.items` and
+// refuses rather than guessing when the answer is ambiguous, so a test can
+// never quietly assert against the wrong Run.
+function findRuntimeRun(payload, runId) {
+  const execution = payload && payload.structuredAllocationLeafExecution;
+  const items = execution && Array.isArray(execution.items) ? execution.items : null;
+  if (!items) {
+    throw new Error('runtime payload carries no structuredAllocationLeafExecution.items');
+  }
+  const matches = items.filter(item => Number(item.runId) === Number(runId));
+  if (matches.length === 0) {
+    throw new Error(`runtime payload contains no item for run ${runId}`);
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `runtime payload contains ${matches.length} items for run ${runId} — ambiguous`);
+  }
+  return matches[0];
+}
+
 module.exports = {
+  findRuntimeRun,
   durableRunCounts,
   durableTerminalCounts,
   countDelta,
