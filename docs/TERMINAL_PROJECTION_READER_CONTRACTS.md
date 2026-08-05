@@ -506,6 +506,48 @@ has no suite that drives it. The malformed-completion suites only drive a
 `completed` Run, and the restart suites never invoke the transition. Recorded,
 not claimed.
 
+## 11b. Suites required when completion-authority projection changes
+
+Derive this set from source rather than maintaining another list — but derive it
+from the SEAM, not from the symbol names.
+
+**A symbol grep is not sufficient**, and this is the trap that hid the
+regression:
+
+```
+grep -rln "runCompletionAuthorityHash\|evaluateRunCompletionEvidence" scripts/
+  -> malformed-completion-binding-postgres-test.js
+     structured-allocation-leaf-run-contract-test.js
+```
+
+That misses `structured-allocation-leaf-run-postgres-test`, the suite that
+actually broke, because it never names those symbols — it exercises the
+authority comparison through the store.
+
+**Use the seam instead:**
+
+```
+grep -rln "transitionTicketAfterRun\|reconcileStructuredAllocationLeafItems" scripts/
+```
+
+which yields, and all of which must run for any change to Ticket projection or
+reconciliation authority comparison:
+
+* `structured-allocation-leaf-run-postgres-test` — holds the deliberate
+  foreign-authority negative cases; **omitted from session gate lists for
+  several sessions while failing**
+* `malformed-completion-projection-postgres-test`
+* `malformed-completion-binding-postgres-test`
+* `completion-decision-postgres-test`
+* `verified-progress-terminal-mapping-test`
+* `governed-leaf-production-path-postgres-test`
+* `postgres-persistence-integration-test`
+* `event-append-lock-order-test`
+
+A per-session gate list assembled from the suites a session happens to touch
+misses this set. The release checkpoint does not — it already requires every one
+of them.
+
 ## 12. Mutation ownership
 
 Caught at the owner that executes the code, restore verified by SHA-256.

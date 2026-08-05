@@ -1,32 +1,53 @@
-## REGRESSION: structured-allocation-leaf-run-postgres-test fails since da5af60 (2026-08-05)
+## Stale Foreign-Authority Expectations: closed 2026-08-05
 
-**Status:** open, undetected for several sessions, found by widening containment.
+Supersedes the entry that recorded this as an open regression. Both the
+diagnosis and the framing in that entry needed correcting.
 
-```
-Error: Run 10 cannot project its ticket: completion_authority_mismatch
-```
+**Production was never wrong.** The authority validation added by `da5af60` is
+correct and unchanged. What was stale were two expectations in
+`structured-allocation-leaf-run-postgres-test`.
 
-Bisected: the suite **PASSES** at `da5af60^` and **FAILS** from `da5af60`
-("Validate completion authority in structured ticket projection") onward. That
-commit made Ticket projection compare the Run's admitted
-`completionAuthoritySnapshot.objectiveContractHash` against the decision's,
-instead of passing `null`.
+**The fixture is also not stale.** It builds two decisions DELIBERATELY against
+a foreign objective contract — `terminalGateCase({ foreignAuthority: true })`
+uses the sibling item's authority, and the forged-run case asserts outright that
+its decision hash differs from the Run's admitted one. Those are intentional
+negative fixtures and are kept exactly as they were. An earlier handoff
+described the fixture as accidentally substituting an authority; that was wrong.
 
-**The production behaviour is correct; the fixture is stale.** The suite builds
-its completion decision through `buildCompletionDecision({ run: { ...run,
-completionAuthoritySnapshot: authority, ... } })` — substituting a fixture
-authority that differs from the Run's stored snapshot. That was invisible while
-the projection compared nothing. It is now exactly the mismatch the corrected
-projection exists to refuse.
+**What actually changed.** Before `da5af60`, Ticket projection passed `null` as
+the expected authority, compared nothing, and merely declined to advance; only
+reconciliation caught the mismatch. Now both readers compare the Run's own
+admitted authority, so the transition REFUSES with
+`COMPLETION_EVIDENCE_MISSING` / `completion_authority_mismatch`. The two readers
+agreeing is precisely what that correction was for. Three expectations that
+predicted "gated, unchanged" now assert the refusal, its code, its exact reason,
+and that the parent Ticket is not advanced.
 
-**Fix required (test-only):** build the fixture decision against the Run's own
-admitted authority, or store the same authority on the Run. No production
-change.
+**Verified consistent, not assumed:** the completing scenario's Runs 5 and 6
+have stored authority hash, hash recomputed from the stored contract, and
+decision authority hash all identical. Only the deliberately foreign cases
+differ.
 
-**Why it went undetected:** this suite has not appeared in any session gate
-list or containment list since the change. Every gate ran green while it was
-failing. Worth treating as a lesson about containment lists derived from the
-suites a session happens to touch.
+### Why it stayed invisible — SUITE IS REGISTERED BUT MANUAL GATE LISTS OMITTED IT
+
+| Location | Present? |
+|---|---|
+| `scripts/test-manifest.js:321` | yes — `status: "required"` |
+| `scripts/release-checkpoint.js:133` | yes |
+| release-checkpoint coverage enforcement | yes — removing it is caught |
+| package scripts | not referenced individually |
+
+The repository always required this suite, and the release checkpoint would have
+caught the failure. It was omitted only from the hand-maintained per-session
+gate and containment lists, and the complete release checkpoint has been
+deliberately deferred for many sessions. **This is not a repository
+registration gap.**
+
+The durable correction is behavioural, not another list: when
+completion-authority projection changes, the suites that must run are those
+naming `runCompletionAuthorityHash` or `evaluateRunCompletionEvidence` — a
+source-derivable set — and `structured-allocation-leaf-run-postgres-test` is in
+it. Recorded in `docs/TERMINAL_PROJECTION_READER_CONTRACTS.md`.
 
 ## Completion Evidence Is Owed Only by a Completion Claim (closed 2026-08-05)
 

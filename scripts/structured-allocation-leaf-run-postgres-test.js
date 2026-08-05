@@ -1170,8 +1170,30 @@ async function main() {
     assert.equal(forgedItem.completionDecisionHash, null);
     assert.notEqual(unprovenAggregate.aggregateStatus, 'completed',
       'a decision evaluated against other completion authority cannot complete an item');
-    const unprovenTransition = await store.transitionTicketAfterRun({ runId: forgedRun.id });
-    assert.notEqual(unprovenTransition.ticket.status, 'completed',
+    // TICKET PROJECTION NOW REFUSES THE FORGED AUTHORITY OUTRIGHT.
+    //
+    // The decision above is deliberately built against a DIFFERENT objective
+    // contract — the assertions just made confirm its hash differs from the
+    // Run's admitted one. Reconciliation always caught that
+    // (`completion_authority_mismatch`). The Ticket transition did not: it
+    // passed `null` as the expected authority, compared nothing, and merely
+    // declined to complete. `da5af60` gave it the Run's own admitted authority,
+    // so it now refuses for the same reason reconciliation does — the two
+    // readers agreeing is exactly what that correction was for.
+    //
+    // The fixture is unchanged; only this expectation was stale.
+    let unprovenRefusal = null;
+    try {
+      await store.transitionTicketAfterRun({ runId: forgedRun.id });
+    } catch (error) { unprovenRefusal = error; }
+    assert.ok(unprovenRefusal,
+      'a forged-authority completion refuses the Ticket projection');
+    assert.equal(unprovenRefusal.code, 'COMPLETION_EVIDENCE_MISSING');
+    assert.equal(unprovenRefusal.completionEvidenceReason,
+      'completion_authority_mismatch',
+      `and names the same reason reconciliation gave ` +
+      `(${unprovenRefusal.completionEvidenceReason})`);
+    assert.notEqual((await store.getTicket(unproven.ticket.id)).status, 'completed',
       'the parent cannot complete while the aggregate proof refuses');
     assert.equal(
       (await store.getAllocationPlan(unproven.plan.id)).aggregateDecision.aggregateStatus,
@@ -1356,10 +1378,31 @@ async function main() {
       'blocked',
       'the canonical projection really does see a blocked disposition'
     );
-    let gated = await store.transitionTicketAfterRun({ runId: interruptedBlocked.subjectRun.id });
-    assert.equal(gated.changed, false);
-    assert.equal(gated.ticket.status, 'in_progress',
-      'an interrupted aggregate permits no blocked parent transition');
+    // FOREIGN AUTHORITY IS NOW REFUSED BY TICKET PROJECTION TOO.
+    //
+    // This case deliberately builds the subject's decision against the
+    // SIBLING's completion authority, and previously the Ticket transition
+    // merely declined to advance: it compared no authority, so the mismatch was
+    // invisible to it and only the leaf derivation caught it. `da5af60` made
+    // structured Ticket projection compare the Run's own admitted authority, so
+    // a decision built against a different objective contract is now refused
+    // here as well — which is the point of that correction.
+    //
+    // The fixture is unchanged; only this expectation was stale. Refusing is
+    // the correct outcome: a Ticket cannot project over a leaf claiming
+    // completion under authority it was never admitted with.
+    let gatedRefusal = null;
+    try {
+      await store.transitionTicketAfterRun({ runId: interruptedBlocked.subjectRun.id });
+    } catch (error) { gatedRefusal = error; }
+    assert.ok(gatedRefusal, 'a foreign-authority completion refuses the Ticket projection');
+    assert.equal(gatedRefusal.code, 'COMPLETION_EVIDENCE_MISSING',
+      `refused with the canonical code (${gatedRefusal.code})`);
+    assert.equal(gatedRefusal.completionEvidenceReason, 'completion_authority_mismatch',
+      `naming the exact mismatch (${gatedRefusal.completionEvidenceReason})`);
+    assert.equal((await store.getTicket(interruptedBlocked.scenario.ticket.id)).status,
+      'in_progress',
+      'and the parent Ticket is not advanced by the refusal');
 
     // aggregate interrupted + Run consequence says failed -> parent nonterminal.
     // Foreign completion authority whose postcondition the evidence does NOT
@@ -1383,10 +1426,18 @@ async function main() {
       'incomplete',
       'the canonical projection really does see a failing disposition'
     );
-    gated = await store.transitionTicketAfterRun({ runId: interruptedFailed.subjectRun.id });
-    assert.equal(gated.changed, false);
-    assert.equal(gated.ticket.status, 'in_progress',
-      'an interrupted aggregate permits no failed parent transition');
+    // Same rule, the other foreign-authority case: refused, not merely gated.
+    let failedRefusal = null;
+    try {
+      await store.transitionTicketAfterRun({ runId: interruptedFailed.subjectRun.id });
+    } catch (error) { failedRefusal = error; }
+    assert.ok(failedRefusal,
+      'the second foreign-authority completion also refuses');
+    assert.equal(failedRefusal.completionEvidenceReason, 'completion_authority_mismatch',
+      `for the same reason (${failedRefusal.completionEvidenceReason})`);
+    assert.equal((await store.getTicket(interruptedFailed.scenario.ticket.id)).status,
+      'in_progress',
+      'and that parent Ticket is not advanced either');
 
     // aggregate failed + canonical blocked disposition -> parent becomes blocked
     const failedBlocked = await terminalGateCase('Aggregate failed blocked', {
