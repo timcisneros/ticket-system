@@ -1,7 +1,20 @@
 # Structured Allocation — Controlled Evaluation Protocol
 
-Tranche 6, session 1. **Protocol design and repository-seam audit only.** No
-production behaviour changed. The evaluation has NOT been run.
+Tranche 6. **Protocol design, then prerequisite resolution and the read-only
+evaluation harness.** No production behaviour changed in either session. The
+scored evaluation has NOT been run and no RETAIN / REVISE / STOP verdict exists.
+
+Harness modules, all read-only:
+
+| Module | Role |
+|---|---|
+| `scripts/fixtures/evaluation-oracle.js` | independent postcondition oracle |
+| `scripts/fixtures/evaluation-arms.js` | the five configurations and their path proofs |
+| `scripts/fixtures/evaluation-normalized-cost.js` | one cost method for every arm |
+| `scripts/fixtures/evaluation-trial-record.js` | comparison envelope and Ticket-scoped record |
+| `scripts/structured-allocation-evaluation-report.js` | SELECT-only durable collection |
+| `scripts/structured-allocation-evaluation-test.js` | 72 deterministic proofs |
+| `config/structured-allocation-evaluation-v1.json` | frozen experiment configuration |
 
 ---
 
@@ -470,26 +483,229 @@ Evidence gaps / inconclusive families: <list>
 
 ---
 
-## 12. Unresolved prerequisites
+## 12. Prerequisite resolutions (session 2)
 
-The evaluation **must not run** until each is closed.
+Each of the six recorded blockers, with its verdict. A prerequisite is CLOSED
+only when something in the repository proves it, not when it is argued.
 
-| # | Prerequisite | Why it blocks |
-|---|---|---|
-| 1 | Priced-cost reader for arms A/A2 (§8 gap 1) | cost comparison is otherwise impossible, not merely imprecise |
-| 2 | Ticket-scoped aggregation reader (§8 gap 2) | no per-arm comparison exists today |
-| 3 | Hermetic fixtures for families 1–10 | families 3, 4, 7, 8 and 9 have no existing fixture |
-| 4 | Fixed planner agent + dated model snapshot | otherwise planner quality confounds every result |
-| 5 | Independent postcondition oracle | truthfulness needs a check *independent* of the completion decision under test; using that decision to score itself is circular |
-| 6 | Decision on the governed-single-Run arm | recorded in §9(1). Either accept governance as part of "the structured path" and say so, or build the arm. **Not to be resolved by silence.** |
+### 1. Priced-cost reader for arms A/A2 — **CLOSED**
 
-Prerequisite 5 is the most important and the least obvious: scoring completion
-truthfulness with the same authority being evaluated would guarantee agreement
-and prove nothing.
+*Why it blocked:* `settled_micro_usd` exists only on governed runs, so the
+direct and legacy arms had no monetary figure at all and cost could not be
+compared.
+
+*Seam:* `runtime/model-pricing-catalog.js` (`computeActualCost`),
+`run_budget_charges` (dimension `model_request`, state `committed`) — the one
+request-count authority present on **every** arm, governed or not.
+
+*Kind:* read-only instrumentation.
+
+*Resolution:* `scripts/fixtures/evaluation-normalized-cost.js` prices every arm
+with **one** method — see §5a. Nothing re-implements pricing arithmetic.
+
+*Proof:* `structured-allocation-evaluation-test`, section 4; mutations E7, E8,
+E10.
+
+### 2. Ticket-scoped aggregation reader — **CLOSED**
+
+*Why it blocked:* every metric was individually durable but nothing assembled
+them per Ticket across arms, and per-Run averaging would divide the structured
+arms by their own parallelism.
+
+*Seam:* `scripts/structured-allocation-evaluation-report.js` (SELECT-only) and
+`scripts/fixtures/evaluation-trial-record.js`.
+
+*Kind:* read-only instrumentation.
+
+*Resolution:* a reader that issues only SELECT statements, plus a Ticket-scoped
+record whose aggregation names its denominator `trials`.
+
+*Proof:* sections 6 and 7 of the suite; mutations E9, E13.
+
+### 3. Hermetic fixtures for families 1–10 — **OPEN — EVALUATION MAY NOT RUN**
+
+*Why it blocks:* families 3, 4, 7, 8 and 9 have no scenario fixture, so those
+cells cannot be executed at all.
+
+*Kind:* deterministic fixture support.
+
+*Status:* **not built in this session.** The oracle, arms, cost method, record
+and reader are complete and proved; the trial runner that drives real servers
+end to end, and the scenario fixtures it would drive, are not. Readiness is
+classified per family in §9a, and family 4 additionally lacks an independent
+observation (see below).
+
+*This is the single reason no smoke run was performed.*
+
+### 4. Fixed planner agent + dated model snapshot — **CLOSED**
+
+*Why it blocked:* planner quality would otherwise confound every structured
+result.
+
+*Kind:* frozen configuration.
+
+*Resolution:* `config/structured-allocation-evaluation-v1.json` → `fixedModel`
+pins provider, exact dated model snapshot and adapter, used for the planner and
+every worker so the model identity cannot differ between arms. `model` is a
+controlled envelope field, so a mismatch refuses the comparison.
+
+*Proof:* suite section 5; mutation E15.
+
+### 5. Independent postcondition oracle — **CLOSED**
+
+*Why it blocked:* scoring truthfulness with the completion authority under
+evaluation is circular and would guarantee agreement.
+
+*Seam:* `scripts/fixtures/evaluation-oracle.js`.
+
+*Kind:* read-only instrumentation.
+
+*Resolution:* an oracle that reads **raw filesystem state only**. It imports
+nothing from `runtime/`, accepts no store, repository, Run or Ticket, and has no
+arm parameter — so it cannot consult product authority and cannot behave
+differently per arm. Refusal is a first-class verdict.
+
+*Proof:* suite sections 1 and 2 assert the structural independence at source
+level and demonstrate all five required detections — false positive, false
+negative, agreed success, agreed failure, and refusal on unobservable state.
+Mutations E4, E5, E6.
+
+### 6. Decision on the governed-single-Run arm — **CLOSED as a product decision**
+
+*Why it blocked:* governed execution is entangled with the structured path, so
+a difference might come from governance rather than allocation.
+
+*Kind:* product decision, explicitly not resolved by silence.
+
+*Resolution — the primary unit is the shipped bundle.* Governance, verified
+progress, bounded economics, structured completion and coordination are part of
+the structured product path as it actually ships. The evaluation therefore
+compares the direct and legacy alternatives against the **complete** structured
+path, and **no governed single-Run arm is built for the evaluation.** No
+equivalent existing production path was found, and inventing one would evaluate
+a product that does not exist.
+
+*The causal limitation, stated plainly:* the primary evaluation can determine
+whether the integrated structured path earns its total complexity, but **cannot
+attribute every observed difference to planning alone.** Arms A2a and A2b
+control for much of the multi-agent and ownership benefit, which is what makes
+the remaining ambiguity narrow rather than fatal.
+
+*A later ablation is proposed only if* the main result is RETAIN or REVISE **and**
+identifying which structured component carries the value would change the
+product decision.
+
+---
+
+## 5a. The normalized cost method
+
+One method, every arm:
+
+```
+canonical committed model-request charges
+  x one frozen pricing snapshot
+  -> normalized derived cost
+```
+
+* the same `computeActualCost` from the production pricing catalog — no second
+  pricing authority;
+* the same model identity, token accounting and rounding;
+* unmetered requests fall back to `authorized_maximum_assumed` **using the same
+  function**, never to zero, identically on every arm;
+* planner requests are counted, never excluded;
+* cost per truthful completion is `null` — not zero, not infinity — when there
+  were no truthful completions.
+
+For B and C the **durable** governed settlement is reported *beside* the
+normalized figure with their difference as an accounting-integrity cross-check.
+It is never the cross-arm comparison value, and no settled monetary authority is
+invented for A/A2a/A2b. Every normalized value is labelled `derived`.
+
+---
+
+## 6a. Ticket-scoped trial record
+
+`scripts/fixtures/evaluation-trial-record.js` builds one record per Ticket per
+trial carrying: trial/scenario/arm/repetition/seed identity, envelope hash and
+initial-state hash, Ticket / plan / item / Run identities and **runCount**,
+provider and model, observed production path, allocation topology and ownership,
+planner and worker request counts, receipts, the independent oracle result
+beside the product completion claim, the truthfulness class, latency components,
+normalized cost, durable governed cost where it exists, canonical churn, retries
+and recovery, terminal authority, inclusion and confounders. Every group states
+its source: `durable`, `derived` or `independent`.
+
+Churn is `null` — never `0` — for arms with no churn control, so "cannot be
+blocked" is never read as "did not churn".
+
+---
+
+## 8a. Comparability enforcement
+
+`buildComparisonEnvelope` requires all 17 controlled fields; an unstated control
+is refused rather than defaulted. `assertComparable` refuses a comparison whose
+envelopes differ and names the offending fields. `assertSingleExecutionMode`
+refuses to pool deterministic-fixture and live-model records. Unavoidable
+architectural differences are recorded on every envelope.
+
+A failed product trial **stays in the data set**; only a predeclared
+infrastructure failure may exclude a trial.
+
+---
+
+## 9a. Scenario readiness
+
+| Family | Readiness |
+|---|---|
+| 1 small indivisible | READY |
+| 2 cleanly separable | READY |
+| 3 sibling dependency | READY WITH FIXTURE-ONLY ORACLE |
+| 4 apparently separable, actually coupled | **BLOCKED — REQUIRED OBSERVATION MISSING** |
+| 5 ownership known in advance | READY |
+| 6 ownership unknown in advance | READY |
+| 7 no-progress / churn | READY WITH FIXTURE-ONLY ORACLE |
+| 8 partial failure and recovery | READY WITH FIXTURE-ONLY ORACLE |
+| 9 completion-evidence ambiguity | READY |
+| 10 cost-sensitive small work | READY |
+
+Family 4 is blocked, not weakened: raw final state cannot distinguish *correct
+handling of coupling* from *a lucky execution order that happened to work*. An
+oracle that guessed would manufacture exactly the truthfulness error this
+evaluation exists to measure.
+
+Smoke subset, when fixtures exist: families 1 and 2 — the smallest pair covering
+both the overhead case and the structured best case.
+
+---
+
+## 10a. Repetition and ordering
+
+Pinned in `config/structured-allocation-evaluation-v1.json`: 5 deterministic
+repetitions and 3 live repetitions per cell; a deterministic balanced Latin
+square rotating arm order across repetitions with the permutation derived from
+the scenario seed; a 900 s timeout recorded as a product failure unless the
+harness itself crashed; four predeclared infrastructure exclusions; and
+write-once trial records — a re-run produces a new `trialId` rather than
+overwriting one.
 
 ---
 
 ## 13. Status
 
-**Tranche 6: IN PROGRESS — protocol design.** Not complete. No comparison has
-been run and no verdict exists. No production behaviour changed in this session.
+**Tranche 6: IN PROGRESS — harness built, evaluation NOT run.**
+
+Five of six prerequisites are CLOSED with repository proof. **Prerequisite 3
+(hermetic scenario fixtures) is OPEN, and the evaluation may not run until it
+closes.** The trial runner and the scenario fixtures it would drive are not
+built; consequently **no smoke run was performed**, no comparison has been run,
+no verdict exists, and no RETAIN / REVISE / STOP has been issued.
+
+No production behaviour changed in either Tranche 6 session.
+
+### Exact remaining execution blockers
+
+1. hermetic scenario fixtures for families 3, 4, 7, 8 and 9;
+2. the deterministic trial runner and its five arm adapters, driving the real
+   production paths end to end;
+3. family 4 has no independent observation distinguishing correct coupling from
+   lucky ordering — it stays BLOCKED rather than being weakened.

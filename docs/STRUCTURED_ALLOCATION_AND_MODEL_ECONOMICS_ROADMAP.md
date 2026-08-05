@@ -779,5 +779,6 @@ Tranche 2B: COMPLETE
 Tranche 3: COMPLETE
 Tranche 4: COMPLETE
 Tranche 5: COMPLETE
-Tranche 6: IN PROGRESS — protocol design; no comparison run, no verdict
+Tranche 6: IN PROGRESS — protocol and read-only harness; no comparison
+            run, no verdict; blocked on scenario fixtures
 ```

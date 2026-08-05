@@ -1,0 +1,171 @@
+{
+  "protocolId": "structured-allocation-controlled-evaluation",
+  "protocolVersion": 1,
+  "frozenAt": "2026-08-05",
+  "note": "Frozen experiment configuration only. Contains no executable authority and no product policy. Results are NOT recorded here; the scored evaluation has not run.",
+
+  "decisionQuestion": "Does the structured-allocation path built in Tranches 1-5 improve real agent work enough to justify its complexity, latency and cost compared with a simpler execution path?",
+  "authorizedOutcomes": ["RETAIN", "REVISE", "STOP"],
+  "authorizedDimensions": [
+    "allocation_quality",
+    "completion_truthfulness",
+    "latency",
+    "cost",
+    "churn"
+  ],
+
+  "arms": {
+    "A": {
+      "label": "direct individual execution",
+      "family": "direct",
+      "assignmentTargetType": "agent",
+      "assignmentMode": "individual",
+      "declaredWork": false,
+      "plannerAgent": false,
+      "ownershipSource": "none",
+      "expectedPath": "direct",
+      "expectedGoverned": false
+    },
+    "A2a": {
+      "label": "legacy v1 group, operator allocated ownership",
+      "family": "legacy_baseline",
+      "assignmentTargetType": "group",
+      "assignmentMode": "allocated",
+      "declaredWork": false,
+      "plannerAgent": false,
+      "ownershipSource": "operator",
+      "expectedPath": "legacy_v1",
+      "expectedGoverned": false
+    },
+    "A2b": {
+      "label": "legacy v1 group, system-derived ownership",
+      "family": "legacy_baseline",
+      "assignmentTargetType": "group",
+      "assignmentMode": "dynamic",
+      "declaredWork": false,
+      "plannerAgent": false,
+      "ownershipSource": "system_derived",
+      "expectedPath": "legacy_v1",
+      "expectedGoverned": false
+    },
+    "B": {
+      "label": "structured v2, operator allocated ownership",
+      "family": "structured",
+      "assignmentTargetType": "group",
+      "assignmentMode": "allocated",
+      "declaredWork": true,
+      "plannerAgent": true,
+      "ownershipSource": "operator",
+      "expectedPath": "structured_v2",
+      "expectedGoverned": true
+    },
+    "C": {
+      "label": "structured v2, system-derived ownership",
+      "family": "structured",
+      "assignmentTargetType": "group",
+      "assignmentMode": "dynamic",
+      "declaredWork": true,
+      "plannerAgent": true,
+      "ownershipSource": "system_derived",
+      "expectedPath": "structured_v2",
+      "expectedGoverned": true
+    }
+  },
+
+  "comparisons": {
+    "primary": { "left": ["A"], "right": ["B", "C"] },
+    "isolator": { "left": ["A2a", "A2b"], "right": ["B", "C"] },
+    "secondaryStructured": { "left": ["B"], "right": ["C"] },
+    "secondaryLegacy": { "left": ["A2a"], "right": ["A2b"] }
+  },
+
+  "fixedModel": {
+    "provider": "openai",
+    "model": "gpt-4o-mini-2024-07-18",
+    "adapterId": "openai.responses.v1",
+    "note": "An exact dated snapshot. A mutable alias may not be captured, and the same identity is used for the planner agent and every worker agent so planner quality does not vary between arms."
+  },
+
+  "repetition": {
+    "deterministicFixtureRepetitions": 5,
+    "liveModelRepetitions": 3,
+    "poolingRule": "deterministic-fixture and live-model results are never combined into one score",
+    "inconclusiveRule": "a family whose repetitions disagree on the completion verdict is INCONCLUSIVE, not favourable",
+    "singleRunReportingRule": "no metric is reported as a single-run number"
+  },
+
+  "ordering": {
+    "strategy": "deterministic_balanced_latin_square",
+    "note": "Arm order is rotated across repetitions so no arm systematically occupies the first or last position. The permutation is derived from the scenario seed and is therefore reproducible.",
+    "seedField": "scenarioSeed",
+    "counterbalanced": true
+  },
+
+  "failureHandling": {
+    "productFailureRule": "a failed product trial remains data and is never discarded as a bad run",
+    "infrastructureExclusions": [
+      "database_unavailable",
+      "harness_process_crash",
+      "fixture_transport_unavailable",
+      "workspace_setup_failed"
+    ],
+    "timeoutMs": 900000,
+    "timeoutRule": "a trial exceeding the timeout is recorded as a product failure unless the harness itself crashed",
+    "resultFreezing": "trial records are written once and never rewritten; a re-run produces a new trialId"
+  },
+
+  "decisionThresholds": {
+    "hardDisqualifiers": [
+      "structured false-positive completion rate higher than arm A on any family",
+      "any authority violation (fabricated block or completion authority, completion without canonical decision, cross-projection disagreement)",
+      "uncontrolled cost (settled spend beyond the captured economic ceiling, or unbounded growth across repetitions)",
+      "non-deterministic recovery (identical durable state producing different terminal dispositions)",
+      "systematic churn misclassification (persistence or recovery interruption attributed to model churn)"
+    ],
+    "retain": {
+      "falsePositiveRateVersusA": "<=",
+      "truePositiveGainVersusAPoints": 10,
+      "truePositiveGainVersusA2Points": 5,
+      "gainRequiredOnFamilies": [2, 3, 5, 6],
+      "maxLatencyRatioVersusA": 1.5,
+      "maxCostRatioVersusA": 1.5,
+      "noFamilyWorseOnTruthfulness": true
+    },
+    "revise": "zero hard disqualifiers, structured wins materially on some families and loses on others; the output is a conditional activation policy",
+    "stop": "any hard disqualifier, or no family where structured improves truthful completion by >= 5 points over BOTH A and A2 while remaining within the latency and cost bounds"
+  },
+
+  "truthfulnessWeighting": {
+    "falsePositiveCompletionWeight": 10,
+    "ordinaryIncompletionWeight": 1,
+    "note": "A false successful completion is additionally an independent hard disqualifier; the weight governs ranking, not admissibility."
+  },
+
+  "costMethod": {
+    "normalized": "canonical committed model-request charges x one frozen pricing snapshot, priced with runtime/model-pricing-catalog computeActualCost",
+    "appliedTo": ["A", "A2a", "A2b", "B", "C"],
+    "unmeteredFallback": "authorized_maximum_assumed, using the identical pricing function",
+    "durableGovernedCost": "reported for B and C only, beside the normalized figure, with their difference as an accounting-integrity cross-check",
+    "prohibited": "comparing durable governed settlement against derived legacy cost as though the methods were the same"
+  },
+
+  "scenarioReadiness": {
+    "1_small_indivisible": "READY",
+    "2_cleanly_separable": "READY",
+    "3_sibling_dependency": "READY WITH FIXTURE-ONLY ORACLE",
+    "4_apparently_separable_coupled": "BLOCKED - REQUIRED OBSERVATION MISSING",
+    "5_ownership_known": "READY",
+    "6_ownership_unknown": "READY",
+    "7_no_progress_churn": "READY WITH FIXTURE-ONLY ORACLE",
+    "8_partial_failure_recovery": "READY WITH FIXTURE-ONLY ORACLE",
+    "9_completion_evidence_ambiguity": "READY",
+    "10_cost_sensitive_small": "READY"
+  },
+
+  "smokeSubset": [1, 2],
+
+  "unresolvedBlockers": [
+    "hermetic scenario fixtures for families 3, 4, 7, 8 and 9 are not yet authored",
+    "family 4 has no independent observation that distinguishes correct coupling from lucky ordering"
+  ]
+}

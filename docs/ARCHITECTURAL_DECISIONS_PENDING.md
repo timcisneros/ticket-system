@@ -1,6 +1,39 @@
-## Tranche 6 Controlled Evaluation: BEGUN (2026-08-05)
+## Tranche 6 Controlled Evaluation: HARNESS BUILT (2026-08-05)
 
-**Status:** protocol design only. Not complete, no verdict, no production change.
+**Status:** prerequisites resolved and the read-only harness built. The scored
+evaluation has NOT run, and no RETAIN / REVISE / STOP verdict exists. No
+production change in either session.
+
+**Five of six execution prerequisites are CLOSED with repository proof.**
+Priced-cost reader, Ticket-scoped aggregation reader, fixed planner model,
+independent postcondition oracle, and the governed-single-Run product decision.
+Proofs live in `scripts/structured-allocation-evaluation-test.js` (72
+assertions, registered required and deterministic) and were mutation-tested
+15/15.
+
+**Prerequisite 3 remains OPEN — EVALUATION MAY NOT RUN.** Hermetic scenario
+fixtures for families 3, 4, 7, 8 and 9 are not authored, and the deterministic
+trial runner with its five arm adapters is not built. No smoke run was
+performed, and none is claimed.
+
+**The governance confounder is CLOSED as a product decision, not by silence.**
+The primary unit is the shipped bundle: governance, verified progress, bounded
+economics, structured completion and coordination are part of the structured
+path as it ships. No governed single-Run arm is built, because no equivalent
+existing production path exists and inventing one would evaluate a product that
+does not exist. The recorded causal limitation is that the evaluation can
+determine whether the integrated structured path earns its total complexity but
+cannot attribute every difference to planning alone; arms A2a/A2b control for
+much of the multi-agent and ownership benefit. A later ablation is proposed only
+if the main result is RETAIN or REVISE and identifying the valuable component
+would change the decision.
+
+**Family 4 stays BLOCKED rather than weakened.** Raw final state cannot
+distinguish correct handling of coupling from a lucky execution order, and an
+oracle that guessed would manufacture exactly the truthfulness error the
+evaluation exists to measure.
+
+**Original session-1 audit, retained:**
 
 Protocol: `docs/STRUCTURED_ALLOCATION_CONTROLLED_EVALUATION.md`.
 
