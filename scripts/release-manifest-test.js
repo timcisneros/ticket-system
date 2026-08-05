@@ -23,8 +23,10 @@ const manifest = buildReleaseManifest({
   buildNative: false
 });
 assert.equal(manifest.sourceRevision, revision);
+// The head advances with every migration this branch adds. Tranche 5's last is
+// 038, the governed request claim binding.
 assert.equal(manifest.databaseMigrationHead,
-  '037_governed_evidence_baseline.sql');
+  '038_governed_request_claim_binding.sql');
 assert.equal(manifest.releaseContract.sourceRevision, revision);
 assert.equal(validateReleaseManifest(manifest), manifest);
 assert.equal(JSON.stringify(manifest).includes('/home/'), false);
