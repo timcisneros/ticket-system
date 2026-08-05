@@ -3,9 +3,12 @@
   "protocolVersion": 1,
   "frozenAt": "2026-08-05",
   "note": "Frozen experiment configuration only. Contains no executable authority and no product policy. Results are NOT recorded here; the scored evaluation has not run.",
-
   "decisionQuestion": "Does the structured-allocation path built in Tranches 1-5 improve real agent work enough to justify its complexity, latency and cost compared with a simpler execution path?",
-  "authorizedOutcomes": ["RETAIN", "REVISE", "STOP"],
+  "authorizedOutcomes": [
+    "RETAIN",
+    "REVISE",
+    "STOP"
+  ],
   "authorizedDimensions": [
     "allocation_quality",
     "completion_truthfulness",
@@ -13,7 +16,6 @@
     "cost",
     "churn"
   ],
-
   "arms": {
     "A": {
       "label": "direct individual execution",
@@ -71,21 +73,49 @@
       "expectedGoverned": true
     }
   },
-
   "comparisons": {
-    "primary": { "left": ["A"], "right": ["B", "C"] },
-    "isolator": { "left": ["A2a", "A2b"], "right": ["B", "C"] },
-    "secondaryStructured": { "left": ["B"], "right": ["C"] },
-    "secondaryLegacy": { "left": ["A2a"], "right": ["A2b"] }
+    "primary": {
+      "left": [
+        "A"
+      ],
+      "right": [
+        "B",
+        "C"
+      ]
+    },
+    "isolator": {
+      "left": [
+        "A2a",
+        "A2b"
+      ],
+      "right": [
+        "B",
+        "C"
+      ]
+    },
+    "secondaryStructured": {
+      "left": [
+        "B"
+      ],
+      "right": [
+        "C"
+      ]
+    },
+    "secondaryLegacy": {
+      "left": [
+        "A2a"
+      ],
+      "right": [
+        "A2b"
+      ]
+    }
   },
-
   "fixedModel": {
     "provider": "openai",
     "model": "gpt-4o-mini-2024-07-18",
     "adapterId": "openai.responses.v1",
     "note": "An exact dated snapshot. A mutable alias may not be captured, and the same identity is used for the planner agent and every worker agent so planner quality does not vary between arms."
   },
-
   "repetition": {
     "deterministicFixtureRepetitions": 5,
     "liveModelRepetitions": 3,
@@ -93,14 +123,12 @@
     "inconclusiveRule": "a family whose repetitions disagree on the completion verdict is INCONCLUSIVE, not favourable",
     "singleRunReportingRule": "no metric is reported as a single-run number"
   },
-
   "ordering": {
     "strategy": "deterministic_balanced_latin_square",
     "note": "Arm order is rotated across repetitions so no arm systematically occupies the first or last position. The permutation is derived from the scenario seed and is therefore reproducible.",
     "seedField": "scenarioSeed",
     "counterbalanced": true
   },
-
   "failureHandling": {
     "productFailureRule": "a failed product trial remains data and is never discarded as a bad run",
     "infrastructureExclusions": [
@@ -113,7 +141,6 @@
     "timeoutRule": "a trial exceeding the timeout is recorded as a product failure unless the harness itself crashed",
     "resultFreezing": "trial records are written once and never rewritten; a re-run produces a new trialId"
   },
-
   "decisionThresholds": {
     "hardDisqualifiers": [
       "structured false-positive completion rate higher than arm A on any family",
@@ -126,7 +153,12 @@
       "falsePositiveRateVersusA": "<=",
       "truePositiveGainVersusAPoints": 10,
       "truePositiveGainVersusA2Points": 5,
-      "gainRequiredOnFamilies": [2, 3, 5, 6],
+      "gainRequiredOnFamilies": [
+        2,
+        3,
+        5,
+        6
+      ],
       "maxLatencyRatioVersusA": 1.5,
       "maxCostRatioVersusA": 1.5,
       "noFamilyWorseOnTruthfulness": true
@@ -134,26 +166,29 @@
     "revise": "zero hard disqualifiers, structured wins materially on some families and loses on others; the output is a conditional activation policy",
     "stop": "any hard disqualifier, or no family where structured improves truthful completion by >= 5 points over BOTH A and A2 while remaining within the latency and cost bounds"
   },
-
   "truthfulnessWeighting": {
     "falsePositiveCompletionWeight": 10,
     "ordinaryIncompletionWeight": 1,
     "note": "A false successful completion is additionally an independent hard disqualifier; the weight governs ranking, not admissibility."
   },
-
   "costMethod": {
     "normalized": "canonical committed model-request charges x one frozen pricing snapshot, priced with runtime/model-pricing-catalog computeActualCost",
-    "appliedTo": ["A", "A2a", "A2b", "B", "C"],
+    "appliedTo": [
+      "A",
+      "A2a",
+      "A2b",
+      "B",
+      "C"
+    ],
     "unmeteredFallback": "authorized_maximum_assumed, using the identical pricing function",
     "durableGovernedCost": "reported for B and C only, beside the normalized figure, with their difference as an accounting-integrity cross-check",
     "prohibited": "comparing durable governed settlement against derived legacy cost as though the methods were the same"
   },
-
   "scenarioReadiness": {
     "1_small_indivisible": "READY",
     "2_cleanly_separable": "READY",
     "3_sibling_dependency": "READY WITH FIXTURE-ONLY ORACLE",
-    "4_apparently_separable_coupled": "BLOCKED - REQUIRED OBSERVATION MISSING",
+    "4_apparently_separable_coupled": "READY",
     "5_ownership_known": "READY",
     "6_ownership_unknown": "READY",
     "7_no_progress_churn": "READY WITH FIXTURE-ONLY ORACLE",
@@ -161,11 +196,18 @@
     "9_completion_evidence_ambiguity": "READY",
     "10_cost_sensitive_small": "READY"
   },
-
-  "smokeSubset": [1, 2],
-
+  "smokeSubset": [
+    1,
+    2
+  ],
   "unresolvedBlockers": [
-    "hermetic scenario fixtures for families 3, 4, 7, 8 and 9 are not yet authored",
-    "family 4 has no independent observation that distinguishes correct coupling from lucky ordering"
+    "scenario fixture DEFINITIONS for families 3, 7, 8 and 9 are not authored as data",
+    "the trial runner and its five arm adapters are not built; no smoke run has been performed"
+  ],
+  "closedInSession3": [
+    "hermetic provider fixture (arm-independent response keys, refusal on unexpected request, three failure boundaries, per-trial namespace)",
+    "family 4 independent coupling observation (seed-derived nonce + fixture access log + output binding)",
+    "quiescence contract (nine named conditions, read-only)",
+    "immutable trial artifact (write-once, mode-validated, dual-namespace fixture/live separation)"
   ]
 }

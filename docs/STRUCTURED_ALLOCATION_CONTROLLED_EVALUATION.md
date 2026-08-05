@@ -522,20 +522,31 @@ record whose aggregation names its denominator `trials`.
 
 *Proof:* sections 6 and 7 of the suite; mutations E9, E13.
 
-### 3. Hermetic fixtures for families 1–10 — **OPEN — EVALUATION MAY NOT RUN**
+### 3. Hermetic fixtures for families 1–10 — **PARTIALLY CLOSED — EVALUATION MAY NOT RUN**
 
-*Why it blocks:* families 3, 4, 7, 8 and 9 have no scenario fixture, so those
-cells cannot be executed at all.
+*Why it blocks:* families 3, 4, 7, 8 and 9 could not be executed.
 
 *Kind:* deterministic fixture support.
 
-*Status:* **not built in this session.** The oracle, arms, cost method, record
-and reader are complete and proved; the trial runner that drives real servers
-end to end, and the scenario fixtures it would drive, are not. Readiness is
-classified per family in §9a, and family 4 additionally lacks an independent
-observation (see below).
+*Closed in session 3:*
 
-*This is the single reason no smoke run was performed.*
+* the **hermetic provider fixture** (`scripts/fixtures/evaluation-fixture-provider.js`)
+  — no network or API key, one response table keyed by protocol / scenario /
+  logical task / seed / role / ordinal and **never by the arm**, stable response
+  identities, deterministic token usage, planner and worker roles, the three
+  controlled failure boundaries, a per-trial namespace that refuses reuse, a
+  transcript and an external access log exposed as plain files outside product
+  authority, and **refusal — never generic success — for an unexpected request**;
+* **family 4's missing observation** (`scripts/fixtures/evaluation-coupling-oracle.js`)
+  — see §4a. Family 4 is no longer observation-blocked;
+* the **quiescence contract** and the **immutable trial artifact**
+  (`scripts/fixtures/evaluation-quiescence.js`).
+
+*Still open:* the five scenario fixture definitions for families 3, 7, 8 and 9
+are not authored as data, and **the trial runner and its five arm adapters are
+not built**. No smoke run was performed.
+
+*This remains the reason the evaluation may not run.*
 
 ### 4. Fixed planner agent + dated model snapshot — **CLOSED**
 
@@ -594,6 +605,77 @@ the remaining ambiguity narrow rather than fatal.
 *A later ablation is proposed only if* the main result is RETAIN or REVISE **and**
 identifying which structured component carries the value would change the
 product decision.
+
+---
+
+## 4a. Family 4 — genuine coupling versus lucky final state (CLOSED)
+
+Raw final state alone cannot decide family 4: a consumer that never read the
+producer's artifact can still leave files that look exactly like a correct run.
+Scoring that as success would manufacture the very false positive the evaluation
+exists to detect.
+
+Three independent raw facts resolve it, none of them product authority:
+
+1. the producer artifact is **derived from the trial seed**, so its content is
+   unpredictable before the trial and cannot be hard-coded into a staged
+   response;
+2. the **fixture-owned access log** — written by the fixture, not the Ticket
+   runtime — records that the consumer read that exact artifact **by hash**;
+3. the consumer's final output **binds the producer artifact hash**, so it
+   cannot be produced without having seen it.
+
+| Situation | Verdict |
+|---|---|
+| correct dependency use | **PASS** |
+| final files look correct, no consumer read | **FAIL** (diagnostic names the missing read) |
+| consumer read a different version | **FAIL** |
+| output does not bind the producer hash | **FAIL** |
+| **self-consistent forgery** — hard-coded producer content, matching access-log hash, matching binding | **FAIL**, on the seed derivation alone |
+| access log unavailable | **REFUSED** |
+
+The forgery case is load-bearing: without it, a mutation removing the
+seed-derivation check survived, because every other case was caught by a later
+check instead.
+
+The coupling oracle imports nothing from `runtime/`, takes no store, and has no
+arm parameter, exactly like the base oracle.
+
+---
+
+## 7a. Quiescence
+
+Nine named conditions, each reported individually so a non-quiescent Ticket says
+*which* fact is outstanding: pending or running Runs, active leases, in-flight
+governed requests, unresolved delivery uncertainty, unsettled reconstructible
+reservations, recoverable terminalization, scheduler-visible retries, pending
+aggregate reconciliation, and active fixture requests.
+
+**Quiescence is not "all Runs are terminal."** A Ticket can have every Run
+terminal while a lease is still held, a governed request is started with no
+durable response, or a terminalization the startup repair would still finish is
+outstanding. Sampling the oracle then measures a half-finished system.
+
+The reader **observes** quiescence and never creates it: SELECT-only, and proved
+at source level to call no transition, claim, settlement or repair.
+
+---
+
+## 8a. Trial artifact
+
+Write-once JSON per trial carrying schema and protocol versions, the exact
+repository commit, scenario / arm / repetition / seed, mode, envelope hash, path
+proof, the Ticket-scoped report, oracle and coupling results, normalized cost,
+durable governed cost where it exists, latency, churn, quiescence, fixture
+transcript hash, external state hash, exclusions, warnings and a final artifact
+hash. Every artifact carries the label **UNSCORED HARNESS SMOKE — NOT PRODUCT
+EVIDENCE**.
+
+Overwriting an existing artifact is refused — a result that can be rewritten is
+not evidence. Fixture and live results are separated **twice over**: distinct
+directory namespaces *and* a mandatory validated `mode` field, so neither
+containment can be defeated alone, and an artifact that does not state its mode
+is refused rather than defaulted.
 
 ---
 
@@ -660,7 +742,7 @@ infrastructure failure may exclude a trial.
 | 1 small indivisible | READY |
 | 2 cleanly separable | READY |
 | 3 sibling dependency | READY WITH FIXTURE-ONLY ORACLE |
-| 4 apparently separable, actually coupled | **BLOCKED — REQUIRED OBSERVATION MISSING** |
+| 4 apparently separable, actually coupled | **READY** — observation closed, see §4a |
 | 5 ownership known in advance | READY |
 | 6 ownership unknown in advance | READY |
 | 7 no-progress / churn | READY WITH FIXTURE-ONLY ORACLE |
@@ -704,8 +786,18 @@ No production behaviour changed in either Tranche 6 session.
 
 ### Exact remaining execution blockers
 
-1. hermetic scenario fixtures for families 3, 4, 7, 8 and 9;
-2. the deterministic trial runner and its five arm adapters, driving the real
-   production paths end to end;
-3. family 4 has no independent observation distinguishing correct coupling from
-   lucky ordering — it stays BLOCKED rather than being weakened.
+1. **scenario fixture definitions** for families 3, 7, 8 and 9 are not authored
+   as data (the *mechanism* to run them exists; the staged responses and
+   expectations do not);
+2. **the trial runner and its five arm adapters** are not built, so no arm has
+   been driven end to end through a real server;
+3. consequently **no unscored smoke run was performed**, and none is claimed.
+
+Family 4 is no longer among these: its missing observation is closed (§4a).
+
+The five arm configurations are fully specified and their routing is proved in
+both directions against the real dispatch conditions, and the production seam
+they must drive is identified — the form POST to `/tickets` accepting
+`objective`, `assignmentTargetType`, `assignmentTargetId`, `assignmentMode`,
+`declaredWork` and `ownedOutputPaths`, which is the single route through which
+all five paths are reachable without bypassing any branch condition.

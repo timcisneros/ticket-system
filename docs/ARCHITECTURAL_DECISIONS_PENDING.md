@@ -1,3 +1,34 @@
+## Tranche 6 Controlled Evaluation: FIXTURE SEAMS BUILT (2026-08-05)
+
+**Session 3.** The complete release checkpoint was run against
+`bf06a1a75d1a0a8386ab197fc58efea2283006ba` before any edit, as the previous
+session had registered a required suite without running it: **197/197 passed**,
+and `structured-allocation-evaluation-test.js` genuinely executed.
+
+**Closed this session:** the hermetic provider fixture (one response table keyed
+by protocol/scenario/task/seed/role/ordinal and never by the arm; refusal rather
+than generic success for an unexpected request; three controlled failure
+boundaries; per-trial namespaces that refuse reuse; transcript and external
+access log exposed outside product authority); **family 4's missing
+observation**, which is no longer observation-blocked; the nine-condition
+read-only quiescence contract; and the write-once, mode-validated trial artifact
+with dual fixture/live separation.
+
+**Family 4 closure is the substantive result.** A seed-derived producer nonce, a
+fixture-owned access log recording the consumer read by hash, and an output that
+binds the producer hash together distinguish genuine coupling from a lucky final
+state — including a fully self-consistent forgery, which fails on the seed
+derivation alone. Two mutations survived their first pass because every other
+case was caught by a later check; the isolating cases were added rather than the
+mutations re-aimed. 12/12 focused mutations now caught.
+
+**STILL OPEN — EVALUATION MAY NOT RUN.** The scenario fixture definitions for
+families 3, 7, 8 and 9 are not authored as data, and the trial runner with its
+five arm adapters is not built. No smoke run was performed and none is claimed.
+No scored or live evaluation ran, and no RETAIN / REVISE / STOP verdict exists.
+
+**Previous session record, retained:**
+
 ## Tranche 6 Controlled Evaluation: HARNESS BUILT (2026-08-05)
 
 **Status:** prerequisites resolved and the read-only harness built. The scored
