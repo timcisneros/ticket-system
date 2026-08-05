@@ -4951,12 +4951,54 @@ class PostgresRuntimeStore {
       );
 
       // Durable runtime-budget consumption. Reused, never duplicated.
+      //
+      // `source_identity` is selected because it is also the RESPONSE-DELIVERY
+      // boundary — see `deliveredToExecution` below. It is the same string the
+      // economic reservation stores as `logical_source_identity`, so no join,
+      // no new column and no new cutoff dimension is required to learn whether
+      // a window's answer ever reached execution.
       const charges = await connection.query(
-        `SELECT dimension, state, reserved_amount, committed_amount
+        `SELECT dimension, source_identity, state, reserved_amount, committed_amount
            FROM ${this.table('run_budget_charges')}
           WHERE run_id = $1 AND id <= $2`,
         [id, cutoff.budgetCutoff]
       );
+
+      // ── WHICH WINDOWS' ANSWERS ACTUALLY REACHED EXECUTION ────────────────
+      //
+      // A durable response proves the provider answered. It does NOT prove the
+      // runtime ever handed that answer to the worker — and those are different
+      // facts whenever a required write between them fails.
+      //
+      // The model-request budget charge is committed in exactly one place:
+      // `dispatchGovernedLeafModelRequest`, after the orchestration returns
+      // `received` or `reused_durable_response` and immediately before the
+      // response envelope is returned to the worker loop. It is reserved before
+      // transport and committed only there, under the SAME logical source
+      // identity the economic reservation carries. So a committed
+      // `model_request` charge is the durable statement "this window's answer
+      // was delivered to execution", and it exists for a turn that proposed no
+      // actions at all — which is what keeps ordinary churn countable.
+      //
+      // Read under the EXISTING `budgetCutoff`, so the cutoff shape, and
+      // therefore every stored block hash, is unchanged.
+      //
+      // OBSERVABLE, OR NOT AT ALL — and the difference is never guessed.
+      // `runtimeBudgetController` is a no-op for a Run carrying no runtime
+      // budget snapshot, so such a Run has no `model_request` charge rows for
+      // ANY window. Reading that absence as "nothing was ever delivered" would
+      // silently disable churn control for those Runs, which is the fail-OPEN
+      // direction and strictly worse than the defect this fixes. So delivery is
+      // reported as UNOBSERVABLE (null) rather than false, and the evaluator
+      // falls back to the durable-response rule for that Run. Only an explicit
+      // false — a Run whose budget ledger is in use and whose window was never
+      // committed — withholds churn eligibility.
+      const modelRequestCharges = charges.rows
+        .filter(row => row.dimension === 'model_request');
+      const deliveryObservable = modelRequestCharges.length > 0;
+      const deliveredToExecution = new Set(modelRequestCharges
+        .filter(row => row.state === 'committed')
+        .map(row => row.source_identity));
 
       const settledMicroUsd = reservations.rows.reduce(
         (total, row) => total + Number(row.settled_micro_usd || 0), 0);
@@ -5013,6 +5055,14 @@ class PostgresRuntimeStore {
           // answered from one that was merely authorized: only the first can be
           // said to have made, or not made, progress.
           hasDurableResponse: Boolean(row.response_hash),
+          // AND WHETHER THAT ANSWER REACHED EXECUTION. A response that is
+          // durable but was never delivered to the worker has not had the
+          // chance to advance the work either, so it is not a no-progress
+          // window. TRUE, FALSE, or NULL when this Run's budget ledger cannot
+          // answer the question at all. See `deliveredToExecution` above.
+          responseDeliveredToExecution: deliveryObservable
+            ? deliveredToExecution.has(row.logical_source_identity)
+            : null,
           startedAt: row.started_at,
           createdAt: row.created_at
         })),

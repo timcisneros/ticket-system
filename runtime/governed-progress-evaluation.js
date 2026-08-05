@@ -56,6 +56,13 @@ function partitionReceiptsIntoWindows({ reservations, receipts }) {
       reservationId: reservation.reservationId,
       state: reservation.state,
       hasDurableResponse: Boolean(reservation.hasDurableResponse),
+      // Tri-state, deliberately: true, false, or null when this Run's budget
+      // ledger cannot answer the question. Coercing null to false here would
+      // reintroduce the fail-open case the store's comment describes.
+      responseDeliveredToExecution:
+        reservation.responseDeliveredToExecution === undefined
+          ? null
+          : reservation.responseDeliveredToExecution,
       from,
       until,
       observations: []
@@ -75,6 +82,55 @@ function partitionReceiptsIntoWindows({ reservations, receipts }) {
     window.observations.push(receipt);
   }
   return { windows, unassigned, preRequestWindow: PRE_REQUEST_WINDOW };
+}
+
+// ── THE CHURN-ELIGIBLE WINDOW ───────────────────────────────────────────────
+//
+// ONE definition, used by the single evaluator below. A window may be counted
+// against the consecutive no-progress streak only when the runtime has durable
+// authority to say the model was actually GIVEN the chance to advance the work
+// and did not take it.
+//
+// Two facts are required, and they are genuinely different:
+//
+//   hasDurableResponse            the provider answered
+//   responseDeliveredToExecution  the runtime handed that answer to the worker
+//
+// A REQUEST WITH NO DURABLE RESPONSE HAS NOT MADE NO PROGRESS. It has not had
+// the chance to make any. A window opens when dispatch authority is won and
+// closes when the answer is durable; between those two points the request is in
+// flight, or was interrupted in flight, and classifying it as a failure to
+// advance is a statement about work that was never done rather than work that
+// was done badly.
+//
+// Counting the ordinal alone did exactly that. Every reservation has an
+// ordinal, so a Run that crashed after authorizing its next request came back
+// to find that authorization already scored against its churn tolerance — and a
+// Run whose tolerance was one stopped without ever sending the request the
+// Ticket had already been charged for.
+//
+// AND A DURABLE ANSWER NOBODY CONSUMED IS THE SAME ARGUMENT, ONE STEP LATER.
+// When settlement — or any required write between the response marker and the
+// worker — fails, the answer exists but execution never saw it. Scoring that
+// window as churn attributes a persistence or recovery interruption to the
+// model, and at a tolerance of one it strands a response the Ticket has already
+// paid for behind a block that short-circuits every later attempt. So delivery
+// to execution is required too.
+//
+// WHAT THIS DELIBERATELY DOES NOT REQUIRE: receipts, evidence or a non-empty
+// plan. A turn whose answer reached execution and proposed nothing IS a
+// no-progress window — that is the ordinary case churn control exists for.
+// Incomplete evidence is a different condition with a different outcome:
+// `readGovernedFactTransitions` refuses it as incomplete rather than letting it
+// reach this evaluator as zero progress.
+function isChurnEligibleWindow(window) {
+  if (!window.hasDurableResponse) return false;
+  // ONLY AN EXPLICIT FALSE WITHHOLDS ELIGIBILITY. `null` means this Run keeps
+  // no model-request budget ledger, so delivery is unobservable and the older
+  // durable-response rule still governs — never disabling churn control for a
+  // Run whose answers genuinely went unanswered-for.
+  if (window.responseDeliveredToExecution === false) return false;
+  return window.observations.length > 0 || window.modelRequestOrdinal > 0;
 }
 
 // ── Evaluation ──────────────────────────────────────────────────────────────
@@ -189,21 +245,7 @@ function evaluateGovernedRunProgress({
     // live in `cumulativeResources` and are never rewound.
     if (projection.verifiedProgressCount > 0) {
       consecutiveNoProgressWindows = 0;
-    } else if (window.hasDurableResponse &&
-               (window.observations.length > 0 || window.modelRequestOrdinal > 0)) {
-      // A REQUEST WITH NO DURABLE RESPONSE HAS NOT MADE NO PROGRESS.
-      //
-      // It has not had the chance to make any. A window opens when dispatch
-      // authority is won and closes when the answer is durable; between those
-      // two points the request is in flight, or was interrupted in flight, and
-      // classifying it as a failure to advance is a statement about work that
-      // was never done rather than work that was done badly.
-      //
-      // Counting the ordinal alone did exactly that. Every reservation has an
-      // ordinal, so a Run that crashed after authorizing its next request came
-      // back to find that authorization already scored against its churn
-      // tolerance — and a Run whose tolerance was one stopped without ever
-      // sending the request the Ticket had already been charged for.
+    } else if (isChurnEligibleWindow(window)) {
       consecutiveNoProgressWindows += 1;
     }
     latestProjection = projection;
@@ -235,5 +277,6 @@ function evaluateGovernedRunProgress({
 module.exports = {
   PRE_REQUEST_WINDOW,
   evaluateGovernedRunProgress,
+  isChurnEligibleWindow,
   partitionReceiptsIntoWindows
 };
