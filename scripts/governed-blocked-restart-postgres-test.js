@@ -567,6 +567,79 @@ async function main() {
         assertThat(countsAfterCli.runRevisions === countsBeforeCli.runRevisions,
           'and moves no Run revision');
 
+        // ── THE CLI REFUSES WHAT CANONICAL PROJECTION WOULD REJECT ─────
+        //
+        // The command reads the durable row directly, so "it came from
+        // PostgreSQL" is not proof of integrity. These edit the stored block —
+        // advancing the revision, because the trigger refuses a silent rewrite
+        // — and require the CLI to fail closed rather than present the result
+        // as authority. Each edit is restored before the next.
+        {
+          const originalBody = (await store.pool.query(
+            `SELECT body FROM ${store.table('runs')} WHERE id = $1`, [runId])).rows[0].body;
+          const restore = async () => {
+            await store.pool.query(
+              `UPDATE ${store.table('runs')} SET body = $2::jsonb,
+                      revision = revision + 1 WHERE id = $1`,
+              [runId, JSON.stringify(originalBody)]);
+          };
+          const withTamperedBlock = async (mutate, label) => {
+            const body = JSON.parse(JSON.stringify(originalBody));
+            mutate(body.governedProgressBlock);
+            await store.pool.query(
+              `UPDATE ${store.table('runs')} SET body = $2::jsonb,
+                      revision = revision + 1 WHERE id = $1`,
+              [runId, JSON.stringify(body)]);
+            const result = await runOquery(['replay', String(runId)],
+              { baseUrl: second.baseUrl, cookie });
+            await restore();
+            assertThat(result.code !== 0,
+              `${label}: the CLI refuses closed (exit ${result.code})`);
+            assertThat(/canonical validation|GOVERNED_PROGRESS_BLOCK/i.test(result.text),
+              `${label}: and names the block-integrity refusal`);
+            return result;
+          };
+
+          // 1. The reason edited while the stored hash is kept.
+          const tamperedReason = await withTamperedBlock(
+            block => { block.reason = 'repeated_no_op'; },
+            'a block whose reason was edited under its old hash');
+          assertThat(!tamperedReason.text.includes('progress block repeated_no_op'),
+            'and never prints the edited reason as authority');
+
+          // 2. A malformed block hash.
+          await withTamperedBlock(
+            block => { block.blockHash = 'not-a-hash'; },
+            'a block with a malformed blockHash');
+
+          // 3. THE CONTRADICTION THAT MATTERS: a verified-progress block
+          //    carrying sibling authority it may never own. This is a real
+          //    contradictory value, not a vacuous edit of an already-null field.
+          const contradiction = await withTamperedBlock(
+            block => {
+              block.siblingDependency = {
+                requestedPath: 'reports/z/forged.md',
+                siblingAllocationItemId: 999,
+                siblingRunId: 999,
+                siblingOwnedScope: 'reports/z/',
+                siblingCompletionDecisionHash: null,
+                siblingCompletionState: 'incomplete'
+              };
+            },
+            'a verified-progress block carrying sibling authority');
+          assertThat(!contradiction.text.includes('reports/z/forged.md') &&
+            !contradiction.text.includes('#999'),
+          'and prints neither the forged path nor the forged sibling item');
+
+          // The untouched block still prints, so the rule is not "refuse
+          // everything".
+          const restored = await runOquery(['replay', String(runId)],
+            { baseUrl: second.baseUrl, cookie });
+          assertThat(restored.code === 0 &&
+            restored.text.includes(blockBefore.blockHash),
+          'and the restored block prints normally again');
+        }
+
         // ── PAGE SEMANTIC SECTIONS (row 3) ─────────────────────────────
         //
         // Sections, not page-wide substrings: this page legitimately renders

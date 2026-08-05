@@ -1,3 +1,24 @@
+## Terminal Reader Parity: five-row matrix CLOSED (2026-08-05)
+
+All five rows and every reader cell are asserted, classified RAW HISTORY ONLY,
+proved a closed refusal, or proved NOT APPLICABLE from source. No cell reads
+PARTIAL, NOT ASSERTED, UNFILLED or BLOCKED BY DEFECT.
+
+The last gap was the CLI's governed-block reader trusting raw durable state. It
+now consumes `normalizeGovernedProgressBlock` — the canonical contract
+`projectBlock` uses — and refuses closed on a block canonical projection would
+reject: an edited reason under a stale hash, a malformed hash, or a
+verified-progress block carrying sibling authority. Details and the full
+five-row matrix are in `docs/TERMINAL_PROJECTION_READER_CONTRACTS.md` §4c, §11.
+
+**Closed:** malformed governed request handling; canonical CLI block
+normalization; progress-block CLI cell; sibling-dependency CLI cell; terminal
+five-row reader matrix; terminal reader-parity register entry.
+
+**Retained:** required-persistence failure matrix; final projection/
+documentation reconciliation; complete release checkpoint; final
+merge-readiness audit. Tranche 5 is not complete.
+
 ## `oquery replay` Governed Payload Contract: repaired 2026-08-05
 
 Supersedes the entry recording the crash as an open blocker.

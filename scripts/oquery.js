@@ -5,6 +5,11 @@ const http = require('http');
 const readline = require('readline');
 
 const ROOT = path.resolve(__dirname, '..');
+// The canonical governed-block contract. The CLI presents blocks; it does not
+// get to decide what a valid one is.
+const {
+  normalizeGovernedProgressBlock
+} = require('../runtime/governed-progress-block-contract');
 
 async function resolveServerAgent(url, cookie, value) {
   const requested = value === undefined || value === null || value === '' ? '1' : String(value).trim();
@@ -509,8 +514,30 @@ async function cmdMutations(args) {
 // It prints only what the block itself carries and invents nothing: a
 // verified-progress block has no sibling section, and a sibling-dependency block
 // prints its exact path and item.
-function printGovernedProgressBlock(block) {
-  if (!block || typeof block !== 'object') return;
+function printGovernedProgressBlock(rawBlock) {
+  if (!rawBlock || typeof rawBlock !== 'object') return;
+  // NORMALIZED BEFORE IT IS PRINTED — never trusted for having come from
+  // PostgreSQL.
+  //
+  // This previously printed the raw row's fields directly, so a block whose
+  // reason or sibling facts had been edited while keeping its old hash would
+  // have been shown to an operator as authority. `normalizeGovernedProgressBlock`
+  // is the same contract `projectBlock` uses for the page and the API: it
+  // recomputes `blockHash` over the stored fields and enforces that a
+  // verified-progress block carries NO sibling details while a
+  // sibling-dependency block MUST. Reusing it is what keeps the CLI from
+  // becoming a second interpretation of block authority.
+  //
+  // A block arriving through `verifiedProgress.block` is already normalized;
+  // re-normalizing is idempotent and simply re-verifies.
+  let block;
+  try {
+    block = normalizeGovernedProgressBlock(rawBlock);
+  } catch (error) {
+    throw new Error(
+      `governed progress block failed canonical validation: ` +
+      `${error && error.message ? error.message : String(error)}`);
+  }
   console.log(`  ${dim('progress block')} ${block.reason} ${dim(block.blockHash)}`);
   console.log(`    ${dim('blocked at')} ${block.blockedAt} ` +
     `${dim('cutoff ' + (block.cutoff ? block.cutoff.cutoffIdentity : 'unavailable'))}`);

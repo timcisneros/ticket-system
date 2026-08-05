@@ -509,11 +509,16 @@ async function main() {
           'and the exact cutoff identity');
         assertThat(cliSibling.text.includes(block.churnDecisionHash),
           'and the exact churn-decision hash');
-        assertThat(cliSibling.text.includes('sibling read'),
-          'and prints the sibling-read section this block class owns');
-        assertThat(cliSibling.text.includes('handover.md'),
-          'naming the exact requested path');
-        assertThat(cliSibling.text.includes(
+        // SCOPED TO THE SIBLING-READ LINE. The requested path also appears in
+        // the Run's error message, so a whole-output check passed even with the
+        // path stripped from the block's own sibling section.
+        const siblingLine = cliSibling.text.split('\n')
+          .find(line => line.includes('sibling read')) || '';
+        assertThat(siblingLine !== '',
+          'the CLI prints the sibling-read section this block class owns');
+        assertThat(siblingLine.includes('handover.md'),
+          `and that line names the exact requested path (${siblingLine.trim()})`);
+        assertThat(siblingLine.includes(
           `#${block.siblingDependency.siblingAllocationItemId}`),
         'and the exact sibling allocation item');
         // The sibling RUN id is not printed by this command; recorded as not

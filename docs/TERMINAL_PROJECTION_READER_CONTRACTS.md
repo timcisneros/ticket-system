@@ -244,8 +244,8 @@ Corrected classification:
 |---|---|---|
 | 1 valid completion | **APPLICABLE — ASSERTED** | `oquery run-state <runId>`; lifecycle suite |
 | 2 contained integrity | NOT APPLICABLE | no `integrityFailureCode`, `replayAvailability` or `POSTGRES_REPLAY_INTEGRITY_FAILURE` anywhere in the file |
-| 3 verified_progress_exhausted | **APPLICABLE — NOT ASSERTED** | `oquery replay` prints block reason and `blockHash` |
-| 4 undeclared_sibling_dependency | **APPLICABLE — NOT ASSERTED** | same command prints `requestedPath` and sibling item |
+| 3 verified_progress_exhausted | **APPLICABLE — ASSERTED** (§4c) | `oquery replay` prints block reason and `blockHash` |
+| 4 undeclared_sibling_dependency | **APPLICABLE — ASSERTED** (§4c) | same command prints `requestedPath` and sibling item |
 | 5 uncontained corruption | NOT APPLICABLE | no projection or refusal seam |
 
 Both directions are pinned by a source contract in the lifecycle suite: the four
@@ -253,8 +253,9 @@ absent symbols must stay absent, the three present ones must stay present, and
 the matrix row is parsed and checked against both. Re-marking rows 3 or 4
 NOT APPLICABLE now fails.
 
-Rows 3 and 4 CLI assertions are **not written** — that is new reader work, and
-the session that found this misclassification was scoped to row 1.
+Rows 3 and 4 CLI assertions were written subsequently — see §4b for the replay
+payload repair that unblocked them and §4c for the canonical normalization they
+now consume.
 
 ## 4b. `oquery replay` governed payload contract — REPAIRED 2026-08-05
 
@@ -300,6 +301,50 @@ progress block verified_progress_exhausted <blockHash>
 
 The sibling RUN id is **not printed** by this command — recorded as not exposed
 rather than added.
+
+## 4c. CLI governed-block reader consumes canonical authority (2026-08-05)
+
+**Verdict before this change: CLI TRUSTED RAW GOVERNED-BLOCK STATE.**
+`printGovernedProgressBlock` printed the durable row's fields directly — no
+hash reverification, no reason/sibling consistency check. A block edited under
+its old hash would have been shown to an operator as authority.
+
+**Corrected:** the CLI now calls `normalizeGovernedProgressBlock` from
+`runtime/governed-progress-block-contract.js` — the same contract `projectBlock`
+uses for the page and the API — and refuses closed when it throws. No second
+implementation of blockHash verification, reason validation, sibling validation
+or cutoff validation exists. A block arriving via `verifiedProgress.block` is
+already normalized; re-normalizing is idempotent and simply re-verifies.
+
+Proved end-to-end against the durable row (revision advanced, since the trigger
+refuses a silent rewrite), each edit restored before the next:
+
+| Tampered stored block | CLI |
+|---|---|
+| reason edited under the old hash | refuses closed; never prints the edited reason |
+| malformed `blockHash` | refuses closed |
+| verified-progress block carrying sibling authority | refuses closed; prints neither the forged path nor the forged item |
+| untouched | prints normally — the rule is not "refuse everything" |
+
+**Request section:** absent `requests` is truthful and silent (the envelope has
+no request list); an explicitly present non-array refuses with a diagnostic
+naming the field and shape. Never `|| []`. The block section does not depend on
+the request section.
+
+**Rows 3 and 4 — CLI cells, complete:**
+
+| | verified_progress_exhausted | undeclared_sibling_dependency |
+|---|---|---|
+| command | `oquery replay <runId>` | `oquery replay <runId>` |
+| owning suite | `governed-blocked-restart-postgres-test`, "CLI READER" section | `governed-sibling-dependency-postgres-test`, "CLI READER" section |
+| normalization seam | `normalizeGovernedProgressBlock` | same |
+| asserted | reason (scoped to the block line), blockHash, blockedAt, cutoffIdentity, churnDecisionHash, progressPolicyHash, projection hash; no sibling/integrity/completion authority | reason, blockHash, blockedAt, cutoffIdentity, churnDecisionHash; sibling-read line carrying exact requestedPath and allocation item; no verified-progress or integrity authority |
+| zero drift | 16-counter matrix, `runRevisions` unchanged | same |
+
+Two assertions were scoped to their own output line after mutations survived
+them: the block reason also appears in an earlier summary line, and the
+requested path also appears in the Run's error message. Whole-output checks
+passed with the field stripped from the block section itself.
 
 ## 5. Page semantic-section contract
 
