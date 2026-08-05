@@ -1,3 +1,21 @@
+## Completion Evidence Is Owed Only by a Completion Claim (closed 2026-08-05)
+
+`deriveLeafItemDisposition` reported `completion_decision_missing` for any
+terminal non-success Run with no decision — a claim that successful completion
+evidence was required and absent, made about Runs that never claimed completion
+and therefore owed none. A replay-integrity-failed leaf was described as lacking
+proof it was never required to produce, competing with the integrity authority
+that actually explained it. A source comment acknowledged the string was kept
+for consumer compatibility.
+
+Corrected to `completion_unsuccessful`; the missing decision stays visible via a
+null `completionDecisionHash`. Strict malformed-success handling is unchanged —
+a COMPLETED Run with no decision still reports `completion_decision_missing`,
+which is the one case that legitimately makes that claim.
+
+Recorded as still unowned: `projectedStatus`'s `not_applicable` branch has no
+suite that executes it.
+
 ## Terminal Reader Parity: Both Production Defects Closed (2026-08-05)
 
 Supersedes the entry recording them as blockers. Both are corrected, with

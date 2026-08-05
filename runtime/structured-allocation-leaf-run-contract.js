@@ -733,15 +733,26 @@ function deriveLeafItemDisposition({
 
   if (evidence.result === 'not_applicable' && !decision) {
     // A terminal non-success Run with NO decision is truthfully itself.
-    // Reported with the historical reason so existing consumers keep the
-    // string they had.
+    //
+    // It previously reported `completion_decision_missing`, kept — per the
+    // comment this replaces — "so existing consumers keep the string they had".
+    // That string is a claim, not a label: it says successful completion
+    // evidence was REQUIRED and absent. Here `evidence.result` is
+    // `not_applicable`, which means the opposite — the Run never claimed
+    // completion, so no evidence was ever owed. A replay-integrity-failed leaf
+    // was therefore reported as missing evidence it was never required to
+    // produce, competing with the integrity authority that actually explains it.
+    //
+    // The absence of a decision is still visible: `completionDecisionHash` is
+    // null. What changes is the reason, which now states the outcome rather
+    // than accusing the Run of missing proof.
     //
     // Only the ABSENT case short-circuits. A non-completed Run that carries a
     // well-bound decision still has something to say — a `blocked` disposition
     // is a real outcome with its own reason — and swallowing it here would
     // discard authority the Run legitimately holds.
     return decided(status === 'interrupted' ? 'interrupted' : 'failed', null,
-      'completion_decision_missing');
+      'completion_unsuccessful');
   }
   if (evidence.result === 'stale' || evidence.result === 'authority_mismatch' ||
       evidence.result === 'conflicts_with_run') {

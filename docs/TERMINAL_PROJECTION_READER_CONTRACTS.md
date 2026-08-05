@@ -435,7 +435,7 @@ Suites: **L** `governed-verified-progress-lifecycle-postgres-test` ·
 | Run page | ✔ L | ✔ C | ✔ B | ✔ S | ✔ 500, C |
 | Run-state API | ✔ L | ✔ C | ✔ B `verifiedProgress.block` | ✔ S `block.siblingDependency` | ✔ refuses, C |
 | Run-events API | ✔ L `run.completion_decided` | ✔ C | ✔ B `run.progress_blocked` | ✔ S | ✔ C |
-| reconciliation | `completion_verified` L | `completion_decision_missing` C | `governed_progress_blocked` B | `governed_sibling_dependency_blocked` S | never reached |
+| reconciliation | `completion_verified` L | `completion_unsuccessful` C | `governed_progress_blocked` B | `governed_sibling_dependency_blocked` S | never reached |
 | parent aggregate | ✔ L | ✔ C | ✔ B | ✔ S | refuses first |
 | CLI | NOT ASSERTED (applicable) | NOT APPLICABLE §4 | NOT APPLICABLE §4 | NOT APPLICABLE §4 | NOT APPLICABLE §4 |
 | completion authority | decision + matching hash, L | none; not required, C | none, B | none, S | none |
@@ -452,6 +452,59 @@ Suites: **L** `governed-verified-progress-lifecycle-postgres-test` ·
   authority is owned there. No assertion added.
 * **CLI row 1** — classified APPLICABLE in §4 but not executed; the other four
   rows are NOT APPLICABLE with the source reason recorded there.
+
+## 11a. Completion evidence is owed only by a completion claim (corrected 2026-08-05)
+
+An earlier revision of this matrix reported the contained-integrity row's
+reconciliation reason as `completion_decision_missing`, while the same row's
+page assertion said no missing-evidence refusal was attributed to that leaf.
+Both could not describe one disposition.
+
+**Verdict: CONTAINED-INTEGRITY LEAF WAS MISCLASSIFIED** — a production defect,
+not a mislabel. Captured from the live scenario after quiescence:
+
+| Input | Value |
+|---|---|
+| Run status | `failed` |
+| completion decision | absent |
+| completion authority hash | present |
+| integrity authority | `POSTGRES_REPLAY_INTEGRITY_FAILURE` |
+| governed block | none |
+
+| Output | Value |
+|---|---|
+| `deriveLeafItemDisposition` | `failed` / **`completion_decision_missing`** |
+| `structuredAllocationLeafExecution` item | same |
+| aggregate item | same |
+| Ticket aggregate | `failed` |
+
+The STATUS was correct; the REASON was not. `evidence.result` is
+`not_applicable` — the Run never claimed completion, so no evidence was owed —
+yet the reason claimed evidence was required and absent. A source comment
+acknowledged the string was retained "so existing consumers keep the string they
+had".
+
+**Correction:** that branch now returns `completion_unsuccessful`. The absence
+of a decision remains visible through a null `completionDecisionHash`.
+
+**These are different facts and must not be conflated:**
+
+| Fact | Meaning |
+|---|---|
+| `completionDecisionIntegrity.status = missing` | diagnostic: no decision is available to this reader |
+| item reason `completion_decision_missing` | terminal claim: successful completion evidence was REQUIRED and absent |
+
+Only a Run that reached `completed` can make the second claim. The four-case
+regression matrix in `structured-allocation-leaf-run-contract-test` pins it:
+completed+missing → `completion_decision_missing`; failed+no decision →
+`completion_unsuccessful`; interrupted+no decision → not missing-evidence;
+completed+valid → `completion_verified`.
+
+**Unowned mutation.** `projectedStatus`'s `not_applicable` branch — a terminal
+non-success Run projecting its own status through `transitionTicketAfterRun` —
+has no suite that drives it. The malformed-completion suites only drive a
+`completed` Run, and the restart suites never invoke the transition. Recorded,
+not claimed.
 
 ## 12. Mutation ownership
 

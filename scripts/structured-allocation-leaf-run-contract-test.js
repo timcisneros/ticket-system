@@ -557,6 +557,51 @@ assert.equal(verified.itemStatus, 'completed');
 assert.equal(verified.completionDecisionHash, 'd'.repeat(64));
 assert.equal(verified.reason, 'completion_verified');
 
+// ── COMPLETION EVIDENCE IS ONLY OWED BY A COMPLETION CLAIM ─────────────────
+//
+// Four cases side by side, because the distinction between them is exactly
+// what one reason string used to blur. `completion_decision_missing` is a
+// CLAIM — it says successful completion evidence was required and absent. Only
+// a Run that reached `completed` makes that claim. A truthfully failed Run owes
+// no evidence, and reporting it as missing evidence put a false accusation
+// where its real failure authority belonged: a replay-integrity-failed leaf was
+// described as lacking proof it was never required to produce.
+{
+  const noDecision = (runStatus) => deriveLeafItemDisposition(runFacts(runStatus));
+
+  // 1. completed + missing decision — evidence WAS owed and is absent.
+  const completedMissing = noDecision('completed');
+  assert.equal(completedMissing.itemStatus, 'interrupted',
+    'a completed Run with no decision is unresolved');
+  assert.equal(completedMissing.reason, 'completion_decision_missing',
+    'and is the ONE case that reports missing completion evidence');
+
+  // 2. failed + no decision — evidence was never owed.
+  const failedNoDecision = noDecision('failed');
+  assert.equal(failedNoDecision.itemStatus, 'failed',
+    'a failed Run with no decision is truthfully failed');
+  assert.notEqual(failedNoDecision.reason, 'completion_decision_missing',
+    'and is NOT reported as missing completion evidence');
+  assert.equal(failedNoDecision.reason, 'completion_unsuccessful',
+    'it states the outcome instead');
+  assert.equal(failedNoDecision.completionDecisionHash, null,
+    'while the absence of a decision stays visible in the hash');
+
+  // 3. interrupted + no decision — same rule, own status.
+  const interruptedNoDecision = noDecision('interrupted');
+  assert.notEqual(interruptedNoDecision.reason, 'completion_decision_missing',
+    'an interrupted Run is not accused of missing evidence either');
+  assert.equal(interruptedNoDecision.itemStatus, 'interrupted');
+
+  // 4. completed + valid matching decision — the positive control, so the
+  //    rules above are not simply refusing everything.
+  const completedValid = deriveLeafItemDisposition(runFacts('completed', {
+    decision: decisionFor(3001, admitted.ticketId, 'completed', AUTHORITY)
+  }));
+  assert.equal(completedValid.itemStatus, 'completed');
+  assert.equal(completedValid.reason, 'completion_verified');
+}
+
 // ── BLOCKED LEAVES KEEP THEIR OWN AUTHORITY ────────────────────────────────
 //
 // `deriveLeafItemDisposition` is the single production mapping from a Run's

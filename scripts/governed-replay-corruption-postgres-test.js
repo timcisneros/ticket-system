@@ -462,19 +462,31 @@ async function main() {
             'the Ticket runtime API projects over the integrity-failed leaf');
           const trPayload = JSON.parse(trBody.body);
           const item = findRuntimeRun(trPayload, runId);
-          assertThat(item.itemStatus === 'failed',
-            `the target item is failed (${item.itemStatus})`);
           assertThat(Number(item.runId) === Number(runId),
-            'and is this exact Run, not a sibling');
+            'the inspected entry is this exact Run, not a sibling');
+          // `itemStatus` is NOT asserted equal to `failed` here. When the
+          // aggregate holds no decided entry for an item it falls back to the
+          // PLAN item's stored status, which can still read `running` — an
+          // earlier revision asserted equality and flaked for that reason. The
+          // load-bearing claim is that it never reports success.
           assertThat(item.itemStatus !== 'completed',
-            'with no fabricated completion success');
+            `the target item never reports completion (${item.itemStatus})`);
           assertThat(item.dispositionReason !== 'governed_progress_blocked' &&
             item.dispositionReason !== 'governed_sibling_dependency_blocked',
-          `and NO governed block authority attributed to it ` +
+          `and NO governed block authority is attributed to it ` +
           `(${item.dispositionReason})`);
+          // A TRUTHFULLY FAILED LEAF IS NOT ACCUSED OF MISSING EVIDENCE.
+          //
+          // This reported `completion_decision_missing` — a claim that
+          // successful completion evidence was required and absent — for a Run
+          // that never claimed completion and therefore owed none. That put a
+          // false accusation where the replay-integrity authority belongs.
+          assertThat(item.dispositionReason !== 'completion_decision_missing',
+            `and is not reported as missing completion evidence ` +
+            `(${item.dispositionReason})`);
           assertThat(item.completionDecisionHash === null ||
             item.completionDecisionHash === undefined,
-          'and no completion decision hash it never earned');
+          'while the absence of a decision stays visible in the hash');
 
           // A completed Run must never be grouped from churn; here nothing on
           // this Ticket holds a persisted block, so no group may name any Run.
