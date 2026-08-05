@@ -30,6 +30,7 @@ const {
   countDelta,
   durableRunCounts,
   durableTerminalCounts,
+  findRuntimeRun,
   waitForSchedulerQuiescence
 } = require('./fixtures/terminal-projection-restart');
 const {
@@ -413,6 +414,62 @@ async function main() {
           'the Ticket page renders over a sibling-blocked leaf');
         assertThat(!/COMPLETION_EVIDENCE_MISSING/.test(String(ticketPage.body || '')),
           'with no completion-evidence refusal attributed to the blocked leaf');
+
+        // ── RUN-STATE OWNS THE SIBLING/PATH BLOCK AUTHORITY ────────────
+        //
+        // Blueprint §2.2: the full per-Run block lives at
+        // `verifiedProgress.block`, including its sibling facts. These are read
+        // from the reader that owns them rather than inferred from the raw
+        // event stream.
+        const runStateApi = await fresh.request(
+          'GET', `/api/runs/${readerRun.id}/state`, { cookie });
+        assertThat(runStateApi.statusCode === 200,
+          `the Run-state API projects the blocked Run (${runStateApi.statusCode})`);
+        const runState = JSON.parse(runStateApi.body);
+        assertThat(Number(runState.id) === Number(readerRun.id) &&
+          Number(runState.ticketId) === Number(readerRun.ticketId),
+        'and reports this exact Run on this exact Ticket');
+        const rsBlock = runState.verifiedProgress && runState.verifiedProgress.block;
+        assertThat(Boolean(rsBlock), 'carrying the governed block');
+        assertThat(rsBlock.reason === 'undeclared_sibling_dependency',
+          `with the exact sibling reason (${rsBlock.reason})`);
+        assertThat(rsBlock.blockHash === block.blockHash,
+          'and the exact immutable block hash');
+        assertThat(Boolean(rsBlock.siblingDependency),
+          'and the sibling dependency authority');
+        assertThat(Number(rsBlock.siblingDependency.siblingRunId) ===
+          Number(siblingRun.id),
+        `naming the exact sibling Run (${rsBlock.siblingDependency.siblingRunId})`);
+        assertThat(Number(rsBlock.siblingDependency.siblingAllocationItemId) ===
+          Number(siblingItem.allocationItemId),
+        'and the exact sibling allocation item');
+        assertThat(String(rsBlock.siblingDependency.requestedPath).includes('handover.md'),
+          `and the exact requested path (${rsBlock.siblingDependency.requestedPath})`);
+        assertThat(rsBlock.reason !== 'verified_progress_exhausted',
+          'and never the verified-progress authority');
+        assertThat(!runState.replaySummary ||
+          !String(JSON.stringify(runState.replaySummary))
+            .includes('POSTGRES_REPLAY_INTEGRITY_FAILURE'),
+        'nor any replay-integrity authority');
+        assertThat(runState.status !== 'completed',
+          `and no successful completion claim (${runState.status})`);
+
+        // Ticket runtime: reason MEMBERSHIP is what this reader owns (§2.1).
+        const ticketRuntimeApi = await fresh.request(
+          'GET', `/api/tickets/${readerRun.ticketId}/runtime`, { cookie });
+        assertThat(ticketRuntimeApi.statusCode === 200,
+          'the Ticket runtime API projects over the sibling-blocked leaf');
+        const runtimePayload = JSON.parse(ticketRuntimeApi.body);
+        const vp = runtimePayload.verifiedProgress;
+        assertThat((vp.blockedForUndeclaredSiblingDependency || [])
+          .map(Number).includes(Number(readerRun.id)),
+        'listing this Run under undeclared sibling dependency');
+        assertThat(!(vp.blockedForVerifiedProgressExhaustion || [])
+          .map(Number).includes(Number(readerRun.id)),
+        'and NOT under verified-progress exhaustion');
+        const runtimeLeaf = findRuntimeRun(runtimePayload, readerRun.id);
+        assertThat(runtimeLeaf.itemStatus !== 'completed',
+          `the structured item never completes (${runtimeLeaf.itemStatus})`);
 
         const eventsApi = await fresh.request(
           'GET', `/api/runs/${readerRun.id}/events`, { cookie });

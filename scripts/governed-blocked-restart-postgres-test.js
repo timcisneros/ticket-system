@@ -425,23 +425,68 @@ async function main() {
         'and reports this exact Run on this exact Ticket');
         assertThat(runState.status !== 'completed',
           `with a non-success disposition (${runState.status})`);
-        // NAME CORRECTION. An earlier revision of this suite concluded the
-        // Run-state API "does not own block authority" because no top-level
-        // `governedProgressBlock` key exists. That was wrong: the reader DOES
-        // carry the complete per-Run block, under `verifiedProgress.block`
-        // (blockHash, reason, churnDecisionHash, siblingDependency). See
-        // docs/TERMINAL_PROJECTION_READER_CONTRACTS.md §2.2.
+        // ── RUN-STATE OWNS THE FULL PER-RUN BLOCK ──────────────────────
         //
-        // The assertion below is kept because it is still true and still
-        // meaningful — nothing publishes a top-level `governedProgressBlock` —
-        // but it must not be read as "this reader has no block authority".
-        // Asserting the real field is listed in that document's checklist and
-        // is deliberately not added in the audit session that found it.
-        assertThat(runState.governedProgressBlock === undefined ||
-          runState.governedProgressBlock === null,
-        'the Run-state API does not own block authority — limitation, not conflict');
-        assertThat(!runState.integrityFailureCode,
-          'and it claims no replay-integrity authority either');
+        // Blueprint §2.2: this reader carries the complete governed block at
+        // `verifiedProgress.block`. An earlier revision searched for a
+        // top-level `governedProgressBlock`, did not find one, and recorded the
+        // authority as absent; that conclusion is corrected in
+        // docs/TERMINAL_PROJECTION_READER_CONTRACTS.md §9.
+        assertThat(runState.verifiedProgress &&
+          Number(runState.verifiedProgress.runId) === Number(runId),
+        'Run-state carries a per-Run verifiedProgress projection for this Run');
+        const rsBlock = runState.verifiedProgress.block;
+        assertThat(Boolean(rsBlock),
+          'and the full governed progress block');
+        assertThat(rsBlock.blockHash === blockBefore.blockHash,
+          `preserving the EXACT immutable block hash (${rsBlock.blockHash})`);
+        assertThat(rsBlock.reason === 'verified_progress_exhausted',
+          `and the exact reason (${rsBlock.reason})`);
+        assertThat(rsBlock.decision === 'blocked',
+          `and the churn decision (${rsBlock.decision})`);
+        assertThat(rsBlock.churnDecisionHash === blockBefore.churnDecisionHash &&
+          rsBlock.verifiedProgressProjectionHash ===
+            blockBefore.verifiedProgressProjectionHash &&
+          rsBlock.progressPolicyHash === blockBefore.progressPolicyHash,
+        'and the exact churn, projection and policy authority hashes');
+        assertThat(rsBlock.siblingDependency === null ||
+          rsBlock.siblingDependency === undefined,
+        'with NO sibling-dependency authority — a different block class');
+        assertThat(!runState.replaySummary ||
+          !String(JSON.stringify(runState.replaySummary))
+            .includes('POSTGRES_REPLAY_INTEGRITY_FAILURE'),
+        'and no replay-integrity authority');
+        assertThat(runState.status !== 'completed',
+          `and no successful completion claim (${runState.status})`);
+
+        // THE TWO HASHES ARE NOT THE SAME AUTHORITY. Blueprint §1/§9.
+        assertThat(rsBlock.blockHash !== runtimeLeaf.completionDecisionHash,
+          'the governed block hash is distinct from the completion-decision hash');
+
+        // Structured item result, from the reader that owns it.
+        assertThat(runtimeLeaf.itemStatus === 'failed',
+          `the structured item result is failed (${runtimeLeaf.itemStatus})`);
+        // CONTRADICTION WITH THE BLUEPRINT, RESOLVED IN FAVOUR OF SOURCE.
+        //
+        // docs/TERMINAL_PROJECTION_READER_CONTRACTS.md predicted
+        // `completion_blocked` here. Production does not produce it: a
+        // progress-blocked leaf's completion decision carries
+        // `completionDisposition: 'incomplete'` with
+        // `reasonCode: 'RUN_EXECUTION_FAILED'`, so `deriveLeafItemDisposition`
+        // takes its generic branch and reports `completion_unsuccessful`.
+        // `completion_blocked` requires a literal `blocked` disposition, which
+        // only the synthetic contract fixture supplies.
+        //
+        // The consequence is recorded rather than papered over: at ITEM level
+        // this reader cannot distinguish a governed progress block from an
+        // ordinary unsuccessful run. The block distinction is carried solely by
+        // `verifiedProgress.block`, asserted above. See §10 of that document.
+        assertThat(runtimeLeaf.dispositionReason === 'completion_unsuccessful',
+          `the item reason is the generic unsuccessful one, not a block-specific ` +
+          `reason (${runtimeLeaf.dispositionReason})`);
+        assertThat(!Object.prototype.hasOwnProperty.call(runtimeLeaf, 'requestedPath') &&
+          !Object.prototype.hasOwnProperty.call(runtimeLeaf, 'siblingAllocationItemId'),
+        'and no sibling item or path fields');
 
         const eventsApi = await second.request(
           'GET', `/api/runs/${runId}/events`, { cookie });

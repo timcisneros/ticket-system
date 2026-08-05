@@ -353,14 +353,114 @@ No production source change is expected for any item above.
 3. **`replayAvailability` is not on the Run-state API.** It is a Run-page
    concern. Any plan asserting it on that route is asserting an absent field.
 
-## 10. Unresolved product questions
+## 10. Product defects found while implementing the blueprint
+
+Two audit predictions were contradicted by source during implementation. Per the
+session's production-change boundary, neither was fixed; both are recorded with
+the smallest correction required, and no assertion locks in the current
+behaviour.
+
+### 10.1 `completion_blocked` is never produced in production — audit was wrong
+
+The blueprint predicted rows 3 and 4 reconcile to
+`failed` / `completion_blocked`. They do not. A progress-blocked or
+sibling-blocked leaf's completion decision carries
+`completionDisposition: 'incomplete'` with `reasonCode: 'RUN_EXECUTION_FAILED'`,
+so `deriveLeafItemDisposition` takes its generic branch and returns
+`failed` / `completion_unsuccessful`.
+
+`completion_blocked` requires a literal `blocked` disposition, which only the
+synthetic fixture in `structured-allocation-leaf-run-contract-test` supplies.
+
+**Consequence:** at ITEM level, neither the Ticket runtime API nor
+reconciliation can distinguish a governed block from an ordinary unsuccessful
+run. The block distinction is carried solely by
+`Run-state.verifiedProgress.block`. Rows 3–4 "reconciliation" cells are
+therefore **NARROW**, not CAN.
+
+**Smallest correction (not applied):** have the completion-decision builder emit
+`completionDisposition: 'blocked'` when a governed progress block exists for the
+Run. That is a completion-authority change and needs its own session.
+
+### 10.2 Ticket runtime reports a COMPLETED Run as blocked — cross-reader conflict
+
+Observed on row 1 (valid completion):
+
+| Source | Value |
+|---|---|
+| durable `run.governedProgressBlock` | `null` |
+| Run-state `verifiedProgress.block` | `null` |
+| Run status | `completed` |
+| Ticket runtime `verifiedProgress.blockedForVerifiedProgressExhaustion` | `[1]` |
+
+The Ticket runtime API attributes verified-progress exhaustion to a Run that
+holds no block and completed successfully. Two readers disagree about the
+authority class for the same Run.
+
+**Cause** — `runtime/verified-progress-projection.js:344-350`:
+
+```js
+const reason = projection.block
+  ? projection.block.reason
+  : (projection.decision && projection.decision.decision === 'blocked'
+    ? projection.decision.reason
+    : null);
+```
+
+With no persisted block the grouping falls back to the FRESHLY EVALUATED churn
+decision, and a completed Run's final window legitimately evaluates to
+`blocked` / `verified_progress_exhausted` — the same fact the Run page shows
+under its historical "Churn decision" heading.
+
+**Smallest correction (not applied):** apply the churn fallback only to
+non-terminal Runs, so a terminal Run contributes a blocked reason only from a
+PERSISTED block. One condition; no other behaviour changes.
+
+**Test posture:** `governed-verified-progress-lifecycle-postgres-test` asserts
+neither direction here. Asserting the current behaviour would lock in the
+contradiction; asserting the corrected behaviour would fail against unmodified
+production.
+
+### 10.3 Carried forward from the audit
 
 * `/api/runs/:id/state` reports
   `completionDecisionIntegrity.code = COMPLETION_EVIDENCE_MISSING` for a leaf
-  that failed on replay integrity. Truthful — no decision exists — but it is the
-  same code the Ticket projection uses to REFUSE. Whether one code should serve
-  both a descriptive status and a refusal is a product question, recorded, not
-  changed here.
-* The Run-state API exposes no `replayAvailability`, so an API-only consumer
-  cannot distinguish "no replay yet" from "replay withheld for integrity"
-  except via `replaySummary === null`. Recorded, not changed.
+  that failed on replay integrity — truthful, but the same code the Ticket
+  projection uses to REFUSE. `completionDecisionIntegrity` is `null` for a
+  healthy completed leaf.
+* The Run-state API exposes no `replayAvailability`; an API-only consumer
+  distinguishes "no replay yet" from "replay withheld" only via
+  `replaySummary === null`.
+
+---
+
+## 11. Implementation status
+
+Rows 1, 3 and 4 implemented against their real readers. Rows 2 and 5 were not
+reached in the implementing session; their blueprint entries in §3 and §8
+remain valid and unchanged.
+
+| Cell group | Status | Owning assertions |
+|---|---|---|
+| Row 1 Ticket runtime `items[]` | done | lifecycle suite, `findRuntimeRun` |
+| Row 1 Run-state completion authority | done | lifecycle suite |
+| Row 1 Run-state no block / no integrity | done | lifecycle suite |
+| Row 1 Ticket-level summary | **blocked by 10.2** | none — deliberately |
+| Row 3 Run-state `verifiedProgress.block` | done | blocked-restart suite |
+| Row 3 blockHash ≠ completionDecisionHash | done | blocked-restart suite |
+| Row 3 Ticket runtime reason membership | done | blocked-restart suite |
+| Row 3 item result | done (corrected per 10.1) | blocked-restart suite |
+| Row 4 Run-state sibling authority | done | sibling suite |
+| Row 4 Ticket runtime membership | done | sibling suite |
+| Rows 2, 5 | not implemented | — |
+| CLI row 1 | not implemented | — |
+
+Mutations executed, with restore verified by SHA-256:
+
+| Mutation | Owner | Suite | Result |
+|---|---|---|---|
+| projection drops block hash | `projectBlock` | blocked-restart | CAUGHT |
+| projection drops sibling authority | `projectBlock` | sibling | CAUGHT |
+| item loses `completion_verified` | `deriveLeafItemDisposition` | lifecycle | CAUGHT |
+| item loses completion-decision hash | `deriveLeafItemDisposition` | lifecycle | CAUGHT |
+| Run-state drops `verifiedProgress.block` | `serializeRunRuntimeState` | blocked-restart | not aimed — anchor not located |

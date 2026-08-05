@@ -33,6 +33,7 @@ const { withHarness, createAsserter } = require('./postgres-test-harness');
 const {
   countDelta,
   durableTerminalCounts,
+  findRuntimeRun,
   waitForSchedulerQuiescence
 } = require('./fixtures/terminal-projection-restart');
 const {
@@ -638,6 +639,18 @@ async function main() {
           // badge. Establishing its real per-Run shape ran past this session's
           // budget and is recorded as open.
 
+          // Per-item Ticket runtime projection, scoped by Run ID (§2.1).
+          const runtimeLeaf = findRuntimeRun(JSON.parse(ticketApi.body), runId);
+          assertThat(runtimeLeaf.itemStatus === 'completed',
+            `the structured item projects completed (${runtimeLeaf.itemStatus})`);
+          assertThat(runtimeLeaf.dispositionReason === 'completion_verified',
+            `with the verified reason (${runtimeLeaf.dispositionReason})`);
+          assertThat(runtimeLeaf.completionDecisionHash === decisionAfter.decisionHash,
+            'naming the exact completion decision');
+          assertThat(Number(runtimeLeaf.allocationItemId) ===
+            Number(run.allocationItemId),
+          'and the exact allocation item');
+
           const runStateApi = await cold.request(
             'GET', `/api/runs/${runId}/state`, { cookie });
           assertThat(runStateApi.statusCode === 200,
@@ -647,6 +660,55 @@ async function main() {
             'and reports the completed disposition');
           assertThat(!runStateBody.includes('undeclared_sibling_dependency'),
             'without borrowing sibling-block authority');
+
+          // ── NO BLOCK OR INTEGRITY AUTHORITY OWNS A COMPLETED LEAF ──────
+          //
+          // The decisive checks are FIELDS, not page substrings: the completed
+          // Run's page legitimately renders `verified_progress_exhausted` under
+          // a historical "Churn decision" heading, so absence of the string
+          // proves nothing. `verifiedProgress.block` being null is what proves
+          // no progress block owns the terminal state.
+          const runStateJson = JSON.parse(runStateApi.body);
+          assertThat(Number(runStateJson.id) === Number(runId) &&
+            Number(runStateJson.ticketId) === Number(run.ticketId),
+          'the Run-state API reports this exact Run on this exact Ticket');
+          assertThat(runStateJson.verifiedProgress === null ||
+            !runStateJson.verifiedProgress.block,
+          'and NO governed progress block owns the completed terminal state');
+          // `completionDecisionIntegrity` is populated only when there IS a
+          // concern — it is null for a healthy completed leaf. So the claim is
+          // that it never reports `missing` here, not that it is present.
+          assertThat(runStateJson.completionDecisionIntegrity === null ||
+            runStateJson.completionDecisionIntegrity.status !== 'missing',
+          `and completion-decision integrity never reports missing ` +
+          `(${JSON.stringify(runStateJson.completionDecisionIntegrity)})`);
+          assertThat(runStateJson.completionAuthoritySnapshot &&
+            runStateJson.completionAuthoritySnapshot.objectiveContractHash ===
+              expectedHash,
+          'and the reader presents the same expected authority hash the decision matches');
+          assertThat(!runStateJson.replaySummary ||
+            !String(JSON.stringify(runStateJson.replaySummary))
+              .includes('POSTGRES_REPLAY_INTEGRITY_FAILURE'),
+          'and no integrity failure owns it');
+
+          // TICKET-LEVEL SUMMARY IS NOT ASSERTED HERE — DEFECT RECORDED.
+          //
+          // `/api/tickets/:id/runtime`.verifiedProgress lists this COMPLETED
+          // Run under `blockedForVerifiedProgressExhaustion`, while its durable
+          // `governedProgressBlock` is null and the Run-state reader agrees
+          // there is no block. The two readers disagree about the authority
+          // class for the same Run.
+          //
+          // Cause (runtime/verified-progress-projection.js:344-350): when no
+          // block is persisted the grouping falls back to the FRESHLY EVALUATED
+          // churn decision, and a completed Run's final window legitimately
+          // evaluates to blocked/verified_progress_exhausted.
+          //
+          // No assertion is made either way. Asserting the current behaviour
+          // would lock in the contradiction; asserting the corrected behaviour
+          // would fail against unmodified production. Recorded in
+          // docs/TERMINAL_PROJECTION_READER_CONTRACTS.md §10 with the smallest
+          // proposed correction, for a session authorised to change production.
 
           // ── NOTHING WAS CREATED BY PROJECTING ─────────────────────────
           await waitForSchedulerQuiescence(store, run.ticketId);
