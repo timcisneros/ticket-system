@@ -1,25 +1,24 @@
-## Terminal Reader Parity: Two Production Defects Block Closure (2026-08-05)
+## Terminal Reader Parity: Both Production Defects Closed (2026-08-05)
 
-Implementing the reader blueprint surfaced two contradictions between the audit
-and source. Neither is fixed — the implementing session was scoped to tests
-only — and both are recorded with the smallest correction in
+Supersedes the entry recording them as blockers. Both are corrected, with
+production proof and 9/9 focused mutations at their canonical owners; details in
 `docs/TERMINAL_PROJECTION_READER_CONTRACTS.md` §10.
 
-1. **`completion_blocked` is never produced in production.** A blocked leaf's
-   completion decision carries `completionDisposition: 'incomplete'`, so
-   `deriveLeafItemDisposition` returns `completion_unsuccessful`. At ITEM level
-   no reader can distinguish a governed block from an ordinary unsuccessful run;
-   the distinction lives only in `Run-state.verifiedProgress.block`.
+1. **Governed block authority reached reconciliation.** The store now passes
+   `run.governedProgressBlock` to `deriveLeafItemDisposition`, which reports
+   `governed_progress_blocked` or `governed_sibling_dependency_blocked`.
+   `completion_blocked` was NOT reused — production already emits it for
+   `VERIFICATION_UNAVAILABLE` and infrastructure failure, so an earlier claim
+   in this register that a blocked disposition was synthetic-only was wrong.
 
-2. **The Ticket runtime API reports a COMPLETED Run as blocked.** With no
-   persisted block, `verified-progress-projection.js:344-350` falls back to the
-   freshly evaluated churn decision, so a completed Run whose final window
-   showed no new progress is listed under
-   `blockedForVerifiedProgressExhaustion` while Run-state and the durable row
-   both say there is no block.
+2. **Historical churn no longer classifies terminal Runs.** The Ticket
+   verified-progress fallback is restricted to nonterminal Runs; a terminal Run
+   groups only from its persisted block. Live churn reporting for executing Runs
+   is retained.
 
-Terminal reader-parity entries stay OPEN. Row 1's Ticket-level summary cell
-cannot be asserted in either direction until defect 2 is decided.
+The broader terminal reader matrix remains OPEN: rows 2 and 5 reader cells, the
+CLI row, page semantic sections and the per-row quiescent no-drift reads are
+still unimplemented.
 
 ## Run-State API Reader Contract (corrected 2026-08-05)
 
