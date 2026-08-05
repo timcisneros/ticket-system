@@ -441,4 +441,264 @@ const ok = (condition, message) => {
   }
 }
 
+
+// ── 8. THE HERMETIC FIXTURE PROVIDER ───────────────────────────────────────
+{
+  const {
+    createFixtureNamespace, stageResponses, serveRequest, readTranscript,
+    transportSummary, transcriptHash, FixtureProviderError, responseKey
+  } = require('./fixtures/evaluation-fixture-provider');
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-eval-fixture-'));
+  const ns = createFixtureNamespace(root, 'trial-1');
+
+  // THE KEY CARRIES NO ARM. Two arms issuing the same logical request get the
+  // same key and therefore the same bytes.
+  const base = {
+    protocolVersion: 1, scenarioId: 's1', logicalTaskId: 'task-a',
+    seed: 'seed-1', role: 'worker', ordinal: 1
+  };
+  ok(responseKey(base) === responseKey({ ...base }),
+    '8 fixture: the response key is a pure function of protocol/scenario/task/seed/role/ordinal');
+  ok(responseKey.length === 1,
+    '8 fixture: responseKey takes one options object — there is no arm parameter');
+
+  stageResponses(ns, [
+    { ...base, body: '{"ok":true}', inputTokens: 100, outputTokens: 50 },
+    { ...base, role: 'planner', ordinal: 1, body: '{"plan":true}',
+      inputTokens: 200, outputTokens: 80 },
+    { ...base, ordinal: 2, body: '{"second":true}', inputTokens: 10, outputTokens: 5,
+      failureBoundary: 'after_transport_before_response' },
+    { ...base, ordinal: 3, body: '{"never":true}', inputTokens: 1, outputTokens: 1,
+      failureBoundary: 'before_transport' }
+  ]);
+
+  const served = serveRequest(ns, { ...base, body: 'request-bytes' });
+  ok(served.text === '{"ok":true}' && served.usage.input_tokens === 100,
+    '8 fixture: a staged request is served deterministically with its token usage');
+  ok(typeof served.identity === 'string' && served.identity.startsWith('fixture-'),
+    '8 fixture: responses carry a stable identity');
+
+  // AN UNEXPECTED REQUEST IS REFUSED, never answered generically.
+  assert.throws(() => serveRequest(ns, { ...base, ordinal: 99, body: 'x' }),
+    error => error instanceof FixtureProviderError && /no staged fixture response/.test(error.message));
+  passed += 1;
+  console.log('  ok 8 fixture: an unexpected request is REFUSED, not given a generic success');
+
+  // Controlled failure boundaries.
+  assert.throws(() => serveRequest(ns, { ...base, ordinal: 2, body: 'x' }),
+    /post-transport response loss/);
+  passed += 1;
+  console.log('  ok 8 fixture: the post-transport boundary serves bytes then loses the response');
+  assert.throws(() => serveRequest(ns, { ...base, ordinal: 3, body: 'x' }),
+    /pre-transport provider failure/);
+  passed += 1;
+  console.log('  ok 8 fixture: the pre-transport boundary refuses before any byte');
+
+  const summary = transportSummary(ns);
+  ok(summary.transportsServed === 2,
+    '8 fixture: the transcript distinguishes bytes-sent from refused-before-transport');
+  ok(summary.refusals === 2,
+    '8 fixture: refusals are recorded, not silent');
+  ok(readTranscript(ns).some(entry => entry.key.includes('|worker|1')),
+    '8 fixture: the transcript records the exact logical key served');
+  ok(/^[0-9a-f]{64}$/.test(transcriptHash(ns)),
+    '8 fixture: the transcript hashes to a stable identity for the trial artifact');
+
+  // ISOLATION: a second trial cannot reuse a namespace.
+  assert.throws(() => createFixtureNamespace(root, 'trial-1'),
+    /already exists — refusing to reuse/);
+  passed += 1;
+  console.log('  ok 8 fixture: reusing a trial namespace is REFUSED');
+  const ns2 = createFixtureNamespace(root, 'trial-2');
+  ok(ns2.dir !== ns.dir && readTranscript(ns2).length === 0,
+    '8 fixture: a new trial starts with a completely empty namespace');
+  assert.throws(() => stageResponses(ns, []), /already staged/);
+  passed += 1;
+  console.log('  ok 8 fixture: re-staging responses mid-trial is REFUSED');
+
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
+// ── 9. FAMILY 4 — GENUINE COUPLING VERSUS LUCKY FINAL STATE ────────────────
+{
+  const {
+    expectedProducerBytes, evaluateCoupling, evaluateCouplingWithFixture
+  } = require('./fixtures/evaluation-coupling-oracle');
+  const crypto = require('node:crypto');
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-eval-coupling-'));
+  const seed = 'trial-seed-42';
+  const producerPath = 'reports/a/producer.txt';
+  const consumerPath = 'reports/b/consumer.md';
+  const reader = 'consumer-agent';
+
+  fs.mkdirSync(path.join(root, 'reports/a'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'reports/b'), { recursive: true });
+  const bytes = expectedProducerBytes(seed);
+  fs.writeFileSync(path.join(root, producerPath), bytes);
+  const producerHash = crypto.createHash('sha256').update(bytes).digest('hex');
+
+  // CORRECT DEPENDENCY USE -> PASS
+  fs.writeFileSync(path.join(root, consumerPath), `derived from ${producerHash}\n`);
+  const correct = evaluateCoupling({
+    workspaceRoot: root, seed, producerPath, consumerPath, consumerReaderId: reader,
+    accessLog: [{ reader, artifactPath: producerPath, artifactHash: producerHash }]
+  });
+  ok(correct.verdict === 'pass',
+    '9 coupling: genuine dependency use PASSES');
+
+  // FINAL FILES LOOK CORRECT BUT THE CONSUMER NEVER READ -> FAIL
+  const lucky = evaluateCoupling({
+    workspaceRoot: root, seed, producerPath, consumerPath, consumerReaderId: reader,
+    accessLog: []
+  });
+  ok(lucky.verdict === 'fail',
+    '9 coupling: correct-looking final files with NO consumer read FAIL');
+  ok(lucky.observations.some(o => o.fact === 'consumer_read' && o.verdict === 'fail' &&
+    /access log records no consumer read/.test(o.detail)),
+  '9 coupling: and the diagnostic names the MISSING READ specifically, not a ' +
+  'generic mismatch — the two are different failures');
+
+  // CONSUMER READ A DIFFERENT ARTIFACT VERSION -> FAIL
+  const wrongHash = evaluateCoupling({
+    workspaceRoot: root, seed, producerPath, consumerPath, consumerReaderId: reader,
+    accessLog: [{ reader, artifactPath: producerPath, artifactHash: 'f'.repeat(64) }]
+  });
+  ok(wrongHash.verdict === 'fail',
+    '9 coupling: reading a different version of the artifact FAILS');
+
+  // OUTPUT DOES NOT BIND THE PRODUCER HASH -> FAIL
+  fs.writeFileSync(path.join(root, consumerPath), 'looks fine but binds nothing\n');
+  const unbound = evaluateCoupling({
+    workspaceRoot: root, seed, producerPath, consumerPath, consumerReaderId: reader,
+    accessLog: [{ reader, artifactPath: producerPath, artifactHash: producerHash }]
+  });
+  ok(unbound.verdict === 'fail',
+    '9 coupling: an output that does not bind the producer hash FAILS');
+
+  // A FULLY SELF-CONSISTENT FORGERY -> FAIL, on the seed derivation alone.
+  //
+  // The producer content is hard-coded rather than seed-derived, but the access
+  // log records a read of THAT content's hash and the consumer output binds it.
+  // Every downstream check therefore agrees; only the seed-derivation check can
+  // reject it. Without this case a mutation removing that check survived,
+  // because the earlier cases were caught by the later checks instead.
+  const forgedBytes = 'PRODUCER-NONCE guessed\n';
+  fs.writeFileSync(path.join(root, producerPath), forgedBytes);
+  const forgedHash = crypto.createHash('sha256').update(forgedBytes).digest('hex');
+  fs.writeFileSync(path.join(root, consumerPath), `derived from ${forgedHash}\n`);
+  const forged = evaluateCoupling({
+    workspaceRoot: root, seed, producerPath, consumerPath, consumerReaderId: reader,
+    accessLog: [{ reader, artifactPath: producerPath, artifactHash: forgedHash }]
+  });
+  ok(forged.verdict === 'fail',
+    '9 coupling: a self-consistent forgery FAILS — a staged response cannot ' +
+    'hard-code the answer, because the nonce is derived from the trial seed');
+  ok(forged.observations.some(o => o.fact === 'producer_artifact' && o.verdict === 'fail'),
+    '9 coupling: and it fails specifically on the seed derivation');
+
+  // INSUFFICIENT FIXTURE EVIDENCE -> REFUSED, never a guess
+  const noLog = evaluateCouplingWithFixture({
+    workspaceRoot: root, seed, producerPath, consumerPath, consumerReaderId: reader,
+    accessLogAvailable: false, accessLog: []
+  });
+  ok(noLog.verdict === 'refused',
+    '9 coupling: an unavailable access log REFUSES rather than guessing');
+
+  // Independence: no product authority is reachable from this module.
+  const source = fs.readFileSync(
+    path.join(__dirname, 'fixtures', 'evaluation-coupling-oracle.js'), 'utf8');
+  const executable = source.split('\n')
+    .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line)).join('\n');
+  ok(!/require\(['"][^'"]*runtime\//.test(executable) &&
+    !executable.includes('completionDecision') && !executable.includes('store'),
+  '9 coupling: the coupling oracle reaches no product authority either');
+
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
+
+// ── 10. QUIESCENCE AND THE IMMUTABLE TRIAL ARTIFACT ────────────────────────
+{
+  const {
+    QUIESCENCE_CONDITIONS, assertSelectOnly: quiescentSelectOnly, assertMode,
+    buildTrialArtifact, writeTrialArtifact, artifactPathFor, assertSingleMode,
+    QuiescenceError
+  } = require('./fixtures/evaluation-quiescence');
+
+  // Quiescence is more than terminal status.
+  ok(QUIESCENCE_CONDITIONS.includes('active_leases') &&
+    QUIESCENCE_CONDITIONS.includes('in_flight_governed_requests') &&
+    QUIESCENCE_CONDITIONS.includes('recoverable_terminalization') &&
+    QUIESCENCE_CONDITIONS.includes('active_fixture_requests'),
+  '10 quiescence: leases, in-flight requests, recoverable terminalization and ' +
+  'fixture requests all block quiescence');
+  ok(QUIESCENCE_CONDITIONS.length === 9,
+    '10 quiescence: all nine conditions are named individually');
+
+  // The reader observes; it never creates.
+  for (const statement of ['UPDATE runs SET status = $1', 'INSERT INTO runs VALUES (1)']) {
+    assert.throws(() => quiescentSelectOnly(statement));
+    passed += 1;
+    console.log(`  ok 10 quiescence: refuses ${statement.split(' ')[0]}`);
+  }
+  const quiescenceSource = fs.readFileSync(
+    path.join(__dirname, 'fixtures', 'evaluation-quiescence.js'), 'utf8')
+    .split('\n').filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line)).join('\n');
+  for (const forbidden of ['transitionRun', 'claimPendingRun', 'settleEconomicRequest',
+    'repairRunTerminalization', 'INSERT ', 'UPDATE ']) {
+    ok(!quiescenceSource.includes(forbidden),
+      `10 quiescence: never calls ${forbidden.trim()}`);
+  }
+
+  // Mode is mandatory and validated.
+  ok(assertMode('fixture') === 'fixture' && assertMode('live') === 'live',
+    '10 artifact: fixture and live are the only modes');
+  assert.throws(() => assertMode(undefined), /may not be scored/);
+  passed += 1;
+  console.log('  ok 10 artifact: a result with no stated mode is REFUSED');
+  assert.throws(() => assertMode('mixed'));
+  passed += 1;
+  console.log('  ok 10 artifact: an unknown mode is REFUSED');
+
+  const baseArtifact = {
+    protocolVersion: 1, repositoryCommit: 'deadbeef', scenarioId: 's1', armId: 'B',
+    repetition: 1, seed: 'seed-1', mode: 'fixture', envelopeHash: 'abc',
+    pathProof: 'structured_v2', ticketReport: { ticketId: 1 },
+    oracleResult: { verdict: 'pass' }, normalizedCost: { totalNormalizedMicroUsd: 5 },
+    quiescence: { quiescent: true }
+  };
+  const artifact = buildTrialArtifact(baseArtifact);
+  ok(artifact.label === 'UNSCORED HARNESS SMOKE — NOT PRODUCT EVIDENCE',
+    '10 artifact: every artifact is labelled unscored');
+  ok(/^[0-9a-f]{64}$/.test(artifact.artifactHash),
+    '10 artifact: carries a final artifact hash');
+  ok(Object.isFrozen(artifact), '10 artifact: is immutable in memory');
+  assert.throws(() => buildTrialArtifact({ ...baseArtifact, quiescence: undefined }));
+  passed += 1;
+  console.log('  ok 10 artifact: a missing required field is REFUSED');
+
+  // Distinct namespaces AND a validated mode field — neither alone.
+  const live = buildTrialArtifact({ ...baseArtifact, mode: 'live' });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-eval-artifact-'));
+  const fixturePath = artifactPathFor(root, artifact);
+  const livePath = artifactPathFor(root, live);
+  ok(fixturePath.includes(`${path.sep}fixture${path.sep}`) &&
+    livePath.includes(`${path.sep}live${path.sep}`),
+  '10 artifact: fixture and live results are written to DISTINCT namespaces');
+  assert.throws(() => assertSingleMode([artifact, live]), /refusing to combine/);
+  passed += 1;
+  console.log('  ok 10 artifact: a fixture result cannot enter a live set, or the reverse');
+
+  // Write once; never overwrite.
+  writeTrialArtifact(fixturePath, artifact);
+  ok(fs.existsSync(fixturePath), '10 artifact: the artifact is written');
+  assert.throws(() => writeTrialArtifact(fixturePath, artifact),
+    error => error instanceof QuiescenceError && /refusing to overwrite/.test(error.message));
+  passed += 1;
+  console.log('  ok 10 artifact: overwriting an existing result is REFUSED');
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
 console.log(`\nstructured allocation evaluation test passed — ${passed} assertions`);
