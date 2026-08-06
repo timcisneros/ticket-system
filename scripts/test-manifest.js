@@ -204,6 +204,8 @@ const TESTS = Object.freeze([
   { file: "governed-openai-transport-test.js", status: "required" },
   { file: "governed-planner-cutover-boundary-test.js", status: "required" },
   { file: "governed-policy-source-test.js", status: "required" },
+  { file: "governed-role-economic-policy-set-test.js", status: "required" },
+  { file: "governed-role-policy-container-postgres-test.js", status: "required" },
   { file: "governed-provider-transport-test.js", status: "required" },
   { file: "governed-provider-request-contract-test.js", status: "required" },
   { file: "model-pricing-catalog-test.js", status: "required" },

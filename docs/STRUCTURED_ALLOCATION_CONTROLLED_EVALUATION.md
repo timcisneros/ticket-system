@@ -1030,26 +1030,98 @@ overwriting one.
 
 ---
 
+## 3e. Governed leaf Runs now EXECUTE — B and C complete (session 9)
+
+### What changed in production
+
+Two corrections landed in session 8 (`f2741929`, `dca37af7`): the canonical
+version-1 progress-control policy is now built and supplied as
+`governedLeafCapture` during real leaf admission, and leaf-admission failures are
+classified truthfully instead of every unexpected error being reported as a
+concurrency race.
+
+The second correction immediately exposed a third defect. With honest
+classification, B and C stopped claiming a race and reported
+`leaf_governed_authority_unavailable` — because **one governed policy container
+could fund only one role**, and only one active container was permitted. Resolved
+this session by `docs/GOVERNED_ROLE_ECONOMIC_POLICY_SET_DECISION.md`: the
+container's economic authority became a closed, role-keyed set
+(`economicPolicies`, version 2) so one immutable container funds both
+`structured_planner` and `structured_leaf_executor`. No fourth subdocument, no
+second container, no cross-role fallback, no migration.
+
+### The fixture blind spot that hid both defects
+
+`seedGovernedStructuredTicket` passed a worker-role policy source **straight to
+the store**, bypassing `loadGovernedPlannerPolicyContainer` entirely. A fixture
+that skips the production seam cannot fail when that seam is broken — which is
+why both the missing-capture defect and the one-role defect survived a full
+release checkpoint. The evaluation runner now seeds a real container and reads it
+**through the production loader**; `scripts/fixtures/governed-role-policy-container.js`
+builds only the RAW container body and deliberately cannot produce a normalized
+source.
+
+### Family-1 results — UNSCORED HARNESS SMOKE, NOT PRODUCT EVIDENCE
+
+| Arm | Path stage reached | Runs | Governed leaf | Claimed | Planner req | Worker req |
+|---|---|---|---|---|---|---|
+| A | `direct_executed` | 1 | 0 | 0 | 0 | 0 |
+| A2a | `legacy_v1_allocated_executed` | 2 | 0 | 0 | 0 | 0 |
+| A2b | `legacy_v1_dynamic_executed` | 2 | 0 | 0 | 0 | 0 |
+| B | `structured_v2_allocated_executed` | 3 | 3 | 3 | 1 | 3 |
+| C | `structured_v2_dynamic_executed` | 3 | 3 | 3 | 1 | 3 |
+
+Each structured arm reserved against **exactly two role accounts** — one
+`structured_planner`, one `structured_leaf_executor` — with no reservation
+crossing roles, and reconciled to a terminal aggregate.
+
+**An observation recorded, not interpreted.** Every arm terminalized with ticket
+status `failed` while the independent oracle — reading raw filesystem state
+only — returned `pass`. That divergence is a real fact about the product and is
+recorded here deliberately. It is **not** scored, ranked, compared or explained
+in this session: doing so would be a product verdict, which is out of scope.
+Nothing in this table is evidence for or against any arm.
+
+### Path-stage classification
+
+Runner and report now share ONE classifier (`classifyPathStage` in
+`scripts/fixtures/evaluation-arms.js`). `structured_v2_*_executed` requires an
+actually claimed, worker-role governed leaf Run — never a merely admitted one and
+never a planning attempt. Five independently tracked facts: `planningAttempted`,
+`planAdmitted`, `leafRunsAdmitted`, `governedLeafExecutionObserved`,
+`aggregateReconciliationObserved`.
+
+Quiescence gained a tenth condition: `admitted_plan_without_leaf_runs`. A
+structured plan admitted with no governed leaf Run yet is **mid-flight, not
+finished** — without it, a structured trial that never executed governed work
+could be observed as quiescent and read as complete. It is scoped to the
+structured path so legacy v1 plans, which never owe a leaf Run, are unaffected.
+
 ## 13. Status
 
-**Tranche 6: IN PROGRESS — harness built, evaluation NOT run.**
+**Tranche 6: IN PROGRESS — harness built and executing; evaluation NOT run.**
 
-Five of six prerequisites are CLOSED with repository proof. **Prerequisite 3
-(hermetic scenario fixtures) is OPEN, and the evaluation may not run until it
-closes.** The trial runner and the scenario fixtures it would drive are not
-built; consequently **no smoke run was performed**, no comparison has been run,
-no verdict exists, and no RETAIN / REVISE / STOP has been issued.
+All five arms now execute end to end through real servers on family-1, including
+governed structured leaf execution for B and C. **No scored or live evaluation
+has been run.** No comparison, no aggregate, no ranking, no verdict, and no
+RETAIN / REVISE / STOP.
 
-No production behaviour changed in either Tranche 6 session.
+**Prerequisite 3 (hermetic scenario fixtures) remains PARTIALLY CLOSED**:
+family-1 is authored and executing; families 3, 4, 7, 8 and 9 are not.
+
+Production behaviour DID change in sessions 8 and 9 — the progress-policy
+capture, the failure classification, and the role-keyed economic policy set.
+Each is covered by its own decision record and its own suites.
 
 ### Exact remaining execution blockers
 
-1. **scenario fixture definitions** for families 3, 7, 8 and 9 are not authored
-   as data (the *mechanism* to run them exists; the staged responses and
+1. **scenario fixture definitions** for families 3, 4, 7, 8 and 9 are not
+   authored as data (the *mechanism* to run them exists; the staged responses and
    expectations do not);
-2. **the trial runner and its five arm adapters** are not built, so no arm has
-   been driven end to end through a real server;
-3. consequently **no unscored smoke run was performed**, and none is claimed.
+2. repetition, ordering and comparability across families are specified but
+   unexercised beyond family-1;
+3. consequently **only an unscored family-1 smoke has been performed**, and
+   nothing more is claimed.
 
 Family 4 is no longer among these: its missing observation is closed (§4a).
 

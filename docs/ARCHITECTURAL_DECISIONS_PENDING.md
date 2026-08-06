@@ -1,6 +1,23 @@
-## GOVERNED POLICY CONTAINER FUNDS ONE ROLE — DECISION REQUIRED (2026-08-06)
+## GOVERNED POLICY CONTAINER FUNDS ONE ROLE — RESOLVED (2026-08-05)
 
-**Status: OPEN. Newly exposed once the leaf-capture wiring was corrected.**
+**Status: CLOSED. Approved and implemented — see
+`docs/GOVERNED_ROLE_ECONOMIC_POLICY_SET_DECISION.md`.**
+
+The approved resolution keeps exactly ONE active governed container and changes
+its economic authority from a singular role policy into a closed, role-keyed set
+(`economicPolicies`, version 2), so one immutable container funds both
+`structured_planner` and `structured_leaf_executor`. No fourth subdocument, no
+second active container, no cross-role fallback, no separate worker policy
+system, and no migration — `model_routing_policies.body` is open JSONB.
+
+Family-1 arms B and C now admit AND execute governed leaf Runs through the
+production loader with role-correct reservations. The original problem statement
+is retained below as the record of what was wrong.
+
+---
+
+**Original status (now resolved): OPEN. Newly exposed once the leaf-capture
+wiring was corrected.**
 
 With `governedLeafCapture` supplied and the false-conflict classification fixed,
 structured leaf admission now refuses **truthfully** with

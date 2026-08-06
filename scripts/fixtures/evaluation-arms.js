@@ -129,6 +129,53 @@ const ARMS = Object.freeze({
 
 const ARM_IDS = Object.freeze(Object.keys(ARMS));
 
+// ── The ONE canonical path-stage classifier ─────────────────────────────────
+//
+// The runner and the read-only report both call this. Two independent
+// derivations of "which stage did this trial reach" would eventually disagree,
+// and a disagreement about whether governed work executed is the single most
+// misleading thing this harness could produce.
+//
+// A stage is `<path>[_<mode>]_executed` and is awarded ONLY from durable facts.
+// In particular `structured_v2_*_executed` requires an actually claimed,
+// worker-role governed leaf Run — never a merely admitted one, and never a
+// planning attempt.
+const PATH_STAGES = Object.freeze([
+  'direct_executed',
+  'legacy_v1_allocated_executed',
+  'legacy_v1_dynamic_executed',
+  'structured_v2_allocated_executed',
+  'structured_v2_dynamic_executed'
+]);
+
+function expectedPathStage(arm) {
+  return arm.expectedPath === 'direct'
+    ? 'direct_executed'
+    : `${arm.expectedPath}_${arm.assignmentMode}_executed`;
+}
+
+// Returns the stage reached, or a `<path>_*` NON-executed marker naming the
+// exact fact that is missing. It never returns an executed stage it cannot
+// justify from the facts it was given.
+function classifyPathStage(arm, proof) {
+  const mode = arm.expectedPath === 'direct' ? null : arm.assignmentMode;
+  const suffix = mode ? `${arm.expectedPath}_${mode}` : arm.expectedPath;
+  if (proof.observedPath === 'direct') {
+    return proof.runCount > 0 ? 'direct_executed' : 'direct_no_run';
+  }
+  if (proof.observedPath === 'legacy_v1') {
+    if (!proof.planAdmitted) return `${suffix}_no_plan`;
+    return proof.runCount > 0 ? `${suffix}_executed` : `${suffix}_no_run`;
+  }
+  // Structured. Each missing fact is named separately, so a blocked trial says
+  // WHERE it stopped instead of collapsing into one "not executed".
+  if (!proof.planningAttempted) return `${suffix}_not_attempted`;
+  if (!proof.planAdmitted) return `${suffix}_plan_refused`;
+  if (!proof.leafRunsAdmitted) return `${suffix}_no_leaf_runs`;
+  if (!proof.governedLeafExecutionObserved) return `${suffix}_leaf_runs_unexecuted`;
+  return `${suffix}_executed`;
+}
+
 // THE ROUTING RULE, transcribed from server.js dispatch conditions.
 //
 // Deliberately expressed over the ticket-shaping inputs an operator actually
@@ -284,7 +331,10 @@ function assertDistinctCells(armIds) {
 module.exports = {
   ARMS,
   ARM_IDS,
+  PATH_STAGES,
   PRODUCTION_PATHS,
+  classifyPathStage,
+  expectedPathStage,
   OWNERSHIP_SOURCES,
   EvaluationArmError,
   predictProductionPath,

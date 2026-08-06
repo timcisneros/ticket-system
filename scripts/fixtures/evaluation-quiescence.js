@@ -40,6 +40,12 @@ const QUIESCENCE_CONDITIONS = Object.freeze([
   'recoverable_terminalization',
   'scheduler_visible_retries',
   'pending_aggregate_reconciliation',
+  // A version-2 plan was admitted and the Ticket is still continuable, but no
+  // governed leaf Run exists yet. That state is MID-FLIGHT, not finished: the
+  // plan-to-leaf step is still owed. Treating it as quiescent is exactly how a
+  // structured trial that never executed any governed work could be read as a
+  // completed one.
+  'admitted_plan_without_leaf_runs',
   'active_fixture_requests'
 ]);
 
@@ -76,6 +82,15 @@ async function observeQuiescence(store, ticketId, { fixtureNamespace = null } = 
        (SELECT count(*) FROM ${store.table('runs')}
          WHERE ticket_id = $1 AND status = 'pending'
        )::int AS scheduler_visible,
+       (SELECT count(*) FROM ${store.table('allocation_plans')}
+         WHERE ticket_id = $1
+       )::int AS admitted_plans,
+       (SELECT count(*) FROM ${store.table('events')}
+         WHERE ticket_id = $1 AND type LIKE 'ticket.structured_planning%'
+       )::int AS structured_planning_events,
+       (SELECT count(*) FROM ${store.table('runs')}
+         WHERE ticket_id = $1 AND body ? 'leafRunBinding'
+       )::int AS governed_leaf_runs,
        (SELECT status FROM ${store.table('tickets')} WHERE id = $1) AS ticket_status`,
   ), [ticketId])).rows[0];
 
@@ -92,6 +107,17 @@ async function observeQuiescence(store, ticketId, { fixtureNamespace = null } = 
     scheduler_visible_retries: Number(rows.scheduler_visible),
     pending_aggregate_reconciliation:
       rows.ticket_status === 'in_progress' && Number(rows.nonterminal_runs) === 0 ? 1 : 0,
+    // Only while the Ticket can still continue. Once it is terminal the plan
+    // either produced its Runs or the trial ended for a reason the other
+    // conditions already report — a terminal Ticket must not be held
+    // permanently non-quiescent by a step that can no longer happen.
+    // Scoped to the STRUCTURED path by the planning attempt. A legacy v1 plan
+    // admits ordinary Runs and never owes a governed leaf Run, so applying this
+    // to every plan would hold the legacy arms non-quiescent forever.
+    admitted_plan_without_leaf_runs:
+      !TERMINAL_STATUSES.includes(rows.ticket_status) &&
+      Number(rows.structured_planning_events) > 0 &&
+      Number(rows.admitted_plans) > 0 && Number(rows.governed_leaf_runs) === 0 ? 1 : 0,
     active_fixture_requests: 0
   };
 

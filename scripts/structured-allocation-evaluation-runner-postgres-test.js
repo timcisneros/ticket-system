@@ -27,7 +27,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { withHarness, createAsserter } = require('./postgres-test-harness');
-const { ARMS, ARM_IDS } = require('./fixtures/evaluation-arms');
+const {
+  ARMS, ARM_IDS, classifyPathStage, expectedPathStage
+} = require('./fixtures/evaluation-arms');
 const { getScenario } = require('./fixtures/evaluation-scenarios');
 const { runTrial, EvaluationRunnerError } = require('./structured-allocation-evaluation-runner');
 
@@ -124,13 +126,53 @@ async function main() {
             `${armId}: the admitted plan is version 2`);
           assertThat(artifact.pathProof.plannerRequestCount > 0,
             `${armId}: a structured planner request was made`);
-          // RECORDED, NOT YET REQUIRED. Leaf-run admission has not been
-          // observed; the milestone is incomplete and this states which fact is
-          // missing rather than implying execution happened.
-          assertThat(artifact.pathProof.leafRunsAdmitted === false,
-            `${armId}: leaf-run admission is NOT yet observed — recorded as the ` +
-            'remaining gap, not as executed governed work');
+          // ── GOVERNED LEAF EXECUTION ──────────────────────────────────
+          //
+          // Previously this recorded leaf admission as the remaining gap. With
+          // one active container funding BOTH canonical roles, the plan-to-leaf
+          // step completes, so the gap marker is replaced by the execution
+          // proofs it was standing in for.
+          assertThat(artifact.pathProof.leafRunsAdmitted === true,
+            `${armId}: governed leaf Runs were admitted from the v2 plan`);
+          assertThat(artifact.pathProof.governedLeafRunCount > 0,
+            `${armId}: at least one leaf Run carries governed leaf authority`);
+          // ADMISSION IS NOT EXECUTION, and the two are asserted separately.
+          assertThat(artifact.pathProof.leafExecutorRequestCount > 0,
+            `${armId}: a worker-ROLE governed request was issued`);
+          assertThat(artifact.pathProof.claimedLeafRunCount > 0,
+            `${armId}: a governed leaf Run was actually claimed and started`);
+          assertThat(artifact.pathProof.governedLeafExecutionObserved === true,
+            `${armId}: governed leaf EXECUTION is observed, not merely admission`);
+
+          // ── ROLE-CORRECT ECONOMICS ───────────────────────────────────
+          //
+          // The planner and the worker draw on their own role accounts. A
+          // reservation that crossed roles would mean one role spent the
+          // other's authority.
+          const accounts = artifact.pathProof.roleAccounts || [];
+          const byRole = Object.fromEntries(accounts.map(row => [row.role, row.accounts]));
+          assertThat(byRole.structured_planner === 1,
+            `${armId}: planner reservations bind exactly one planner account`);
+          assertThat(byRole.structured_leaf_executor === 1,
+            `${armId}: worker reservations bind exactly one leaf-executor account`);
+          assertThat(accounts.length === 2,
+            `${armId}: exactly the two canonical roles reserved — no role crossing`);
+
+          // ── AGGREGATE ────────────────────────────────────────────────
+          assertThat(artifact.pathProof.aggregateReconciliationObserved === true,
+            `${armId}: the Ticket aggregate was reconciled to a terminal status`);
         }
+
+        // ── CANONICAL PATH STAGE, one classifier ───────────────────────────
+        assertThat(artifact.pathProof.expectedPathStage === expectedPathStage(arm),
+          `${armId}: the arm's canonical stage is ${expectedPathStage(arm)}`);
+        assertThat(artifact.pathProof.pathStage === expectedPathStage(arm),
+          `${armId}: durable facts reach that exact stage — observed ` +
+          `${artifact.pathProof.pathStage}`);
+        // The runner and the read-only report must not derive it separately.
+        assertThat(artifact.pathProof.pathStage ===
+          classifyPathStage(arm, artifact.pathProof),
+        `${armId}: the shared classifier reproduces the recorded stage`);
 
         // ── INDEPENDENT ORACLE ───────────────────────────────────────────
         assertThat(['pass', 'fail', 'refused'].includes(artifact.oracleResult.verdict),

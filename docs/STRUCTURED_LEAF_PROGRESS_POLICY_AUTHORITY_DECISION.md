@@ -1,7 +1,31 @@
-# Structured Leaf Progress-Policy Authority — Decision Required
+# Structured Leaf Progress-Policy Authority — Decision CLOSED
 
-**Status: OPTION B ACCEPTED. Version-1 values APPROVED 2026-08-06 — see §6b.
-Implementation authorized.**
+**Status: CLOSED 2026-08-05. Option B accepted, version-1 values approved (§6b),
+implemented, and PROVEN THROUGH PRODUCTION.**
+
+Closure evidence — the decision is closed on execution, not on merge:
+
+- production builds the canonical version-1 progress-control policy in
+  `runtime/churn-decision-contract.js` (`buildDefaultProgressControlPolicy`),
+  with `maximumCumulativeExecutionDurationMs` derived ONLY from the immutable
+  `runtimeBudgetSnapshot.maxRuntimeDurationMs`; the fixture-only 3 600 000 ms
+  value is not used anywhere;
+- all policy-relevant leaf snapshots are proved equal by
+  `assertUniformProgressPolicyInputs` before one plan-scoped capture is used —
+  the first snapshot is never trusted;
+- `server.js` supplies `governedLeafCapture` during real leaf admission, using
+  the canonical worker-role policy source read through the production loader;
+- store validation remains fail-closed and unrelaxed;
+- family-1 arms B and C admitted governed leaf Runs and EXECUTED them, with
+  worker-role reservations and terminal aggregate reconciliation, in
+  `scripts/structured-allocation-evaluation-runner-postgres-test.js`.
+
+The blocking dependency — one governed container funding only one role — was
+resolved separately by
+`docs/GOVERNED_ROLE_ECONOMIC_POLICY_SET_DECISION.md`.
+
+A later policy adjustment requires an explicit version bump and must not rewrite
+existing captured Runs.
 
 Recorded 2026-08-06 from `structured-allocation-controlled-evaluation`.
 

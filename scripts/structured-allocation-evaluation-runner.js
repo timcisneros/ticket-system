@@ -27,7 +27,8 @@ const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 
 const {
-  ARMS, assertArmReachesIntendedPath, assertObservedPathMatches
+  ARMS, assertArmReachesIntendedPath, assertObservedPathMatches,
+  classifyPathStage, expectedPathStage
 } = require('./fixtures/evaluation-arms');
 const {
   getScenario, assertArmAllowed, materializeResponses, buildOracleFor,
@@ -52,6 +53,9 @@ const {
   buildComparisonEnvelope, classifyTrialInclusion, CONTROLLED_FIELDS
 } = require('./fixtures/evaluation-trial-record');
 const { pricedCatalogValue } = require('./governed-structured-fixture');
+const {
+  buildGovernedExecutionValue
+} = require('./fixtures/governed-role-policy-container');
 const { buildPricingCatalog } = require('../runtime/model-pricing-catalog');
 
 const SUPPORTED_MODES = Object.freeze(['fixture', 'live']);
@@ -166,6 +170,30 @@ async function proveDurablePath(store, ticketId, arm) {
   const plannerReservations = (await store.pool.query(
     `SELECT count(*)::int AS n FROM ${store.table('economic_request_reservations')}
       WHERE ticket_id = $1 AND role = 'structured_planner'`, [ticketId])).rows[0].n;
+  // WORKER-ROLE facts, read separately from the planner's.
+  //
+  // `structured_v2_executed` may not be claimed from an admitted leaf Run: a
+  // Run can be admitted with complete governed authority and never claimed. The
+  // proof of EXECUTION is a worker-role reservation — created only when a
+  // governed leaf request is actually issued under the leaf-executor role — and
+  // a Run that was actually claimed.
+  const workerReservations = (await store.pool.query(
+    `SELECT count(*)::int AS n FROM ${store.table('economic_request_reservations')}
+      WHERE ticket_id = $1 AND role = 'structured_leaf_executor'`, [ticketId])).rows[0].n;
+  const claimedLeafRuns = (await store.pool.query(
+    `SELECT count(*)::int AS n FROM ${store.table('runs')}
+      WHERE ticket_id = $1 AND body ? 'leafRunBinding' AND started_at IS NOT NULL`,
+    [ticketId])).rows[0].n;
+  // Reservations must never cross roles: a planner reservation may not be
+  // charged to a worker account, nor the reverse. Read as distinct accounts
+  // rather than inferred from counts.
+  const roleAccounts = (await store.pool.query(
+    `SELECT role, count(DISTINCT account_id)::int AS accounts
+       FROM ${store.table('economic_request_reservations')}
+      WHERE ticket_id = $1 GROUP BY role ORDER BY role`, [ticketId])).rows;
+  const ticketStatus = (await store.pool.query(
+    `SELECT status FROM ${store.table('tickets')} WHERE id = $1`,
+    [ticketId])).rows[0];
 
   // A STRUCTURED PLANNING ATTEMPT IS ITSELF EVIDENCE OF THE STRUCTURED PATH.
   //
@@ -217,20 +245,41 @@ async function proveDurablePath(store, ticketId, arm) {
       ORDER BY seq DESC LIMIT 1`, [ticketId])).rows;
   // The four separate facts the milestone distinguishes, so a planning attempt
   // can never be read as executed governed work.
-  return Object.freeze({
+  const proof = {
     observedPath, planVersion, planningAttempts,
     planningAttempted: planningAttempts > 0,
     planAdmitted: plans.length > 0,
     leafRunsAdmitted: observed.governedLeafRunCount > 0,
-    governedLeafExecutionObserved: runs.some(run =>
-      run.governed_leaf && run.governed_envelope),
+    // ADMISSION IS NOT EXECUTION. Both facts must hold: a governed leaf request
+    // was actually issued under the worker role, and a leaf Run was actually
+    // claimed and started.
+    governedLeafExecutionObserved: workerReservations > 0 && claimedLeafRuns > 0,
     planningFailureReason: planningFailures.length > 0
       ? JSON.stringify(planningFailures[0].payload).slice(0, 300) : null,
     plannerRequestCount: plannerReservations,
+    leafExecutorRequestCount: workerReservations,
+    claimedLeafRunCount: claimedLeafRuns,
+    // One account per role, and never one shared between them.
+    roleAccounts: roleAccounts.map(row => ({
+      role: row.role, accounts: Number(row.accounts)
+    })),
+    // The Ticket reached a terminal status with no non-terminal Runs left, so
+    // the aggregate was reconciled rather than merely abandoned mid-flight.
+    aggregateReconciliationObserved: ['completed', 'failed', 'interrupted', 'cancelled']
+      .includes(ticketStatus && ticketStatus.status),
+    ticketStatus: ticketStatus ? ticketStatus.status : null,
     runCount: runs.length,
     governedLeafRunCount: observed.governedLeafRunCount,
     allocationPlanIds: plans.map(plan => plan.id),
     authority: 'durable_state'
+  };
+  // ONE classifier, shared with the read-only report. The stage is derived
+  // last, from the durable facts above, so it can never be more optimistic than
+  // they are.
+  return Object.freeze({
+    ...proof,
+    pathStage: classifyPathStage(arm, proof),
+    expectedPathStage: expectedPathStage(arm)
   });
 }
 
@@ -346,30 +395,15 @@ async function runTrial({
     });
     const rows = Array.isArray(existing) ? existing : (existing && existing.policies) || [];
     const alreadyGoverned = rows.some(row => row && row.governedExecution);
-    const catalog = buildPricingCatalog(pricedCatalogValue());
-    const roleEntry = role => ({
-      role,
-      primaryRoute: {
-        adapterId: 'openai.responses.v1', provider: 'openai',
-        model: 'gpt-4o-mini-2024-07-18'
-      },
-      fallbackRoute: null,
-      authorizedFallbackReasons: []
-    });
-    const economics = role => ({
-      policyId: `${role}-economics-eval`,
-      role,
-      authorizedMicroUsd: 500_000,
-      maximumProviderRequests: 3,
-      maximumOutputTokensPerRequest: 2048,
-      pricingCatalogId: catalog.catalogId,
-      pricingCatalogHash: catalog.catalogHash,
-      fallbackLiabilityAuthorized: false,
-      fallbackProviderRequests: 0,
-      // Required by the economic-authority contract: an economic policy that
-      // cannot say when it was captured cannot be bound to a request.
-      capturedAt: '2026-08-01T00:00:00.000Z'
-    });
+    // ONE container, BOTH roles.
+    //
+    // The singular `economicPolicy` this block used to seed funded only the
+    // planner, so leaf admission refused with
+    // `leaf_governed_authority_unavailable` — truthfully, because no worker
+    // economics were configured anywhere. The container now carries the
+    // role-keyed set, and BOTH the planner invocation and leaf admission read
+    // their own entry from this same active revision through the production
+    // loader. Nothing here hands a policy source to the store directly.
     if (!alreadyGoverned) await store.createModelRoutingPolicy({
       value: {
         name: `Eval governed routing ${stamp}`,
@@ -387,17 +421,7 @@ async function runTrial({
         targetRequirements: [],
         verificationRequirement: null,
         triageOnNoRoute: true,
-        governedExecution: {
-          roleRoutingPolicy: {
-            policyId: 'eval-routing-1',
-            rolePolicies: [
-              roleEntry('structured_planner'),
-              roleEntry('structured_leaf_executor')
-            ]
-          },
-          economicPolicy: economics('structured_planner'),
-          pricingCatalog: pricedCatalogValue()
-        }
+        governedExecution: buildGovernedExecutionValue()
       },
       changedBy: 'evaluation-runner'
     });

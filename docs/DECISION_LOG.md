@@ -1,5 +1,37 @@
 # Decision Log
 
+## One governed container funds every canonical role (2026-08-05)
+
+The governed policy container carried a singular `economicPolicy` naming exactly
+one role, while only ONE active container was permitted. A deployment could
+therefore fund `structured_planner` or `structured_leaf_executor`, never both —
+so the structured plan-to-leaf path could not be configured at all, and leaf
+admission refused truthfully with `leaf_governed_authority_unavailable`.
+
+**Decision: keep exactly one active container and make its economic authority a
+closed, role-keyed set.** `economicPolicies` (version 2) replaces the singular
+`economicPolicy` (version 1, still readable forever for its recorded role). It is
+NOT a fourth subdocument — it is the version-2 shape of the existing economic
+category, and the container still carries exactly three authority categories.
+
+Rejected: multiple active containers (restores the ambiguity
+`GOVERNED_PLANNER_POLICY_AMBIGUOUS` exists to refuse); a separate worker policy
+loader (two drifting policy systems, and economics split from the shared routing
+and pricing they must be priced against).
+
+No migration: `model_routing_policies.body` is open JSONB with no constraint,
+column or index touching governed economics. No stored container is rewritten,
+and no historical Run is rewritten.
+
+Consequence: family-1 arms B and C admit AND execute governed leaf Runs with
+role-correct reservations — one planner account, one leaf-executor account, no
+crossing. Full record: `docs/GOVERNED_ROLE_ECONOMIC_POLICY_SET_DECISION.md`.
+
+Both this defect and the earlier missing-`governedLeafCapture` defect survived a
+full release checkpoint for the same reason: a fixture handed a policy source
+straight to the store, bypassing the production loader. Fixtures that skip a
+production seam cannot fail when that seam is broken.
+
 ## Tranche 5 closed — the verified-progress substrate was built (2026-08-05)
 
 **Supersedes "Verified progress has no durable evidence substrate (2026-08-02)"**

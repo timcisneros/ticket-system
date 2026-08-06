@@ -33,6 +33,7 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'governed-openai-transport-test.js',
   'governed-planner-cutover-boundary-test.js',
   'governed-policy-source-test.js',
+  'governed-role-economic-policy-set-test.js',
   'governed-provider-transport-test.js',
   'governed-provider-request-contract-test.js',
   'model-pricing-catalog-test.js',
@@ -104,6 +105,9 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
 ]);
 
 const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
+  // Tranche 6 — one active governed container funding both canonical roles,
+  // proved against real persistence and a fresh connection.
+  'governed-role-policy-container-postgres-test.js',
   'postgres-persistence-integration-test.js',
   'postgres-runtime-cutover-test.js',
   'page-render-regression-test.js',

@@ -635,8 +635,14 @@ const ok = (condition, message) => {
     QUIESCENCE_CONDITIONS.includes('active_fixture_requests'),
   '10 quiescence: leases, in-flight requests, recoverable terminalization and ' +
   'fixture requests all block quiescence');
-  ok(QUIESCENCE_CONDITIONS.length === 9,
-    '10 quiescence: all nine conditions are named individually');
+  ok(QUIESCENCE_CONDITIONS.length === 10,
+    '10 quiescence: all ten conditions are named individually');
+  // An admitted structured plan that has produced no governed leaf Run is
+  // MID-FLIGHT, not finished. Without this condition a structured trial that
+  // never executed any governed work could be observed as quiescent and read as
+  // a completed one.
+  ok(QUIESCENCE_CONDITIONS.includes('admitted_plan_without_leaf_runs'),
+    '10 quiescence: an admitted plan owing leaf Runs blocks quiescence');
 
   // The reader observes; it never creates.
   for (const statement of ['UPDATE runs SET status = $1', 'INSERT INTO runs VALUES (1)']) {
@@ -1025,27 +1031,55 @@ const ok = (condition, message) => {
   ok(serverSource.includes('causeCode ? `cause ${causeCode}` :'),
     '13 plan-to-leaf: durable refusal detail carries a stable cause code, not raw text');
 
-  // ── STILL OPEN: one governed container can fund only one role ──────────
+  // ── RESOLVED: one active container now funds BOTH canonical roles ──────
   //
-  // With the capture wired, leaf admission now refuses truthfully with
-  // `leaf_governed_authority_unavailable` rather than a false race. The
-  // remaining cause is a configuration-model gap, not a wiring omission:
-  //
-  //   * `readGovernedPolicySource` refuses unless `economicPolicy.role`
-  //     equals the requested role — one container funds exactly one role;
-  //   * `loadGovernedPlannerPolicyContainer` refuses when more than one active
-  //     governed policy exists.
-  //
-  // So a deployment cannot fund BOTH `structured_planner` and
-  // `structured_leaf_executor` at once. Pinned here so the day it is resolved
-  // this assertion fails and must be replaced by an execution proof.
-  const policySourceContract = fs.readFileSync(
-    path.join(__dirname, '..', 'runtime', 'governed-policy-source.js'), 'utf8');
-  ok(policySourceContract.includes('economicPolicy.role !== role'),
-    '13 plan-to-leaf: OPEN — one governed container funds exactly one role');
+  // The previous OPEN pin recorded that `readGovernedPolicySource` refused
+  // unless the container's single `economicPolicy.role` equalled the requested
+  // role, while `loadGovernedPlannerPolicyContainer` permitted only ONE active
+  // governed container — so a deployment could fund the planner or the worker,
+  // never both. That pin failed the moment the gap closed, which is what it was
+  // for. It is replaced here by proofs of the approved resolution.
+  const {
+    readGovernedPolicySource: readSource, GOVERNED_POLICY_SOURCE_VERSION
+  } = require('../runtime/governed-policy-source');
+  const { CANONICAL_ROLES } = require('../runtime/role-routing-contract');
+  const {
+    buildRoleKeyedGovernedContainer
+  } = require('./fixtures/governed-role-policy-container');
+  const roleKeyed = buildRoleKeyedGovernedContainer();
+
+  ok(GOVERNED_POLICY_SOURCE_VERSION === 2,
+    '13 role funding: the policy-source contract is at the role-keyed version');
+
+  const plannerSource = readSource(roleKeyed, { role: 'structured_planner' });
+  const workerSource = readSource(roleKeyed, { role: 'structured_leaf_executor' });
+
+  // ONE container, BOTH roles — the fact the whole decision exists to establish.
+  ok(plannerSource.economicPolicy.role === 'structured_planner' &&
+     workerSource.economicPolicy.role === 'structured_leaf_executor',
+  '13 role funding: one active container funds both canonical roles');
+  ok(plannerSource.economicPolicyHash !== workerSource.economicPolicyHash,
+    '13 role funding: each role keeps its own economic-policy identity');
+  // Role selection READS the container; it never changes it.
+  ok(plannerSource.economicPolicySetHash === workerSource.economicPolicySetHash,
+    '13 role funding: the parent economic-set identity is the same for both roles');
+  ok(plannerSource.roleRoutingPolicyHash === workerSource.roleRoutingPolicyHash &&
+     plannerSource.pricingCatalogHash === workerSource.pricingCatalogHash,
+  '13 role funding: routing and pricing remain shared, separately hashed authority');
+
+  // Still exactly ONE active container. The decision widened what a container
+  // may fund; it did not permit a second container.
   ok(serverSource.includes('GOVERNED_PLANNER_POLICY_AMBIGUOUS'),
-    '13 plan-to-leaf: OPEN — and only one active governed container is permitted, ' +
-    'so planner and leaf-executor economics cannot both be configured');
+    '13 role funding: more than one active governed container is still refused');
+
+  // No fourth subdocument: `economicPolicies` is the version-2 shape of the
+  // EXISTING economic category, and the three categories are unchanged.
+  const { GOVERNED_SUBDOCUMENTS } = require('../runtime/governed-policy-source');
+  ok(GOVERNED_SUBDOCUMENTS.length === 3,
+    '13 role funding: the container still carries exactly three authority categories');
+  ok(CANONICAL_ROLES.length === 2 &&
+     plannerSource.economicPolicyRoles.join(',') === CANONICAL_ROLES.join(','),
+  '13 role funding: the funded set is canonically ordered by the role constants');
 }
 
 console.log(`\nstructured allocation evaluation test passed — ${passed} assertions`);
