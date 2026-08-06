@@ -40,6 +40,7 @@ const {
 } = require('./fixtures/evaluation-trial-record');
 const { buildPricingCatalog } = require('../runtime/model-pricing-catalog');
 
+async function main() {
 let passed = 0;
 const ok = (condition, message) => {
   assert.ok(condition, message);
@@ -701,4 +702,159 @@ const ok = (condition, message) => {
   fs.rmSync(root, { recursive: true, force: true });
 }
 
+
+// ── 11. THE FETCH-SIDE FIXTURE ADAPTER (ungoverned arms) ───────────────────
+{
+  const {
+    installEvaluationFetchFixture, assertAllWorkerResponsesConsumed,
+    buildFixtureResponse, selectStaged, EvaluationFetchFixtureError, PROVIDER_URL
+  } = require('./fixtures/evaluation-fetch-fixture');
+  const {
+    createFixtureNamespace, stageResponses
+  } = require('./fixtures/evaluation-fixture-provider');
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-eval-fetch-'));
+  const ns = createFixtureNamespace(root, 'fetch-trial-1');
+  const base = {
+    protocolVersion: 1, scenarioId: 'family-1', logicalTaskId: 'alpha',
+    seed: 'seed-1', role: 'worker'
+  };
+  stageResponses(ns, [
+    { ...base, ordinal: 1, body: '{"complete":true}', inputTokens: 120,
+      outputTokens: 40, match: 'reports/alpha' }
+  ]);
+  // `match` is carried through staging so the adapter can recover the logical
+  // task from what production actually sent.
+  const staged = JSON.parse(fs.readFileSync(ns.stagedPath, 'utf8'));
+  for (const entry of Object.values(staged)) entry.match = 'reports/alpha';
+  fs.writeFileSync(ns.stagedPath, JSON.stringify(staged));
+
+  const restore = installEvaluationFetchFixture({ namespaceDir: ns.dir });
+  try {
+    // THE UNGOVERNED ARMS RECEIVE STAGED RESPONSES.
+    const response = await globalThis.fetch(PROVIDER_URL, {
+      method: 'POST', body: JSON.stringify({ input: 'write reports/alpha' })
+    });
+    ok(response.ok === true && response.status === 200,
+      '11 fetch fixture: an ungoverned provider request is served hermetically');
+    const payload = JSON.parse(await response.text());
+    ok(payload.output_text === '{"complete":true}',
+      '11 fetch fixture: with the exact staged body');
+    ok(payload.usage.input_tokens === 120 && payload.usage.output_tokens === 40,
+      '11 fetch fixture: and deterministic token usage');
+    ok(Object.fromEntries(response.headers.entries())['content-type'] === 'application/json',
+      '11 fetch fixture: headers.entries() satisfies the production reader');
+
+    // The bounded reader contract production uses when a byte limit is set.
+    const streamed = buildFixtureResponse({ body: 'hello' });
+    const reader = streamed.body.getReader();
+    const first = await reader.read();
+    ok(!first.done && Buffer.from(first.value).toString('utf8') === 'hello',
+      '11 fetch fixture: body.getReader() streams the bytes once');
+    ok((await reader.read()).done === true,
+      '11 fetch fixture: and then completes');
+
+    // AN UNEXPECTED REQUEST REFUSES rather than receiving a generic success.
+    let refused = null;
+    try {
+      await globalThis.fetch(PROVIDER_URL, {
+        method: 'POST', body: JSON.stringify({ input: 'unplanned work' })
+      });
+    } catch (error) { refused = error; }
+    ok(refused instanceof EvaluationFetchFixtureError &&
+      /no staged fixture response matches/.test(refused.message),
+    '11 fetch fixture: an unmatched ungoverned request is REFUSED');
+
+    // NO OTHER HOST REACHES THE NETWORK.
+    let blocked = null;
+    try { await globalThis.fetch('https://example.com/x'); }
+    catch (error) { blocked = error; }
+    ok(blocked && /UNEXPECTED_EXTERNAL_NETWORK_REQUEST/.test(blocked.message),
+      '11 fetch fixture: any other non-localhost URL is refused before the network');
+
+    // localhost still passes through to the real implementation.
+    ok(typeof globalThis.fetch === 'function',
+      '11 fetch fixture: localhost routing remains delegated to the real fetch');
+
+    // Selection never sees an arm.
+    ok(selectStaged.length === 3,
+      '11 fetch fixture: selectStaged takes table/body/counts — no arm parameter');
+
+    ok(assertAllWorkerResponsesConsumed(ns.dir) === true,
+      '11 fetch fixture: all staged worker responses were consumed');
+  } finally {
+    restore();
+  }
+
+  // SELECTION IS BY BODY MARKER, NOT BY ORDER.
+  //
+  // With a single staged response any selection rule looks correct, so a
+  // mutation deleting the marker filter survived. Two responses with different
+  // markers, requested out of staging order, isolate it.
+  const ns3 = createFixtureNamespace(root, 'fetch-trial-3');
+  stageResponses(ns3, [
+    { ...base, logicalTaskId: 'alpha', ordinal: 1, body: '{"which":"alpha"}',
+      inputTokens: 1, outputTokens: 1 },
+    { ...base, logicalTaskId: 'beta', ordinal: 2, body: '{"which":"beta"}',
+      inputTokens: 1, outputTokens: 1 }
+  ]);
+  const staged3 = JSON.parse(fs.readFileSync(ns3.stagedPath, 'utf8'));
+  for (const entry of Object.values(staged3)) {
+    entry.match = entry.key.includes('alpha') ? 'reports/alpha' : 'reports/beta';
+  }
+  fs.writeFileSync(ns3.stagedPath, JSON.stringify(staged3));
+  const restore3 = installEvaluationFetchFixture({ namespaceDir: ns3.dir });
+  try {
+    // Ask for BETA first — the second staged entry.
+    const betaFirst = JSON.parse(await (await globalThis.fetch(PROVIDER_URL, {
+      method: 'POST', body: JSON.stringify({ input: 'write reports/beta' })
+    })).text());
+    ok(betaFirst.output_text === '{"which":"beta"}',
+      '11 fetch fixture: the response is chosen by the REQUEST BODY marker, not ' +
+      'by staging order');
+    const alphaSecond = JSON.parse(await (await globalThis.fetch(PROVIDER_URL, {
+      method: 'POST', body: JSON.stringify({ input: 'write reports/alpha' })
+    })).text());
+    ok(alphaSecond.output_text === '{"which":"alpha"}',
+      '11 fetch fixture: and the other marker still selects its own response');
+  } finally { restore3(); }
+
+  // THE PRE-TRANSPORT BOUNDARY REFUSES THROUGH THE FETCH ADAPTER TOO.
+  const ns4 = createFixtureNamespace(root, 'fetch-trial-4');
+  stageResponses(ns4, [
+    { ...base, ordinal: 1, body: '{"never":true}', inputTokens: 1, outputTokens: 1,
+      failureBoundary: 'before_transport' }
+  ]);
+  const restore4 = installEvaluationFetchFixture({ namespaceDir: ns4.dir });
+  try {
+    let preTransport = null;
+    try {
+      await globalThis.fetch(PROVIDER_URL, { method: 'POST', body: '{}' });
+    } catch (error) { preTransport = error; }
+    ok(preTransport && /pre-transport provider failure/.test(preTransport.message),
+      '11 fetch fixture: the pre-transport boundary refuses before serving bytes');
+    const transcript = fs.readFileSync(ns4.transcriptPath, 'utf8');
+    ok(transcript.includes('before_transport') && !/"served":true/.test(transcript),
+      '11 fetch fixture: and the transcript records a refusal, not a transport');
+  } finally { restore4(); }
+
+  // AN UNCONSUMED STAGED RESPONSE FAILS THE TRIAL.
+  const ns2 = createFixtureNamespace(root, 'fetch-trial-2');
+  stageResponses(ns2, [
+    { ...base, ordinal: 1, body: '{"a":1}', inputTokens: 1, outputTokens: 1 },
+    { ...base, logicalTaskId: 'beta', ordinal: 2, body: '{"b":2}',
+      inputTokens: 1, outputTokens: 1 }
+  ]);
+  assert.throws(() => assertAllWorkerResponsesConsumed(ns2.dir),
+    error => error instanceof EvaluationFetchFixtureError &&
+      /production never requested/.test(error.message));
+  passed += 1;
+  console.log('  ok 11 fetch fixture: staged responses production never asked for FAIL the trial');
+
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
 console.log(`\nstructured allocation evaluation test passed — ${passed} assertions`);
+}
+
+main().catch(error => { console.error(error); process.exit(1); });
