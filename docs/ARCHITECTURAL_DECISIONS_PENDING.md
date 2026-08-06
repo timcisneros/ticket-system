@@ -1,3 +1,50 @@
+## STRUCTURED LEAF PROGRESS POLICY AUTHORITY — DECISION REQUIRED (2026-08-06)
+
+**Status: DECISION REQUIRED. Not closed, not implemented.**
+
+Full memo: `docs/STRUCTURED_LEAF_PROGRESS_POLICY_AUTHORITY_DECISION.md`.
+
+Structured leaf admission is blocked because `governedLeafCapture` requires a
+`progressControlPolicy` and production has no source for one. The previous
+session framed the owners too narrowly; this audit corrects that.
+
+**The earlier claim that only three owners existed was wrong.** A fourth exists
+and is preferred: a repository-owned, versioned policy captured with the Run
+through the execution-policy authority that already travels with it.
+
+**Field audit.** Of the seven progress-policy fields, exactly one has existing
+authority — `maximumCumulativeExecutionDurationMs` maps to
+`runtimeBudgetSnapshot.maxRuntimeDurationMs`, a required positive integer on an
+immutable, hashed, Run-scoped snapshot that is already present on every leaf
+draft. One (`resourceDimensions`) is a repository-owned choice from a closed
+vocabulary. **Five are genuine product decisions with no existing home**, and
+deriving them from request or step limits would be fabrication: "how many
+requests may this Run make" and "how many wasted windows may it burn" are
+different questions.
+
+**Recommendation: Option B with Option A for duration.** Progress control is a
+versioned runtime execution policy captured with the Run — not a model claim,
+and not part of provider-routing or economic policy. No operator surface, no
+migration (`runs.body` already carries every comparable snapshot), historical
+Runs unaffected, evolution by explicit version bump.
+
+**Rejected:** Option A alone (insufficient — five fields unfilled); Option C
+(configurability without demonstrated need, though Option B does not preclude
+it); Option D (the policy-source container states a fourth subdocument is a
+configuration error, and routing/economics answer a different question than
+termination); Option E (restores ungoverned leaf admission and forfeits the
+Tranche 5 block-hash binding, replayable churn decisions and the A3 duration
+bound).
+
+A **separate** correction is specified for truthful failure classification —
+real conflict, known authority failure, unexpected internal failure — and must
+not be bundled with the capture wiring merely because both touch one catch
+block.
+
+**Tranche 6 remains blocked until this decision is taken and implemented.**
+
+---
+
 ## PRODUCTION DEFECT — structured leaf admission is unreachable (2026-08-06)
 
 **Status: OPEN. NOT a wiring omission. It cannot be corrected without a product
