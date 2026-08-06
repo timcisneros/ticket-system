@@ -170,6 +170,15 @@ function buildTicketForm(arm, scenario, context) {
   return group;
 }
 
+// The variant participates in the trial identity, so two variants of one
+// scenario can never share a fixture namespace or silently reuse staged state.
+// Exported so that property can be proved directly rather than inferred from a
+// run that happens not to collide.
+function trialIdFor(scenario, arm, repetition) {
+  return `${scenario.scenarioId}${scenario.variantId ? `--${scenario.variantId}` : ''}` +
+    `--${arm.armId}--r${repetition}`;
+}
+
 // ── Family-7 churn facts and family-8 recovery facts ────────────────────────
 //
 // FACTS, NOT VERDICTS. Each function reports what the fixture transcript and
@@ -469,10 +478,7 @@ async function runTrial({
       `refusing to overwrite an existing trial artifact at ${outputPath}`);
   }
 
-  // The variant participates in the trial identity, so two variants of one
-  // scenario can never share a fixture namespace or silently reuse state.
-  const trialId = `${scenario.scenarioId}${scenario.variantId ? `--${scenario.variantId}` : ''}` +
-    `--${arm.armId}--r${repetition}`;
+  const trialId = trialIdFor(scenario, arm, repetition);
   // Fixture namespaces live under a PER-INVOCATION root while artifacts stay at
   // a stable per-commit path. Reuse inside one invocation still refuses — that
   // is the isolation guarantee — but re-running the milestone is not blocked by
@@ -880,6 +886,7 @@ async function runTrial({
 
 module.exports = {
   sameParentPolicyRevisionOf,
+  trialIdFor,
   SUPPORTED_MODES,
   QUIESCENCE_TIMEOUT_MS,
   EvaluationRunnerError,

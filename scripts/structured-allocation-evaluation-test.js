@@ -1302,6 +1302,28 @@ const ok = (condition, message) => {
          JSON.stringify(seven.ownedOutputPaths),
     `14 variants: ${variantId} changes the trial, not the experimental cell`);
   }
+  // A variant may replace what a trial stages; it may NEVER leak its own
+  // bookkeeping into the resolved scenario, because that is how a variant would
+  // quietly redefine the cell it belongs to.
+  for (const variantId of variantIdsOf(seven)) {
+    const resolved = resolveScenarioVariant(seven, variantId);
+    ok(!('label' in resolved) && !('expectation' in resolved) &&
+       !('variants' in resolved),
+    `14 variants: ${variantId} leaks no variant bookkeeping into the scenario`);
+  }
+  // TWO VARIANTS, TWO IDENTITIES. A shared trial id would mean a shared fixture
+  // namespace, and staged state from one variant would silently serve another.
+  {
+    const { trialIdFor } = require('./structured-allocation-evaluation-runner');
+    const armB = ARMS.B;
+    const ids = variantIdsOf(seven).map(id =>
+      trialIdFor(resolveScenarioVariant(seven, id), armB, 1));
+    ok(new Set(ids).size === ids.length,
+      '14 variants: every variant of one scenario has a distinct trial identity');
+    ok(ids.every(id => id.includes('family-7-no-progress') && id.includes('--B--r1')),
+      '14 variants: and the identity still names its scenario, arm and repetition');
+  }
+
   // 7B and 8A/8B carry real failure boundaries, and staging must apply them.
   const undelivered = resolveScenarioVariant(seven, '7B');
   ok(undelivered.failureBoundary === 'after_transport_before_response',
