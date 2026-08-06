@@ -76,7 +76,14 @@ const SCENARIOS = Object.freeze({
     version: 1,
     family: 1,
     objective: 'Create folders reports/alpha and reports/beta',
-    initialState: Object.freeze({ folders: Object.freeze(['reports']) }),
+    // THREE top-level folders, and none is decoration: dynamic allocation
+    // refuses a ticket with fewer usable top-level directories than the group
+    // has agents, and the structured dynamic arm carries a planner in the group
+    // as well as two workers. The initial state is identical for every arm, so
+    // it remains a controlled variable rather than an arm-specific setup.
+    initialState: Object.freeze({
+      folders: Object.freeze(['reports', 'reports-b', 'reports-c'])
+    }),
     declaredWork: Object.freeze({
       objective: 'Create folders reports/alpha and reports/beta',
       expectedOutputs: Object.freeze([
@@ -87,7 +94,7 @@ const SCENARIOS = Object.freeze({
       ]),
       evidenceRequirements: Object.freeze([])
     }),
-    ownedOutputPaths: Object.freeze({ alpha: 'reports/alpha/', beta: 'reports/beta/' }),
+    ownedOutputPaths: Object.freeze({ alpha: 'reports/alpha/', beta: 'reports-b/beta/' }),
     logicalTasks: Object.freeze(['alpha', 'beta']),
     plannerResponses: Object.freeze([
       Object.freeze({
@@ -110,10 +117,10 @@ const SCENARIOS = Object.freeze({
       }),
       Object.freeze({
         role: 'worker', logicalTaskId: 'beta', ordinal: 1,
-        match: 'reports/beta', inputTokens: 300, outputTokens: 60,
+        match: 'reports-b/beta', inputTokens: 300, outputTokens: 60,
         body: workerPlan({
           message: 'Creating the beta folder.',
-          actions: [createFolder('reports/beta')], complete: true
+          actions: [createFolder('reports-b/beta')], complete: true
         })
       })
     ]),
@@ -123,7 +130,7 @@ const SCENARIOS = Object.freeze({
       kind: 'raw_state',
       expectations: Object.freeze([
         Object.freeze({ kind: 'folder_exists', path: 'reports/alpha' }),
-        Object.freeze({ kind: 'folder_exists', path: 'reports/beta' })
+        Object.freeze({ kind: 'folder_exists', path: 'reports-b/beta' })
       ])
     }),
     expectedQuiescence: 'quiescent',

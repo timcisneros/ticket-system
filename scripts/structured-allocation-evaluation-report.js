@@ -56,7 +56,8 @@ async function readOnly(store, sql, params) {
 async function collectTicketFacts(store, ticketId) {
   const runs = await readOnly(store,
     `SELECT id, status, created_at, started_at, completed_at,
-            allocation_plan_id, allocation_item_id,
+            body->>'allocationPlanId' AS allocation_plan_id,
+            body->>'allocationItemId' AS allocation_item_id,
             body ? 'leafRunBinding' AS governed_leaf,
             body ? 'governedProgressBlock' AS has_block
        FROM ${store.table('runs')}
@@ -179,8 +180,16 @@ function deriveChurn(facts, arm) {
 }
 
 function deriveObservedPath(facts) {
+  // A durable structured PLANNING ATTEMPT counts. A trial blocked during
+  // planning admits no plan and creates no Run, so counting only plans and Runs
+  // would report it as the direct path — mislabelling a truthful structured
+  // outcome as a different architecture.
+  const planningAttempts = facts.events
+    .filter(event => String(event.type).startsWith('ticket.structured_planning')).length;
   return {
-    structuredPlanAdmitted: facts.runs.some(run => run.governed_leaf),
+    structuredPlanAdmitted:
+      facts.runs.some(run => run.governed_leaf) || planningAttempts > 0,
+    planningAttempts,
     plannerRequestCount: facts.reservations.filter(r => r.role === GOVERNED_PLANNER_ROLE).length,
     governedLeafRunCount: facts.runs.filter(run => run.governed_leaf).length,
     allocationPlanPresent: facts.plans.length > 0,

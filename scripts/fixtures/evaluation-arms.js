@@ -204,7 +204,13 @@ function assertObservedPathMatches(arm, observed) {
     plannerRequestCount = 0,
     governedLeafRunCount = 0,
     allocationPlanPresent = false,
-    runCount = 0
+    runCount = 0,
+    // A durable structured PLANNING ATTEMPT. A trial whose planning was
+    // attempted and then blocked makes no planner reservation and admits no
+    // plan, but it unquestionably ran the structured path — and calling that
+    // "the structured path did not run" would discard a truthful product
+    // outcome as a harness error.
+    planningAttempts = 0
   } = observed;
 
   const observedPath = structuredPlanAdmitted || governedLeafRunCount > 0
@@ -222,15 +228,20 @@ function assertObservedPathMatches(arm, observed) {
       `arm ${arm.armId} must make no planner request but made ${plannerRequestCount}`,
       { armId: arm.armId });
   }
-  if (arm.expectedPlannerRequests > 0 && plannerRequestCount === 0) {
+  if (arm.expectedPlannerRequests > 0 &&
+      plannerRequestCount === 0 && planningAttempts === 0) {
     throw new EvaluationArmError(
-      `arm ${arm.armId} must make a planner request and made none — the ` +
-      'structured path did not actually run',
+      `arm ${arm.armId} shows neither a planner request nor a planning attempt ` +
+      '— the structured path did not actually run',
       { armId: arm.armId });
   }
-  if (arm.expectedGoverned && governedLeafRunCount === 0) {
+  // Governed leaf Runs exist only once a plan is admitted. Requiring them
+  // unconditionally would refuse a structured trial that was truthfully
+  // blocked during planning, which is a product result rather than an invalid
+  // trial.
+  if (arm.expectedGoverned && allocationPlanPresent && governedLeafRunCount === 0) {
     throw new EvaluationArmError(
-      `arm ${arm.armId} must produce governed leaf Runs and produced none`,
+      `arm ${arm.armId} admitted a plan but produced no governed leaf Runs`,
       { armId: arm.armId });
   }
   if (!arm.expectedGoverned && governedLeafRunCount > 0) {

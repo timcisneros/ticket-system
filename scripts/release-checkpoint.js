@@ -158,6 +158,7 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'governed-post-transport-restart-postgres-test.js',
   'governed-replay-corruption-postgres-test.js',
   'governed-required-persistence-postgres-test.js',
+  'structured-allocation-evaluation-runner-postgres-test.js',
   'malformed-completion-projection-postgres-test.js',
   'governed-planner-dispatch-postgres-test.js',
   'governed-planner-production-path-postgres-test.js',
