@@ -980,107 +980,72 @@ const ok = (condition, message) => {
 }
 
 
-// ── 13. THE STRUCTURED PLAN-TO-LEAF DEFECT, PINNED ─────────────────────────
+// ── 13. THE STRUCTURED PLAN-TO-LEAF CORRECTIONS ────────────────────────────
 //
-// Family-1 arms B and C admit a valid Allocation Plan v2 and then produce zero
-// leaf Runs. The public reason is `leaf_admission_conflict` — "lost a
-// concurrent race" — which is false. Captured below the catch-all, the real
-// exception is:
+// Two defects found through this harness are now fixed, and one newly exposed
+// gap is pinned in their place.
 //
-//   code    GOVERNED_LEAF_CAPTURE_REQUIRED
-//   message structured leaf admission requires governed leaf capture;
-//           ungoverned structured leaf admission was removed by the Tranche 4
-//           cutover
-//   at      PostgresRuntimeStore._captureGovernedLeafAuthority
+// FIXED 1 — server.js supplies the mandatory governed leaf capture. It was
+// omitted entirely, so every structured Allocation Plan v2 that reached leaf
+// admission was refused.
 //
-// The store REQUIRES a `governedLeafCapture` argument. `server.js`'s only
-// leaf-admission call does not pass one, and the identifier appears nowhere in
-// that file. So every structured v2 Ticket that reaches leaf admission is
-// refused and blocked, and the refusal is mislabelled as a concurrency loss.
-//
-// This is a production lifecycle defect, not a harness defect. It is PINNED
-// here rather than repaired: repairing the structured execution lifecycle is
-// outside the evaluation brief and needs its own authorization. These
-// assertions fail the moment either half changes, so the defect cannot be
-// closed silently or drift unnoticed.
+// FIXED 2 — the catch-all no longer reports every unexpected exception as a
+// lost concurrency race. That mislabelling is what made the first defect
+// expensive to find: the real cause reached neither durable state nor stdout.
 {
   const serverSource = fs.readFileSync(
     path.join(__dirname, '..', 'server.js'), 'utf8');
-
-  ok(serverSource.includes('.admitStructuredAllocationLeafRuns({'),
-    '13 plan-to-leaf: server.js calls the canonical leaf-admission method');
-  ok(!serverSource.includes('governedLeafCapture'),
-    '13 plan-to-leaf: DEFECT — server.js never supplies governedLeafCapture, ' +
-    'which the store requires; when this assertion fails the defect has been ' +
-    'fixed and this pin must be replaced by an execution proof');
-
   const storeSource = fs.readFileSync(
     path.join(__dirname, '..', 'persistence', 'postgres', 'store.js'), 'utf8');
+
+  ok(serverSource.includes('governedLeafCapture'),
+    '13 plan-to-leaf: server.js now supplies governedLeafCapture');
+  ok(serverSource.includes('buildDefaultProgressControlPolicy'),
+    '13 plan-to-leaf: from the canonical version-1 builder, not a local literal');
+  ok(serverSource.includes('assertUniformProgressPolicyInputs'),
+    '13 plan-to-leaf: after proving every leaf draft shares one execution snapshot');
+
+  // The store's fail-closed requirement is UNCHANGED — the correction supplied
+  // the authority rather than relaxing the check.
   ok(storeSource.includes("error.code = 'GOVERNED_LEAF_CAPTURE_REQUIRED'"),
-    '13 plan-to-leaf: the store refuses leaf admission without governed capture');
+    '13 plan-to-leaf: the store still refuses admission without governed capture');
 
-  // The catch-all that turns this into a false concurrency verdict.
-  ok(serverSource.includes("return refuse('leaf_admission_conflict', error.message)"),
-    '13 plan-to-leaf: DEFECT — any unexpected leaf-admission exception is ' +
-    'reported as a lost concurrency race, so the real cause is unrecoverable ' +
-    'from durable state');
+  // A genuine race is now a narrow named set, not the default.
+  ok(!serverSource.includes("return refuse('leaf_admission_conflict', error.message);\n  }"),
+    '13 plan-to-leaf: the blanket conflict catch-all is gone');
+  ok(serverSource.includes("'OPTIMISTIC_CONCURRENCY_CONFLICT'") &&
+    serverSource.includes("'STATE_TRANSITION_CONFLICT'"),
+  '13 plan-to-leaf: only real revision/state conflicts map to a race');
+  ok(serverSource.includes("leaf_admission_internal_failure"),
+    '13 plan-to-leaf: unexpected failures get an internal classification');
+  ok(serverSource.includes("leaf_governed_authority_unavailable"),
+    '13 plan-to-leaf: missing governed authority gets its own exact code');
 
-  // ── THE DEFECT IS DEEPER THAN A MISSING ARGUMENT ──────────────────────
+  // Sanitization: only a stable code reaches durable authority.
+  ok(serverSource.includes('causeCode ? `cause ${causeCode}` :'),
+    '13 plan-to-leaf: durable refusal detail carries a stable cause code, not raw text');
+
+  // ── STILL OPEN: one governed container can fund only one role ──────────
   //
-  // Supplying `governedLeafCapture` requires a `progressControlPolicy`, and
-  // production has NO source for one:
+  // With the capture wired, leaf admission now refuses truthfully with
+  // `leaf_governed_authority_unavailable` rather than a false race. The
+  // remaining cause is a configuration-model gap, not a wiring omission:
   //
-  //   * `buildProgressControlPolicy` has no production caller — only the
-  //     contract that defines it, its own contract test, and a test fixture;
-  //   * the governed policy container carries exactly three subdocuments
-  //     (roleRoutingPolicy, economicPolicy, pricingCatalog) and its own comment
-  //     says "a fourth is a configuration error, not an extension point";
-  //   * no migration defines a durable progress-control policy anywhere.
+  //   * `readGovernedPolicySource` refuses unless `economicPolicy.role`
+  //     equals the requested role — one container funds exactly one role;
+  //   * `loadGovernedPlannerPolicyContainer` refuses when more than one active
+  //     governed policy exists.
   //
-  // So structured leaf admission is unreachable in production BY
-  // CONSTRUCTION, not by an omitted argument. Wiring it would require
-  // inventing governance authority nobody granted, which the container
-  // explicitly forbids. These assertions pin that, so the day a canonical
-  // source appears they fail and force this pin to be replaced.
-  const churnSource = fs.readFileSync(
-    path.join(__dirname, '..', 'runtime', 'churn-decision-contract.js'), 'utf8');
-  ok(churnSource.includes('function buildProgressControlPolicy'),
-    '13 plan-to-leaf: the progress-control policy builder exists');
-
-  const productionFiles = [
-    path.join(__dirname, '..', 'server.js'),
-    ...fs.readdirSync(path.join(__dirname, '..', 'runtime'))
-      .filter(name => name.endsWith('.js') && name !== 'churn-decision-contract.js')
-      .map(name => path.join(__dirname, '..', 'runtime', name)),
-    path.join(__dirname, '..', 'persistence', 'postgres', 'store.js')
-  ];
-  const buildersInProduction = productionFiles.filter(file =>
-    fs.readFileSync(file, 'utf8').includes('buildProgressControlPolicy'));
-  ok(buildersInProduction.length === 0,
-    '13 plan-to-leaf: DEFECT — NO production source builds a progress-control ' +
-    'policy, so the capture the store requires cannot be assembled without ' +
-    'inventing authority');
-
+  // So a deployment cannot fund BOTH `structured_planner` and
+  // `structured_leaf_executor` at once. Pinned here so the day it is resolved
+  // this assertion fails and must be replaced by an execution proof.
   const policySourceContract = fs.readFileSync(
     path.join(__dirname, '..', 'runtime', 'governed-policy-source.js'), 'utf8');
-  ok(policySourceContract.includes("'roleRoutingPolicy'") &&
-    policySourceContract.includes("'pricingCatalog'") &&
-    !policySourceContract.includes("'progressControlPolicy'"),
-  '13 plan-to-leaf: and the governed policy container cannot carry one — it ' +
-  'admits exactly three subdocuments by contract');
-
-  // The mislabelling is what made this expensive to find: the vocabulary
-  // message is rendered instead of the captured error message.
-  const { STRUCTURED_LEAF_REFUSAL_MESSAGES } = (() => {
-    try {
-      return require('../runtime/structured-allocation-leaf-run-contract');
-    } catch (_) { return {}; }
-  })();
-  ok(typeof STRUCTURED_LEAF_REFUSAL_MESSAGES !== 'object' ||
-    STRUCTURED_LEAF_REFUSAL_MESSAGES === undefined ||
-    typeof STRUCTURED_LEAF_REFUSAL_MESSAGES.leaf_admission_conflict === 'string',
-  '13 plan-to-leaf: leaf_admission_conflict carries a fixed vocabulary message, ' +
-  'which is what is persisted instead of the real cause');
+  ok(policySourceContract.includes('economicPolicy.role !== role'),
+    '13 plan-to-leaf: OPEN — one governed container funds exactly one role');
+  ok(serverSource.includes('GOVERNED_PLANNER_POLICY_AMBIGUOUS'),
+    '13 plan-to-leaf: OPEN — and only one active governed container is permitted, ' +
+    'so planner and leaf-executor economics cannot both be configured');
 }
 
 console.log(`\nstructured allocation evaluation test passed — ${passed} assertions`);

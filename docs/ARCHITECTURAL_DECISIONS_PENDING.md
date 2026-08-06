@@ -1,3 +1,47 @@
+## GOVERNED POLICY CONTAINER FUNDS ONE ROLE — DECISION REQUIRED (2026-08-06)
+
+**Status: OPEN. Newly exposed once the leaf-capture wiring was corrected.**
+
+With `governedLeafCapture` supplied and the false-conflict classification fixed,
+structured leaf admission now refuses **truthfully** with
+`leaf_governed_authority_unavailable` instead of a fabricated concurrency race.
+The remaining cause is a configuration-model gap, not a wiring omission:
+
+* `runtime/governed-policy-source.js` refuses unless `economicPolicy.role`
+  equals the requested role — **one container funds exactly one role**, and its
+  comment explains why: "a routing policy that authorizes a role the economic
+  policy does not fund would reach the point of reservation and refuse there";
+* `server.js loadGovernedPlannerPolicyContainer` refuses when more than one
+  active governed policy exists (`GOVERNED_PLANNER_POLICY_AMBIGUOUS`).
+
+**Therefore a deployment cannot fund both `structured_planner` and
+`structured_leaf_executor` at the same time.** The planner needs one container;
+governed leaf execution needs another; only one may be active.
+
+Test fixtures never hit this because `seedGovernedStructuredTicket` passes a
+worker-role `policySource` straight to the store, bypassing the loader
+entirely — the same reason the missing-capture defect survived the release
+checkpoint.
+
+### Candidate resolutions, for whoever authorizes one
+
+1. **Role-keyed economic policies in one container** — replace the single
+   `economicPolicy` with a per-role map, keeping the "both documents must
+   govern the role" rule intact. Smallest change; touches a closed contract.
+2. **Role-scoped container selection** — permit one active governed policy *per
+   role* and select by role instead of requiring a single global one. Changes
+   the ambiguity rule, which exists to stop two policies silently competing.
+3. **A distinct worker-role loader** reading a separately designated container.
+   Most explicit, largest surface.
+
+Option 1 looks smallest, but the choice is a product decision about how
+governed economics is configured and is deliberately not made here.
+
+**Tranche 6 remains blocked on this**: structured leaf Runs cannot be admitted
+until a deployment can fund the leaf-executor role.
+
+---
+
 ## STRUCTURED LEAF PROGRESS POLICY AUTHORITY — OPTION B ACCEPTED, VALUES REQUIRED (2026-08-06)
 
 **Status: Option B accepted. Implementation BLOCKED on five undecided numbers.**

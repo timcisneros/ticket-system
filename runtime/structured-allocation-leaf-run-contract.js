@@ -71,7 +71,17 @@ const LEAF_ADMISSION_REFUSALS = Object.freeze([
   'leaf_ownership_drift',
   'leaf_route_refused',
   'leaf_execution_mode_unsupported',
-  'leaf_admission_conflict'
+  'leaf_admission_conflict',
+  // Governed capture could not be assembled — missing routing/economic policy,
+  // an unusable runtime budget snapshot, or leaf drafts disagreeing on the
+  // execution authority a plan-scoped progress policy derives from. An
+  // authority/configuration failure, decided before anything is admitted.
+  'leaf_governed_authority_unavailable',
+  // Anything unexpected: an internal error or a database failure. Kept distinct
+  // from `leaf_admission_conflict` because reporting an arbitrary exception as a
+  // lost concurrency race tells an operator to retry a failure that will never
+  // succeed, and hides the real cause.
+  'leaf_admission_internal_failure'
 ]);
 
 const LEAF_ADMISSION_MESSAGES = deepFreeze({
@@ -105,7 +115,11 @@ const LEAF_ADMISSION_MESSAGES = deepFreeze({
   // neither, so this tranche refuses rather than synthesising them.
   leaf_execution_mode_unsupported:
     'Structured leaf-run admission supports agent execution only',
-  leaf_admission_conflict: 'Leaf-run admission lost a concurrent race for this allocation plan'
+  leaf_admission_conflict: 'Leaf-run admission lost a concurrent race for this allocation plan',
+  leaf_governed_authority_unavailable:
+    'Leaf-run admission could not assemble the governed authority it requires',
+  leaf_admission_internal_failure:
+    'Leaf-run admission failed unexpectedly and was not admitted'
 });
 
 // Why an item holds the durable status it holds. Closed, so a projection can
