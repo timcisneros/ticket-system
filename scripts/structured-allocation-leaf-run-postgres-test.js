@@ -533,6 +533,89 @@ async function main() {
         'the worker principal is the agent the item admitted');
       assert.equal(run.agentId, item.assignedAgentId,
         'the Run is dispatched to the admitted agent, never a replacement');
+      // ── PARENT POLICY REVISION, on the Run itself ──────────────────────
+      //
+      // The Run must bind the identity of the container revision its worker
+      // policy was selected from, and that identity must be the SET hash — not
+      // the selected role-policy hash. Substituting one for the other would
+      // make the parity check compare a value that says nothing about the
+      // sibling role, which is the entire hole this binding closes.
+      const parent = run.governedExecution.parentPolicyReference;
+      assert.equal(run.governedExecution.version, 2,
+        'a newly admitted leaf Run carries the versioned authority envelope');
+      assert.equal(parent.economicPolicySetHash,
+        LEAF_WORKER_POLICY.source.economicPolicySetHash,
+        'the Run binds the economic SET hash of the container it came from');
+      assert.notEqual(parent.economicPolicySetHash,
+        run.governedExecution.economicPolicyHash,
+        'the set hash is not the selected role-policy hash');
+      assert.equal(run.governedExecution.economicPolicyHash,
+        LEAF_WORKER_POLICY.source.economicPolicyHash,
+        'and the selected role-policy hash is still the worker policy');
+      assert.equal(parent.policyContainerId,
+        LEAF_WORKER_POLICY.source.policyContainerId,
+        'the Run names the exact policy container row');
+      assert.equal(parent.policyContainerRevision,
+        LEAF_WORKER_POLICY.source.policyContainerRevision,
+        'and the exact revision of that row');
+
+      // ── A HISTORICAL VERSION-1 ENVELOPE STAYS READABLE ────────────────
+      //
+      // Constructed from this envelope by removing the parent reference and
+      // re-hashing over the version-1 field list — exactly the bytes a
+      // pre-binding Run carries. It must normalize under its ORIGINAL rules. A
+      // contract that silently applied version-2 rules to it would invalidate
+      // every historical Run, which is why this is proved behaviourally rather
+      // than by inspecting a field list.
+      {
+        const {
+          GOVERNED_RUN_AUTHORITY_FIELDS, normalizeGovernedRunAuthority
+        } = require('../runtime/governed-run-authority-contract');
+        const { hashCanonical } = require('../runtime/declared-work-contract');
+        const historical = {};
+        for (const field of GOVERNED_RUN_AUTHORITY_FIELDS) {
+          historical[field] = run.governedExecution[field];
+        }
+        historical.version = 1;
+        const payload = {};
+        for (const field of GOVERNED_RUN_AUTHORITY_FIELDS) {
+          if (field === 'governedExecutionHash') continue;
+          payload[field] = historical[field];
+        }
+        historical.governedExecutionHash = hashCanonical(payload);
+        const readBack = normalizeGovernedRunAuthority(historical, {
+          expectedRunId: run.id,
+          expectedTicketId: primary.ticket.id,
+          expectedAllocationItemId: item.allocationItemId
+        });
+        assert.equal(readBack.version, 1,
+          'a historical version-1 envelope still normalizes under its own rules');
+        assert.equal(
+          Object.prototype.hasOwnProperty.call(readBack, 'parentPolicyReference'),
+          false,
+          'and is never silently upgraded with a parent reference it never recorded');
+
+        // A VERSION-2 ENVELOPE MUST VALIDATE ITS REFERENCE, not merely carry
+        // one. A present-but-malformed reference proves nothing, and accepting
+        // it would let a corrupted or hand-written binding pass the parity
+        // check it exists to satisfy.
+        for (const [label, broken] of [
+          ['a malformed set hash', { ...parent, economicPolicySetHash: 'nope' }],
+          ['a zero container row', { ...parent, policyContainerId: 0 }],
+          ['an unknown extra field', { ...parent, injected: true }]
+        ]) {
+          assert.throws(() => normalizeGovernedRunAuthority({
+            ...run.governedExecution, parentPolicyReference: broken
+          }, { expectedRunId: run.id }),
+          // The refusal must name the PARENT REFERENCE specifically. Matching
+          // any refusal would let the envelope hash-mismatch check stand in for
+          // reference validation, which is a different guarantee: a
+          // consistently re-hashed but malformed reference would then pass.
+          /parentPolicyReference/,
+          `a version-2 envelope with ${label} refuses on the reference itself`);
+        }
+      }
+
       // THE ROUTE ITSELF was decided for that same agent. Binding and dispatch
       // can both name the right agent while the governed routing decision — the
       // thing the economic authority is bound to — was taken for a sibling. That

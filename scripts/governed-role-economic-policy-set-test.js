@@ -364,6 +364,15 @@ function main() {
     'governed_policy_revision_mismatch',
   'parity 3 an unchanged worker policy under a CHANGED sibling still refuses');
 
+  // The container CONTENT hash must cover the economics, not only the shared
+  // routing and pricing documents. If it covered only those, two containers
+  // differing in a role policy would share a content identity — and the parity
+  // check would be comparing a value blind to the very thing that changed.
+  ok(sourceFor({ ...revisionA,
+    economicOverrides: { [PLANNER]: { authorizedMicroUsd: 499_996 } }
+  }, WORKER).policyContainerHash !== sourceFor(revisionA, WORKER).policyContainerHash,
+  'parity 3 the container content hash covers the economic set, not just routing');
+
   // 4. Changed worker policy refuses.
   ok(refusalReason(() => assertSameParentPolicyRevision(plannerA,
     buildParentPolicyReference(sourceFor({

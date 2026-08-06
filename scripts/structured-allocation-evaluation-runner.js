@@ -151,6 +151,28 @@ function buildTicketForm(arm, scenario, context) {
   return group;
 }
 
+// ── Cross-role parent policy revision parity ────────────────────────────────
+//
+// Exported so it can be exercised with DISAGREEING inputs. A happy-path trial
+// always agrees, so a predicate that simply returned true would be
+// indistinguishable there — the only way to prove it discriminates is to feed it
+// a mismatch directly.
+//
+// `workerReferences` arrives DISTINCT from SQL: more than one entry means the
+// leaf Runs disagree among themselves, which is a parity failure regardless of
+// what the planner captured.
+function sameParentPolicyRevisionOf(plannerReference, workerReferences) {
+  const canonical = value => (value && typeof value === 'object'
+    ? JSON.stringify(Object.keys(value).sort().map(key => [key, value[key]]))
+    : null);
+  const distinct = [...new Set((workerReferences || []).map(canonical))];
+  return Boolean(
+    plannerReference &&
+    distinct.length === 1 &&
+    distinct[0] !== null &&
+    distinct[0] === canonical(plannerReference));
+}
+
 // ── Durable path proof ──────────────────────────────────────────────────────
 //
 // Read from persisted state, never from the arm label. `assertObservedPathMatches`
@@ -226,14 +248,8 @@ async function proveDurablePath(store, ticketId, arm) {
     ? plannerParent.reference : null;
   const workerReferences = workerParents
     .map(row => row.reference).filter(Boolean);
-  const canonical = value => (value ? JSON.stringify(Object.keys(value).sort()
-    .map(key => [key, value[key]])) : null);
-  // The query is DISTINCT, so more than one row means the leaf Runs disagree
-  // among themselves — which is a parity failure regardless of the planner.
-  const sameParentPolicyRevision = Boolean(
-    plannerReference &&
-    workerReferences.length === 1 &&
-    canonical(workerReferences[0]) === canonical(plannerReference));
+  const sameParentPolicyRevision =
+    sameParentPolicyRevisionOf(plannerReference, workerReferences);
 
   const executableItems = plans.reduce((total, plan) => {
     const items = plan.body && Array.isArray(plan.body.items) ? plan.body.items : [];
@@ -727,6 +743,7 @@ async function runTrial({
 }
 
 module.exports = {
+  sameParentPolicyRevisionOf,
   SUPPORTED_MODES,
   QUIESCENCE_TIMEOUT_MS,
   EvaluationRunnerError,

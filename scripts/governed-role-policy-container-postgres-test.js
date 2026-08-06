@@ -268,6 +268,31 @@ async function main() {
         'the worker policy itself is unchanged by the planner-sibling edit');
       assertThat(refusal === 'governed_policy_revision_mismatch',
         'an unchanged worker policy under a changed sibling still refuses');
+
+      // ISOLATING THE REVISION ITSELF.
+      //
+      // Two references with IDENTICAL governed content but different row
+      // revisions must still refuse. This is the documented over-strictness in
+      // executable form: an edit that touches only legacy fields bumps the
+      // revision while governed content is unchanged, and leaf admission
+      // refuses rather than deciding which edits "do not count". Without this
+      // case, dropping the revision from the comparison would be undetectable —
+      // the content hash would carry every other assertion.
+      let revisionOnly = null;
+      try {
+        assertSameParentPolicyRevision(plannerRef,
+          { ...plannerRef, policyContainerRevision: plannerRef.policyContainerRevision + 1 });
+      } catch (error) { revisionOnly = error.detail && error.detail.reason; }
+      assertThat(revisionOnly === 'governed_policy_revision_mismatch',
+        'a revision difference alone refuses, with governed content identical');
+      // ...and the row ID alone, likewise.
+      let rowOnly = null;
+      try {
+        assertSameParentPolicyRevision(plannerRef,
+          { ...plannerRef, policyContainerId: plannerRef.policyContainerId + 1 });
+      } catch (error) { rowOnly = error.detail && error.detail.reason; }
+      assertThat(rowOnly === 'governed_policy_revision_mismatch',
+        'a container row difference alone refuses');
     }
 
     // ── A second active governed container is still refused ──────────────

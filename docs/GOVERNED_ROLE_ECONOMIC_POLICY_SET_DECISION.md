@@ -220,6 +220,22 @@ unnoticed. The refusal is truthful, fails closed, and is recoverable by
 re-planning. If it proves operationally costly, the fix is an explicit decision
 to narrow the comparison — not a silent relaxation.
 
+### Proof boundary, stated explicitly
+
+The comparison LOGIC is proved behaviourally — replaced containers,
+revision-only and row-only differences, a byte-identical worker under a changed
+planner sibling, malformed and missing references, and a historical version-1
+envelope that still normalizes and is never upgraded. The exported parity
+predicate is exercised with disagreeing inputs, because a happy-path trial always
+agrees and could not distinguish a predicate that simply returned true.
+
+The server-side WIRING at leaf admission is proved by comment-stripped
+executable-source assertions on the guard condition itself. **An end-to-end
+trial that replaces the active container between plan admission and leaf
+admission is not exercised**: the two stages occur inside one synchronous
+request, so provoking the race would require interposing on the planner
+response. That is recorded as a known coverage boundary rather than implied.
+
 ## 7. Capture and recovery behaviour
 
 A captured governed leaf Run retains:

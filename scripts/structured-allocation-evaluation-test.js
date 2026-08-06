@@ -1128,6 +1128,58 @@ const ok = (condition, message) => {
   ok(serverSource.includes("leaf_governed_authority_unavailable"),
     '13 plan-to-leaf: missing governed authority gets its own exact code');
 
+  // ── CROSS-ROLE PARENT REVISION PARITY, exercised with MISMATCHES ───────
+  //
+  // A happy-path trial always agrees, so a predicate that simply returned true
+  // would be indistinguishable there. It is fed disagreeing inputs directly.
+  {
+    const {
+      sameParentPolicyRevisionOf
+    } = require('./structured-allocation-evaluation-runner');
+    const reference = {
+      version: 1, policyContainerId: 4, policyContainerRevision: 9,
+      policyContainerHash: 'a'.repeat(64),
+      economicPolicySetVersion: 2, economicPolicySetHash: 'b'.repeat(64)
+    };
+    ok(sameParentPolicyRevisionOf(reference, [{ ...reference }]) === true,
+      '13 parity: matching planner and worker references agree');
+    ok(sameParentPolicyRevisionOf(reference,
+      [{ ...reference }, { ...reference }]) === true,
+    '13 parity: identical worker references are one revision, however many Runs');
+    for (const [field, value] of [
+      ['policyContainerRevision', 10], ['policyContainerId', 5],
+      ['policyContainerHash', 'c'.repeat(64)],
+      ['economicPolicySetHash', 'd'.repeat(64)], ['economicPolicySetVersion', 1]
+    ]) {
+      ok(sameParentPolicyRevisionOf(reference,
+        [{ ...reference, [field]: value }]) === false,
+      `13 parity: a differing ${field} is NOT the same revision`);
+    }
+    // Leaf Runs that disagree among themselves fail parity regardless of the
+    // planner.
+    ok(sameParentPolicyRevisionOf(reference,
+      [{ ...reference }, { ...reference, policyContainerRevision: 10 }]) === false,
+    '13 parity: leaf Runs disagreeing among themselves fail parity');
+    ok(sameParentPolicyRevisionOf(null, [{ ...reference }]) === false &&
+       sameParentPolicyRevisionOf(reference, []) === false,
+    '13 parity: an absent reference on either side is never parity');
+  }
+
+  // The server-side guard is proved as WIRING here and as BEHAVIOUR in the
+  // policy-source and PostgreSQL suites, which drive the comparison itself with
+  // replaced containers, revision-only and row-only differences.
+  ok(serverExecutable.includes('assertSameParentPolicyRevision(') &&
+     serverExecutable.includes('plannerGoverned.parentPolicyReference'),
+  '13 parity: leaf admission compares the planner reference against its own');
+  // The GUARD CONDITION, not its message. A message can survive as unreachable
+  // text while the branch that raises it has been disabled.
+  ok(serverExecutable.includes(
+    'if (!plannerGoverned || !plannerGoverned.parentPolicyReference) {'),
+  '13 parity: a plan with no captured parent revision refuses leaf admission');
+  ok(serverExecutable.includes(
+    'the admitted plan carries no captured parent policy revision'),
+  '13 parity: and says so in terms of the missing capture, not a race');
+
   // The runner must not derive the stage itself: one classifier, called.
   const runnerSource = fs.readFileSync(
     path.join(__dirname, 'structured-allocation-evaluation-runner.js'), 'utf8');
