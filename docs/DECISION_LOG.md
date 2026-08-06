@@ -1,5 +1,29 @@
 # Decision Log
 
+## Scored fixture evaluation executed — FIXTURE EVIDENCE SUPPORTS STOP (2026-08-06)
+
+The frozen 200-trial fixture manifest was executed exactly as frozen: 200
+trials, 0 exclusions, no interruptions, corpus complete and internally
+consistent. No repetition count, seed, ordering, threshold, scenario or
+exclusion predicate was changed after results existed.
+
+**FIXTURE EVIDENCE SUPPORTS STOP.** No hard disqualifier triggered; structured
+does not improve truthful completion by at least 5 points over both A and A2.
+
+**FINAL PRODUCT DECISION: REQUIRES LIVE-MODEL MATRIX.** The fixture phase does
+not carry final product authority, and this result does not claim it.
+
+**The result must be read with its limitation.** True completion is 0.0% for
+every arm, so the gain rule is satisfied trivially: structured shows no gain
+because nothing succeeded anywhere. The corpus establishes that these
+deterministic fixture scenarios do not discriminate arms on completion
+truthfulness — not that structured allocation fails to help.
+
+One hard disqualifier is recorded NOT EVALUABLE rather than not triggered: it
+requires identical durable state to recur, and every trial carries its own
+derived seed. Full record: `docs/STRUCTURED_ALLOCATION_CONTROLLED_EVALUATION.md`
+§3k.
+
 ## Governed authority binds its parent policy revision (2026-08-05)
 
 Selected role-policy hashes proved "this policy funded this role". They did not

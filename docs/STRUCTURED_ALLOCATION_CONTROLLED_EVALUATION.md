@@ -1445,6 +1445,94 @@ harmless.
 **Decision rules: FULLY FROZEN.** RETAIN/REVISE/STOP thresholds and hard
 disqualifiers are unmodified, and exactly five authorized metrics remain.
 
+## 3k. Scored fixture evaluation — executed (session 15)
+
+**The frozen 200-trial manifest was executed exactly as frozen. No protocol
+value was changed after results existed.**
+
+| | |
+|---|---|
+| Manifest hash | `044d37828f6f251eefaef66eccb2362ff6c6498c689baf54eb357870c4d9a07b` |
+| Scored-run hash | `a8c70fa049f3fd45c77b73d161cf094ae961e2953886ec9fd9d0b19a07855cb1` |
+| Corpus hash | `40efc9db8242dc616808f00465124ded313b2d1c1d7b61ac077f5acf0fdbfc8f` |
+| Report hash | `17a8dcf83580d259e9794fac345e827640115327ee1a75152aac6b1029bb8569` |
+| Trials | 200 executed, 200 planned |
+| Exclusions | 0 |
+| Interruptions / resumes | none |
+
+**Corpus integrity: SCORED FIXTURE CORPUS COMPLETE AND INTERNALLY CONSISTENT.**
+
+### Metrics by arm — arms never collapsed
+
+| Arm | Trials | Allocation quality | True completion | FALSE completion | Oracle refused | Latency (ms) | Normalized cost |
+|---|---|---|---|---|---|---|---|
+| A | 40 | 100.0% | 0.0% | 0.0% | 12.5% | 2425 | 696.88 |
+| A2a | 40 | 100.0% | 0.0% | 0.0% | 12.5% | 3023 | 3125.88 |
+| A2b | 20 | 100.0% | 0.0% | 0.0% | 25.0% | 2787 | 2567.75 |
+| B | 60 | 100.0% | 0.0% | 0.0% | 8.3% | 4209 | 7975.22 |
+| C | 40 | 100.0% | 0.0% | 0.0% | 12.5% | 3362 | 8319.33 |
+
+### Hard disqualifiers — evaluated before any tradeoff
+
+- NOT TRIGGERED — structured false-positive completion rate higher than arm A
+- NOT TRIGGERED — any authority violation
+- NOT TRIGGERED — uncontrolled cost
+- **NOT EVALUABLE** — non-deterministic recovery
+- NOT TRIGGERED — systematic churn misclassification
+
+`NOT EVALUABLE` is a third state, deliberately not folded into "not
+triggered". The rule says *identical durable state* producing different
+terminal dispositions; every trial in this corpus carries its own derived seed
+and therefore its own comparison envelope, so identical durable state never
+recurs and the rule cannot be checked from fixture evidence. "We could not
+check" and "we checked and it was clean" are different claims.
+
+### Decision
+
+**FIXTURE EVIDENCE SUPPORTS STOP** — no hard disqualifier triggered, but
+structured does not improve truthful completion by at least 5 points over both
+A and A2 (gain versus A: 0.0 points; versus A2: 0.0 points).
+
+**FINAL PRODUCT DECISION: REQUIRES LIVE-MODEL MATRIX.**
+
+### The strongest competing interpretation
+
+**True completion is 0.0% for EVERY arm.** No arm ever produced a truthful
+completion, so the frozen gain rule is satisfied trivially rather than
+informatively: structured shows no gain because *nothing* succeeded anywhere.
+This corpus therefore establishes that the deterministic fixture scenarios do
+not discriminate arms on completion truthfulness — not that structured
+allocation fails to help. The honest reading of STOP here is "fixture evidence
+provides no support for retaining", not "structured allocation was shown to be
+worse".
+
+What the corpus *does* discriminate: allocation quality is 100% everywhere
+(every arm executed its declared work on its own path); structured arms cost
+roughly 11x arm A and run roughly 1.4-1.7x its latency; oracle refusals are
+lowest on arm B.
+
+### Exact conditions that would reverse the decision
+
+1. a fixture corpus in which any arm achieves a non-zero true-completion rate,
+   allowing the gain rule to discriminate;
+2. structured true completion at least 5 points above **both** A and A2, with
+   latency and cost within 1.5x of A — the current cost ratio alone would fail
+   RETAIN even with a truthfulness gain;
+3. the live-model matrix, which the protocol still requires before any final
+   product decision.
+
+### No post-hoc protocol changes
+
+Repetitions, seeds, ordering, scenario membership, thresholds, exclusion
+predicate and the five authorized metrics are byte-identical to the frozen
+manifest. One SCORER defect was corrected after first output — it read
+`latency.totalMs` and `normalizedCost.totalMicroUsd`, field names the artifacts
+do not use, leaving two authorized metrics unreported; and its
+non-deterministic-recovery predicate grouped trials that do not share identical
+durable state, which is broader than the frozen rule text. Correcting an
+implementation to match a frozen rule is not changing the rule, and the decision
+is STOP under both the original and the corrected predicate.
+
 ## 13. Status
 
 **Tranche 6: IN PROGRESS — harness built and executing; evaluation NOT run.**

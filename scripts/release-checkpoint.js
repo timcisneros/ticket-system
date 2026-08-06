@@ -39,6 +39,8 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'evaluation-observation-sink-test.js',
   // Tranche 6 — the frozen scored-run manifest. Deterministic: config only.
   'evaluation-scored-manifest-test.js',
+  // Tranche 6 — the scored executor and pure scorer. Deterministic: config only.
+  'structured-allocation-scored-evaluation-test.js',
   'governed-provider-transport-test.js',
   'governed-provider-request-contract-test.js',
   'model-pricing-catalog-test.js',

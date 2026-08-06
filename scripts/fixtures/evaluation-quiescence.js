@@ -174,8 +174,18 @@ function buildTrialArtifact(input) {
     schemaVersion: ARTIFACT_SCHEMA_VERSION,
     protocolVersion: input.protocolVersion,
     repositoryCommit: input.repositoryCommit,
-    // The label the protocol requires on every unscored output.
-    label: 'UNSCORED HARNESS SMOKE — NOT PRODUCT EVIDENCE',
+    // The label the protocol requires. Unscored by DEFAULT: a result that does
+    // not explicitly claim scored identity may never be treated as product
+    // evidence, so the safe value is the one you get by saying nothing.
+    label: input.label || 'UNSCORED HARNESS SMOKE — NOT PRODUCT EVIDENCE',
+    // Scored identity, present only on a scored trial. Every scored artifact
+    // binds the run header and the manifest it was executed under, so an
+    // artifact can never be moved between runs or manifests.
+    scoredRunHash: input.scoredRunHash === undefined ? null : input.scoredRunHash,
+    manifestHash: input.manifestHash === undefined ? null : input.manifestHash,
+    trialSlot: input.trialSlot === undefined ? null : input.trialSlot,
+    trialId: input.trialId === undefined ? null : input.trialId,
+    sourceCommit: input.repositoryCommit,
     scenarioId: input.scenarioId,
     // Which trial of that scenario this is. Null for a scenario with one
     // canonical variant; never omitted, so an artifact can always say what it

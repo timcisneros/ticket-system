@@ -551,7 +551,10 @@ async function waitForQuiescence(store, ticketId, namespace, timeoutMs) {
 async function runTrial({
   store, startServer, workspaceRoot, scenario: requestedScenario, arm, repetition,
   seed, outputPath, commit, smokeRoot, namespaceRoot, variant = null,
-  omitStagedLogicalTasks = null
+  omitStagedLogicalTasks = null,
+  // Supplied ONLY by the scored executor. Its absence is what keeps every
+  // other caller's artifact explicitly unscored.
+  scoredIdentity = null
 }) {
   assertMode('fixture');
   // ONE RESOLUTION POINT. The variant is resolved into a complete scenario here
@@ -989,6 +992,7 @@ async function runTrial({
     if (quiescence.timedOut) warnings.push('trial timed out before quiescence');
 
     artifact = buildTrialArtifact({
+      ...(scoredIdentity || {}),
       protocolVersion: PROTOCOL_VERSION,
       repositoryCommit: commit,
       scenarioId: scenario.scenarioId,

@@ -207,6 +207,7 @@ const TESTS = Object.freeze([
   { file: "governed-role-economic-policy-set-test.js", status: "required" },
   { file: "evaluation-observation-sink-test.js", status: "required" },
   { file: "evaluation-scored-manifest-test.js", status: "required" },
+  { file: "structured-allocation-scored-evaluation-test.js", status: "required" },
   { file: "governed-role-policy-container-postgres-test.js", status: "required" },
   { file: "governed-evaluation-negative-path-postgres-test.js", status: "required" },
   { file: "structured-allocation-scenario-postgres-test.js", status: "required" },
