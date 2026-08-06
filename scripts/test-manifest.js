@@ -206,6 +206,7 @@ const TESTS = Object.freeze([
   { file: "governed-policy-source-test.js", status: "required" },
   { file: "governed-role-economic-policy-set-test.js", status: "required" },
   { file: "governed-role-policy-container-postgres-test.js", status: "required" },
+  { file: "structured-allocation-scenario-postgres-test.js", status: "required" },
   { file: "governed-provider-transport-test.js", status: "required" },
   { file: "governed-provider-request-contract-test.js", status: "required" },
   { file: "model-pricing-catalog-test.js", status: "required" },

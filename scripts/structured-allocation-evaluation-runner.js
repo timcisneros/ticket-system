@@ -32,12 +32,15 @@ const {
 } = require('./fixtures/evaluation-arms');
 const {
   getScenario, assertArmAllowed, materializeResponses, buildOracleFor,
-  PROTOCOL_VERSION
+  resolveScenarioVariant, PROTOCOL_VERSION
 } = require('./fixtures/evaluation-scenarios');
 const {
   createFixtureNamespace, stageResponses, transcriptHash, externalStateHash,
-  transportSummary
+  transportSummary, readAccessLog, readTranscript
 } = require('./fixtures/evaluation-fixture-provider');
+const {
+  evaluateCouplingWithFixture
+} = require('./fixtures/evaluation-coupling-oracle');
 const { assertAllWorkerResponsesConsumed } = require('./fixtures/evaluation-fetch-fixture');
 const { evaluateScenarioOutcome, classifyTruthfulness } = require('./fixtures/evaluation-oracle');
 const {
@@ -105,6 +108,22 @@ function parseArguments(argv) {
   if (!ARMS[parsed.arm]) {
     throw new EvaluationRunnerError(`unknown arm ${parsed.arm}`);
   }
+  // `--variant` is OPTIONAL: a scenario with one canonical variant needs none.
+  // When supplied it must belong to the selected scenario, and the arm must be
+  // allowed for it — both are checked here, before any server is spawned.
+  const scenario = getScenario(parsed.scenario);
+  let resolved;
+  try {
+    resolved = resolveScenarioVariant(scenario, parsed.variant || null);
+  } catch (error) {
+    throw new EvaluationRunnerError(error.message, error.detail || {});
+  }
+  try {
+    assertArmAllowed(resolved, parsed.arm);
+  } catch (error) {
+    throw new EvaluationRunnerError(error.message, error.detail || {});
+  }
+  parsed.variant = resolved.variantId || null;
   const repetition = Number(parsed.repetition);
   if (!Number.isSafeInteger(repetition) || repetition <= 0) {
     throw new EvaluationRunnerError('--repetition must be a positive integer');
@@ -149,6 +168,61 @@ function buildTicketForm(arm, scenario, context) {
     group.declaredWork = JSON.stringify(scenario.declaredWork);
   }
   return group;
+}
+
+// ── Family-7 churn facts and family-8 recovery facts ────────────────────────
+//
+// FACTS, NOT VERDICTS. Each function reports what the fixture transcript and
+// the durable Ticket report actually showed. Neither decides whether the
+// product behaved correctly, and neither is compared between arms — they exist
+// so a reader can tell a genuine no-progress window from an undelivered
+// response, and a reused durable response from a retransmission.
+function buildChurnFacts(report, transcript) {
+  const served = transcript.filter(entry => entry.served);
+  const refused = transcript.filter(entry => entry.served === false);
+  return Object.freeze({
+    // Did a response become durable at all? A refused transport produced none,
+    // so no window may be judged from it.
+    durableResponses: served.length,
+    refusedTransports: refused.length,
+    refusalReasons: Object.freeze([...new Set(refused.map(e => e.refused))].sort()),
+    // The canonical churn block the product itself recorded, if any. Reported
+    // beside the fixture facts rather than derived from them.
+    noProgressStreak: report.churn && report.churn.noProgressStreak !== undefined
+      ? report.churn.noProgressStreak : null,
+    progressBlocks: report.churn && report.churn.progressBlocks !== undefined
+      ? report.churn.progressBlocks : null,
+    verifiedProgressCredits: report.churn && report.churn.verifiedProgressCredits !== undefined
+      ? report.churn.verifiedProgressCredits : null,
+    providerRequests: Array.isArray(report.canonicalRequests)
+      ? report.canonicalRequests.length : null
+  });
+}
+
+function buildRecoveryFacts(transcript, workspaceRoot, scenario) {
+  const served = transcript.filter(entry => entry.served);
+  const identities = served.map(entry => entry.responseIdentity).filter(Boolean);
+  // A committed effect is observed in RAW workspace state, never inferred from
+  // a receipt: the question is whether the world changed, and how many times.
+  const effectPath = scenario.oracle && scenario.oracle.kind === 'raw_state' &&
+    scenario.oracle.expectations[0] && scenario.oracle.expectations[0].path
+    ? path.join(workspaceRoot, scenario.oracle.expectations[0].path) : null;
+  const committedEffects = effectPath && fs.existsSync(effectPath) ? 1 : 0;
+  return Object.freeze({
+    servedCalls: served.length,
+    // Serving the same staged response twice is a RETRANSMISSION, which the
+    // uncertain-delivery boundary must never produce.
+    duplicateServedCalls: identities.length - new Set(identities).size,
+    responseIdentities: Object.freeze([...new Set(identities)].sort()),
+    durableResponse: served.some(entry =>
+      !entry.refused && entry.responseIdentity),
+    refusedBefore: transcript.filter(e => e.refused === 'before_transport').length,
+    committedEffects,
+    // One effect path, observed once. A duplicated effect would appear as a
+    // second distinct artifact, which the scenarios deliberately do not stage.
+    duplicateEffects: 0,
+    failureBoundary: scenario.failureBoundary || 'none'
+  });
 }
 
 // ── Cross-role parent policy revision parity ────────────────────────────────
@@ -376,10 +450,16 @@ async function waitForQuiescence(store, ticketId, namespace, timeoutMs) {
 // ── The trial ───────────────────────────────────────────────────────────────
 
 async function runTrial({
-  store, startServer, workspaceRoot, scenario, arm, repetition, seed,
-  outputPath, commit, smokeRoot, namespaceRoot
+  store, startServer, workspaceRoot, scenario: requestedScenario, arm, repetition,
+  seed, outputPath, commit, smokeRoot, namespaceRoot, variant = null
 }) {
   assertMode('fixture');
+  // ONE RESOLUTION POINT. The variant is resolved into a complete scenario here
+  // and nowhere else, so every downstream step — staging, oracle, artifact —
+  // consumes it exactly as it consumes a single-variant scenario. An unknown
+  // variant, or one belonging to another scenario, refuses rather than falling
+  // back to the default.
+  const scenario = resolveScenarioVariant(requestedScenario, variant);
   assertArmAllowed(scenario, arm.armId);
   if (scenario.protocolVersion !== PROTOCOL_VERSION) {
     throw new EvaluationRunnerError('scenario protocol version mismatch');
@@ -389,7 +469,10 @@ async function runTrial({
       `refusing to overwrite an existing trial artifact at ${outputPath}`);
   }
 
-  const trialId = `${scenario.scenarioId}--${arm.armId}--r${repetition}`;
+  // The variant participates in the trial identity, so two variants of one
+  // scenario can never share a fixture namespace or silently reuse state.
+  const trialId = `${scenario.scenarioId}${scenario.variantId ? `--${scenario.variantId}` : ''}` +
+    `--${arm.armId}--r${repetition}`;
   // Fixture namespaces live under a PER-INVOCATION root while artifacts stay at
   // a stable per-commit path. Reuse inside one invocation still refuses — that
   // is the isolation guarantee — but re-running the milestone is not blocked by
@@ -407,6 +490,19 @@ async function runTrial({
   const trialWorkspace = workspaceRoot;
   for (const entry of fs.readdirSync(trialWorkspace)) {
     fs.rmSync(path.join(trialWorkspace, entry), { recursive: true, force: true });
+  }
+  // A path whose KIND raw observation cannot decide.
+  //
+  // Family 9C needs a genuine "insufficient raw state" case, and the obvious
+  // candidates do not produce one: a directory where a file is expected is a
+  // truthful FAIL (the file really is absent), and an unreadable file depends
+  // on the running uid, which is not a property of the scenario. A FIFO is
+  // neither a regular file nor a directory, so the oracle must refuse to judge
+  // it however the harness is run.
+  for (const fifo of scenario.initialState.undecidablePaths || []) {
+    const target = path.join(trialWorkspace, fifo);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    execFileSync('mkfifo', [target]);
   }
   for (const folder of scenario.initialState.folders || []) {
     fs.mkdirSync(path.join(trialWorkspace, folder), { recursive: true });
@@ -682,8 +778,40 @@ async function runTrial({
         'the read-only report changed durable state', { before, between, after });
     }
 
-    const oracleResult = evaluateScenarioOutcome({
-      workspaceRoot: trialWorkspace, expectation: buildOracleFor(scenario) });
+    // ── THE INDEPENDENT ORACLE, one of two kinds ─────────────────────────
+    //
+    // A raw-state oracle reads the filesystem. A COUPLING oracle additionally
+    // consults the fixture-owned access log, because "did the consumer actually
+    // read the producer?" cannot be answered by final files: a summary naming
+    // the right hash looks identical whether the product read it or the staged
+    // response already contained it. Both kinds are arm-blind and neither reads
+    // any product table.
+    const oracleContract = buildOracleFor(scenario);
+    let oracleResult;
+    if (scenario.oracle.kind === 'coupling') {
+      // AVAILABILITY IS ABOUT THE OBSERVER, NOT ABOUT WHAT IT SAW.
+      //
+      // The log file is created lazily, on the first observed read. Treating an
+      // absent file as "unavailable" would report every trial in which nothing
+      // was read as REFUSED — collapsing "the consumer demonstrably did not read
+      // the producer" into "we could not tell", which are opposite findings. The
+      // observer was installed for the whole trial whenever the namespace
+      // exists, so that is what availability means; an empty log is zero
+      // observed reads.
+      const accessLogAvailable = fs.existsSync(namespace.dir);
+      oracleResult = evaluateCouplingWithFixture({
+        workspaceRoot: trialWorkspace,
+        seed,
+        producerPath: oracleContract.producerPath,
+        consumerPath: oracleContract.consumerPath,
+        consumerReaderId: oracleContract.consumerReaderId,
+        accessLogAvailable,
+        accessLog: accessLogAvailable ? readAccessLog(namespace) : []
+      });
+    } else {
+      oracleResult = evaluateScenarioOutcome({
+        workspaceRoot: trialWorkspace, expectation: oracleContract });
+    }
     const truthfulness = classifyTruthfulness({
       productClaimsCompleted: firstReport.productClaimsCompleted, oracleResult });
 
@@ -696,6 +824,7 @@ async function runTrial({
       releasedReservations: firstReport.releasedReservations
     });
 
+    const transcript = readTranscript(namespace);
     const warnings = [];
     try { assertAllWorkerResponsesConsumed(namespace.dir); }
     catch (error) { warnings.push(error.message); }
@@ -705,6 +834,10 @@ async function runTrial({
       protocolVersion: PROTOCOL_VERSION,
       repositoryCommit: commit,
       scenarioId: scenario.scenarioId,
+      family: scenario.family,
+      variantId: scenario.variantId || null,
+      variantLabel: scenario.variantLabel || null,
+      variantExpectation: scenario.variantExpectation || null,
       armId: arm.armId,
       repetition,
       seed,
@@ -717,6 +850,9 @@ async function runTrial({
       durableGovernedCost: firstReport.durableGovernedMicroUsd,
       latency: firstReport.latency,
       churn: firstReport.churn,
+      churnFacts: buildChurnFacts(firstReport, transcript),
+      recoveryFacts: buildRecoveryFacts(transcript, trialWorkspace, scenario),
+      truthfulness,
       quiescence,
       fixtureTranscriptHash: transcriptHash(namespace),
       externalStateHash: externalStateHash(namespace),

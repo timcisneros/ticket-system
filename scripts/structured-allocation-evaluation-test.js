@@ -1241,6 +1241,226 @@ const ok = (condition, message) => {
   '13 role funding: the funded set is canonically ordered by the role constants');
 }
 
+// ── 14. SCENARIO FAMILIES 3, 4, 7, 8 AND 9 ─────────────────────────────────
+//
+// The catalog, the variant model and the execution matrix, proved
+// deterministically. The real trials live in the scenario PostgreSQL suite;
+// what is proved here is that a scenario cannot be mis-declared, a variant
+// cannot be mis-selected, and a cell cannot be silently dropped.
+{
+  const {
+    SCENARIOS, SCENARIO_IDS, getScenario, resolveScenarioVariant, variantIdsOf,
+    validateScenario, materializeResponses
+  } = require('./fixtures/evaluation-scenarios');
+  const {
+    MATRIX, NOT_NATURALLY_PRODUCED, assertDeclaredExclusion, requiredTrials,
+    ExecutionMatrixError
+  } = require('./fixtures/evaluation-execution-matrix');
+  const { evaluateCoupling } = require('./fixtures/evaluation-coupling-oracle');
+  const { expectedProducerBytes } = require('./fixtures/evaluation-coupling-oracle');
+  const crypto14 = require('node:crypto');
+
+  // ── Catalog ───────────────────────────────────────────────────────────
+  for (const scenarioId of SCENARIO_IDS) {
+    const scenario = getScenario(scenarioId);
+    validateScenario(scenario);
+    ok(true, `14 catalog: ${scenarioId} is structurally valid`);
+    // A scenario that stages a static planner proposal cannot name the agents a
+    // trial actually created, and lowering refuses a proposal that omits any
+    // captured candidate — so every structured arm would refuse the plan.
+    ok(!scenario.plannerResponses || scenario.plannerResponseTemplate,
+      `14 catalog: ${scenarioId} binds planner items to real candidates`);
+    // Dynamic allocation needs one usable top-level directory per agent.
+    ok((scenario.initialState.folders || []).length >= 3,
+      `14 catalog: ${scenarioId} provides enough roots for the dynamic arms`);
+  }
+
+  // ── Variant selection ─────────────────────────────────────────────────
+  const seven = getScenario('family-7-no-progress');
+  ok(variantIdsOf(seven).join(',') === '7A,7B,7C,7D',
+    '14 variants: family 7 declares its four distinct variants');
+  ok(resolveScenarioVariant(seven, null).variantId === '7A',
+    '14 variants: a default variant is used when none is requested');
+  ok(resolveScenarioVariant(seven, '7C').variantId === '7C',
+    '14 variants: an explicit variant is selected exactly');
+  for (const [label, fn] of [
+    ['an unknown variant', () => resolveScenarioVariant(seven, '7Z')],
+    ['a variant of another scenario',
+      () => resolveScenarioVariant(getScenario('family-1-simple'), '7A')]
+  ]) {
+    let refused14 = false;
+    try { fn(); } catch (_) { refused14 = true; }
+    ok(refused14, `14 variants: ${label} refuses`);
+  }
+  // A variant may replace what a trial STAGES; it may never change the
+  // experimental cell — objective, declared work, ownership or allowed arms.
+  for (const variantId of variantIdsOf(seven)) {
+    const resolved = resolveScenarioVariant(seven, variantId);
+    ok(resolved.objective === seven.objective &&
+       resolved.allowedArms.join(',') === seven.allowedArms.join(',') &&
+       JSON.stringify(resolved.ownedOutputPaths) ===
+         JSON.stringify(seven.ownedOutputPaths),
+    `14 variants: ${variantId} changes the trial, not the experimental cell`);
+  }
+  // 7B and 8A/8B carry real failure boundaries, and staging must apply them.
+  const undelivered = resolveScenarioVariant(seven, '7B');
+  ok(undelivered.failureBoundary === 'after_transport_before_response',
+    '14 variants: 7B declares the delivery-uncertainty boundary');
+  const stagedUndelivered = materializeResponses(undelivered, 'seed-14',
+    { candidateAgentIds: [1, 2, 3] });
+  ok(stagedUndelivered.some(entry => entry.role === 'worker' &&
+     entry.failureBoundary === 'after_transport_before_response'),
+  '14 variants: the boundary reaches the staged WORKER response');
+  ok(stagedUndelivered.every(entry => entry.role !== 'planner' ||
+     !entry.failureBoundary),
+  '14 variants: and never the planner request, which is a different window');
+
+  // ── Execution matrix ──────────────────────────────────────────────────
+  const { CANDIDATE_CELLS, OBSERVATION_BLOCKED, BLOCKED_FAMILIES } =
+    require('./fixtures/evaluation-execution-matrix');
+  ok(CANDIDATE_CELLS.length === 12,
+    '14 matrix: twelve candidate cells are declared across families 3,4,7,8,9');
+  for (const family of [3, 4, 7, 8, 9]) {
+    ok(CANDIDATE_CELLS.some(cell => cell.family === family),
+      `14 matrix: family ${family} has at least one declared cell`);
+  }
+  // ── THE OBSERVATION BLOCK, pinned ─────────────────────────────────────
+  //
+  // Families 3, 4, 7 and 8 depend on a fixture-owned external channel that does
+  // not reach a spawned server. Requiring those cells would produce verdicts
+  // computed from an absent observer — "no consumer read" instead of "no
+  // observation", which inverts the finding rather than weakening it. They are
+  // recorded as blocked, and this pin fails the day the channel is connected.
+  ok(BLOCKED_FAMILIES.join(',') === '3,4,7,8',
+    '14 matrix: families 3, 4, 7 and 8 are recorded as OBSERVATION-BLOCKED');
+  ok(OBSERVATION_BLOCKED.every(entry =>
+    entry.requires && entry.blockedBy && entry.wouldFabricate && entry.fix),
+  '14 matrix: each block names what it needs, what blocks it, what a false ' +
+  'reading would claim, and the exact fix');
+  ok(MATRIX.every(cell => !BLOCKED_FAMILIES.includes(cell.family)),
+    '14 matrix: no blocked family is required until its observation exists');
+  ok(MATRIX.length === 2 && requiredTrials().length === 10,
+    '14 matrix: only family 9 is required today — ten trials it can observe');
+  const seven7 = CANDIDATE_CELLS.filter(cell => cell.family === 7);
+  ok(seven7.every(cell => cell.requiredArms.join(',') === 'B,C'),
+    '14 matrix: family 7 runs the structured arms only');
+  ok(seven7.every(cell => Object.keys(cell.excludedArms).length === 3 &&
+     Object.values(cell.excludedArms).every(reason => reason.length > 10)),
+  '14 matrix: and states an exact reason for every excluded arm');
+  // An exclusion is only legitimate when the matrix declared it. This is what
+  // stops a failing cell being retired as "infrastructure" after the fact.
+  ok(assertDeclaredExclusion('family-7/7A', 'A').includes('churn'),
+    '14 matrix: a declared exclusion returns its recorded reason');
+  let undeclared = false;
+  try { assertDeclaredExclusion('family-7/7A', 'B'); } catch (error) {
+    undeclared = error instanceof ExecutionMatrixError;
+  }
+  ok(undeclared, '14 matrix: an UNDECLARED exclusion refuses — no silent skip');
+  ok(NOT_NATURALLY_PRODUCED.length === 1 &&
+     NOT_NATURALLY_PRODUCED[0].variantId === '9B' &&
+     NOT_NATURALLY_PRODUCED[0].provedInsteadBy.includes('classifier'),
+  '14 matrix: 9B is recorded as not naturally produced, with its substitute proof');
+
+  // ── Family 3 and 4: the coupling distinction ──────────────────────────
+  //
+  // The three cases the protocol requires, proved directly rather than left to
+  // whatever a trial happens to produce.
+  {
+    const root14 = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-eval-coupling-'));
+    const seed14 = 'coupling-seed';
+    const bytes14 = expectedProducerBytes(seed14);
+    const hash14 = crypto14.createHash('sha256').update(bytes14).digest('hex');
+    fs.mkdirSync(path.join(root14, 'reports/producer'), { recursive: true });
+    fs.mkdirSync(path.join(root14, 'reports/consumer'), { recursive: true });
+    fs.writeFileSync(path.join(root14, 'reports/producer/artifact.txt'), bytes14);
+    fs.writeFileSync(path.join(root14, 'reports/consumer/summary.md'),
+      `derived from ${hash14}
+`);
+    const base14 = {
+      workspaceRoot: root14, seed: seed14,
+      producerPath: 'reports/producer/artifact.txt',
+      consumerPath: 'reports/consumer/summary.md',
+      consumerReaderId: 'consumer'
+    };
+    ok(evaluateCoupling({ ...base14,
+      accessLog: [{ reader: 'consumer', artifactPath: base14.producerPath,
+        artifactHash: hash14 }] }).verdict === 'pass',
+    '14 family 3/4: exact bytes, matching binding AND a consumer read pass');
+    // THE CASE THE WHOLE FAMILY EXISTS FOR. Final state is identical; only the
+    // read record is missing. Calling this pass would report luck as coupling.
+    ok(evaluateCoupling({ ...base14, accessLog: [] }).verdict === 'fail',
+      '14 family 3/4: a plausible output with NO consumer read fails');
+    ok(evaluateCoupling({ ...base14,
+      accessLog: [{ reader: 'consumer', artifactPath: base14.producerPath,
+        artifactHash: 'f'.repeat(64) }] })
+      .verdict === 'fail',
+    '14 family 3/4: a fabricated read naming the wrong hash fails');
+    fs.rmSync(path.join(root14, 'reports/producer/artifact.txt'));
+    ok(['fail', 'refused'].includes(evaluateCoupling({ ...base14,
+      accessLog: [{ reader: 'consumer', artifactPath: base14.producerPath,
+        artifactHash: hash14 }] }).verdict),
+    '14 family 3/4: a missing producer artifact never passes');
+    fs.rmSync(root14, { recursive: true, force: true });
+  }
+
+  // ── Family 7: the four distinctions, as declared expectations ─────────
+  const churnExpectations = variantIdsOf(seven).map(id =>
+    [id, resolveScenarioVariant(seven, id).variantExpectation]);
+  for (const [id, expectation] of churnExpectations) {
+    ok(expectation && typeof expectation.churnEligible === 'boolean',
+      `14 family 7: ${id} declares whether it is churn-eligible`);
+  }
+  const byId = Object.fromEntries(churnExpectations);
+  // ONLY 7A is churn. Each of the other three is a NEIGHBOUR that must not be
+  // counted as a no-progress window, for three different reasons.
+  ok(byId['7A'].churnEligible === true && byId['7B'].churnEligible === false &&
+     byId['7C'].churnEligible === false && byId['7D'].churnEligible === false,
+  '14 family 7: exactly one variant is churn-eligible');
+  ok(byId['7B'].durableResponse === false,
+    '14 family 7: 7B is not churn because nothing became durable');
+  ok(byId['7C'].durableResponse === true && byId['7C'].evidenceComplete === false,
+    '14 family 7: 7C is not churn because the evidence boundary is incomplete');
+  ok(byId['7D'].newlySatisfiedFacts === 1,
+    '14 family 7: 7D is not churn because it satisfied an admitted fact');
+
+  // ── Family 8: the four recovery boundaries ────────────────────────────
+  const eight = getScenario('family-8-recovery');
+  const eightExpectations = Object.fromEntries(variantIdsOf(eight).map(id =>
+    [id, resolveScenarioVariant(eight, id).variantExpectation]));
+  ok(eightExpectations['8A'].servedCalls === 0,
+    '14 family 8: a pre-transport failure serves zero calls');
+  ok(eightExpectations['8B'].servedCalls === 1 &&
+     eightExpectations['8B'].durableResponse === false,
+  '14 family 8: uncertain delivery is exactly one call with no durable response');
+  ok(eightExpectations['8C'].servedCalls === 1 &&
+     eightExpectations['8C'].durableResponse === true,
+  '14 family 8: a durable response is reused, never resent');
+  ok(Object.values(eightExpectations).every(e => e.duplicateEffects === 0),
+    '14 family 8: no boundary may duplicate a committed effect');
+  ok(resolveScenarioVariant(eight, '8A').failureBoundary === 'before_transport' &&
+     resolveScenarioVariant(eight, '8B').failureBoundary ===
+       'after_transport_before_response',
+  '14 family 8: each boundary variant declares its exact injection point');
+
+  // ── Family 9: every logical truthfulness class ────────────────────────
+  //
+  // Including the classes no smoke trial naturally produces. The classifier is
+  // total, and proving that here is what lets the matrix record 9B as not
+  // naturally produced without leaving the class unproved.
+  for (const [claims, verdict, expected] of [
+    [true, 'fail', 'false_positive_completion'],
+    [false, 'pass', 'false_negative_completion'],
+    [true, 'pass', 'true_positive_completion'],
+    [false, 'fail', 'true_negative_completion'],
+    [true, 'refused', 'oracle_refused'],
+    [false, 'refused', 'oracle_refused']
+  ]) {
+    ok(classifyTruthfulness({ productClaimsCompleted: claims,
+      oracleResult: { verdict } }) === expected,
+    `14 family 9: (claims=${claims}, oracle=${verdict}) classifies as ${expected}`);
+  }
+}
+
 console.log(`\nstructured allocation evaluation test passed — ${passed} assertions`);
 }
 

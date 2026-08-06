@@ -108,6 +108,8 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // Tranche 6 — one active governed container funding both canonical roles,
   // proved against real persistence and a fresh connection.
   'governed-role-policy-container-postgres-test.js',
+  // Tranche 6 — scenario families executed through the real server.
+  'structured-allocation-scenario-postgres-test.js',
   'postgres-persistence-integration-test.js',
   'postgres-runtime-cutover-test.js',
   'page-render-regression-test.js',

@@ -33,6 +33,7 @@
 // is unchanged and reads no environment variable added here.
 
 const fs = require('node:fs');
+const { observeArtifactRead } = require('./evaluation-artifact-observer');
 const path = require('node:path');
 
 const PROVIDER_URL = 'https://api.openai.com/v1/responses';
@@ -122,6 +123,7 @@ function installEvaluationFetchFixture({ namespaceDir, providerUrl = PROVIDER_UR
   }
   const stagedPath = path.join(namespaceDir, 'staged.json');
   const transcriptPath = path.join(namespaceDir, 'transcript.jsonl');
+  const accessLogPath = path.join(namespaceDir, 'access-log.jsonl');
   const realFetch = globalThis.fetch;
   const servedCounts = new Map();
 
@@ -154,6 +156,13 @@ function installEvaluationFetchFixture({ namespaceDir, providerUrl = PROVIDER_UR
         })}\n`);
         throw new EvaluationFetchFixtureError('injected pre-transport provider failure');
       }
+
+      // The SAME fixture-owned read observation the governed path takes, so a
+      // dependency verdict never depends on which arm ran.
+      observeArtifactRead({
+        accessLogPath, requestBody, seed: staged.seed,
+        reader: staged.logicalTaskId, artifactPath: staged.producerPath || null
+      });
 
       servedCounts.set(staged.key, (servedCounts.get(staged.key) || 0) + 1);
       fs.appendFileSync(transcriptPath, `${JSON.stringify({

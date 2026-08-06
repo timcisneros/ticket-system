@@ -1,3 +1,33 @@
+## EVALUATION FIXTURE OBSERVATION DOES NOT REACH THE SPAWNED SERVER (2026-08-06)
+
+**Status: OPEN. Blocks evaluation prerequisite 3.**
+
+Scenario families 3, 4, 7 and 8 depend on fixture-owned external observation:
+the consumer access log (coupling) and the served-call transcript (churn and
+recovery). Neither reaches a spawned server.
+
+The governed path is served by `hermetic-governed-transport-preload`, which
+carries its own staged-response mechanism and writes `governed-capture.jsonl`.
+It never writes the evaluation namespace's `transcript.jsonl` or
+`access-log.jsonl`. Every namespace produced by a real-server trial therefore
+has an empty transcript and no access log at all.
+
+**Why this cannot be worked around by reading the empty file.** A coupling
+verdict computed from an empty access log says "the consumer demonstrably did
+not read the producer" when the truth is "the observer never ran" — an inverted
+finding, not a weak one. A zero served-call count would likewise report a
+pre-transport refusal or an undelivered response when no transport was observed.
+
+**Fix:** derive the read observation and the transport facts from the channel the
+spawned server actually writes (`governed-capture.jsonl` for governed arms), or
+route the governed preload through the shared evaluation namespace.
+
+Recorded in `scripts/fixtures/evaluation-execution-matrix.js` as
+`OBSERVATION_BLOCKED`, and pinned by `structured-allocation-evaluation-test.js`
+so the pin fails when the channel is connected.
+
+---
+
 ## GOVERNED POLICY CONTAINER FUNDS ONE ROLE — RESOLVED (2026-08-05)
 
 **Status: CLOSED. Approved and implemented — see

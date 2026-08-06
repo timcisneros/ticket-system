@@ -1142,6 +1142,79 @@ execution ignores. A legacy edit between planning and leaf admission therefore
 refuses leaf admission. Deliberate: the alternative is deciding which edits "do
 not count". Recorded in the decision record rather than left as a surprise.
 
+## 3g. Scenario families 3, 4, 7, 8 and 9 (session 11)
+
+### What was built
+
+- **Variant model.** Families 7 and 8 now declare executable variants (7A–7D,
+  8A–8D) resolved into complete scenarios by `resolveScenarioVariant`. The
+  runner takes `--variant`, and refuses an unknown variant, a variant belonging
+  to another scenario, or an arm the variant does not allow.
+- **Execution matrix** (`scripts/fixtures/evaluation-execution-matrix.js`) —
+  twelve candidate cells with required arms, excluded arms and an exact reason
+  for each exclusion. An **undeclared** exclusion refuses, so a failing cell
+  cannot be retired as "infrastructure" after the fact.
+- **Coupling oracle wired** into the runner for families 3 and 4, with a
+  fixture-owned read observer.
+- **Scenario PostgreSQL suite** executing every required cell through the real
+  server.
+
+### Three harness defects found and corrected
+
+1. **Pre-created ownership made oracles trivially true.** Production requires
+   every owned output path to exist before a Run starts, so the harness
+   pre-creates `reports/alpha/`. Families 8 and 9 expected `folder_exists
+   reports/alpha` — satisfied before any work happened, which would have
+   reported a pre-transport failure as a success. Observations now target paths
+   only the worker's own action creates.
+2. **Static planner proposals could not name real agents.** Families 3, 4, 7, 8
+   and 9 staged frozen proposals, and lowering refuses a proposal that omits any
+   captured candidate — so every structured arm refused the plan before any leaf
+   Run existed. All now use the agent-bound `plannerResponseTemplate`.
+3. **Dynamic arms had too few workspace roots.** Dynamic allocation derives one
+   owned root per agent and refuses when there are fewer directories than
+   agents, so a single `reports` folder made every dynamic arm fail at ticket
+   creation. All scenarios now provide three roots, matching family 1.
+
+### The blocking finding: families 3, 4, 7 and 8 are OBSERVATION-BLOCKED
+
+Those four families depend on **fixture-owned external observation** — the
+consumer access log for the coupling families, the served-call transcript for
+the churn and recovery families. **That channel does not reach a spawned
+server.** The governed path is served by `hermetic-governed-transport-preload`,
+which has its own staged-response mechanism and writes `governed-capture.jsonl`;
+it never writes the evaluation namespace's `transcript.jsonl` or
+`access-log.jsonl`. Every namespace from a real-server run carries an empty
+transcript and no access log.
+
+**Why this blocks rather than degrades.** A coupling verdict computed from an
+empty access log reads "the consumer demonstrably did not read the producer"
+when the truth is "the observer never ran". That inverts the finding rather than
+weakening it. The same applies to a zero served-call count for families 7 and 8:
+it would describe the harness, not the product.
+
+Those families were executed during this session and their trials ran — plans
+admitted, leaf Runs claimed, quiescence reached — but their **verdicts were
+discarded** rather than recorded, because the observation behind them was not
+real. They are recorded as blocked, with the exact fix: route the read observer
+and the transport facts off the channel the spawned server actually writes.
+
+### Family 9: executed and complete
+
+Ten cells (9A and 9C across all five arms) execute end to end and are asserted
+on raw state alone, which needs no external channel.
+
+- **9A** — the model claims completion having done nothing. Raw state reports
+  `fail`; the claim is never recorded as a truthful completion.
+- **9C** — a FIFO makes the observation genuinely undecidable, so the oracle
+  returns `refused`. The earlier definition expected a file at a directory path,
+  which the oracle correctly reports as a truthful **fail** — a directory where a
+  file is expected is decidable, so it was never a refusal case at all.
+- **9B** — objective true while the product reports incomplete — is recorded as
+  **not naturally produced**: reaching it would require corrupting completion
+  authority. All six truthfulness classes, including false positive and false
+  negative, are proved by the deterministic classifier instead.
+
 ## 13. Status
 
 **Tranche 6: IN PROGRESS — harness built and executing; evaluation NOT run.**
@@ -1152,8 +1225,10 @@ has been run.** No comparison, no aggregate, no ranking, no verdict, and no
 RETAIN / REVISE / STOP.
 
 **Prerequisite 3 (hermetic scenario fixtures) remains PARTIALLY CLOSED and is
-NOT closed by this session**: family-1 is authored and executing; families 3, 4,
-7, 8 and 9 are not implemented and were not executed.
+NOT closed by this session.** Families 1 and 9 are authored and executing.
+Families 3, 4, 7 and 8 are authored, variant-complete and proved at contract
+level, but are OBSERVATION-BLOCKED (§3g) and therefore not executable as
+evidence. Prerequisite 3 cannot close while that list is non-empty.
 
 Production behaviour DID change in sessions 8 and 9 — the progress-policy
 capture, the failure classification, and the role-keyed economic policy set.

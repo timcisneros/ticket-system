@@ -27,6 +27,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { observeArtifactRead } = require('./evaluation-artifact-observer');
 const crypto = require('node:crypto');
 
 const FIXTURE_ROLES = Object.freeze(['planner', 'worker']);
@@ -105,6 +106,12 @@ function stageResponses(namespace, responses) {
       inputTokens: response.inputTokens,
       outputTokens: response.outputTokens,
       failureBoundary: response.failureBoundary || 'none',
+      // Carried so the fixture can take its own read observation when it serves
+      // this request. The seed derives the producer bytes; the logical task
+      // names the reader.
+      seed: response.seed || null,
+      logicalTaskId: response.logicalTaskId || null,
+      producerPath: response.producerPath || null,
       // Stable identity, independent of arrival order.
       responseIdentity: `fixture-${crypto.createHash('sha256')
         .update(key).digest('hex').slice(0, 16)}`
@@ -136,6 +143,16 @@ function serveRequest(namespace, request) {
     appendTranscript(namespace, { key, served: false, refused: 'before_transport' });
     throw new FixtureProviderError('injected pre-transport provider failure', { key });
   }
+
+  // FIXTURE-OWNED READ OBSERVATION, taken from the OUTGOING request before the
+  // response is served. See `evaluation-artifact-observer`.
+  observeArtifactRead({
+    accessLogPath: namespace.accessLogPath,
+    requestBody: typeof request.body === 'string' ? request.body : JSON.stringify(request),
+    seed: staged.seed,
+    reader: staged.logicalTaskId,
+    artifactPath: staged.producerPath || null
+  });
 
   appendTranscript(namespace, {
     key,

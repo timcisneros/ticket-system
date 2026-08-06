@@ -177,6 +177,12 @@ function buildTrialArtifact(input) {
     // The label the protocol requires on every unscored output.
     label: 'UNSCORED HARNESS SMOKE — NOT PRODUCT EVIDENCE',
     scenarioId: input.scenarioId,
+    // Which trial of that scenario this is. Null for a scenario with one
+    // canonical variant; never omitted, so an artifact can always say what it
+    // ran rather than leaving a reader to infer it from the scenario alone.
+    family: input.family === undefined ? null : input.family,
+    variantId: input.variantId === undefined ? null : input.variantId,
+    variantLabel: input.variantLabel === undefined ? null : input.variantLabel,
     armId: input.armId,
     repetition: input.repetition,
     seed: input.seed,
@@ -191,6 +197,14 @@ function buildTrialArtifact(input) {
       ? null : input.durableGovernedCost,
     latency: input.latency === undefined ? null : input.latency,
     churn: input.churn === undefined ? null : input.churn,
+    // Family-7 and family-8 observations, recorded as facts rather than as a
+    // pass/fail judgement. They say what the fixture and durable state showed;
+    // nothing here is scored or compared.
+    churnFacts: input.churnFacts === undefined ? null : input.churnFacts,
+    recoveryFacts: input.recoveryFacts === undefined ? null : input.recoveryFacts,
+    variantExpectation: input.variantExpectation === undefined
+      ? null : input.variantExpectation,
+    truthfulness: input.truthfulness === undefined ? null : input.truthfulness,
     quiescence: input.quiescence,
     fixtureTranscriptHash: input.fixtureTranscriptHash || null,
     externalStateHash: input.externalStateHash || null,
