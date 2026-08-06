@@ -157,7 +157,8 @@ function createObservationSink(descriptorInput) {
     // failure.
     recordTransport({
       logicalRequestId, role, ordinal, requestHash, responseIdentity = null,
-      responseHash = null, boundary, deliveredToExecution = null, injected = false
+      responseHash = null, boundary, deliveredToExecution = null, injected = false,
+      reason = null
     }) {
       if (!TRANSPORT_BOUNDARIES.includes(boundary)) {
         throw new ObservationSinkError(`unknown transport boundary: ${String(boundary)}`);
@@ -171,6 +172,10 @@ function createObservationSink(descriptorInput) {
         responseHash,
         boundary,
         injected: Boolean(injected),
+        // Why this boundary was reached, when the transport can say. An
+        // unexpected request records `no_staged_response`; a staged boundary
+        // records none, because the boundary itself is the reason.
+        reason: reason || null,
         // Delivery to EXECUTION is a product fact the transport cannot see, so
         // it stays null here rather than being guessed. Family 7 reads it from
         // canonical product evidence.

@@ -95,6 +95,21 @@ async function main() {
           `${armId}: the path proof is derived from durable state`);
         assertThat(artifact.pathProof.observedPath === arm.expectedPath,
           `${armId}: durable facts show the ${arm.expectedPath} path`);
+        // ── WHERE THE TWO AGGREGATE FACTS GENUINELY DIVERGE ──────────────
+        //
+        // The direct and legacy arms settle, but there is no Allocation Plan
+        // v2 to reconcile, so no canonical reconciliation event exists. If the
+        // field were inferred from the Ticket's status it would claim one
+        // anyway — which is exactly the overstatement the rename prevents.
+        if (arm.expectedPath !== 'structured_v2') {
+          assertThat(artifact.pathProof.aggregateReconciliationObserved === false,
+            `${armId}: no aggregate reconciliation is claimed where no v2 plan exists`);
+          assertThat(artifact.pathProof.aggregateReconciliationAuthority === null,
+            `${armId}: and no reconciliation authority is recorded`);
+          assertThat(artifact.pathProof.aggregateSettled === true,
+            `${armId}: while the Ticket still settled (status ` +
+            `${artifact.pathProof.ticketResultStatus})`);
+        }
         if (arm.expectedPath === 'direct') {
           assertThat(artifact.pathProof.allocationPlanIds.length === 0,
             `${armId}: no allocation plan exists`);
@@ -191,19 +206,27 @@ async function main() {
           `${armId}: the selected planner and worker policy hashes remain distinct`);
 
           // ── AGGREGATE ────────────────────────────────────────────────
-          // A SETTLED aggregate, with the exact status recorded beside it.
+          // ── THREE SEPARATE FACTS, ASSERTED SEPARATELY ────────────────
           //
-          // Serving governed WORKER responses changed the structured arms from
-          // `failed` to `blocked`: the workers now genuinely execute, and the
-          // Ticket ends awaiting intervention rather than failing outright.
-          // Both are settled outcomes with nothing outstanding, and quiescence
-          // is asserted separately, so the status itself is reported rather
-          // than required to be one particular value.
+          // Reconciliation is proved by the canonical durable event, never
+          // inferred from the Ticket's status or from quiescence. A `blocked`
+          // Ticket may be fully reconciled; a settled status alone proves
+          // nothing about whether the reconciler ran.
           assertThat(artifact.pathProof.aggregateReconciliationObserved === true,
-            `${armId}: the Ticket aggregate settled with nothing outstanding ` +
-            `(status ${artifact.pathProof.ticketStatus})`);
+            `${armId}: the canonical aggregate reconciliation event is durable`);
+          assertThat(Boolean(artifact.pathProof.aggregateReconciliationAuthority) &&
+            /^[0-9a-f]{64}$/.test(
+              artifact.pathProof.aggregateReconciliationAuthority.aggregateDecisionHash),
+          `${armId}: and names the aggregate decision it recorded`);
+          assertThat(artifact.pathProof.aggregateSettled === true,
+            `${armId}: the Ticket settled with nothing outstanding ` +
+            `(status ${artifact.pathProof.ticketResultStatus})`);
           assertThat(artifact.quiescence.quiescent === true,
             `${armId}: and quiescence confirms no work remained`);
+          // The three must not be conflated: settledness and quiescence are
+          // observations about outstanding work, not about the reconciler.
+          assertThat(artifact.pathProof.ticketResultStatus !== null,
+            `${armId}: the exact Ticket result status is recorded separately`);
         }
 
         // ── CANONICAL PATH STAGE, one classifier ───────────────────────────

@@ -364,6 +364,15 @@ async function proveDurablePath(store, ticketId, arm) {
   const ticketStatus = (await store.pool.query(
     `SELECT status FROM ${store.table('tickets')} WHERE id = $1`,
     [ticketId])).rows[0];
+  // THE CANONICAL RECONCILIATION AUTHORITY. Written by the store in the same
+  // transaction as the aggregate decision it describes, so its presence is
+  // evidence the reconciler ran and its write committed.
+  const reconciliationEvents = (await store.pool.query(
+    `SELECT payload->>'aggregateStatus' AS aggregate_status,
+            payload->>'aggregateDecisionHash' AS decision_hash
+       FROM ${store.table('events')}
+      WHERE ticket_id = $1 AND type = 'ticket.allocation_leaf_items_reconciled'
+      ORDER BY seq DESC`, [ticketId])).rows;
   // How many executable items the admitted plan actually declared. EVERY one of
   // them must receive its own governed leaf Run: a plan that silently produced
   // fewer Runs than items would leave declared work with no executor while
@@ -474,17 +483,36 @@ async function proveDurablePath(store, ticketId, arm) {
     roleAccounts: roleAccounts.map(row => ({
       role: row.role, accounts: Number(row.accounts)
     })),
-    // THE TICKET REACHED A SETTLED STATE WITH NOTHING OUTSTANDING.
+    // ── TWO DIFFERENT FACTS, NAMED SEPARATELY ────────────────────────────
     //
-    // `blocked` is included deliberately and is not a terminal status: a blocked
-    // Ticket has finished reconciling and is awaiting intervention, which is a
-    // settled outcome rather than a mid-flight one. The distinction still
-    // matters, so the exact status is recorded beside this flag and a reader can
-    // tell the two apart; what this flag answers is "was anything still owed?",
-    // and quiescence answers that independently.
-    aggregateReconciliationObserved:
+    // This field previously inferred reconciliation from the Ticket's status:
+    // a settled status was read as "the aggregate reconciler ran". Those are
+    // not the same claim, and the weaker one may not wear the stronger one's
+    // name — completion truthfulness is an authorized metric, so an inferred
+    // historical claim would corrupt exactly the thing being measured.
+    //
+    // `aggregateReconciliationObserved` is now bound to the ONE durable
+    // authority that records a reconciliation actually happening:
+    // `ticket.allocation_leaf_items_reconciled`, journalled by the store in the
+    // same transaction as the aggregate write, so it can never describe a
+    // reconciliation that rolled back.
+    //
+    // Terminal Run status cannot set it. Quiescence cannot set it. A `blocked`
+    // Ticket MAY be reconciled — the event, not the status, decides.
+    aggregateReconciliationObserved: reconciliationEvents.length > 0,
+    aggregateReconciliationAuthority: reconciliationEvents.length > 0
+      ? Object.freeze({
+        events: reconciliationEvents.length,
+        aggregateStatus: reconciliationEvents[0].aggregate_status,
+        aggregateDecisionHash: reconciliationEvents[0].decision_hash
+      })
+      : null,
+    // The INFERRED fact, kept because it is genuinely useful — under its own
+    // name, saying only what it observes.
+    aggregateSettled:
       ['completed', 'failed', 'interrupted', 'cancelled', 'blocked']
         .includes(ticketStatus && ticketStatus.status),
+    ticketResultStatus: ticketStatus ? ticketStatus.status : null,
     ticketStatus: ticketStatus ? ticketStatus.status : null,
     runCount: runs.length,
     governedLeafRunCount: observed.governedLeafRunCount,
@@ -522,7 +550,8 @@ async function waitForQuiescence(store, ticketId, namespace, timeoutMs) {
 
 async function runTrial({
   store, startServer, workspaceRoot, scenario: requestedScenario, arm, repetition,
-  seed, outputPath, commit, smokeRoot, namespaceRoot, variant = null
+  seed, outputPath, commit, smokeRoot, namespaceRoot, variant = null,
+  omitStagedLogicalTasks = null
 }) {
   assertMode('fixture');
   // ONE RESOLUTION POINT. The variant is resolved into a complete scenario here
@@ -681,7 +710,20 @@ async function runTrial({
     candidateAgentIds: [workerOne.id, workerTwo.id,
       ...(planner ? [planner.id] : [])]
   });
-  stageResponses(namespace, staged);
+  // NEGATIVE-CONTROL SEAM, test-only and never used by the scored or unscored
+  // matrix. It removes exactly the named worker responses from the staged set
+  // so a real governed request can be made for an identity nothing staged —
+  // the only way to exercise the unexpected-request path through a real server.
+  const stagedForTrial = omitStagedLogicalTasks
+    ? staged.filter(entry => !(entry.role === 'worker' &&
+        omitStagedLogicalTasks.includes(entry.logicalTaskId)))
+    : staged;
+  if (omitStagedLogicalTasks && stagedForTrial.length === staged.length) {
+    throw new EvaluationRunnerError(
+      `omitStagedLogicalTasks removed nothing: ${omitStagedLogicalTasks.join(', ')} ` +
+      'matched no staged worker response, so the negative control would prove nothing');
+  }
+  stageResponses(namespace, stagedForTrial);
   // The fetch adapter recovers the logical task from what production sent.
   const table = JSON.parse(fs.readFileSync(namespace.stagedPath, 'utf8'));
   for (const entry of Object.values(table)) {
@@ -734,7 +776,7 @@ async function runTrial({
   // request bytes. The arm label is not written here and cannot select anything.
   const governedResponsePath = path.join(namespace.dir, 'governed-responses.json');
   fs.writeFileSync(governedResponsePath, JSON.stringify({
-    responses: staged.map(entry => ({
+    responses: stagedForTrial.map(entry => ({
       statusCode: 200,
       role: entry.role,
       ordinal: entry.ordinal,

@@ -187,12 +187,12 @@
   "scenarioReadiness": {
     "1_small_indivisible": "READY",
     "2_cleanly_separable": "READY",
-    "3_sibling_dependency": "READY WITH FIXTURE-ONLY ORACLE",
+    "3_sibling_dependency": "EXECUTED UNSCORED (fixture-owned observation sink)",
     "4_apparently_separable_coupled": "READY",
     "5_ownership_known": "READY",
     "6_ownership_unknown": "READY",
-    "7_no_progress_churn": "READY WITH FIXTURE-ONLY ORACLE",
-    "8_partial_failure_recovery": "READY WITH FIXTURE-ONLY ORACLE",
+    "7_no_progress_churn": "EXECUTED UNSCORED (fixture-owned observation sink)",
+    "8_partial_failure_recovery": "EXECUTED UNSCORED (fixture-owned observation sink)",
     "9_completion_evidence_ambiguity": "READY",
     "10_cost_sensitive_small": "READY"
   },
@@ -200,14 +200,22 @@
     1,
     2
   ],
-  "unresolvedBlockers": [
-    "scenario fixture DEFINITIONS for families 3, 7, 8 and 9 are not authored as data",
-    "the trial runner and its five arm adapters are not built; no smoke run has been performed"
-  ],
+  "unresolvedBlockers": [],
   "closedInSession3": [
     "hermetic provider fixture (arm-independent response keys, refusal on unexpected request, three failure boundaries, per-trial namespace)",
     "family 4 independent coupling observation (seed-derived nonce + fixture access log + output binding)",
     "quiescence contract (nine named conditions, read-only)",
     "immutable trial artifact (write-once, mode-validated, dual-namespace fixture/live separation)"
-  ]
+  ],
+  "executionPrerequisites": {
+    "1_normalized_cross_arm_cost": "CLOSED",
+    "2_ticket_scoped_aggregation": "CLOSED",
+    "3_hermetic_scenario_fixtures_and_executable_runner": "CLOSED",
+    "4_fixed_planner_model_snapshot": "CLOSED",
+    "5_independent_oracle": "CLOSED",
+    "6_governed_single_run_decision": "CLOSED"
+  },
+  "executionPrerequisitesNote": "Prerequisite 3 closed once all 40 required family-3/4/7/8/9 cells executed through real governed worker requests with complete observation, the unexpected-governed-request negative control passed and its mutation was killed, and aggregate reconciliation was bound to the canonical durable event rather than inferred from Ticket status.",
+  "unresolvedBlockersNote": "Cleared 2026-08-06. The two recorded blockers - unauthored scenario fixture definitions and an unbuilt trial runner - are both closed; the full unscored matrix executes. The scored matrix itself remains NOT RUN.",
+  "scoredRunManifest": "config/structured-allocation-evaluation-scored-v1.json"
 }

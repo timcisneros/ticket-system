@@ -1382,6 +1382,69 @@ holds — so the aggregate fact now means "the Ticket settled with nothing owed"
 and records the exact status beside it, rather than requiring one particular
 terminal value.
 
+## 3j. Pre-score freeze (session 14)
+
+### The unexpected-governed-request negative control
+
+The last surviving mutation was unreachable through the matrix, because every
+scenario request is staged. Rather than bending a product scenario into emitting
+an unplanned request, a dedicated negative control
+(`scripts/governed-evaluation-negative-path-postgres-test.js`) runs one real
+trial through the real governed transport with **exactly one** expected worker
+response removed. It proves the request refuses before transport, writes no
+durable observation, invents no response identity or hash, is not recorded as an
+injected boundary, and leaves the Ticket fail-closed. It is **not** part of the
+scored or unscored matrix. The mutation is now killed behaviourally.
+
+### `aggregateReconciliationObserved` — verdict and correction
+
+**Verdict: FIELD INFERRED RECONCILIATION FROM SETTLED TERMINAL STATE.**
+
+A genuine durable authority exists — `ticket.allocation_leaf_items_reconciled`,
+journalled by the store in the same transaction as the aggregate write, carrying
+the aggregate status and decision hash — and the field never consulted it. A
+settled Ticket status was being read as "the aggregate reconciler ran", which is
+a stronger historical claim than the evidence supported. Completion truthfulness
+is an authorized metric, so an inferred claim wearing a stronger name would
+corrupt the thing being measured.
+
+Corrected into three separately named facts:
+
+| Field | Means |
+|---|---|
+| `aggregateReconciliationObserved` | the canonical reconciliation event is durable |
+| `aggregateReconciliationAuthority` | its aggregate status and decision hash, or null |
+| `aggregateSettled` | nothing outstanding — inferred from status, and says so |
+| `ticketResultStatus` | the exact Ticket status |
+
+Terminal Run status cannot set the first. Quiescence cannot set it. A `blocked`
+Ticket may be fully reconciled — the event decides. The direct and legacy arms
+now assert the case where the facts genuinely diverge: they settle, but have no
+Allocation Plan v2 to reconcile, so no reconciliation is claimed.
+
+### Frozen scored protocol
+
+Repetition was **already authoritative** and is retained, not chosen:
+`deterministicFixtureRepetitions: 5`. Ordering follows the frozen
+`deterministic_balanced_latin_square`; with five arms and five repetitions the
+square is complete, so every arm occupies every ordinal position exactly once.
+
+`config/structured-allocation-evaluation-scored-v1.json` freezes 200 trials
+(40 cells × 5 repetitions) with pre-assigned slots, derived per-trial seeds, the
+timeout, the closed infrastructure-exclusion list, the five authorized metrics
+and a manifest hash. It contains **no results**, and the scored runner refuses to
+start when its runtime inputs differ from it.
+
+Comparability separates **controlled fields** — seventeen values that must be
+identical, where a difference refuses aggregation rather than adjusting for it —
+from **declared confounders** (planner presence, Run cardinality, governed
+economics, ownership source, plan version), which differ by design and are what
+the experiment compares. An unclassified field is neither, and is never assumed
+harmless.
+
+**Decision rules: FULLY FROZEN.** RETAIN/REVISE/STOP thresholds and hard
+disqualifiers are unmodified, and exactly five authorized metrics remain.
+
 ## 13. Status
 
 **Tranche 6: IN PROGRESS — harness built and executing; evaluation NOT run.**
@@ -1391,7 +1454,7 @@ governed structured leaf execution for B and C. **No scored or live evaluation
 has been run.** No comparison, no aggregate, no ranking, no verdict, and no
 RETAIN / REVISE / STOP.
 
-**Prerequisite 3 (hermetic scenario fixtures) is CLOSED for execution.** All
+**Prerequisite 3 (hermetic scenario fixtures) is CLOSED.** All
 forty protocol-required family-3/4/7/8/9 cells execute through real governed
 worker requests with complete observation, immutable unscored artifacts and
 zero-drift reporting. Families 1 and 9 remain executed. No cell is excluded for

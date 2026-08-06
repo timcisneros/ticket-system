@@ -164,9 +164,13 @@ function fixtureHttpsRequest(options, onResponse) {
       if (!candidate) {
         // An unexpected request records NO successful transport. It is refused,
         // and the refusal is what the stream shows.
+        // AN UNEXPECTED REQUEST IS NOT AN INJECTED BOUNDARY. `injected: false`
+        // is what separates "the scenario staged this failure" from "nothing
+        // was staged for this request at all", and the reason names which.
         observeTransport({
           logicalRequestId: null, role: null, ordinal: null,
-          requestHash: requestHashOf(body), boundary: 'refused_before_transport'
+          requestHash: requestHashOf(body), boundary: 'refused_before_transport',
+          injected: false, reason: 'no_staged_response'
         });
         throw new Error(
           `HERMETIC_FIXTURE_UNPLANNED_REQUEST_${fixtureRequestCount}: ` +

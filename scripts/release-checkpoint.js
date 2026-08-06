@@ -37,6 +37,8 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   // Tranche 6 — the shared per-trial observation sink. Deterministic: it
   // touches only temporary directories.
   'evaluation-observation-sink-test.js',
+  // Tranche 6 — the frozen scored-run manifest. Deterministic: config only.
+  'evaluation-scored-manifest-test.js',
   'governed-provider-transport-test.js',
   'governed-provider-request-contract-test.js',
   'model-pricing-catalog-test.js',
@@ -113,6 +115,8 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'governed-role-policy-container-postgres-test.js',
   // Tranche 6 — scenario families executed through the real server.
   'structured-allocation-scenario-postgres-test.js',
+  // Tranche 6 — the governed unexpected-request negative control.
+  'governed-evaluation-negative-path-postgres-test.js',
   'postgres-persistence-integration-test.js',
   'postgres-runtime-cutover-test.js',
   'page-render-regression-test.js',

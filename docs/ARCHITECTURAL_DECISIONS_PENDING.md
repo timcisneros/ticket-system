@@ -1,3 +1,22 @@
+## AGGREGATE RECONCILIATION WAS INFERRED, NOT OBSERVED (2026-08-06)
+
+**Status: RESOLVED 2026-08-06.**
+
+`aggregateReconciliationObserved` derived its value from the Ticket's status: a
+settled status was read as "the aggregate reconciler ran". That is a stronger
+historical claim than the evidence supported, and completion truthfulness is an
+authorized Tranche-6 metric, so the overstatement would have corrupted the thing
+being measured.
+
+A durable authority already existed — `ticket.allocation_leaf_items_reconciled`,
+journalled in the same transaction as the aggregate write. The field is now
+bound to it, and the inferred fact is retained under its own name
+(`aggregateSettled`) beside the exact `ticketResultStatus`. Terminal Run status
+and quiescence can no longer set the reconciliation field, and the direct and
+legacy arms assert the divergent case directly.
+
+---
+
 ## GOVERNED WORKER RESPONSES ARE NOT STAGED FOR THE GOVERNED TRANSPORT (2026-08-06)
 
 **Status: RESOLVED 2026-08-06.** Every staged response — planner and worker,
