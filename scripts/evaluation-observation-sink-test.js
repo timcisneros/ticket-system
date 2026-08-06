@@ -230,6 +230,62 @@ function main() {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
+  // ── 8, 9, 15. THE REAL READ OBSERVER, exercised directly ──────────────
+  //
+  // Not a simulation of the wrapper: this is the exact function the preload
+  // installs in the spawned server, wrapping a real `fs` module.
+  {
+    const dir = freshDir();
+    const workspace = freshDir();
+    markSinkInstalled(descriptorFor(dir));
+    const sink = createObservationSink(descriptorFor(dir));
+    const { installReadObserver } = require('./fixtures/evaluation-observation-sink');
+
+    const target = path.join(workspace, 'artifact.txt');
+    const bytes = 'seed-derived-artifact\n';
+    fs.writeFileSync(target, bytes);
+
+    const fsModule = { readFileSync: fs.readFileSync.bind(fs) };
+    const restore = installReadObserver({ fsModule, sink, workspaceRoot: workspace });
+
+    // 8 & 10. A successful read is observed, with the exact returned bytes.
+    const returned = fsModule.readFileSync(target, 'utf8');
+    ok(returned === bytes,
+      '15 the observer returns the exact bytes the real read produced');
+    let observed = readObservations(dir);
+    ok(observed.consumerReads.length === 1 &&
+       observed.consumerReads[0].contentHash === hashBytes(bytes),
+    '8 the real read observer records one read with the returned content hash');
+    ok(observed.consumerReads[0].requestedPath === 'artifact.txt',
+      '8 and records the path relative to the observed workspace root');
+
+    // 9. A FAILED read records NOTHING and re-throws the original error. This
+    // is the case a wrapper that recorded first would get wrong.
+    let thrown = null;
+    try { fsModule.readFileSync(path.join(workspace, 'absent.txt'), 'utf8'); }
+    catch (error) { thrown = error; }
+    ok(thrown && thrown.code === 'ENOENT',
+      '9 a failed read propagates the ORIGINAL error unchanged');
+    ok(readObservations(dir).consumerReads.length === 1,
+      '9 and writes no successful access record');
+
+    // Reads OUTSIDE the trial workspace are not this trial's business.
+    const outside = path.join(freshDir(), 'other.txt');
+    fs.writeFileSync(outside, 'unrelated');
+    fsModule.readFileSync(outside, 'utf8');
+    ok(readObservations(dir).consumerReads.length === 1,
+      'a read outside the observed workspace records nothing');
+
+    // 11. A repeated read is a second observation.
+    fsModule.readFileSync(target, 'utf8');
+    ok(readObservations(dir).consumerReads.length === 2,
+      '11 a repeated real read is a second observation');
+
+    restore();
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+
   // ── 15. The observer never alters what it observes ────────────────────
   {
     // The wrapper contract, exercised directly: call through, hash, return the

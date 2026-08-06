@@ -300,7 +300,56 @@ function markSinkInstalled(descriptor) {
   return normalized;
 }
 
+// ── The real-read observer ──────────────────────────────────────────────────
+//
+// Extracted so its contract can be exercised DIRECTLY rather than simulated. It
+// wraps one `fs` module's `readFileSync` and is the only place a consumer read
+// observation originates in a spawned server.
+//
+// THE CONTRACT, in order:
+//
+//   1. call the real operation FIRST and let it settle;
+//   2. on a throw, re-throw the original error untouched and record NOTHING —
+//      a failed read is not an access;
+//   3. on success, hash the exact returned value and append one observation;
+//   4. return the EXACT original value, never a copy or a re-read.
+//
+// A sink write that itself fails must never change what production returns, so
+// the observation is best-effort while the value and the error never are.
+function installReadObserver({ fsModule, sink, workspaceRoot, pathModule = path }) {
+  if (!fsModule || !sink || !workspaceRoot) {
+    throw new ObservationSinkError(
+      'a read observer needs an fs module, a sink and a workspace root');
+  }
+  const realReadFileSync = fsModule.readFileSync;
+  const observedRoot = pathModule.resolve(workspaceRoot);
+  fsModule.readFileSync = function observedReadFileSync(target, ...rest) {
+    // 1 & 2. The real call, and its errors, are authoritative. No catch here:
+    // a throw propagates untouched and never reaches the recording below.
+    const value = realReadFileSync.call(this, target, ...rest);
+    try {
+      if (typeof target === 'string') {
+        const resolved = pathModule.resolve(target);
+        if (resolved === observedRoot ||
+            resolved.startsWith(`${observedRoot}${pathModule.sep}`)) {
+          // 3. The exact returned value is what is hashed — not the file as it
+          // may look when someone looks later.
+          sink.recordConsumerRead({
+            readerTaskId: null,
+            requestedPath: pathModule.relative(observedRoot, resolved),
+            returnedBytes: value
+          });
+        }
+      }
+    } catch (_) { /* an observation may never alter production, including by failing */ }
+    // 4. The original value, unchanged.
+    return value;
+  };
+  return () => { fsModule.readFileSync = realReadFileSync; };
+}
+
 module.exports = {
+  installReadObserver,
   COMPLETENESS,
   DESCRIPTOR_FIELDS,
   OBSERVATION_KINDS,

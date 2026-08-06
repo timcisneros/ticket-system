@@ -57,33 +57,12 @@ if (DESCRIPTOR_JSON) {
   // environment value this whole block is skipped.
   const WORKSPACE_ROOT = process.env.EVALUATION_OBSERVED_WORKSPACE_ROOT || null;
   if (WORKSPACE_ROOT) {
-    const nodeFs = require('node:fs');
-    const nodePath = require('node:path');
-    const realReadFileSync = nodeFs.readFileSync;
-    const observedRoot = nodePath.resolve(WORKSPACE_ROOT);
-    nodeFs.readFileSync = function observedReadFileSync(target, ...rest) {
-      // The real call first. Its result and its errors are authoritative.
-      const value = realReadFileSync.call(this, target, ...rest);
-      try {
-        if (typeof target === 'string') {
-          const resolved = nodePath.resolve(target);
-          if (resolved === observedRoot ||
-              resolved.startsWith(`${observedRoot}${nodePath.sep}`)) {
-            sink.recordConsumerRead({
-              readerTaskId: null,
-              requestedPath: nodePath.relative(observedRoot, resolved),
-              returnedBytes: value
-            });
-          }
-        }
-      } catch (_) {
-        // An observation must never change what production returns, including
-        // by failing. A sink write that cannot happen is a lost observation,
-        // and the completeness contract is what reports that — not an
-        // exception thrown into the middle of a workspace read.
-      }
-      return value;
-    };
+    const {
+      installReadObserver
+    } = require(path.join(__dirname, 'evaluation-observation-sink.js'));
+    installReadObserver({
+      fsModule: require('node:fs'), sink, workspaceRoot: WORKSPACE_ROOT
+    });
   }
 }
 

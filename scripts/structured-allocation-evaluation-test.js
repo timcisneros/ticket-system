@@ -1186,6 +1186,17 @@ const ok = (condition, message) => {
   ok(runnerSource.includes('pathStage: classifyPathStage(arm, proof)'),
     '13 stages: the runner calls the shared classifier rather than deriving a stage');
 
+  // ── THE COMPLETENESS GATE ──────────────────────────────────────────────
+  //
+  // An oracle that needs an access observation may report PASS or FAIL only
+  // when the observation is COMPLETE. Passing an unconditional availability
+  // would let an absent observer be reported as a negative finding.
+  ok(runnerSource.includes("accessLogAvailable: observations.completeness === 'complete'"),
+    '13 observation: the coupling oracle is gated on observation completeness');
+  ok(runnerSource.includes('observationCompleteness: observations.completeness'),
+    '13 observation: every artifact records whether an observer was running');
+
+
   // Sanitization: only a stable code reaches durable authority.
   ok(serverSource.includes('causeCode ? `cause ${causeCode}` :'),
     '13 plan-to-leaf: durable refusal detail carries a stable cause code, not raw text');

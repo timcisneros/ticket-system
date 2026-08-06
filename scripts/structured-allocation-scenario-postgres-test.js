@@ -103,6 +103,27 @@ async function main() {
           `${label}: the artifact names its family and variant`);
           assertThat(artifact.pathProof.authority === 'durable_state',
             `${label}: the path proof is derived from durable state`);
+          // ── THE OBSERVATION CONTRACT ────────────────────────────────────
+          //
+          // Every artifact must say whether an observer was actually running.
+          // A count read without this is a number that cannot be interpreted:
+          // zero means "nothing happened" only when completeness is complete.
+          assertThat(artifact.observationCompleteness === 'complete',
+            `${label}: the shared observation sink was installed and complete ` +
+            `(got ${artifact.observationCompleteness})`);
+          assertThat(Boolean(artifact.observationSinkVersion) &&
+            Boolean(artifact.observationStreamIdentities),
+          `${label}: the artifact records the sink version and stream identities`);
+          // A trial that reached the provider must show it in the SHARED
+          // stream. Both transports write there, so an empty stream beside a
+          // non-zero request count means an adapter is not reporting.
+          const requestCount = (artifact.ticketReport.canonicalRequests || []).length;
+          if (requestCount > 0) {
+            assertThat(artifact.churnFacts &&
+              (artifact.churnFacts.durableResponses + artifact.churnFacts.refusedTransports) > 0,
+            `${label}: ${requestCount} provider request(s) are visible in the shared ` +
+            'transport stream');
+          }
           assertThat(artifact.ticketReport.secondReadIdentical === true,
             `${label}: invoking the read-only report twice changed nothing`);
           assertThat(cell.expectedOracleVerdicts.includes(artifact.oracleResult.verdict),
