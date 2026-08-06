@@ -11,8 +11,15 @@ second active container, no cross-role fallback, no separate worker policy
 system, and no migration — `model_routing_policies.body` is open JSONB.
 
 Family-1 arms B and C now admit AND execute governed leaf Runs through the
-production loader with role-correct reservations. The original problem statement
-is retained below as the record of what was wrong.
+production loader with role-correct reservations.
+
+**Follow-up also CLOSED (2026-08-05):** the parent policy container revision and
+economic-set identity are now durably bound to both the planner authority and
+every governed leaf Run (`parentPolicyReference`, authority envelope version 2).
+Leaf admission refuses when the active container changed after the plan was
+admitted. See §6b of the decision record.
+
+The original problem statement is retained below as the record of what was wrong.
 
 ---
 

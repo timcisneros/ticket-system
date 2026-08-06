@@ -92,6 +92,9 @@ function policyContainer({
     body: {
       name: `Planner policy ${STAMP}`,
       status: 'active',
+      // Persistent row identity, as the production loader supplies it.
+      id: 1,
+      revision: 1,
       // Legacy siblings that governed execution must never read.
       maxCost: { currency: 'USD', limit: 5 },
       preferredModel: 'gpt-legacy-should-be-ignored',

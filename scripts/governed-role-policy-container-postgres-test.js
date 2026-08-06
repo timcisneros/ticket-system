@@ -183,6 +183,93 @@ async function main() {
     assertThat(reservations === 0,
       'no reservation was created by the refused read');
 
+    // ── PARENT POLICY REVISION SURVIVES PERSISTENCE AND RECOVERY ─────────
+    //
+    // The reference must reconstruct from STORED bytes alone. If any part of it
+    // were re-derived from the currently active container at read time, a
+    // policy replacement would silently rewrite history — which is exactly the
+    // failure this binding exists to prevent.
+    {
+      const { buildParentPolicyReference, assertSameParentPolicyRevision } =
+        require('../runtime/governed-policy-source');
+      const rows2 = await activeRows(store);
+      const live = loadActiveGovernedContainer(rows2);
+      const plannerRef = buildParentPolicyReference(
+        readGovernedPolicySource(live, { role: PLANNER }));
+      const workerRef = buildParentPolicyReference(
+        readGovernedPolicySource(live, { role: WORKER }));
+      assertThat(plannerRef.policyContainerId === Number(rows2[0].id) &&
+        plannerRef.policyContainerRevision === Number(rows2[0].revision),
+      'the parent reference names the real persisted row and revision');
+      let parity = null;
+      try { assertSameParentPolicyRevision(plannerRef, workerRef); parity = 'agreed'; }
+      catch (error) { parity = error.message; }
+      assertThat(parity === 'agreed',
+        'planner and worker references from one stored revision agree');
+
+      // A fresh connection reconstructs both identically.
+      const fresh = new PostgresRuntimeStore({ connectionString: databaseUrl, schema });
+      try {
+        const afterRestart = loadActiveGovernedContainer(await activeRows(fresh));
+        const plannerAfter = buildParentPolicyReference(
+          readGovernedPolicySource(afterRestart, { role: PLANNER }));
+        const workerAfter = buildParentPolicyReference(
+          readGovernedPolicySource(afterRestart, { role: WORKER }));
+        assertThat(plannerAfter.policyContainerHash === plannerRef.policyContainerHash &&
+          plannerAfter.policyContainerRevision === plannerRef.policyContainerRevision,
+        'the planner parent reference reconstructs identically after reconnection');
+        assertThat(workerAfter.policyContainerHash === workerRef.policyContainerHash,
+          'the leaf-executor parent reference reconstructs identically');
+        assertThat(plannerAfter.economicPolicySetHash === workerAfter.economicPolicySetHash,
+          'both carry the same economic set hash after recovery');
+        assertThat(readGovernedPolicySource(afterRestart, { role: PLANNER })
+          .economicPolicyHash !==
+          readGovernedPolicySource(afterRestart, { role: WORKER }).economicPolicyHash,
+        'the selected planner and worker hashes remain distinct after recovery');
+      } finally {
+        await fresh.close();
+      }
+
+      // Replacing the CURRENT container does not alter an already-captured
+      // reference, and the new one no longer matches it — which is what makes a
+      // mid-plan replacement refuse rather than pass silently.
+      const before = await activeRows(store);
+      const workerBefore = readGovernedPolicySource(
+        loadActiveGovernedContainer(before), { role: WORKER }).economicPolicyHash;
+      // Only the PLANNER entry changes. The worker override already in force is
+      // carried forward unchanged, so the worker policy is byte-identical
+      // across the replacement — the exact case selected role-policy hashes
+      // cannot detect.
+      await store.updateModelRoutingPolicy({
+        policyId: before[0].id,
+        expectedRevision: before[0].revision,
+        value: policyValue(before[0].name, buildGovernedExecutionValue({
+          economicOverrides: {
+            [WORKER]: { authorizedMicroUsd: 123_456 },
+            [PLANNER]: { authorizedMicroUsd: 400_000 }
+          }
+        })),
+        changedBy: 'role-policy-test'
+      });
+      const replaced = buildParentPolicyReference(readGovernedPolicySource(
+        loadActiveGovernedContainer(await activeRows(store)), { role: WORKER }));
+      assertThat(plannerRef.policyContainerHash !== replaced.policyContainerHash,
+        'a replaced container yields a different parent identity');
+      let refusal = null;
+      try { assertSameParentPolicyRevision(plannerRef, replaced); }
+      catch (error) { refusal = error.detail && error.detail.reason; }
+      assertThat(refusal === 'governed_policy_revision_mismatch',
+        'a capture from the replaced container refuses against the admitted one');
+      // THE CENTRAL CASE, against real persistence: only the PLANNER sibling
+      // changed, so the worker policy is byte-identical and still refuses.
+      const workerNow = readGovernedPolicySource(
+        loadActiveGovernedContainer(await activeRows(store)), { role: WORKER });
+      assertThat(workerNow.economicPolicyHash === workerBefore,
+        'the worker policy itself is unchanged by the planner-sibling edit');
+      assertThat(refusal === 'governed_policy_revision_mismatch',
+        'an unchanged worker policy under a changed sibling still refuses');
+    }
+
     // ── A second active governed container is still refused ──────────────
     await store.createModelRoutingPolicy({
       value: policyValue('Second governed container', buildGovernedExecutionValue()),

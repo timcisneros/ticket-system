@@ -1097,6 +1097,51 @@ finished** — without it, a structured trial that never executed governed work
 could be observed as quiescent and read as complete. It is scoped to the
 structured path so legacy v1 plans, which never owe a leaf Run, are unaffected.
 
+## 3f. Cross-role parent policy revision binding (session 10)
+
+### The gap
+
+B and C executed, and each role's authority was individually valid. But the
+durable envelopes proved only *this exact worker policy funded this Run* — not
+*the planner policy and the worker policy came from the same immutable revision*.
+Replacing the active container mid-plan with one whose worker entry is
+byte-identical and whose planner entry differs left every captured hash matching.
+
+**Phase 1 audit verdict: PARENT POLICY REVISION IS NOT DURABLY BOUND.** Nothing —
+planning attempts, planner reservations, admitted plans, leaf Run authority,
+worker reservations, projections — carried the container row ID, its revision, a
+container body hash, the economic set version or the set hash.
+
+### The binding
+
+Both governed authority envelopes now carry `parentPolicyReference`
+(container row ID, revision, governed-content hash, economic set version and
+hash), versioned in parallel at version 2 with version 1 kept readable under its
+original rules. Leaf admission requires the worker's reference to equal the
+planner's field for field, before any leaf Run commits.
+
+### Artifact fields — authority validity, NOT a sixth metric
+
+Each trial artifact now records `plannerParentPolicyReference`,
+`workerParentPolicyReference`, `economicPolicySetVersion`,
+`economicPolicySetHash`, `plannerEconomicPolicyHash`, `workerEconomicPolicyHash`
+and `sameParentPolicyRevision`. These say whether a trial's governed authority is
+coherent. They are never compared between arms and are not scored.
+
+Read entirely from **captured** state — the durable planning attempt and the
+durable Run envelopes. Deriving them from the currently active container would
+prove nothing, because the question is what was true when they were captured.
+
+B and C: `sameParentPolicyRevision = true`, with planner and worker economic
+policy hashes distinct.
+
+### Accepted over-strictness
+
+The row revision increments on any edit, including legacy fields governed
+execution ignores. A legacy edit between planning and leaf admission therefore
+refuses leaf admission. Deliberate: the alternative is deciding which edits "do
+not count". Recorded in the decision record rather than left as a surprise.
+
 ## 13. Status
 
 **Tranche 6: IN PROGRESS — harness built and executing; evaluation NOT run.**
@@ -1106,8 +1151,9 @@ governed structured leaf execution for B and C. **No scored or live evaluation
 has been run.** No comparison, no aggregate, no ranking, no verdict, and no
 RETAIN / REVISE / STOP.
 
-**Prerequisite 3 (hermetic scenario fixtures) remains PARTIALLY CLOSED**:
-family-1 is authored and executing; families 3, 4, 7, 8 and 9 are not.
+**Prerequisite 3 (hermetic scenario fixtures) remains PARTIALLY CLOSED and is
+NOT closed by this session**: family-1 is authored and executing; families 3, 4,
+7, 8 and 9 are not implemented and were not executed.
 
 Production behaviour DID change in sessions 8 and 9 — the progress-policy
 capture, the failure classification, and the role-keyed economic policy set.

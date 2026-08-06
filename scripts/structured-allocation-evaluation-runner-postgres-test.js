@@ -168,6 +168,28 @@ async function main() {
           assertThat(accounts.length === 2,
             `${armId}: exactly the two canonical roles reserved — no role crossing`);
 
+          // ── CROSS-ROLE PARENT POLICY REVISION PARITY ─────────────────
+          //
+          // AUTHORITY VALIDITY, NOT A METRIC. This says the trial's governed
+          // authority is coherent — one immutable policy revision funded both
+          // the planner and every worker. It is never compared between arms.
+          assertThat(artifact.pathProof.sameParentPolicyRevision === true,
+            `${armId}: planner and every leaf Run bind the SAME parent policy revision`);
+          const parent = artifact.pathProof.plannerParentPolicyReference;
+          assertThat(Boolean(parent) && parent.policyContainerId > 0 &&
+            parent.policyContainerRevision > 0 &&
+            /^[0-9a-f]{64}$/.test(parent.policyContainerHash),
+          `${armId}: the captured parent reference names a real container revision`);
+          assertThat(artifact.pathProof.economicPolicySetVersion === 2 &&
+            /^[0-9a-f]{64}$/.test(artifact.pathProof.economicPolicySetHash),
+          `${armId}: the parent reference carries the role-keyed set identity`);
+          // One revision funding two roles is NOT one policy funding both.
+          assertThat(Boolean(artifact.pathProof.plannerEconomicPolicyHash) &&
+            Boolean(artifact.pathProof.workerEconomicPolicyHash) &&
+            artifact.pathProof.plannerEconomicPolicyHash !==
+              artifact.pathProof.workerEconomicPolicyHash,
+          `${armId}: the selected planner and worker policy hashes remain distinct`);
+
           // ── AGGREGATE ────────────────────────────────────────────────
           assertThat(artifact.pathProof.aggregateReconciliationObserved === true,
             `${armId}: the Ticket aggregate was reconciled to a terminal status`);

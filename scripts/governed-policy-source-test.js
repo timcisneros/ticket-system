@@ -146,11 +146,24 @@ assert.equal(Object.prototype.hasOwnProperty.call(source.economicPolicy, 'maxCos
 assert.equal(source.economicPolicy.authorizedMicroUsd, 500_000,
   'the budget comes from the closed document, not from maxCost');
 
-// The container revision is not authority: it is never read.
+// THE CONTAINER REVISION IS IDENTITY, NEVER CONTENT AUTHORITY.
+//
+// This assertion previously required that the revision was never read at all.
+// That was superseded deliberately: the approved cross-role revision binding
+// captures the row's identity so a planner authority and its leaf Runs can be
+// proved to come from ONE immutable revision. What must still never happen is
+// the revision — or any legacy sibling edit that bumps it — leaking into the
+// governed document hashes, which the assertions immediately above prove
+// directly by editing legacy fields and re-reading every hash.
 const moduleSource = fs.readFileSync(
   path.join(__dirname, '..', 'runtime', 'governed-policy-source.js'), 'utf8');
-assert.equal(/\.revision\b/.test(moduleSource), false,
-  'the container revision is never consulted as authority');
+assert.equal(legacyEdited.policyContainerHash, source.policyContainerHash,
+  'a legacy container edit does not change the governed content identity');
+assert.equal(legacyEdited.economicPolicySetHash, source.economicPolicySetHash,
+  'a legacy container edit does not change the economic set identity');
+assert.equal(typeof source.policyContainerRevision === 'number' ||
+  source.policyContainerRevision === null, true,
+'the revision is carried as identity, separate from every document hash');
 assert.equal(/inputMicroUsdPerMillionTokens\s*:/.test(moduleSource), false,
   'the module supplies no implicit production pricing');
 

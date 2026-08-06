@@ -109,8 +109,14 @@ function buildGovernedExecutionValue({
 
 // A full container, shaped as the loader returns it (`{ body }`).
 function buildRoleKeyedGovernedContainer(options = {}) {
+  const { policyContainerId = 1, policyContainerRevision = 1 } = options;
   return {
     body: {
+      // PERSISTENT ROW IDENTITY, exactly as the production loader supplies it.
+      // Without it a parent-policy revision binding cannot be built, and it is
+      // refused rather than faked.
+      id: policyContainerId,
+      revision: policyContainerRevision,
       // Legacy container siblings, present so fixtures keep proving they are
       // ignored rather than silently converted into authority.
       maxCost: { currency: 'USD', limit: 5 },
@@ -127,6 +133,8 @@ function buildSingularGovernedContainer({ role = 'structured_planner' } = {}) {
   const entry = value.economicPolicies.find(candidate => candidate.role === role);
   return {
     body: {
+      id: 1,
+      revision: 1,
       governedExecution: {
         roleRoutingPolicy: value.roleRoutingPolicy,
         economicPolicy: entry.policy,

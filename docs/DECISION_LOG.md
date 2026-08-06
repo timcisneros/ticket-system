@@ -1,5 +1,33 @@
 # Decision Log
 
+## Governed authority binds its parent policy revision (2026-08-05)
+
+Selected role-policy hashes proved "this policy funded this role". They did not
+prove "both roles came from one immutable revision": replacing the active
+container between planning and leaf admission with one whose worker entry is
+byte-identical and whose planner entry differs left every captured hash matching
+while the two roles were funded by two different revisions.
+
+**Decision: both governed authority envelopes carry a `parentPolicyReference`.**
+It names the policy container row, its revision, a governed-content hash, and the
+economic set version and hash. Leaf admission requires the worker's reference to
+equal the planner's field for field, before any leaf Run commits.
+
+Both envelopes are versioned in parallel (1, 2). Each version selects its own
+exact field list and hashes over that list, so version-1 captures reproduce their
+original hash, validate under their original rules, and are never rewritten or
+silently upgraded — but they also cannot claim cross-role revision parity, and
+leaf admission refuses rather than crediting them with it.
+
+No migration: both envelopes live in existing JSONB bodies.
+
+**Known over-strictness, accepted deliberately.** The row revision increments on
+any edit, including legacy fields governed execution ignores. A legacy edit
+between planning and leaf admission therefore refuses leaf admission. The
+alternative is deciding which edits "do not count", and that inference is how a
+real governance change slips through. Full record:
+`docs/GOVERNED_ROLE_ECONOMIC_POLICY_SET_DECISION.md` §6b.
+
 ## One governed container funds every canonical role (2026-08-05)
 
 The governed policy container carried a singular `economicPolicy` naming exactly

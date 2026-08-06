@@ -167,6 +167,16 @@ async function proveDurablePath(store, ticketId, arm) {
   const planningAttempts = (await store.pool.query(
     `SELECT count(*)::int AS n FROM ${store.table('events')}
       WHERE ticket_id = $1 AND type LIKE 'ticket.structured_planning%'`, [ticketId])).rows[0].n;
+  // The SELECTED role-policy hashes, also from captured state. They must differ:
+  // one revision funding two roles is not the same as one policy funding both.
+  const capturedPolicyHashes = (await store.pool.query(
+    `SELECT
+       (SELECT body #>> '{structuredAllocationPlanningAttempt,governedExecution,economicPolicyHash}'
+          FROM ${store.table('tickets')} WHERE id = $1) AS planner_hash,
+       (SELECT DISTINCT body #>> '{governedExecution,economicPolicyHash}'
+          FROM ${store.table('runs')}
+         WHERE ticket_id = $1 AND body ? 'leafRunBinding' LIMIT 1) AS worker_hash`,
+    [ticketId])).rows[0];
   const plannerReservations = (await store.pool.query(
     `SELECT count(*)::int AS n FROM ${store.table('economic_request_reservations')}
       WHERE ticket_id = $1 AND role = 'structured_planner'`, [ticketId])).rows[0].n;
@@ -198,6 +208,33 @@ async function proveDurablePath(store, ticketId, arm) {
   // them must receive its own governed leaf Run: a plan that silently produced
   // fewer Runs than items would leave declared work with no executor while
   // still looking like a successful structured trial.
+  // ── PARENT POLICY REVISION PARITY, from CAPTURED state only ──────────
+  //
+  // Read out of the durable planning attempt and the durable Run envelopes.
+  // Deriving this from the currently active container would prove nothing: the
+  // whole question is whether the two roles were funded by the SAME revision at
+  // the time they were captured, and current configuration cannot answer that.
+  const plannerParent = (await store.pool.query(
+    `SELECT body #> '{structuredAllocationPlanningAttempt,governedExecution,parentPolicyReference}'
+              AS reference
+       FROM ${store.table('tickets')} WHERE id = $1`, [ticketId])).rows[0];
+  const workerParents = (await store.pool.query(
+    `SELECT DISTINCT body #> '{governedExecution,parentPolicyReference}' AS reference
+       FROM ${store.table('runs')}
+      WHERE ticket_id = $1 AND body ? 'leafRunBinding'`, [ticketId])).rows;
+  const plannerReference = plannerParent && plannerParent.reference
+    ? plannerParent.reference : null;
+  const workerReferences = workerParents
+    .map(row => row.reference).filter(Boolean);
+  const canonical = value => (value ? JSON.stringify(Object.keys(value).sort()
+    .map(key => [key, value[key]])) : null);
+  // The query is DISTINCT, so more than one row means the leaf Runs disagree
+  // among themselves — which is a parity failure regardless of the planner.
+  const sameParentPolicyRevision = Boolean(
+    plannerReference &&
+    workerReferences.length === 1 &&
+    canonical(workerReferences[0]) === canonical(plannerReference));
+
   const executableItems = plans.reduce((total, plan) => {
     const items = plan.body && Array.isArray(plan.body.items) ? plan.body.items : [];
     return total + items.length;
@@ -269,6 +306,17 @@ async function proveDurablePath(store, ticketId, arm) {
     claimedLeafRunCount: claimedLeafRuns,
     // One account per role, and never one shared between them.
     executableItemCount: executableItems,
+    // Authority validity, NOT a comparison metric. It says whether this trial's
+    // governed authority is coherent, never whether an arm performed better.
+    plannerParentPolicyReference: plannerReference,
+    workerParentPolicyReference: workerReferences.length > 0 ? workerReferences[0] : null,
+    economicPolicySetVersion: plannerReference
+      ? plannerReference.economicPolicySetVersion : null,
+    economicPolicySetHash: plannerReference
+      ? plannerReference.economicPolicySetHash : null,
+    plannerEconomicPolicyHash: capturedPolicyHashes.planner_hash || null,
+    workerEconomicPolicyHash: capturedPolicyHashes.worker_hash || null,
+    sameParentPolicyRevision,
     roleAccounts: roleAccounts.map(row => ({
       role: row.role, accounts: Number(row.accounts)
     })),

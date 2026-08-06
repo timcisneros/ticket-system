@@ -22,7 +22,11 @@ Closure evidence — the decision is closed on execution, not on merge:
 
 The blocking dependency — one governed container funding only one role — was
 resolved separately by
-`docs/GOVERNED_ROLE_ECONOMIC_POLICY_SET_DECISION.md`.
+`docs/GOVERNED_ROLE_ECONOMIC_POLICY_SET_DECISION.md`, whose §6b additionally
+binds the parent policy container revision to both the planner authority and
+every governed leaf Run. The captured progress-control policy is therefore now
+provably part of an authority whose planner and worker halves came from ONE
+immutable policy revision.
 
 A later policy adjustment requires an explicit version bump and must not rewrite
 existing captured Runs.

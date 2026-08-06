@@ -89,6 +89,9 @@ function policyContainer({
   return {
     body: {
       name: `Planner policy ${STAMP}`, status: 'active',
+      // Persistent row identity, as the production loader supplies it.
+      id: 1,
+      revision: 1,
       maxCost: { currency: 'USD', limit: 5 },
       preferredModel: 'gpt-legacy-ignored',
       governedExecution: governed

@@ -24,7 +24,9 @@
 // ceiling is what bounds it.
 
 const { hashCanonical } = require('./declared-work-contract');
-const { readGovernedPolicySource } = require('./governed-policy-source');
+const {
+  buildParentPolicyReference, readGovernedPolicySource
+} = require('./governed-policy-source');
 const {
   buildRoleRoutingDecision
 } = require('./role-routing-contract');
@@ -189,11 +191,14 @@ function buildGovernedExecutionState({
   settlementReceiptHash = null
 }) {
   return {
-    version: 1,
+    version: 2,
     role: PLANNER_ROLE,
     roleRoutingPolicyHash: capture.source.roleRoutingPolicyHash,
     economicPolicyHash: capture.source.economicPolicyHash,
     pricingCatalogHash: capture.source.pricingCatalogHash,
+    // The container revision this planner authority was selected from. Every
+    // leaf Run admitted from the resulting plan must bind the same one.
+    parentPolicyReference: buildParentPolicyReference(capture.source),
     routingDecisionHash: capture.routingDecision.decisionHash,
     economicAuthorityHash: capture.economicAuthority.authorityHash,
     dispatchTarget: capture.economicAuthority.dispatchTarget,

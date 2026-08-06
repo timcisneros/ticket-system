@@ -92,6 +92,13 @@ function policySource({
   const built = require('../runtime/model-pricing-catalog').buildPricingCatalog(catalog);
   const container = {
     body: {
+      // PERSISTENT ROW IDENTITY, exactly as the production loader supplies it.
+      // A fixture container without these cannot support a parent-policy
+      // revision binding, and `buildParentPolicyReference` refuses rather than
+      // inventing one — so omitting them here would quietly exempt every
+      // fixture from the binding production must satisfy.
+      id: 1,
+      revision: 1,
       // Legacy container siblings, present so fixtures prove they are ignored.
       maxCost: { currency: 'USD', limit: 5 },
       preferredModel: 'gpt-legacy-ignored',

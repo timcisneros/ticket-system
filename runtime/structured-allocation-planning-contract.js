@@ -30,6 +30,9 @@ const {
   ALLOCATION_PLAN_VERSION,
   normalizeOwnedOutputPath
 } = require('./allocation-plan-contract');
+const {
+  normalizeParentPolicyReference
+} = require('./governed-policy-source');
 
 const PLANNER_REQUEST_CONTEXT_VERSION = 1;
 const PLANNER_PROPOSAL_VERSION = 1;
@@ -317,7 +320,27 @@ const GOVERNED_EXECUTION_FIELDS = Object.freeze([
   'economicState'
 ]);
 
-const GOVERNED_EXECUTION_VERSION = 1;
+// VERSION 2 adds `parentPolicyReference`, the identity of the policy container
+// revision the planner's role authority was selected from. Every leaf Run
+// admitted from the resulting plan must carry the SAME reference, which is what
+// turns two independently valid role authorities into proof that one immutable
+// revision funded both.
+//
+// Version 1 stays readable exactly as written and is never rewritten. It simply
+// cannot claim cross-role revision parity, because it never recorded the
+// identity that would establish it.
+const GOVERNED_EXECUTION_VERSION = 2;
+const GOVERNED_EXECUTION_VERSIONS = Object.freeze([1, 2]);
+
+// Derived, not retyped, so the two lists cannot drift apart.
+const GOVERNED_EXECUTION_FIELDS_V2 = Object.freeze([
+  ...GOVERNED_EXECUTION_FIELDS,
+  'parentPolicyReference'
+]);
+
+function governedExecutionFieldsFor(version) {
+  return version === 1 ? GOVERNED_EXECUTION_FIELDS : GOVERNED_EXECUTION_FIELDS_V2;
+}
 
 // Mirrors the reservation lifecycle. The attempt records what it observed; the
 // reservation remains the authority.
@@ -1193,14 +1216,17 @@ function normalizeAttemptRequestMetadata(value) {
 // economic state with no receipt, describes a situation that cannot have
 // happened, and admitting it would let recovery draw false conclusions.
 function normalizeGovernedExecution(value) {
-  exactFields(value, GOVERNED_EXECUTION_FIELDS, 'planningAttempt.governedExecution');
-  if (value.version !== GOVERNED_EXECUTION_VERSION) {
-    fail(`planningAttempt.governedExecution.version must be ${GOVERNED_EXECUTION_VERSION}`);
+  // Version first: it selects which exact field set applies.
+  if (!value || !GOVERNED_EXECUTION_VERSIONS.includes(value.version)) {
+    fail('planningAttempt.governedExecution.version must be ' +
+      GOVERNED_EXECUTION_VERSIONS.join(' or '));
   }
+  exactFields(value, governedExecutionFieldsFor(value.version),
+    'planningAttempt.governedExecution');
   const economicState = enumerated(
     value.economicState, GOVERNED_ECONOMIC_STATES, 'governedExecution.economicState');
   const normalized = {
-    version: GOVERNED_EXECUTION_VERSION,
+    version: value.version,
     role: requiredString(value.role, 'governedExecution.role'),
     roleRoutingPolicyHash: hash(
       value.roleRoutingPolicyHash, 'governedExecution.roleRoutingPolicyHash'),
@@ -1221,6 +1247,14 @@ function normalizeGovernedExecution(value) {
       value.settlementReceiptHash, 'governedExecution.settlementReceiptHash'),
     economicState
   };
+  // A version-2 attempt must carry a well-formed parent reference. A version-1
+  // attempt must not acquire one retroactively — that would be a claim about
+  // authority it never captured.
+  if (value.version === 2) {
+    normalized.parentPolicyReference =
+      normalizeParentPolicyReference(value.parentPolicyReference,
+        'governedExecution.parentPolicyReference');
+  }
   // A settled attempt must name the receipt that settled it, and only a settled
   // attempt may name one.
   if (economicState === 'settled' && normalized.settlementReceiptHash === null) {
@@ -1580,6 +1614,10 @@ function projectStructuredAllocationPlanningForTicket(ticket, { allocationPlan =
 }
 
 module.exports = {
+  GOVERNED_EXECUTION_FIELDS,
+  GOVERNED_EXECUTION_FIELDS_V2,
+  GOVERNED_EXECUTION_VERSION,
+  GOVERNED_EXECUTION_VERSIONS,
   LEGACY_ALLOCATION_PLACEHOLDER_PATTERN,
   MODEL_FORBIDDEN_AUTHORITY_FIELDS,
   PLANNER_PROPOSAL_PROVENANCE,

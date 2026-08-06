@@ -111,6 +111,8 @@ const {
   WORKER_ROLE: GOVERNED_STRUCTURED_LEAF_ROLE
 } = require('./runtime/governed-leaf-orchestration');
 const {
+  assertSameParentPolicyRevision,
+  buildParentPolicyReference,
   readGovernedPolicySource
 } = require('./runtime/governed-policy-source');
 const {
@@ -17096,6 +17098,31 @@ async function admitStructuredAllocationLeafRuns(ticket, plan) {
     // checked across every draft and refuses before anything is admitted.
     const uniformBudget = assertUniformProgressPolicyInputs(
       leafDrafts.map(draft => draft.run && draft.run.runtimeBudgetSnapshot));
+    // ── CROSS-ROLE REVISION PARITY ───────────────────────────────────────
+    //
+    // The plan was admitted under the revision the PLANNER read. The worker
+    // policy is read here, later, from whatever container is active NOW. Those
+    // are two separate reads, and an administrator may have replaced the
+    // container in between with one whose worker entry is byte-identical and
+    // whose planner entry differs — every role hash would still match while the
+    // two roles were funded by two different revisions.
+    //
+    // So the planner's captured parent reference is the authority, and the
+    // worker's must equal it exactly. A version-1 attempt captured no such
+    // reference and cannot be retro-fitted with one; it is refused rather than
+    // credited with a binding it never recorded.
+    const plannerGoverned = ticket.structuredAllocationPlanningAttempt &&
+      ticket.structuredAllocationPlanningAttempt.governedExecution;
+    if (!plannerGoverned || !plannerGoverned.parentPolicyReference) {
+      throw new Error(
+        'the admitted plan carries no captured parent policy revision, so leaf ' +
+        'authority cannot be proved to come from the same policy revision');
+    }
+    assertSameParentPolicyRevision(
+      plannerGoverned.parentPolicyReference,
+      buildParentPolicyReference(policySource),
+      'structured leaf admission');
+
     governedLeafCapture = {
       policySource,
       progressControlPolicy: buildDefaultProgressControlPolicy({

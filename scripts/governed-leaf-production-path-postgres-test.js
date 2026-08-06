@@ -87,6 +87,11 @@ function policySourceOf({
   const built = buildPricingCatalog(catalog);
   return readGovernedPolicySource({
     body: {
+      // Persistent row identity, as the production loader supplies it. A
+      // container without it cannot bind a parent policy revision, and that
+      // binding is refused rather than faked.
+      id: 1,
+      revision: 1,
       maxCost: { currency: 'USD', limit: 5 },
       preferredModel: 'gpt-legacy-ignored',
       governedExecution: {

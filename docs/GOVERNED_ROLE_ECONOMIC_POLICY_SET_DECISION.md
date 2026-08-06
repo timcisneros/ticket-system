@@ -134,6 +134,92 @@ column or index references `governedExecution`, `economicPolicy` or any economic
 field. The role-keyed set round-trips through the existing body unchanged, and
 the Postgres suite asserts that round trip.
 
+## 6b. Cross-role parent policy revision binding (2026-08-05, follow-up)
+
+### Why selected role-policy hashes were insufficient
+
+A planner authority captures `economicPolicyHash` for the planner; a leaf Run
+captures `economicPolicyHash` for the worker. Together those prove:
+
+> this exact worker policy funded this Run
+
+They do **not** prove:
+
+> the planner policy and the worker policy came from the same immutable active
+> policy revision
+
+An administrator can replace the active container between planning and leaf
+admission with one whose **worker entry is byte-identical** and whose planner
+entry differs. Every previously captured hash still matches, and the two roles
+are now funded by two different revisions with nothing recording it. Shared
+routing and pricing hashes narrow this but do not close it: they say nothing
+about the sibling role's economics.
+
+### The parent policy reference
+
+```
+{
+  version: 1,
+  policyContainerId,        // model_routing_policies row id
+  policyContainerRevision,  // the row's enforced revision counter
+  policyContainerHash,      // governed CONTENT identity
+  economicPolicySetVersion,
+  economicPolicySetHash
+}
+```
+
+`policyContainerHash` covers governed content only — the shared routing and
+pricing hashes plus the economic set identity. It deliberately excludes the row's
+legacy sibling fields, which governed execution never reads. `policyContainerRevision`
+is carried separately and does count every edit; the two answer different
+questions and both are recorded.
+
+A container read outside the loader has no row identity, and
+`buildParentPolicyReference` **refuses** rather than inventing one. An authority
+never claims a revision binding it cannot support.
+
+### Envelope versioning
+
+| Envelope | Versions | Version 2 adds |
+|---|---|---|
+| planning attempt `governedExecution` | 1, 2 | `parentPolicyReference` |
+| `governedRunAuthority` | 1, 2 | `parentPolicyReference` |
+
+Each version selects its own exact field list, and the hash payload iterates the
+list its own version declares — so a version-1 envelope reproduces the identical
+hash it was written with. Historical captures validate under their original
+rules, are never rewritten, and are never silently upgraded. What a version-1
+envelope may **not** do is claim cross-role revision parity: it never recorded the
+identity that would establish it, and leaf admission refuses rather than
+crediting it with one.
+
+### Ordering enforced at leaf admission
+
+```
+planner reads container, captures parent reference
+  → plan admitted under that revision
+  → leaf admission reads the worker role, builds its own reference
+  → the two must be EQUAL, field for field
+  → leaf Runs commit (all, or none)
+```
+
+`assertSameParentPolicyRevision` compares every field: a partial match is a
+mismatch, because the point is that one revision funded both roles. The refusal
+happens **before** the store call, so no partial leaf Run can commit.
+
+### Deliberate over-strictness, stated plainly
+
+`policyContainerRevision` increments on **any** edit to the row, including edits
+to legacy fields governed execution ignores (`maxCost`, `preferredModel`, …). So
+editing a legacy field between planning and leaf admission **will refuse leaf
+admission**, even though no governed authority changed.
+
+That is deliberate. The alternative is deciding which edits "do not count", and
+that inference is exactly how a real governance change slips through
+unnoticed. The refusal is truthful, fails closed, and is recoverable by
+re-planning. If it proves operationally costly, the fix is an explicit decision
+to narrow the comparison — not a silent relaxation.
+
 ## 7. Capture and recovery behaviour
 
 A captured governed leaf Run retains:
@@ -144,9 +230,14 @@ A captured governed leaf Run retains:
 - the **exact selected** role identity — `economicPolicyHash`, which differs per
   role.
 
-**Deliberate limitation, recorded rather than hidden.** `economicPolicySetHash`
+**RESOLVED (see §6b).** The limitation recorded below has been closed:
+`economicPolicySetHash` is now carried inside `parentPolicyReference` on BOTH
+version-2 authority envelopes, with version 1 kept readable under its original
+rules rather than rewritten. The original reasoning is retained for the record.
+
+~~**Deliberate limitation, recorded rather than hidden.** `economicPolicySetHash`
 is bound at the policy-source contract layer and is **not** added to the
-`governedRunAuthority` envelope. Adding a field there would change
+`governedRunAuthority` envelope.~~ Adding a field there would change
 `GOVERNED_RUN_AUTHORITY_FIELDS` and the envelope hash, and
 `normalizeGovernedRunAuthority` validates an exact field list — so every
 historically captured Run would fail normalization. The standing constraint is

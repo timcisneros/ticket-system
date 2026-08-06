@@ -43,8 +43,18 @@ const { normalizeEconomicAuthority } = require('./economic-authority-contract');
 const {
   normalizeProgressControlPolicy
 } = require('./churn-decision-contract');
+const {
+  buildParentPolicyReference,
+  normalizeParentPolicyReference
+} = require('./governed-policy-source');
 
-const GOVERNED_RUN_AUTHORITY_VERSION = 1;
+// VERSION 2 adds `parentPolicyReference`. Version 1 remains readable exactly as
+// it was written: its field list, its hash payload and its meaning are
+// unchanged, and it is never rewritten or silently upgraded. What a version-1
+// envelope may NOT do is claim cross-role revision parity — it never recorded
+// the parent identity that would establish it.
+const GOVERNED_RUN_AUTHORITY_VERSION = 2;
+const GOVERNED_RUN_AUTHORITY_VERSIONS = Object.freeze([1, 2]);
 const WORKER_ROLE = 'structured_leaf_executor';
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 
@@ -77,6 +87,22 @@ const GOVERNED_RUN_AUTHORITY_FIELDS = Object.freeze([
   'capturedAt',
   'governedExecutionHash'
 ]);
+
+// The version-2 list is the version-1 list plus the parent reference. It is
+// derived rather than retyped so the two can never drift apart, and the parent
+// reference is inserted before the trailing hash field so the hash stays last.
+const GOVERNED_RUN_AUTHORITY_FIELDS_V2 = Object.freeze([
+  ...GOVERNED_RUN_AUTHORITY_FIELDS.filter(field => field !== 'governedExecutionHash'),
+  // The immutable identity of the policy container revision this Run's role
+  // authority was selected from. Equal to the planner's, by construction and by
+  // verification.
+  'parentPolicyReference',
+  'governedExecutionHash'
+]);
+
+function authorityFieldsFor(version) {
+  return version === 1 ? GOVERNED_RUN_AUTHORITY_FIELDS : GOVERNED_RUN_AUTHORITY_FIELDS_V2;
+}
 
 const GOVERNED_RUN_REFUSALS = Object.freeze([
   'governed_run_authority_malformed',
@@ -154,9 +180,12 @@ function assertCapturedPricingEntry(pricingEntry, authority) {
   return deepFreeze({ ...pricingEntry });
 }
 
+// Hashes over EXACTLY the fields its own version declares. A version-1 envelope
+// therefore reproduces the identical hash it was written with, which is what
+// keeps historical Runs valid without rewriting them.
 function hashEnvelope(fields) {
   const payload = {};
-  for (const field of GOVERNED_RUN_AUTHORITY_FIELDS) {
+  for (const field of authorityFieldsFor(fields.version)) {
     if (field === 'governedExecutionHash') continue;
     payload[field] = fields[field];
   }
@@ -221,6 +250,10 @@ function buildGovernedRunAuthority({
     ticketId: positiveSafeInteger(ticketId, 'ticketId'),
     runId: positiveSafeInteger(runId, 'runId'),
     allocationItemId: positiveSafeInteger(allocationItemId, 'allocationItemId'),
+    // The parent revision this worker policy was selected from. Derived from the
+    // SAME policy source the role hashes above came from, so it cannot name a
+    // different container than the one that funded this Run.
+    parentPolicyReference: buildParentPolicyReference(policySource),
     capturedAt: timestamp(capturedAt, 'capturedAt'),
     governedExecutionHash: null
   };
@@ -243,22 +276,25 @@ function normalizeGovernedRunAuthority(value, {
   if (!isPlainObject(value)) {
     refuse('governed_run_authority_malformed', 'governedExecution must be an object');
   }
-  const unknown = Object.keys(value).filter(
-    field => !GOVERNED_RUN_AUTHORITY_FIELDS.includes(field));
+  // The version selects the field list, so a version-1 envelope is validated
+  // against version-1 rules and a version-2 envelope against version-2 rules.
+  // An unknown version is refused before either list is consulted.
+  if (!GOVERNED_RUN_AUTHORITY_VERSIONS.includes(value.version)) {
+    refuse('governed_run_authority_malformed',
+      `unsupported governedExecution version: ${String(value.version)}`);
+  }
+  const fields = authorityFieldsFor(value.version);
+  const unknown = Object.keys(value).filter(field => !fields.includes(field));
   if (unknown.length > 0) {
     refuse('governed_run_authority_malformed',
       `governedExecution contains unknown field(s): ${unknown.sort(compareCanonicalText).join(', ')}`);
   }
-  const missing = GOVERNED_RUN_AUTHORITY_FIELDS.filter(
+  const missing = fields.filter(
     field => !Object.prototype.hasOwnProperty.call(value, field));
   if (missing.length > 0) {
     // The whole point of this contract: half an authority is not authority.
     refuse('governed_run_authority_partial',
       `governedExecution is missing field(s): ${missing.join(', ')}`);
-  }
-  if (value.version !== GOVERNED_RUN_AUTHORITY_VERSION) {
-    refuse('governed_run_authority_malformed',
-      `unsupported governedExecution version: ${String(value.version)}`);
   }
   if (value.role !== WORKER_ROLE) {
     refuse('governed_run_role_mismatch',
@@ -283,9 +319,15 @@ function normalizeGovernedRunAuthority(value, {
   }
 
   const normalized = {};
-  for (const field of GOVERNED_RUN_AUTHORITY_FIELDS) normalized[field] = value[field];
+  for (const field of fields) normalized[field] = value[field];
   normalized.routingDecision = decision;
   normalized.economicAuthority = authority;
+  // A version-2 envelope must carry a WELL-FORMED parent reference; a version-1
+  // envelope must not be given one retroactively.
+  if (value.version === 2) {
+    normalized.parentPolicyReference =
+      normalizeParentPolicyReference(value.parentPolicyReference);
+  }
 
   const expectedHash = hashEnvelope(normalized);
   if (value.governedExecutionHash !== expectedHash) {
@@ -359,7 +401,9 @@ function assertRunGovernedExecutionPairing(run, label = 'run governed execution'
 module.exports = {
   assertRunGovernedExecutionPairing,
   GOVERNED_RUN_AUTHORITY_FIELDS,
+  GOVERNED_RUN_AUTHORITY_FIELDS_V2,
   GOVERNED_RUN_AUTHORITY_VERSION,
+  GOVERNED_RUN_AUTHORITY_VERSIONS,
   GOVERNED_RUN_REFUSALS,
   GovernedRunAuthorityError,
   WORKER_ROLE,

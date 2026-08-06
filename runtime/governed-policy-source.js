@@ -135,7 +135,11 @@ const GOVERNED_POLICY_REFUSALS = Object.freeze([
   'governed_policy_economic_shape_ambiguous',
   // The role-keyed set itself is unusable: empty, duplicated, non-canonical, or
   // filed under a role its policy does not claim.
-  'governed_policy_economic_set_malformed'
+  'governed_policy_economic_set_malformed',
+  // The parent reference itself is unusable.
+  'governed_policy_parent_reference_malformed',
+  // The active container changed between planning and leaf admission.
+  'governed_policy_revision_mismatch'
 ]);
 
 class GovernedPolicySourceError extends Error {
@@ -162,6 +166,142 @@ function isPlainObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
+}
+
+// ── The parent policy reference ─────────────────────────────────────────────
+//
+// WHY SELECTED ROLE-POLICY HASHES ARE NOT ENOUGH.
+//
+// A planner authority captures `economicPolicyHash` for the planner; a leaf Run
+// captures `economicPolicyHash` for the worker. Together those prove:
+//
+//   this exact worker policy funded this Run
+//
+// They do NOT prove:
+//
+//   the planner policy and the worker policy came from the SAME immutable
+//   active policy revision
+//
+// An administrator can replace the active container between planning and leaf
+// admission with one whose worker entry is byte-identical and whose planner
+// entry differs. Every previously captured hash still matches, and the two roles
+// are now funded by two different revisions with nothing recording it. Shared
+// routing and pricing hashes narrow this but do not close it: they say nothing
+// about the sibling role's economics.
+//
+// This reference closes it. It is carried by BOTH the planner authority and
+// every leaf Run admitted from that plan, and it must be equal across them.
+//
+// `policyContainerHash` covers GOVERNED CONTENT ONLY — the shared document
+// hashes and the economic set identity. It deliberately excludes the row's
+// legacy sibling fields, which governed execution never reads, so an edit to
+// `maxCost` does not read as a governance change. The row `revision` is carried
+// separately and does count every edit; the two answer different questions and
+// both are recorded.
+const PARENT_POLICY_REFERENCE_VERSION = 1;
+
+const PARENT_POLICY_REFERENCE_FIELDS = Object.freeze([
+  'version',
+  'policyContainerId',
+  'policyContainerRevision',
+  'policyContainerHash',
+  'economicPolicySetVersion',
+  'economicPolicySetHash'
+]);
+
+function positiveIdentity(value, label) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    refuse('governed_policy_parent_reference_malformed',
+      `${label} must be a positive integer`);
+  }
+  return value;
+}
+
+function referenceHash(value, label) {
+  if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value)) {
+    refuse('governed_policy_parent_reference_malformed',
+      `${label} must be a 64-character lowercase hex hash`);
+  }
+  return value;
+}
+
+// Built from a policy source that was read through the loader, so the row
+// identity it names is the row the authority actually came from.
+function buildParentPolicyReference(source) {
+  if (!isPlainObject(source)) {
+    refuse('governed_policy_parent_reference_malformed',
+      'a governed policy source is required to build a parent policy reference');
+  }
+  if (source.policyContainerId === null || source.policyContainerRevision === null) {
+    // A container read outside the loader has no row identity. Refusing here is
+    // what stops an authority claiming a revision binding it cannot support.
+    refuse('governed_policy_parent_reference_malformed',
+      'the policy container carries no persistent row identity; parent policy ' +
+      'revision cannot be bound');
+  }
+  return deepFreeze({
+    version: PARENT_POLICY_REFERENCE_VERSION,
+    policyContainerId: positiveIdentity(source.policyContainerId, 'policyContainerId'),
+    policyContainerRevision: positiveIdentity(
+      source.policyContainerRevision, 'policyContainerRevision'),
+    policyContainerHash: referenceHash(source.policyContainerHash, 'policyContainerHash'),
+    economicPolicySetVersion: source.economicPolicySetVersion,
+    economicPolicySetHash: referenceHash(
+      source.economicPolicySetHash, 'economicPolicySetHash')
+  });
+}
+
+function normalizeParentPolicyReference(value, label = 'parentPolicyReference') {
+  if (!isPlainObject(value)) {
+    refuse('governed_policy_parent_reference_malformed', `${label} must be an object`);
+  }
+  const unknown = Object.keys(value).filter(
+    key => !PARENT_POLICY_REFERENCE_FIELDS.includes(key));
+  if (unknown.length > 0) {
+    refuse('governed_policy_parent_reference_malformed',
+      `${label} contains unknown field(s): ${unknown.sort().join(', ')}`);
+  }
+  const missing = PARENT_POLICY_REFERENCE_FIELDS.filter(
+    key => !Object.prototype.hasOwnProperty.call(value, key));
+  if (missing.length > 0) {
+    refuse('governed_policy_parent_reference_malformed',
+      `${label} is missing field(s): ${missing.join(', ')}`);
+  }
+  if (value.version !== PARENT_POLICY_REFERENCE_VERSION) {
+    refuse('governed_policy_parent_reference_malformed',
+      `${label}.version must be ${PARENT_POLICY_REFERENCE_VERSION}`);
+  }
+  if (!ECONOMIC_SET_VERSIONS.includes(value.economicPolicySetVersion)) {
+    refuse('governed_policy_parent_reference_malformed',
+      `${label}.economicPolicySetVersion is not a supported economic set version`);
+  }
+  return deepFreeze({
+    version: PARENT_POLICY_REFERENCE_VERSION,
+    policyContainerId: positiveIdentity(
+      value.policyContainerId, `${label}.policyContainerId`),
+    policyContainerRevision: positiveIdentity(
+      value.policyContainerRevision, `${label}.policyContainerRevision`),
+    policyContainerHash: referenceHash(
+      value.policyContainerHash, `${label}.policyContainerHash`),
+    economicPolicySetVersion: value.economicPolicySetVersion,
+    economicPolicySetHash: referenceHash(
+      value.economicPolicySetHash, `${label}.economicPolicySetHash`)
+  });
+}
+
+// EVERY field must agree. A partial match is a mismatch: the point is that the
+// two roles were funded by one revision, and any difference means they were not.
+function assertSameParentPolicyRevision(expected, actual, context = 'governed authority') {
+  const left = normalizeParentPolicyReference(expected, 'admitted parentPolicyReference');
+  const right = normalizeParentPolicyReference(actual, 'supplied parentPolicyReference');
+  for (const field of PARENT_POLICY_REFERENCE_FIELDS) {
+    if (left[field] !== right[field]) {
+      refuse('governed_policy_revision_mismatch',
+        `${context}: the active governed policy revision changed after the plan ` +
+        `was admitted (${field} ${String(left[field])} became ${String(right[field])})`);
+    }
+  }
+  return left;
 }
 
 // ── The role-keyed economic policy set ──────────────────────────────────────
@@ -440,6 +580,20 @@ function readGovernedPolicySource(container, { role }) {
     economicPolicySetVersion: economicPolicySet.version,
     economicPolicySetHash: economicPolicySet.setHash,
     economicPolicyRoles: economicPolicySet.roles,
+    // PERSISTENT ROW IDENTITY, when the container came from the loader. Null
+    // when a caller read a bare body, which cannot support a revision binding
+    // and is refused by `buildParentPolicyReference` rather than faked.
+    policyContainerId: Number.isSafeInteger(body.id) && body.id > 0 ? body.id : null,
+    policyContainerRevision: Number.isSafeInteger(body.revision) && body.revision > 0
+      ? body.revision : null,
+    // Governed CONTENT identity. Legacy sibling fields are excluded on purpose.
+    policyContainerHash: hashCanonical({
+      version: PARENT_POLICY_REFERENCE_VERSION,
+      roleRoutingPolicyHash: roleRoutingPolicy.policyHash,
+      pricingCatalogHash: pricingCatalog.catalogHash,
+      economicPolicySetVersion: economicPolicySet.version,
+      economicPolicySetHash: economicPolicySet.setHash
+    }),
     // SELECTED authority — the exact policy funding the requested role:
     economicPolicy: selected.policy,
     economicPolicyHash: selected.policyHash
@@ -448,6 +602,11 @@ function readGovernedPolicySource(container, { role }) {
 
 module.exports = {
   ECONOMIC_AUTHORITY_KEYS,
+  PARENT_POLICY_REFERENCE_FIELDS,
+  PARENT_POLICY_REFERENCE_VERSION,
+  assertSameParentPolicyRevision,
+  buildParentPolicyReference,
+  normalizeParentPolicyReference,
   ECONOMIC_SET_ENTRY_FIELDS,
   ECONOMIC_SET_VERSIONS,
   GOVERNED_CONTAINER_KEYS,

@@ -318,6 +318,157 @@ function main() {
   ok(serverText.includes('causeCode ? `cause ${causeCode}` :'),
     'classification: durable refusal detail carries a stable cause code, not raw text');
 
+  // ── CROSS-ROLE PARENT POLICY REVISION PARITY ───────────────────────────
+  //
+  // Selected role-policy hashes prove "this policy funded this role". They do
+  // NOT prove "both roles came from one immutable revision": an administrator
+  // can replace the container with one whose worker entry is byte-identical and
+  // whose planner entry differs, and every previously captured hash still
+  // matches. The parent reference closes exactly that hole.
+  const {
+    buildParentPolicyReference, normalizeParentPolicyReference,
+    assertSameParentPolicyRevision, PARENT_POLICY_REFERENCE_FIELDS
+  } = require('../runtime/governed-policy-source');
+
+  const sourceFor = (options, role) =>
+    readGovernedPolicySource(buildRoleKeyedGovernedContainer(options), { role });
+
+  // 1. Planner and leaf capture from the SAME revision succeed.
+  const revisionA = { policyContainerId: 7, policyContainerRevision: 3 };
+  const plannerA = buildParentPolicyReference(sourceFor(revisionA, PLANNER));
+  const workerA = buildParentPolicyReference(sourceFor(revisionA, WORKER));
+  ok(refusalReason(() => assertSameParentPolicyRevision(plannerA, workerA)) === 'no_refusal',
+    'parity 1 planner and leaf capture from one revision agree');
+  ok(plannerA.policyContainerId === 7 && plannerA.policyContainerRevision === 3,
+    'parity 1 the reference names the exact container row and revision');
+
+  // 2. Planner from revision A, leaf from revision B refuses.
+  const workerB = buildParentPolicyReference(
+    sourceFor({ policyContainerId: 7, policyContainerRevision: 4 }, WORKER));
+  ok(refusalReason(() => assertSameParentPolicyRevision(plannerA, workerB)) ===
+    'governed_policy_revision_mismatch',
+  'parity 2 a leaf capture from a different revision refuses');
+
+  // 3. THE CENTRAL CASE. The worker policy is byte-identical; only the PLANNER
+  //    sibling changed. Every worker-side hash still matches, and it must still
+  //    refuse — because the set hash moved.
+  const siblingChanged = sourceFor({
+    ...revisionA,
+    economicOverrides: { [PLANNER]: { authorizedMicroUsd: 499_998 } }
+  }, WORKER);
+  ok(siblingChanged.economicPolicyHash ===
+     sourceFor(revisionA, WORKER).economicPolicyHash,
+  'parity 3 the worker policy is unchanged by a planner-sibling edit');
+  ok(refusalReason(() => assertSameParentPolicyRevision(
+    plannerA, buildParentPolicyReference(siblingChanged))) ===
+    'governed_policy_revision_mismatch',
+  'parity 3 an unchanged worker policy under a CHANGED sibling still refuses');
+
+  // 4. Changed worker policy refuses.
+  ok(refusalReason(() => assertSameParentPolicyRevision(plannerA,
+    buildParentPolicyReference(sourceFor({
+      ...revisionA, economicOverrides: { [WORKER]: { authorizedMicroUsd: 499_997 } }
+    }, WORKER)))) === 'governed_policy_revision_mismatch',
+  'parity 4 a changed worker policy refuses');
+
+  // 5 & 6. Changed shared routing or pricing authority refuses, because both
+  //        enter the container content hash.
+  const routingChanged = buildGovernedExecutionValue();
+  routingChanged.roleRoutingPolicy = {
+    ...routingChanged.roleRoutingPolicy, policyId: 'eval-routing-2'
+  };
+  ok(refusalReason(() => assertSameParentPolicyRevision(plannerA,
+    buildParentPolicyReference(readGovernedPolicySource(
+      { body: { ...revisionA, id: 7, revision: 3, governedExecution: routingChanged } },
+      { role: WORKER })))) === 'governed_policy_revision_mismatch',
+  'parity 5 a changed routing policy refuses');
+  const pricingChanged = buildGovernedExecutionValue();
+  const repriced = pricedCatalogValue();
+  repriced.catalogId = 'evaluation-repriced-catalog';
+  const repricedBuilt = buildPricingCatalog(repriced);
+  pricingChanged.pricingCatalog = repriced;
+  pricingChanged.economicPolicies = pricingChanged.economicPolicies.map(entry => ({
+    role: entry.role,
+    policy: { ...entry.policy, pricingCatalogId: repricedBuilt.catalogId,
+      pricingCatalogHash: repricedBuilt.catalogHash }
+  }));
+  ok(refusalReason(() => assertSameParentPolicyRevision(plannerA,
+    buildParentPolicyReference(readGovernedPolicySource(
+      { body: { id: 7, revision: 3, governedExecution: pricingChanged } },
+      { role: WORKER })))) === 'governed_policy_revision_mismatch',
+  'parity 6 a changed pricing catalog refuses');
+
+  // 7 & 8. Missing and malformed fields refuse.
+  for (const field of PARENT_POLICY_REFERENCE_FIELDS) {
+    const partial = { ...plannerA };
+    delete partial[field];
+    ok(refusalReason(() => normalizeParentPolicyReference(partial)) ===
+      'governed_policy_parent_reference_malformed',
+    `parity 7 a reference missing ${field} refuses`);
+  }
+  ok(refusalReason(() => normalizeParentPolicyReference(
+    { ...plannerA, economicPolicySetHash: 'not-a-hash' })) ===
+    'governed_policy_parent_reference_malformed',
+  'parity 8 a malformed set hash refuses');
+  ok(refusalReason(() => normalizeParentPolicyReference(
+    { ...plannerA, policyContainerHash: 'f'.repeat(63) })) ===
+    'governed_policy_parent_reference_malformed',
+  'parity 8 a malformed container hash refuses');
+  ok(refusalReason(() => normalizeParentPolicyReference(
+    { ...plannerA, extra: 1 })) === 'governed_policy_parent_reference_malformed',
+  'parity 8 an unknown field in the reference refuses');
+
+  // 9. A selected role-policy hash may not stand in for the set hash. The two
+  //    answer different questions and substituting one for the other would make
+  //    the parity check pass while proving nothing about the sibling role.
+  ok(!PARENT_POLICY_REFERENCE_FIELDS.includes('economicPolicyHash'),
+    'parity 9 the parent reference carries no selected role-policy hash');
+  ok(plannerA.economicPolicySetHash !== plannerSource.economicPolicyHash &&
+     plannerA.economicPolicySetHash !== workerSource.economicPolicyHash,
+  'parity 9 the set hash is not either selected role-policy hash');
+
+  // 10 & 11. Row identity and revision mismatches refuse.
+  ok(refusalReason(() => assertSameParentPolicyRevision(plannerA,
+    { ...plannerA, policyContainerId: 8 })) === 'governed_policy_revision_mismatch',
+  'parity 10 a parent row ID mismatch refuses');
+  ok(refusalReason(() => assertSameParentPolicyRevision(plannerA,
+    { ...plannerA, policyContainerRevision: 4 })) ===
+    'governed_policy_revision_mismatch',
+  'parity 11 a parent revision mismatch refuses');
+  ok(refusalReason(() => assertSameParentPolicyRevision(plannerA,
+    { ...plannerA, policyContainerHash: 'a'.repeat(64) })) ===
+    'governed_policy_revision_mismatch',
+  'parity 11 a container content-hash mismatch refuses');
+
+  // A container read WITHOUT persistent row identity cannot claim a binding.
+  ok(refusalReason(() => buildParentPolicyReference(readGovernedPolicySource(
+    { body: { governedExecution: buildGovernedExecutionValue() } }, { role: PLANNER }))) ===
+    'governed_policy_parent_reference_malformed',
+  'parity a container with no row identity refuses to claim a revision binding');
+
+  // 13 & 14. Historical envelopes stay readable and never claim parity.
+  {
+    const {
+      GOVERNED_RUN_AUTHORITY_VERSIONS, GOVERNED_RUN_AUTHORITY_FIELDS_V2
+    } = require('../runtime/governed-run-authority-contract');
+    const {
+      GOVERNED_EXECUTION_VERSIONS
+    } = require('../runtime/structured-allocation-planning-contract');
+    ok(GOVERNED_RUN_AUTHORITY_VERSIONS.join(',') === '1,2' &&
+       GOVERNED_EXECUTION_VERSIONS.join(',') === '1,2',
+    'parity 13 both authority envelopes read version 1 and version 2');
+    ok(GOVERNED_RUN_AUTHORITY_FIELDS_V2.includes('parentPolicyReference') &&
+       GOVERNED_RUN_AUTHORITY_FIELDS_V2.indexOf('governedExecutionHash') ===
+         GOVERNED_RUN_AUTHORITY_FIELDS_V2.length - 1,
+    'parity 13 version 2 adds the parent reference and keeps its hash last');
+    // A version-1 envelope has NO parent reference field at all, so it cannot
+    // assert cross-role revision parity. Server-side leaf admission refuses
+    // rather than crediting it with a binding it never recorded.
+    ok(serverSource.includes(
+      'the admitted plan carries no captured parent policy revision'),
+    'parity 14 a plan with no captured parent revision refuses leaf admission');
+  }
+
   console.log(`\ngoverned role economic policy set test passed — ${passed} assertions`);
 }
 
