@@ -117,6 +117,49 @@ async function main() {
           // A trial that reached the provider must show it in the SHARED
           // stream. Both transports write there, so an empty stream beside a
           // non-zero request count means an adapter is not reporting.
+          // ── A DURABLE RESPONSE MUST NAME THE RESPONSE IT DELIVERED ──────
+          //
+          // An unexpected request has no staged response, so it can only ever
+          // be a refusal. Recording it as durable would invent a delivery that
+          // never happened — and a durable observation with no response
+          // identity is exactly what that looks like.
+          for (const roleFacts of [
+            ['planner', (artifact.churnFacts || artifact.recoveryFacts || {}).planner],
+            ['worker', (artifact.churnFacts || artifact.recoveryFacts || {}).worker]
+          ]) {
+            const [roleName, roleData] = roleFacts;
+            if (!roleData) continue;
+            assertThat(roleData.durableResponses === roleData.responseIdentities.length ||
+              roleData.durableResponses === 0 || roleData.duplicateServedCalls > 0,
+            `${label}: every ${roleName} durable response names the response it ` +
+            `delivered (${roleData.durableResponses} durable, ` +
+            `${roleData.responseIdentities.length} identities)`);
+          }
+          // ── PLANNER AND WORKER ARE SEPARATE SUMMARIES ───────────────────
+          //
+          // Collapsing them into one count would make a planner success
+          // indistinguishable from a worker success, which is the whole basis
+          // of the family-7 and family-8 distinctions.
+          // BOTH fact objects, independently. Reading only the first would
+          // leave the other's role separation unasserted, and each is built by
+          // its own function.
+          for (const combined of [artifact.churnFacts, artifact.recoveryFacts]) {
+          if (combined && combined.planner && combined.worker &&
+              arm.expectedPath === 'structured_v2') {
+            // The structured planner's economic policy authorizes exactly ONE
+            // provider request, so its durable-response count is exactly one.
+            // A collapsed summary would report every transport under the
+            // planner, which is how "the planner succeeded" would come to stand
+            // for "the worker succeeded".
+            assertThat(combined.planner.durableResponses === 1,
+              `${label}: the planner summary counts exactly its own one request ` +
+              `(got ${combined.planner.durableResponses})`);
+            assertThat(combined.planner.responseIdentities.every(id =>
+              !combined.worker.responseIdentities.includes(id)),
+            `${label}: no response identity appears under both roles`);
+          }
+          }
+
           const requestCount = (artifact.ticketReport.canonicalRequests || []).length;
           if (requestCount > 0) {
             assertThat(artifact.churnFacts &&

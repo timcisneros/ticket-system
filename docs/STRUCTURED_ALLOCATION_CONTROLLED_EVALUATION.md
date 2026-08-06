@@ -1354,6 +1354,24 @@ All twelve protocol-required cells across families 3, 4, 7, 8 and 9 execute
 | family-8/8A/B | 1 durable | — | `refused_before_transport: 1` |
 | family-8/8C/B | 1 durable | 2 durable | none |
 
+### Focused mutations
+
+Both mutations that survived the previous session are now killed:
+
+- **removing the governed durable-response observation** — killed, because a
+  governed worker request now actually completes;
+- **collapsing planner and worker observations** — killed by asserting each
+  fact object independently (the structured planner's economic policy authorizes
+  exactly one request, so its summary must count exactly one) rather than
+  reading only the first.
+
+**One mutation still survives, and its reason is measured rather than guessed.**
+Recording an *unexpected* governed request as a success is unreachable: every
+governed request in all forty required cells matches a staged response, so the
+unplanned-request path never executes. Closing it needs a cell that deliberately
+issues an unstaged governed request — a scenario this catalog does not define.
+It is recorded rather than papered over with a looser assertion.
+
 ### One frozen result changed, and it is not hidden
 
 Serving governed **worker** responses changed family 1's structured arms from
