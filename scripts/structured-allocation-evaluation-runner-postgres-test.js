@@ -136,6 +136,16 @@ async function main() {
             `${armId}: governed leaf Runs were admitted from the v2 plan`);
           assertThat(artifact.pathProof.governedLeafRunCount > 0,
             `${armId}: at least one leaf Run carries governed leaf authority`);
+          // ONE Run PER EXECUTABLE ITEM — not "at least one". A plan that
+          // produced fewer Runs than it declared items would leave declared
+          // work with no executor while still looking like a success.
+          assertThat(artifact.pathProof.executableItemCount > 1,
+            `${armId}: the admitted plan declares several executable items`);
+          assertThat(artifact.pathProof.governedLeafRunCount ===
+            artifact.pathProof.executableItemCount,
+          `${armId}: every executable item received exactly one governed leaf Run ` +
+          `(${artifact.pathProof.governedLeafRunCount} of ` +
+          `${artifact.pathProof.executableItemCount})`);
           // ADMISSION IS NOT EXECUTION, and the two are asserted separately.
           assertThat(artifact.pathProof.leafExecutorRequestCount > 0,
             `${armId}: a worker-ROLE governed request was issued`);

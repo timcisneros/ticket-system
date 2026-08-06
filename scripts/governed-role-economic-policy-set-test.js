@@ -111,6 +111,20 @@ function main() {
     containerWith(unknownRole), { role: PLANNER })) ===
     'governed_policy_economic_set_malformed',
   '5 a non-canonical role in the set refuses');
+  // ISOLATING CASE. The entry above is ALSO a key/embedded-role mismatch, so it
+  // would still refuse if the canonical-role check were deleted. This one is
+  // internally consistent — key and embedded role agree — so the ONLY thing
+  // that can reject it is the canonical-role check itself.
+  const consistentUnknown = buildGovernedExecutionValue();
+  consistentUnknown.economicPolicies = [...consistentUnknown.economicPolicies, {
+    role: 'structured_reviewer',
+    policy: { ...consistentUnknown.economicPolicies[0].policy,
+      role: 'structured_reviewer', policyId: 'structured_reviewer-economics' }
+  }];
+  ok(refusalReason(() => readGovernedPolicySource(
+    containerWith(consistentUnknown), { role: PLANNER })) ===
+    'governed_policy_economic_set_malformed',
+  '5 a self-consistent non-canonical role is rejected by the role check alone');
 
   // ── 6. Embedded-role mismatch refuses ──────────────────────────────────
   //

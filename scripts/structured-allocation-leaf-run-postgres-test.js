@@ -533,6 +533,13 @@ async function main() {
         'the worker principal is the agent the item admitted');
       assert.equal(run.agentId, item.assignedAgentId,
         'the Run is dispatched to the admitted agent, never a replacement');
+      // THE ROUTE ITSELF was decided for that same agent. Binding and dispatch
+      // can both name the right agent while the governed routing decision — the
+      // thing the economic authority is bound to — was taken for a sibling. That
+      // would price and authorize one agent's work under another's route.
+      assert.equal(run.governedExecution.routingDecision.actingAgentId,
+        item.assignedAgentId,
+        'the governed route was decided for the item\'s own agent');
       assert.deepEqual(binding.ownedOutputPaths, item.ownedOutputPaths,
         'ownership is the exact admitted item ownership');
       assert.deepEqual(run.ownedOutputPaths, item.ownedOutputPaths,

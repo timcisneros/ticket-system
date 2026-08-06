@@ -644,6 +644,50 @@ const ok = (condition, message) => {
   ok(QUIESCENCE_CONDITIONS.includes('admitted_plan_without_leaf_runs'),
     '10 quiescence: an admitted plan owing leaf Runs blocks quiescence');
 
+  // ── The ONE canonical path-stage classifier ────────────────────────────
+  //
+  // Runner and report share it, so the "did governed work execute?" answer
+  // cannot be derived twice and disagree.
+  {
+    const {
+      ARMS: STAGE_ARMS, classifyPathStage, expectedPathStage
+    } = require('./fixtures/evaluation-arms');
+    const structured = {
+      observedPath: 'structured_v2', runCount: 3, planningAttempted: true,
+      planAdmitted: true, leafRunsAdmitted: true,
+      governedLeafExecutionObserved: true, ticketStatus: 'completed'
+    };
+    ok(expectedPathStage(STAGE_ARMS.A) === 'direct_executed' &&
+       expectedPathStage(STAGE_ARMS.A2a) === 'legacy_v1_allocated_executed' &&
+       expectedPathStage(STAGE_ARMS.A2b) === 'legacy_v1_dynamic_executed' &&
+       expectedPathStage(STAGE_ARMS.B) === 'structured_v2_allocated_executed' &&
+       expectedPathStage(STAGE_ARMS.C) === 'structured_v2_dynamic_executed',
+    '10 stages: each arm names its own canonical stage');
+    ok(classifyPathStage(STAGE_ARMS.B, structured) === 'structured_v2_allocated_executed',
+      '10 stages: a fully executed structured trial reaches its executed stage');
+    // ADMISSION IS NOT EXECUTION. Leaf Runs admitted but never claimed may not
+    // be reported as worker execution.
+    ok(classifyPathStage(STAGE_ARMS.B,
+      { ...structured, governedLeafExecutionObserved: false }) ===
+      'structured_v2_allocated_leaf_runs_unexecuted',
+    '10 stages: admitted-but-unexecuted leaf Runs are NOT reported as execution');
+    ok(classifyPathStage(STAGE_ARMS.B,
+      { ...structured, leafRunsAdmitted: false, governedLeafExecutionObserved: false }) ===
+      'structured_v2_allocated_no_leaf_runs',
+    '10 stages: an admitted plan with no leaf Runs names that exact gap');
+    ok(classifyPathStage(STAGE_ARMS.B,
+      { ...structured, planAdmitted: false, leafRunsAdmitted: false,
+        governedLeafExecutionObserved: false }) ===
+      'structured_v2_allocated_plan_refused',
+    '10 stages: a refused plan is distinguished from an unattempted one');
+    // A terminal Ticket status may NEVER by itself confer an executed stage.
+    ok(classifyPathStage(STAGE_ARMS.B, {
+      ...structured, leafRunsAdmitted: false,
+      governedLeafExecutionObserved: false, ticketStatus: 'completed'
+    }) !== 'structured_v2_allocated_executed',
+    '10 stages: a terminal ticket status alone never implies governed execution');
+  }
+
   // The reader observes; it never creates.
   for (const statement of ['UPDATE runs SET status = $1', 'INSERT INTO runs VALUES (1)']) {
     assert.throws(() => quiescentSelectOnly(statement));
@@ -1004,12 +1048,60 @@ const ok = (condition, message) => {
   const storeSource = fs.readFileSync(
     path.join(__dirname, '..', 'persistence', 'postgres', 'store.js'), 'utf8');
 
-  ok(serverSource.includes('governedLeafCapture'),
-    '13 plan-to-leaf: server.js now supplies governedLeafCapture');
-  ok(serverSource.includes('buildDefaultProgressControlPolicy'),
+  // EXECUTABLE source only. A substring check against the raw file passes
+  // happily when the call has been commented out, which is precisely the
+  // mutation this section must catch.
+  const stripComments = text => text.split('\n')
+    .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line))
+    .map(line => line.replace(/\s\/\/.*$/, '')).join('\n');
+  const serverExecutable = stripComments(serverSource);
+
+  ok(serverExecutable.includes('governedLeafCapture = {') &&
+     /\n\s*governedLeafCapture,\n/.test(serverExecutable),
+  '13 plan-to-leaf: server.js BUILDS and PASSES governedLeafCapture');
+  ok(serverExecutable.includes('buildDefaultProgressControlPolicy({'),
     '13 plan-to-leaf: from the canonical version-1 builder, not a local literal');
-  ok(serverSource.includes('assertUniformProgressPolicyInputs'),
+  ok(serverExecutable.includes('assertUniformProgressPolicyInputs('),
     '13 plan-to-leaf: after proving every leaf draft shares one execution snapshot');
+
+  // ── The two capture contracts, proved by BEHAVIOUR ────────────────────
+  //
+  // Source presence is not enough: a builder can be present and still read the
+  // wrong thing.
+  {
+    const {
+      buildDefaultProgressControlPolicy, assertUniformProgressPolicyInputs
+    } = require('../runtime/churn-decision-contract');
+    // A distinctive duration no ambient default could coincidentally produce.
+    const snapshot = duration => ({
+      maxRuntimeDurationMs: duration, snapshotHash: 'a'.repeat(64),
+      executionPolicyHash: 'b'.repeat(64), runtimeLimitsRevision: 3
+    });
+    const policy = buildDefaultProgressControlPolicy({
+      runtimeBudgetSnapshot: snapshot(777_777) });
+    ok(policy.maximumCumulativeExecutionDurationMs === 777_777,
+      '13 capture: the duration comes ONLY from the captured runtime budget snapshot');
+    ok(policy.version === 1 && policy.maximumConsecutiveNoProgressWindows === 3 &&
+       policy.maximumRepeatedMutations === 3 && policy.maximumFailedOperationStreak === 4 &&
+       policy.maximumMutationReversals === 3 && policy.maximumInspectionOnlyStreak === 4,
+    '13 capture: the approved version-1 tolerances are the ones built');
+    ok(policy.resourceDimensions.join(',') === 'provider_requests,settled_micro_usd',
+      '13 capture: the approved resource dimensions are the ones built');
+    // The fixture-only hour must never appear as a production default.
+    ok(policy.maximumCumulativeExecutionDurationMs !== 3_600_000,
+      '13 capture: the fixture-only 3 600 000 ms duration is not adopted');
+
+    // Uniformity is PROVED, never assumed from the first draft.
+    ok(assertUniformProgressPolicyInputs([snapshot(600_000), snapshot(600_000)])
+      .maxRuntimeDurationMs === 600_000,
+    '13 capture: identical leaf snapshots yield one plan-scoped capture');
+    let disagreement = null;
+    try {
+      assertUniformProgressPolicyInputs([snapshot(600_000), snapshot(900_000)]);
+    } catch (error) { disagreement = error; }
+    ok(disagreement !== null,
+      '13 capture: leaf drafts that DISAGREE refuse instead of using the first');
+  }
 
   // The store's fail-closed requirement is UNCHANGED — the correction supplied
   // the authority rather than relaxing the check.
@@ -1019,13 +1111,28 @@ const ok = (condition, message) => {
   // A genuine race is now a narrow named set, not the default.
   ok(!serverSource.includes("return refuse('leaf_admission_conflict', error.message);\n  }"),
     '13 plan-to-leaf: the blanket conflict catch-all is gone');
-  ok(serverSource.includes("'OPTIMISTIC_CONCURRENCY_CONFLICT'") &&
-    serverSource.includes("'STATE_TRANSITION_CONFLICT'"),
+  ok(serverExecutable.includes("'OPTIMISTIC_CONCURRENCY_CONFLICT'") &&
+    serverExecutable.includes("'STATE_TRANSITION_CONFLICT'"),
   '13 plan-to-leaf: only real revision/state conflicts map to a race');
-  ok(serverSource.includes("leaf_admission_internal_failure"),
+  // The conflict classification must still be REACHABLE from those codes. A
+  // mutation that disables the branch would leave the codes present and
+  // classify a genuine race as an internal failure.
+  ok(serverExecutable.includes('if (optimistic || serialization) {'),
+    '13 plan-to-leaf: a genuine conflict still reaches the conflict classification');
+  ok(serverExecutable.includes("leaf_admission_internal_failure"),
     '13 plan-to-leaf: unexpected failures get an internal classification');
+  // ...and exactly ONE site may produce a race, so an internal failure cannot
+  // be relabelled as one.
+  ok(serverExecutable.split("refuse('leaf_admission_conflict'").length - 1 === 1,
+    '13 plan-to-leaf: exactly one site classifies a failure as a race');
   ok(serverSource.includes("leaf_governed_authority_unavailable"),
     '13 plan-to-leaf: missing governed authority gets its own exact code');
+
+  // The runner must not derive the stage itself: one classifier, called.
+  const runnerSource = fs.readFileSync(
+    path.join(__dirname, 'structured-allocation-evaluation-runner.js'), 'utf8');
+  ok(runnerSource.includes('pathStage: classifyPathStage(arm, proof)'),
+    '13 stages: the runner calls the shared classifier rather than deriving a stage');
 
   // Sanitization: only a stable code reaches durable authority.
   ok(serverSource.includes('causeCode ? `cause ${causeCode}` :'),

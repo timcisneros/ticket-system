@@ -194,6 +194,14 @@ async function proveDurablePath(store, ticketId, arm) {
   const ticketStatus = (await store.pool.query(
     `SELECT status FROM ${store.table('tickets')} WHERE id = $1`,
     [ticketId])).rows[0];
+  // How many executable items the admitted plan actually declared. EVERY one of
+  // them must receive its own governed leaf Run: a plan that silently produced
+  // fewer Runs than items would leave declared work with no executor while
+  // still looking like a successful structured trial.
+  const executableItems = plans.reduce((total, plan) => {
+    const items = plan.body && Array.isArray(plan.body.items) ? plan.body.items : [];
+    return total + items.length;
+  }, 0);
 
   // A STRUCTURED PLANNING ATTEMPT IS ITSELF EVIDENCE OF THE STRUCTURED PATH.
   //
@@ -260,6 +268,7 @@ async function proveDurablePath(store, ticketId, arm) {
     leafExecutorRequestCount: workerReservations,
     claimedLeafRunCount: claimedLeafRuns,
     // One account per role, and never one shared between them.
+    executableItemCount: executableItems,
     roleAccounts: roleAccounts.map(row => ({
       role: row.role, accounts: Number(row.accounts)
     })),
