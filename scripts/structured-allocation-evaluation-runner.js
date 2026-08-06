@@ -485,7 +485,12 @@ async function runTrial({
       HERMETIC_TRANSPORT_RESPONSE: governedResponsePath,
       HERMETIC_TRANSPORT_CAPTURE: path.join(namespace.dir, 'governed-capture.jsonl'),
       OPENAI_API_KEY: 'test-only-sentinel-not-a-real-credential',
-      RUNTIME_SCHEDULER_INTERVAL_MS: '200'
+      // NOT AGGRESSIVE. A 200 ms tick made a scheduler continuation race the
+      // synchronous post-planning leaf admission for the same plan, and the
+      // loser blocked the Ticket with `leaf_admission_conflict` before any leaf
+      // Run was created. The race is real in production too, but forcing it
+      // here measured the harness rather than the product.
+      RUNTIME_SCHEDULER_INTERVAL_MS: '2000'
     }
   });
 
@@ -627,6 +632,12 @@ async function runTrial({
     });
     writeTrialArtifact(outputPath, artifact);
   } finally {
+    if (process.env.EVALUATION_DUMP_SERVER_OUTPUT === '1') {
+      const out = typeof server.output === 'function' ? server.output() : '';
+      const lines = String(out).split('\n')
+        .filter(line => /leaf|admission|allocation|Error|error/i.test(line));
+      console.log('SERVER OUTPUT (filtered):\n' + lines.slice(-25).join('\n'));
+    }
     await server.stop().catch(() => {});
   }
   return artifact;

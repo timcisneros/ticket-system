@@ -858,6 +858,85 @@ each labelled `UNSCORED HARNESS SMOKE — NOT PRODUCT EVIDENCE`.
 
 ---
 
+## 3d. Plan-to-leaf lifecycle: the zero-leaf cause (session 7)
+
+### Phase 1 verdict: LEAF MATERIALIZATION ATTEMPT REFUSED
+
+Not "no attempt", not "rolled back", and not a reader misclassification. The
+durable evidence for both B and C:
+
+```
+plan:      version 2, status pending, 3 allocation items
+items:     agent 1 -> reports/alpha/ · agent 2 -> reports-b/beta/ · agent 3 -> reports/agent-2/
+events:    … ticket.structured_planning_validated
+           ticket.allocation_plan_admitted
+           ticket.blocked
+block:     reasonCode  leaf_admission_conflict
+           stage       leaf_admission
+           reason      "Leaf-run admission lost a concurrent race for this allocation plan"
+           workerRunsCreated 0
+log:       "admitted Allocation Plan v2 #1 (pending; zero worker runs; leaf admission runs next)"
+```
+
+So leaf admission **is** reached synchronously after plan admission, is
+attempted, and refuses. The admitted plan and its three items are well formed:
+distinct agents, distinct non-overlapping owned paths, version 2.
+
+### The reported reason is almost certainly not the real one
+
+`server.js:17078` is a **catch-all**:
+
+```js
+} catch (error) {
+  if (error instanceof StructuredAllocationLeafRunError && error.reason) {
+    return refuse(error.reason, error.message);
+  }
+  return refuse('leaf_admission_conflict', error.message);
+}
+```
+
+Any exception that is not a `StructuredAllocationLeafRunError` is reported as
+`leaf_admission_conflict` — a concurrency verdict — regardless of its actual
+cause. And `refuse(reason, message)` renders the vocabulary message rather than
+`error.message`, so the underlying error text reaches neither the block payload,
+nor the diagnostic log, nor the server's stdout.
+
+Two facts argue the label is wrong here:
+
+* raising `RUNTIME_SCHEDULER_INTERVAL_MS` from 200 ms to 2000 ms changed
+  nothing, so a scheduler continuation racing the synchronous admission is not
+  the cause;
+* a genuine race would require a competing admitter, and the winner would have
+  created leaf Runs. Zero Runs exist.
+
+**This is a diagnosability finding worth recording on its own:** a leaf-admission
+failure of any kind is currently indistinguishable from a concurrency conflict,
+and its cause is unrecoverable from durable state. Establishing the real error
+is the first task of the next session, and it needs either a bounded production
+diagnostics change (surfacing `error.message`/`error.code` on the refusal) or an
+in-process reproduction of `admitStructuredAllocationLeafRuns` against the
+admitted plan.
+
+**No production file was changed in this session**, so the catch-all is left as
+found rather than altered inside the evaluation branch.
+
+### Quiescence audit
+
+The current contract treats plan-admitted / leaf-unmaterialized as quiescent,
+which is wrong for a plan whose leaf admission may still continue. The
+correction is **not made yet**, because the distinction it must draw depends on
+the answer above: a terminally refused admission may legitimately be quiescent,
+while a recoverable one may not, and the present block is of unknown kind.
+
+### Unchanged five-arm matrix
+
+A `direct` · A2a `legacy_v1` allocated · A2b `legacy_v1` dynamic · B and C
+`structured_v2` with an admitted v2 plan and **no leaf Runs**. The four path
+facts remain reported separately, so nothing here reads as executed governed
+work.
+
+---
+
 ## 5a. The normalized cost method
 
 One method, every arm:

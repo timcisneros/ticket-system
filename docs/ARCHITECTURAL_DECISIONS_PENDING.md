@@ -1,3 +1,36 @@
+## Tranche 6 Controlled Evaluation: LEAF ADMISSION REFUSES (2026-08-06)
+
+**Session 7. Goal NOT met.** B and C still produce zero leaf Runs.
+
+**Verdict: LEAF MATERIALIZATION ATTEMPT REFUSED.** Leaf admission is reached
+synchronously after plan admission and refuses with `leaf_admission_conflict`
+at stage `leaf_admission`, `workerRunsCreated: 0`. The admitted plan is well
+formed — version 2, three items, distinct agents, distinct non-overlapping owned
+paths.
+
+**The reported reason is almost certainly not the real one.** `server.js:17078`
+reports ANY non-`StructuredAllocationLeafRunError` as `leaf_admission_conflict`,
+and `refuse()` renders the vocabulary message rather than `error.message`, so the
+underlying cause reaches neither the block payload, the diagnostic log, nor
+stdout. Raising the scheduler interval tenfold changed nothing, and a genuine
+race would have left the winner's leaf Runs behind; zero exist.
+
+**Recorded as a diagnosability gap:** a leaf-admission failure of any kind is
+currently indistinguishable from a concurrency conflict and its cause is
+unrecoverable from durable state. Closing it needs either a bounded production
+diagnostics change or an in-process reproduction of
+`admitStructuredAllocationLeafRuns` against the admitted plan — the first task of
+the next session. No production file was changed here.
+
+**Quiescence correction deferred, deliberately.** Plan-admitted /
+leaf-unmaterialized is currently treated as quiescent, which is wrong for a
+recoverable continuation but right for a terminal refusal — and the present
+block is of unknown kind, so the rule cannot be written truthfully yet.
+
+**PREREQUISITE 3 REMAINS PARTIALLY CLOSED — EVALUATION MAY NOT RUN.**
+
+**Previous session record, retained:**
+
 ## Tranche 6 Controlled Evaluation: B AND C ADMIT PLAN v2 (2026-08-06)
 
 **Session 6.** The structured arms previously failed planning outright. Four
