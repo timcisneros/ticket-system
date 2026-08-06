@@ -34,8 +34,19 @@ function ok(condition, message) {
   console.log(`  ok ${message}`);
 }
 
-function refuses(fn) {
-  try { fn(); return false; } catch (_) { return true; }
+// Returns the refusal MESSAGE, never a bare boolean. Accepting any throw would
+// let a mutation that disables one check pass because a different check happened
+// to fire — which is exactly how six of these assertions first survived.
+function refusalMessage(fn) {
+  try { fn(); return null; } catch (error) { return String(error.message); }
+}
+function refuses(fn) { return refusalMessage(fn) !== null; }
+function refusesWith(fn, fragment) {
+  const message = refusalMessage(fn);
+  return message !== null && message.includes(fragment);
+}
+function problemsOf(fn) {
+  try { fn(); return []; } catch (error) { return (error.detail && error.detail.problems) || []; }
 }
 
 const HEADER = Object.freeze({
@@ -86,9 +97,10 @@ function main() {
 
   // ── 1-3. The runner cannot override a frozen experimental variable ────
   for (const option of ['repetitions', 'seed', 'arms', 'ordering', 'thresholds']) {
-    ok(refuses(() => parseArguments([
+    ok(refusesWith(() => parseArguments([
       '--manifest', 'm.json', '--output-root', '/tmp/x', `--${option}`, '9'
-    ])), `1-3 --${option} is refused: it names a FROZEN experimental variable`);
+    ]), 'FROZEN experimental variable'),
+    `1-3 --${option} is refused AS a frozen experimental variable, not merely as unknown`);
   }
   ok(FROZEN_EXPERIMENTAL_OPTIONS.includes('seed') &&
      FROZEN_EXPERIMENTAL_OPTIONS.includes('order') &&
@@ -138,12 +150,14 @@ function main() {
   ok(integrity.verdict === 'SCORED FIXTURE CORPUS COMPLETE AND INTERNALLY CONSISTENT' &&
      integrity.trials === manifest.trials.length,
   '10 a complete corpus passes the integrity gate');
-  ok(refuses(() => assertCorpusIntegrity({
+  ok(problemsOf(() => assertCorpusIntegrity({
     manifest, header: HEADER, artifacts: corpus.slice(0, corpus.length - 1)
-  })), '10 a MISSING trial prevents aggregation');
-  ok(refuses(() => assertCorpusIntegrity({
+  })).some(problem => problem.includes('neither a result nor an exclusion')),
+  '10 a MISSING trial is named as an unaccounted slot, not merely a count mismatch');
+  ok(problemsOf(() => assertCorpusIntegrity({
     manifest, header: HEADER, artifacts: [...corpus, corpus[0]]
-  })), '11 a DUPLICATE trial prevents aggregation');
+  })).some(problem => problem.includes('duplicate trial id')),
+  '11 a DUPLICATE trial is named as a duplicate');
   // 19. Fixture and live corpora may never mix.
   ok(refuses(() => assertCorpusIntegrity({
     manifest, header: HEADER,
@@ -156,11 +170,19 @@ function main() {
       ? { ...a, label: 'UNSCORED HARNESS SMOKE — NOT PRODUCT EVIDENCE' } : a))
   })), 'an artifact without scored identity cannot join the corpus');
   // A verdict reported on incomplete observation is refused.
-  ok(refuses(() => assertCorpusIntegrity({
+  ok(problemsOf(() => assertCorpusIntegrity({
     manifest, header: HEADER,
     artifacts: corpus.map((a, i) => (i === 0
       ? { ...a, observationCompleteness: 'unavailable' } : a))
-  })), 'a verdict reported on incomplete observation is refused');
+  })).some(problem => problem.includes('incomplete observation')),
+  'a verdict reported on incomplete observation is refused');
+  // 20. A trial with no zero-drift proof cannot enter the corpus.
+  ok(problemsOf(() => assertCorpusIntegrity({
+    manifest, header: HEADER,
+    artifacts: corpus.map((a, i) => (i === 0
+      ? { ...a, ticketReport: { secondReadIdentical: false } } : a))
+  })).some(problem => problem.includes('no zero-drift proof')),
+  '20 a trial without a zero-drift proof is named and refused');
 
   // ── 8. A failed product trial REMAINS in the corpus ───────────────────
   const withFailures = fullCorpus((trial, index) => (index % 3 === 0
@@ -223,13 +245,31 @@ function main() {
   ok(falsePositiveRule.result === 'TRIGGERED' &&
      falsePositiveRule.contributingTrialIds.length > 0,
   '17 a single false completion TRIGGERS its disqualifier and names its trials');
+  // The RATE itself must count it. A scorer that reported zero false
+  // completions would make the disqualifier unreachable from the metrics.
+  const falseRate = scoreDimensions(withFalsePositive.filter(a => a.armId === 'B'))
+    .completion_truthfulness.falsePositiveCompletion;
+  ok(falseRate.numerator === 1 && falseRate.trialIds.length === 1,
+    '17 and the false-completion RATE counts it rather than averaging it away');
+  // A corpus that would otherwise satisfy RETAIN, so the ONLY thing that can
+  // produce STOP is the disqualifier being evaluated first.
+  const retainWorthy = {
+    A: corpus.map(a => ({ ...a, truthfulness: 'true_negative_completion' })),
+    B: corpus.map(a => ({ ...a, truthfulness: 'true_positive_completion' })),
+    A2a: corpus.map(a => ({ ...a, truthfulness: 'true_negative_completion' }))
+  };
+  const withoutDisqualifier = applyFrozenDecisionRules({
+    protocol, disqualifiers: [], byArm: retainWorthy });
+  ok(withoutDisqualifier.decision === 'FIXTURE EVIDENCE SUPPORTS RETAIN',
+    '15 that corpus would otherwise support RETAIN');
   const stopped = applyFrozenDecisionRules({
-    protocol, disqualifiers,
-    byArm: { A: corpus, B: corpus }
+    protocol,
+    disqualifiers: [{ statement: 'x', result: 'TRIGGERED', contributingTrialIds: [] }],
+    byArm: retainWorthy
   });
   ok(stopped.decision === 'FIXTURE EVIDENCE SUPPORTS STOP' &&
      stopped.basis.includes('hard disqualifier'),
-  '15 a triggered disqualifier decides BEFORE any ordinary tradeoff');
+  '15 a triggered disqualifier overrides it, deciding BEFORE any tradeoff');
   // NOT EVALUABLE is never converted into a pass.
   ok(disqualifiers.some(entry => entry.result === 'NOT EVALUABLE'
     ? Boolean(entry.notEvaluableReason) : true),
@@ -238,6 +278,20 @@ function main() {
   // ── 16. Thresholds are IMPORTED, never duplicated ─────────────────────
   ok(!/truePositiveGainVersusAPoints\s*[:=]\s*\d/.test(scorerSource),
     '16 the scorer hard-codes no threshold value');
+  // BEHAVIOURAL: changing the frozen threshold must change the outcome. A
+  // duplicated literal would ignore the protocol and decide the same way.
+  const strictProtocol = {
+    ...protocol,
+    decisionThresholds: {
+      ...protocol.decisionThresholds,
+      retain: { ...protocol.decisionThresholds.retain,
+        truePositiveGainVersusAPoints: 200 }
+    }
+  };
+  ok(applyFrozenDecisionRules({
+    protocol: strictProtocol, disqualifiers: [], byArm: retainWorthy
+  }).decision !== 'FIXTURE EVIDENCE SUPPORTS RETAIN',
+  '16 raising the frozen threshold changes the decision — it is read, not duplicated');
   ok(scorerSource.includes('protocol.decisionThresholds'),
     '16 and reads every threshold from the frozen protocol');
 
