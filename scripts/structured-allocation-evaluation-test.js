@@ -979,6 +979,66 @@ const ok = (condition, message) => {
   ok(PROTOCOL_VERSION === 1, '12 catalog: the catalog declares protocol version 1');
 }
 
+
+// ── 13. THE STRUCTURED PLAN-TO-LEAF DEFECT, PINNED ─────────────────────────
+//
+// Family-1 arms B and C admit a valid Allocation Plan v2 and then produce zero
+// leaf Runs. The public reason is `leaf_admission_conflict` — "lost a
+// concurrent race" — which is false. Captured below the catch-all, the real
+// exception is:
+//
+//   code    GOVERNED_LEAF_CAPTURE_REQUIRED
+//   message structured leaf admission requires governed leaf capture;
+//           ungoverned structured leaf admission was removed by the Tranche 4
+//           cutover
+//   at      PostgresRuntimeStore._captureGovernedLeafAuthority
+//
+// The store REQUIRES a `governedLeafCapture` argument. `server.js`'s only
+// leaf-admission call does not pass one, and the identifier appears nowhere in
+// that file. So every structured v2 Ticket that reaches leaf admission is
+// refused and blocked, and the refusal is mislabelled as a concurrency loss.
+//
+// This is a production lifecycle defect, not a harness defect. It is PINNED
+// here rather than repaired: repairing the structured execution lifecycle is
+// outside the evaluation brief and needs its own authorization. These
+// assertions fail the moment either half changes, so the defect cannot be
+// closed silently or drift unnoticed.
+{
+  const serverSource = fs.readFileSync(
+    path.join(__dirname, '..', 'server.js'), 'utf8');
+
+  ok(serverSource.includes('.admitStructuredAllocationLeafRuns({'),
+    '13 plan-to-leaf: server.js calls the canonical leaf-admission method');
+  ok(!serverSource.includes('governedLeafCapture'),
+    '13 plan-to-leaf: DEFECT — server.js never supplies governedLeafCapture, ' +
+    'which the store requires; when this assertion fails the defect has been ' +
+    'fixed and this pin must be replaced by an execution proof');
+
+  const storeSource = fs.readFileSync(
+    path.join(__dirname, '..', 'persistence', 'postgres', 'store.js'), 'utf8');
+  ok(storeSource.includes("error.code = 'GOVERNED_LEAF_CAPTURE_REQUIRED'"),
+    '13 plan-to-leaf: the store refuses leaf admission without governed capture');
+
+  // The catch-all that turns this into a false concurrency verdict.
+  ok(serverSource.includes("return refuse('leaf_admission_conflict', error.message)"),
+    '13 plan-to-leaf: DEFECT — any unexpected leaf-admission exception is ' +
+    'reported as a lost concurrency race, so the real cause is unrecoverable ' +
+    'from durable state');
+
+  // The mislabelling is what made this expensive to find: the vocabulary
+  // message is rendered instead of the captured error message.
+  const { STRUCTURED_LEAF_REFUSAL_MESSAGES } = (() => {
+    try {
+      return require('../runtime/structured-allocation-leaf-run-contract');
+    } catch (_) { return {}; }
+  })();
+  ok(typeof STRUCTURED_LEAF_REFUSAL_MESSAGES !== 'object' ||
+    STRUCTURED_LEAF_REFUSAL_MESSAGES === undefined ||
+    typeof STRUCTURED_LEAF_REFUSAL_MESSAGES.leaf_admission_conflict === 'string',
+  '13 plan-to-leaf: leaf_admission_conflict carries a fixed vocabulary message, ' +
+  'which is what is persisted instead of the real cause');
+}
+
 console.log(`\nstructured allocation evaluation test passed — ${passed} assertions`);
 }
 

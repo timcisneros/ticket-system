@@ -1,3 +1,93 @@
+## PRODUCTION DEFECT — structured leaf admission cannot succeed (2026-08-06)
+
+**Status: OPEN. Not repaired here — it needs its own authorization.**
+
+**Every structured Allocation Plan v2 that reaches leaf admission is refused,
+and the refusal is mislabelled as a concurrency loss.** The structured execution
+path cannot admit governed leaf Runs at all.
+
+### The raw exception, captured below the catch-all
+
+```
+code     GOVERNED_LEAF_CAPTURE_REQUIRED
+message  structured leaf admission requires governed leaf capture; ungoverned
+         structured leaf admission was removed by the Tranche 4 cutover
+at       PostgresRuntimeStore._captureGovernedLeafAuthority  (store.js:4433)
+```
+
+### Canonical owner and smallest semantic correction
+
+`persistence/postgres/store.js` `_captureGovernedLeafAuthority` requires a
+`governedLeafCapture` argument carrying `{ policySource, progressControlPolicy }`
+— the Tranche 4 cutover made ungoverned structured leaf admission impossible.
+
+`server.js` `admitStructuredAllocationLeafRuns` makes the only production call
+to that method and **passes no `governedLeafCapture`**. The identifier appears
+nowhere in `server.js`. `getStructuredAllocationLeafExecutionRepository()`
+returns the store itself, so nothing injects it downstream.
+
+The smallest correction is for the leaf-admission orchestrator to resolve the
+worker-role governed policy source and progress-control policy — as
+`scripts/governed-structured-fixture.js` already does for admission in tests —
+and pass them as `governedLeafCapture`. That is a structured-execution lifecycle
+change and is deliberately NOT made under the evaluation brief.
+
+### A second, independent defect: the refusal is mislabelled
+
+`server.js:17078`:
+
+```js
+} catch (error) {
+  if (error instanceof StructuredAllocationLeafRunError && error.reason) {
+    return refuse(error.reason, error.message);
+  }
+  return refuse('leaf_admission_conflict', error.message);
+}
+```
+
+Any exception that is not a `StructuredAllocationLeafRunError` becomes
+`leaf_admission_conflict` — a concurrency verdict — and `refuse()` renders the
+fixed vocabulary message rather than `error.message`. The real cause therefore
+reaches neither the block payload, the diagnostic log, nor stdout, and an
+operator sees "lost a concurrent race for this allocation plan" for a failure
+that involves no concurrency at all.
+
+Recommended bounded correction, when authorized: keep known
+`StructuredAllocationLeafRunError` codes unchanged, keep genuine revision or
+serialization conflicts mapping to `leaf_admission_conflict`, and give
+everything else a distinct class such as `leaf_admission_internal_failure`
+carrying a sanitized `causeCode` (application code or SQLSTATE) — never raw
+message text in user-visible output.
+
+### How it was found
+
+The public reason was untrustworthy, so the exception was captured **below** the
+catch-all with an opt-in, test-only wrapper on the canonical store method
+(`scripts/fixtures/evaluation-preload.js`,
+`EVALUATION_CAPTURE_LEAF_ADMISSION=1`). It rethrows unchanged, so production
+behaviour is identical whether or not it is enabled. No plan, Run, evidence or
+constraint was manufactured, and no production file was modified.
+
+### Pinned, not silently carried
+
+`scripts/structured-allocation-evaluation-test.js` §13 asserts both halves —
+that `server.js` supplies no `governedLeafCapture`, and that the catch-all maps
+unexpected errors to `leaf_admission_conflict`. Those assertions fail the moment
+either is fixed, so the defect cannot close unnoticed and the pin must then be
+replaced by an execution proof.
+
+### Consequence for Tranche 6
+
+The structured arms cannot execute governed leaf Runs until this is repaired, so
+the controlled evaluation cannot measure governed execution, governed economics,
+verified-progress control or aggregate structured completion. **Prerequisite 3
+remains PARTIALLY CLOSED**, and the quiescence correction stays deferred: this
+refusal is currently terminal, but it is terminal because of a defect rather
+than a product decision, so encoding it as a legitimate terminal state would
+record the bug as intended behaviour.
+
+---
+
 ## Tranche 6 Controlled Evaluation: LEAF ADMISSION REFUSES (2026-08-06)
 
 **Session 7. Goal NOT met.** B and C still produce zero leaf Runs.

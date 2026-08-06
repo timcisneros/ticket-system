@@ -482,6 +482,8 @@ async function runTrial({
     env: {
       NODE_OPTIONS: `--require ${path.join(__dirname, 'fixtures', 'evaluation-preload.js')}`,
       EVALUATION_FIXTURE_NAMESPACE: namespace.dir,
+      ...(process.env.EVALUATION_CAPTURE_LEAF_ADMISSION === '1'
+        ? { EVALUATION_CAPTURE_LEAF_ADMISSION: '1' } : {}),
       HERMETIC_TRANSPORT_RESPONSE: governedResponsePath,
       HERMETIC_TRANSPORT_CAPTURE: path.join(namespace.dir, 'governed-capture.jsonl'),
       OPENAI_API_KEY: 'test-only-sentinel-not-a-real-credential',
@@ -635,7 +637,7 @@ async function runTrial({
     if (process.env.EVALUATION_DUMP_SERVER_OUTPUT === '1') {
       const out = typeof server.output === 'function' ? server.output() : '';
       const lines = String(out).split('\n')
-        .filter(line => /leaf|admission|allocation|Error|error/i.test(line));
+        .filter(line => /LEAF_ADMISSION_RAW_ERROR|leaf|admission|allocation|Error|error/i.test(line));
       console.log('SERVER OUTPUT (filtered):\n' + lines.slice(-25).join('\n'));
     }
     await server.stop().catch(() => {});
