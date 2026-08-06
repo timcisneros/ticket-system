@@ -150,9 +150,14 @@ function createObservationSink(descriptorInput) {
     // Written by BOTH transport adapters, so a governed and an ungoverned
     // request are described identically and can never be told apart by which
     // file they landed in.
+    // `injected` distinguishes a boundary the SCENARIO staged from a refusal
+    // the fixture issued because nothing was staged at all. Both are honest
+    // refusals, but only the first is the boundary a variant is testing —
+    // counting them together would credit an unplanned request as the injected
+    // failure.
     recordTransport({
       logicalRequestId, role, ordinal, requestHash, responseIdentity = null,
-      responseHash = null, boundary, deliveredToExecution = null
+      responseHash = null, boundary, deliveredToExecution = null, injected = false
     }) {
       if (!TRANSPORT_BOUNDARIES.includes(boundary)) {
         throw new ObservationSinkError(`unknown transport boundary: ${String(boundary)}`);
@@ -165,6 +170,7 @@ function createObservationSink(descriptorInput) {
         responseIdentity,
         responseHash,
         boundary,
+        injected: Boolean(injected),
         // Delivery to EXECUTION is a product fact the transport cannot see, so
         // it stays null here rather than being guessed. Family 7 reads it from
         // canonical product evidence.

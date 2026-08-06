@@ -196,7 +196,7 @@ const SCENARIOS = Object.freeze({
     scenarioId: 'family-3-sibling-dependency',
     version: 1,
     family: 3,
-    objective: 'Create reports/producer/artifact.txt and reports/consumer/summary.md',
+    objective: 'Create folders reports/producer/out and reports/consumer/out',
     // THREE top-level folders, matching family 1.
     //
     // Dynamic allocation derives one owned root PER AGENT from the usable
@@ -209,7 +209,7 @@ const SCENARIOS = Object.freeze({
       folders: Object.freeze(['reports', 'reports-b', 'reports-c'])
     }),
     declaredWork: Object.freeze({
-      objective: 'Create reports/producer/artifact.txt and reports/consumer/summary.md',
+      objective: 'Create folders reports/producer/out and reports/consumer/out',
       expectedOutputs: Object.freeze([
         Object.freeze({ kind: 'text', declaration: 'A producer artifact and a bound consumer summary' })
       ]),
@@ -280,7 +280,7 @@ const SCENARIOS = Object.freeze({
     scenarioId: 'family-4-coupled',
     version: 1,
     family: 4,
-    objective: 'Create reports/left/artifact.txt and reports/right/summary.md',
+    objective: 'Create folders reports/left/out and reports/right/out',
     // THREE top-level folders, matching family 1.
     //
     // Dynamic allocation derives one owned root PER AGENT from the usable
@@ -293,7 +293,7 @@ const SCENARIOS = Object.freeze({
       folders: Object.freeze(['reports', 'reports-b', 'reports-c'])
     }),
     declaredWork: Object.freeze({
-      objective: 'Create reports/left/artifact.txt and reports/right/summary.md',
+      objective: 'Create folders reports/left/out and reports/right/out',
       expectedOutputs: Object.freeze([
         Object.freeze({ kind: 'text', declaration: 'Two apparently independent outputs' })
       ]),
@@ -627,7 +627,7 @@ const SCENARIOS = Object.freeze({
         match: 'reports/alpha', inputTokens: 300, outputTokens: 60,
         body: workerPlan({
           message: 'Committing the alpha effect.',
-          actions: [createFolder('reports/alpha/effect')], complete: true
+          actions: [createFolder('reports/alpha/done')], complete: true
         })
       }),
       // Any additional captured candidate. The planner agent is itself a group
@@ -659,7 +659,7 @@ const SCENARIOS = Object.freeze({
     oracle: Object.freeze({
       kind: 'raw_state',
       expectations: Object.freeze([
-        Object.freeze({ kind: 'folder_exists', path: 'reports/alpha/effect' })
+        Object.freeze({ kind: 'folder_exists', path: 'reports/alpha/done' })
       ])
     }),
     expectedQuiescence: 'quiescent_or_truthful_failure',
@@ -906,11 +906,18 @@ function materializeResponses(scenario, seed, { candidateAgentIds = [] } = {}) {
     staged.push({
       ...response, protocolVersion: scenario.protocolVersion,
       scenarioId: scenario.scenarioId, seed,
-      // A variant's failure boundary applies to the WORKER request, which is
-      // where every family-7 and family-8 boundary sits. An explicit boundary
-      // on the response itself wins, so a scenario can still stage a mixed set.
+      // A variant's failure boundary applies to the WORKER request UNDER TEST —
+      // the scenario's own declared logical task — and to nothing else.
+      //
+      // A structured trial also stages a filler response for the extra captured
+      // candidate (the planner agent receives an allocation item of its own).
+      // Applying the boundary to that too produced TWO injected refusals where
+      // the variant declares one, which would read as a retransmission or as a
+      // second failure the scenario never staged. An explicit boundary on the
+      // response itself still wins, so a scenario can stage a mixed set.
       failureBoundary: response.failureBoundary ||
-        (scenario.failureBoundary && scenario.failureBoundary !== 'none'
+        (scenario.failureBoundary && scenario.failureBoundary !== 'none' &&
+          (scenario.logicalTasks || []).includes(response.logicalTaskId)
           ? scenario.failureBoundary : undefined)
     });
   }
@@ -933,6 +940,14 @@ function materializeResponses(scenario, seed, { candidateAgentIds = [] } = {}) {
           message: 'Producing the seeded artifact.',
           actions: [
             createFolder(scenario.oracle.producerPath.replace(/\/[^/]+$/, '')),
+            // THE DECLARED OBJECTIVE FOLDER.
+            //
+            // A governed leaf item is admitted only when it carries at least one
+            // EXECUTION-EVALUABLE declared fact, and the evaluable criterion
+            // types are folder_exists, path_absent and file_content_equals. The
+            // objective therefore names folders, and the work creates them —
+            // otherwise the item admits a fact the work never satisfies.
+            createFolder(`${scenario.oracle.producerPath.replace(/\/[^/]+$/, '')}/out`),
             writeFile(scenario.oracle.producerPath, producerBytes)
           ],
           complete: true
@@ -949,6 +964,7 @@ function materializeResponses(scenario, seed, { candidateAgentIds = [] } = {}) {
             // nothing ever opened.
             readFile(scenario.oracle.producerPath),
             createFolder(scenario.oracle.consumerPath.replace(/\/[^/]+$/, '')),
+            createFolder(`${scenario.oracle.consumerPath.replace(/\/[^/]+$/, '')}/out`),
             writeFile(scenario.oracle.consumerPath, `derived from ${producerHash}\n`)
           ],
           complete: true

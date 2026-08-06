@@ -189,12 +189,52 @@ function trialIdFor(scenario, arm, repetition) {
 // product behaved correctly, and neither is compared between arms — they exist
 // so a reader can tell a genuine no-progress window from an undelivered
 // response, and a reused durable response from a retransmission.
+// PLANNER AND WORKER ARE DIFFERENT WINDOWS.
+//
+// A family-7 variant injects its boundary on the WORKER request. Counting the
+// planner's durable response in the same total would report "a response became
+// durable" for a window in which none did — crediting the planner's success to
+// the worker's boundary. Every transport fact is therefore reported per role,
+// and the combined view is never used to judge a variant.
+function transportFactsFor(transport, role) {
+  const scoped = role === null
+    ? transport : transport.filter(entry => entry.role === role);
+  const served = scoped.filter(entry => entry.boundary === 'response_durable');
+  const attempted = scoped.filter(entry => entry.boundary !== 'refused_before_transport');
+  const identities = served.map(entry => entry.responseIdentity).filter(Boolean);
+  return Object.freeze({
+    durableResponses: served.length,
+    attemptedTransports: attempted.length,
+    refusedTransports: scoped.length - served.length,
+    duplicateServedCalls: identities.length - new Set(identities).size,
+    responseIdentities: Object.freeze([...new Set(identities)].sort()),
+    boundaries: Object.freeze([...new Set(scoped.map(entry => entry.boundary))].sort()),
+    // HOW MANY TIMES EACH BOUNDARY WAS REACHED. A structured trial has sibling
+    // leaf Runs, so a total transport count says nothing about the ONE request a
+    // variant injected its boundary on. The count of that boundary does.
+    boundaryCounts: Object.freeze(scoped.reduce((counts, entry) => {
+      counts[entry.boundary] = (counts[entry.boundary] || 0) + 1;
+      return counts;
+    }, {})),
+    // Only the boundaries the SCENARIO staged. A refusal for want of a staged
+    // response is a different fact and is counted above, never here.
+    injectedBoundaryCounts: Object.freeze(scoped.filter(entry => entry.injected)
+      .reduce((counts, entry) => {
+        counts[entry.boundary] = (counts[entry.boundary] || 0) + 1;
+        return counts;
+      }, {}))
+  });
+}
+
 function buildChurnFacts(report, observations) {
   const transport = observations.transport;
   const served = transport.filter(entry => entry.boundary === 'response_durable');
   const refused = transport.filter(entry => entry.boundary !== 'response_durable');
   return Object.freeze({
     observationCompleteness: observations.completeness,
+    // The two windows, never summed.
+    planner: transportFactsFor(transport, 'planner'),
+    worker: transportFactsFor(transport, 'worker'),
     // Did a response become durable at all? A refused transport produced none,
     // so no window may be judged from it.
     durableResponses: served.length,
@@ -229,6 +269,10 @@ function buildRecoveryFacts(observations, workspaceRoot, scenario) {
   const committedEffects = effectPath && fs.existsSync(effectPath) ? 1 : 0;
   return Object.freeze({
     observationCompleteness: observations.completeness,
+    // Recovery boundaries belong to the WORKER request. The planner's transport
+    // is reported beside it so a reader can see it was not the thing under test.
+    planner: transportFactsFor(transport, 'planner'),
+    worker: transportFactsFor(transport, 'worker'),
     servedCalls: served.length,
     attemptedTransports: attempted.length,
     // Serving the same staged response twice is a RETRANSMISSION, which the
@@ -430,10 +474,17 @@ async function proveDurablePath(store, ticketId, arm) {
     roleAccounts: roleAccounts.map(row => ({
       role: row.role, accounts: Number(row.accounts)
     })),
-    // The Ticket reached a terminal status with no non-terminal Runs left, so
-    // the aggregate was reconciled rather than merely abandoned mid-flight.
-    aggregateReconciliationObserved: ['completed', 'failed', 'interrupted', 'cancelled']
-      .includes(ticketStatus && ticketStatus.status),
+    // THE TICKET REACHED A SETTLED STATE WITH NOTHING OUTSTANDING.
+    //
+    // `blocked` is included deliberately and is not a terminal status: a blocked
+    // Ticket has finished reconciling and is awaiting intervention, which is a
+    // settled outcome rather than a mid-flight one. The distinction still
+    // matters, so the exact status is recorded beside this flag and a reader can
+    // tell the two apart; what this flag answers is "was anything still owed?",
+    // and quiescence answers that independently.
+    aggregateReconciliationObserved:
+      ['completed', 'failed', 'interrupted', 'cancelled', 'blocked']
+        .includes(ticketStatus && ticketStatus.status),
     ticketStatus: ticketStatus ? ticketStatus.status : null,
     runCount: runs.length,
     governedLeafRunCount: observed.governedLeafRunCount,
@@ -671,13 +722,30 @@ async function runTrial({
   // seam, which the hermetic preload feeds from `HERMETIC_TRANSPORT_RESPONSE`.
   // Writing it from the SAME staged entries keeps one response source for both
   // transports; a second table would let the two arms diverge invisibly.
-  const plannerStaged = staged.filter(entry => entry.role === 'planner');
+  // BOTH ROLES, from the SAME materialized set.
+  //
+  // Only planner responses used to be written here, so a governed WORKER
+  // request had nothing staged and was refused — which meant families 7 and 8
+  // could never reach the worker boundaries they exist to test, and no governed
+  // worker transport observation was ever produced. Every staged entry is now
+  // written, carrying its match string, role, ordinal and failure boundary.
+  //
+  // Selection stays CONTENT-ADDRESSED: the preload matches `match` against the
+  // request bytes. The arm label is not written here and cannot select anything.
   const governedResponsePath = path.join(namespace.dir, 'governed-responses.json');
   fs.writeFileSync(governedResponsePath, JSON.stringify({
-    responses: plannerStaged.map(entry => ({
+    responses: staged.map(entry => ({
       statusCode: 200,
+      role: entry.role,
+      ordinal: entry.ordinal,
+      logicalTaskId: entry.logicalTaskId,
+      // The planner request carries the ticket objective; a worker request
+      // carries its owned path. Both appear in the request bytes, so one match
+      // rule serves both roles.
+      match: entry.role === 'planner' ? null : entry.match,
+      failureBoundary: entry.failureBoundary || 'none',
       body: JSON.stringify({
-        id: `fixture-planner-${entry.ordinal}`,
+        id: `fixture-${entry.role}-${entry.logicalTaskId}-${entry.ordinal}`,
         output_text: entry.body,
         usage: {
           input_tokens: entry.inputTokens,

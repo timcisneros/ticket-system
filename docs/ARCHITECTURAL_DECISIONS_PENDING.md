@@ -1,6 +1,11 @@
 ## GOVERNED WORKER RESPONSES ARE NOT STAGED FOR THE GOVERNED TRANSPORT (2026-08-06)
 
-**Status: OPEN. Blocks families 7 and 8, and therefore prerequisite 3.**
+**Status: RESOLVED 2026-08-06.** Every staged response — planner and worker,
+with its match string, role, ordinal and failure boundary — is written to the
+governed staged table from the same materialized set the ungoverned fixture
+uses. All forty required cells execute, and both previously surviving
+governed-transport mutations are now reachable. Retained as the record of why a
+refusal for want of staging may never be credited as a declared boundary.
 
 Only PLANNER responses are written to `HERMETIC_TRANSPORT_RESPONSE`. Families 7
 and 8 inject their boundaries on the WORKER request, so on the structured arms

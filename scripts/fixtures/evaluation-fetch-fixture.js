@@ -174,7 +174,8 @@ function installEvaluationFetchFixture({ namespaceDir, providerUrl = PROVIDER_UR
         })}\n`);
         observeTransport({
           logicalRequestId: staged.key, role: staged.role, ordinal: staged.ordinal,
-          requestHash: requestHashOf(requestBody), boundary: 'refused_before_transport'
+          requestHash: requestHashOf(requestBody), boundary: 'refused_before_transport',
+          injected: true
         });
         throw new EvaluationFetchFixtureError('injected pre-transport provider failure');
       }
@@ -201,7 +202,7 @@ function installEvaluationFetchFixture({ namespaceDir, providerUrl = PROVIDER_UR
         // transport rather than as a refusal or as a durable response.
         observeTransport({
           logicalRequestId: staged.key, role: staged.role, ordinal: staged.ordinal,
-          requestHash: requestHashOf(requestBody), boundary: 'bytes_sent'
+          requestHash: requestHashOf(requestBody), boundary: 'bytes_sent', injected: true
         });
         throw new EvaluationFetchFixtureError('injected post-transport response loss');
       }

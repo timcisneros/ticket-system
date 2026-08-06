@@ -1369,9 +1369,13 @@ const ok = (condition, message) => {
   // remains is a narrower STAGING gap on the governed worker request.
   const { GOVERNED_WORKER_STAGING_BLOCKED } =
     require('./fixtures/evaluation-execution-matrix');
-  ok(OBSERVATION_BLOCKED.length > 0 && BLOCKED_FAMILIES.join(',') === '7,8',
-    '14 matrix: the observation block is resolved; only families 7 and 8 remain, ' +
-    'and for a different reason');
+  // BOTH blocks are resolved: the shared sink observes every transport and the
+  // real read, and both roles are staged for the governed transport. The
+  // records of what was wrong are retained so neither mistake can recur
+  // silently.
+  ok(OBSERVATION_BLOCKED.length > 0 && GOVERNED_WORKER_STAGING_BLOCKED.length > 0 &&
+     BLOCKED_FAMILIES.length === 0,
+  '14 matrix: no family is blocked — both the observation and staging gaps are closed');
   ok(GOVERNED_WORKER_STAGING_BLOCKED.every(entry =>
     entry.requires && entry.blockedBy && entry.wouldFabricate && entry.fix),
   '14 matrix: the remaining block names what it needs, what blocks it, what a ' +
@@ -1382,8 +1386,8 @@ const ok = (condition, message) => {
   'reading would claim, and the exact fix');
   ok(MATRIX.every(cell => !BLOCKED_FAMILIES.includes(cell.family)),
     '14 matrix: no blocked family is required until its observation exists');
-  ok(MATRIX.length === 4 && requiredTrials().length === 20,
-    '14 matrix: families 3, 4 and 9 are required and observable — twenty trials');
+  ok(MATRIX.length === 12 && requiredTrials().length === 40,
+    '14 matrix: all twelve protocol-required cells are required — forty trials');
   const seven7 = CANDIDATE_CELLS.filter(cell => cell.family === 7);
   ok(seven7.every(cell => cell.requiredArms.join(',') === 'B,C'),
     '14 matrix: family 7 runs the structured arms only');

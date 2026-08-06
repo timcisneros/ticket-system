@@ -209,9 +209,43 @@ function fixtureHttpsRequest(options, onResponse) {
         process.exit(70);
       }
 
+      // ── SCENARIO FAILURE BOUNDARIES ──────────────────────────────────
+      //
+      // Distinct from the crash machinery above: these boundaries model a
+      // provider interaction that failed, not a process that died. Each records
+      // exactly what actually happened and nothing more.
+      if (candidate.failureBoundary === 'before_transport') {
+        servedIndexes.add(staged.indexOf(candidate));
+        observeTransport({
+          logicalRequestId: candidate.match || candidate.logicalTaskId || null,
+          role: candidate.role || null, ordinal: candidate.ordinal || null,
+          requestHash: requestHashOf(body), boundary: 'refused_before_transport',
+          injected: true
+        });
+        throw new Error('injected pre-transport provider failure');
+      }
+      if (candidate.failureBoundary === 'after_transport_before_response') {
+        // Bytes left; no durable response comes back. Exactly one attempted
+        // transport, and never a retransmission of it.
+        servedIndexes.add(staged.indexOf(candidate));
+        observeTransport({
+          logicalRequestId: candidate.match || candidate.logicalTaskId || null,
+          role: candidate.role || null, ordinal: candidate.ordinal || null,
+          requestHash: requestHashOf(body), boundary: 'bytes_sent', injected: true
+        });
+        throw new Error('injected post-transport response loss');
+      }
+
       servedIndexes.add(staged.indexOf(candidate));
       response.statusCode = candidate.statusCode || 200;
-      const responseIdentity = `fixture-governed-request-${fixtureRequestCount}`;
+      // The response identity comes from the STAGED entry where one exists, so
+      // a governed observation names the same response the scenario wrote
+      // rather than an arrival-order counter.
+      let responseIdentity = `fixture-governed-request-${fixtureRequestCount}`;
+      try {
+        const parsed = JSON.parse(candidate.body || '{}');
+        if (parsed && typeof parsed.id === 'string') responseIdentity = parsed.id;
+      } catch (_) { /* keep the counter-derived identity */ }
       response.headers = { 'x-request-id': responseIdentity };
       // Bytes left AND a response is being handed back, so the durable boundary
       // is the truthful one. A post-transport crash boundary below may still

@@ -1292,6 +1292,78 @@ what shows the sink reports correctly; the governed pair closes when the
 structured arms reach the transport. Both are recorded rather than worked
 around.
 
+## 3i. Governed worker staging — the complete matrix executes (session 13)
+
+### The two blockers, diagnosed from durable state
+
+**Blocker A was misdiagnosed in the previous handoff.** Structured planning did
+NOT refuse: the plan was admitted and a planner request was made. The durable
+block was `leaf_admission_internal_failure`, and the raw cause — captured
+through the opt-in leaf-admission diagnostic — was
+`GOVERNED_LEAF_NO_EVALUABLE_FACT` / `governed_facts_empty`.
+
+That is production working correctly. A governed leaf item is admitted only when
+it carries at least one **execution-evaluable** declared fact, and the evaluable
+criterion types are `folder_exists`, `path_absent` and `file_content_equals`.
+The previous session's objective change — made to escape the pre-created
+ownership trap — produced objectives naming FILES, which compile to no evaluable
+postcondition. Objectives now name folders **inside** the owned roots
+(`reports/producer/out`), satisfying both constraints at once: not already true
+from ownership pre-creation, and compiling to an evaluable fact the work
+actually creates.
+
+**Blocker B is closed.** Every staged response — planner and worker, with its
+match string, role, ordinal and failure boundary — is written to the governed
+staged table from the same materialized set the ungoverned fixture uses.
+Selection stays content-addressed; the arm label reaches neither table.
+
+### First governed scenario worker request
+
+Family 3 arm B, verified end to end: planner request → admitted v2 plan → 3 leaf
+Runs → governed **worker** requests → staged worker responses → shared transport
+observations with distinct roles:
+
+```
+1 planner  response_durable  fixture-planner-plan-1
+2 worker   response_durable  fixture-worker-producer-1
+3 worker   response_durable  fixture-worker-consumer-1
+```
+
+### Planner and worker facts are never summed
+
+Transport facts are reported per role, and the boundary a variant injects is
+counted separately from a refusal issued for want of a staged response
+(`injected: true`). Three distinctions that were previously conflated:
+
+- the **planner's** durable response is not the **worker** window;
+- a structured trial's sibling filler item is not the task under test — the
+  variant boundary now applies only to the scenario's declared logical task;
+- an injected boundary is not a no-staged-response refusal.
+
+### Results — 40 required cells, UNSCORED
+
+All twelve protocol-required cells across families 3, 4, 7, 8 and 9 execute
+(800 suite assertions). Every artifact carries
+`observationCompleteness: "complete"`, and structured arms carry
+`sameParentPolicyRevision: true` at `structured_v2_*_executed`.
+
+| Cell | planner | worker | injected boundary |
+|---|---|---|---|
+| family-7/7A/B | 1 durable | 1 durable | none |
+| family-7/7B/B | 1 durable | 0 durable | `bytes_sent: 1` |
+| family-8/8A/B | 1 durable | — | `refused_before_transport: 1` |
+| family-8/8C/B | 1 durable | 2 durable | none |
+
+### One frozen result changed, and it is not hidden
+
+Serving governed **worker** responses changed family 1's structured arms from
+ticket status `failed` to `blocked`: the workers now genuinely execute, and the
+Ticket ends awaiting intervention rather than failing outright. Both are settled
+outcomes with nothing outstanding — quiescence is asserted separately and still
+holds — so the aggregate fact now means "the Ticket settled with nothing owed"
+and records the exact status beside it, rather than requiring one particular
+terminal value.
+
 ## 13. Status
 
 **Tranche 6: IN PROGRESS — harness built and executing; evaluation NOT run.**
@@ -1301,12 +1373,13 @@ governed structured leaf execution for B and C. **No scored or live evaluation
 has been run.** No comparison, no aggregate, no ranking, no verdict, and no
 RETAIN / REVISE / STOP.
 
-**Prerequisite 3 (hermetic scenario fixtures) remains PARTIALLY CLOSED and is
-NOT closed by this session.** Families 1, 3, 4 and 9 execute with complete
-observation. Families 7 and 8 are authored, variant-complete and proved at
-contract level, but their governed-arm boundaries cannot be reached until the
-governed transport is fed worker responses (§3h). Prerequisite 3 cannot close
-while that list is non-empty.
+**Prerequisite 3 (hermetic scenario fixtures) is CLOSED for execution.** All
+forty protocol-required family-3/4/7/8/9 cells execute through real governed
+worker requests with complete observation, immutable unscored artifacts and
+zero-drift reporting. Families 1 and 9 remain executed. No cell is excluded for
+want of observation or staging.
+
+The scored matrix remains **NOT RUN**, so Tranche 6 stays IN PROGRESS.
 
 Production behaviour DID change in sessions 8 and 9 — the progress-policy
 capture, the failure classification, and the role-keyed economic policy set.

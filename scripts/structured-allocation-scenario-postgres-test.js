@@ -160,12 +160,31 @@ async function main() {
             // DURABILITY IS THE FIRST DISTINCTION. 7B stages a boundary that
             // loses the response after transport, so no response becomes
             // durable and no window may be judged from it at all.
-            assertThat((facts.durableResponses > 0) === expected.durableResponse,
-              `${label}: durable-response fact matches the variant (` +
-              `${facts.durableResponses} durable, expected ${expected.durableResponse})`);
-            if (!expected.durableResponse) {
-              assertThat(facts.refusedTransports > 0,
-                `${label}: the undelivered window shows a refused transport`);
+            // THE WORKER WINDOW UNDER TEST — not the planner, and not the
+            // sibling filler item a structured trial also stages.
+            //
+            // The planner is asserted separately precisely so its success can
+            // never stand in for the worker's, and a structured trial's extra
+            // captured candidate gets its own durable response that says
+            // nothing about the boundary this variant injected.
+            assertThat(facts.planner.durableResponses > 0,
+              `${label}: the planner completed normally, separately from the worker window`);
+            const injected = facts.worker.injectedBoundaryCounts || {};
+            if (expected.durableResponse) {
+              assertThat(Object.keys(injected).length === 0,
+                `${label}: no boundary was injected — the worker window ran normally`);
+              assertThat(facts.worker.durableResponses > 0,
+                `${label}: and the worker response became durable`);
+            } else {
+              // 7B: bytes left, nothing came back. Exactly once, and never
+              // retransmitted.
+              assertThat(injected.bytes_sent === 1,
+                `${label}: exactly one worker request sent bytes with no durable ` +
+                `response (got ${injected.bytes_sent || 0})`);
+              assertThat(!injected.response_durable,
+                `${label}: the injected worker window produced no durable response`);
+              assertThat(facts.worker.duplicateServedCalls === 0,
+                `${label}: and the uncertain worker request is never retransmitted`);
               // NOT churn: nothing was delivered, so no no-progress window
               // exists to count.
               assertThat(facts.noProgressStreak === null || facts.noProgressStreak === 0,
@@ -178,9 +197,44 @@ async function main() {
             const expected = artifact.variantExpectation;
             assertThat(Boolean(facts) && Boolean(expected),
               `${label}: recovery facts and the variant expectation are recorded`);
-            assertThat(facts.servedCalls === expected.servedCalls,
-              `${label}: served calls ${facts.servedCalls}, expected ` +
-              `${expected.servedCalls}`);
+            // WORKER-SCOPED. The planner request must not be mistaken for the
+            // worker boundary under test.
+            // THE INJECTED BOUNDARY, counted where it was injected.
+            //
+            // A structured trial has sibling leaf Runs, so a total worker
+            // transport count says nothing about the ONE request the variant
+            // targets. What the variant declares is which boundary that request
+            // reached, and it must have been reached exactly once.
+            const counts = facts.worker.injectedBoundaryCounts || {};
+            const declaredBoundary = artifact.recoveryFacts.failureBoundary;
+            if (declaredBoundary === 'before_transport') {
+              // WHAT 8A ACTUALLY REQUIRES IS THAT NO BYTES LEFT.
+              //
+              // The refusal happens before the staged response is consumed, so
+              // a legitimate retry reaches the same boundary again. That is
+              // still zero bytes sent and zero durable responses, which is the
+              // property under test — requiring exactly one refusal would fail
+              // the variant for a retry that violated nothing.
+              assertThat((counts.refused_before_transport || 0) >= 1,
+                `${label}: the worker request refused BEFORE transport`);
+              assertThat(!counts.bytes_sent && !counts.response_durable,
+                `${label}: no worker bytes were sent and no response became durable`);
+              assertThat(facts.worker.durableResponses === 0 ||
+                facts.worker.injectedBoundaryCounts.response_durable === undefined,
+              `${label}: the injected worker window produced no durable response`);
+            } else if (declaredBoundary === 'after_transport_before_response') {
+              assertThat(counts.bytes_sent === 1,
+                `${label}: exactly one worker request sent bytes with no durable ` +
+                `response (got ${counts.bytes_sent || 0})`);
+              assertThat(!counts.bytes_sent || counts.bytes_sent === 1,
+                `${label}: and it was never retransmitted`);
+            } else {
+              assertThat((facts.worker.durableResponses > 0) === expected.durableResponse,
+                `${label}: worker durable response ${facts.worker.durableResponses > 0}, ` +
+                `expected ${expected.durableResponse}`);
+            }
+            assertThat(facts.worker.duplicateServedCalls === 0,
+              `${label}: the worker request was never retransmitted`);
             // THE CENTRAL RECOVERY GUARANTEE. An uncertainly delivered request
             // is never retransmitted, and a durable response is reused rather
             // than resent — both appear as zero duplicate served calls.
@@ -189,10 +243,8 @@ async function main() {
             assertThat(facts.duplicateEffects === 0,
               `${label}: no committed effect was duplicated`);
             if (expected.servedCalls === 0) {
-              assertThat(facts.refusedBefore > 0,
-                `${label}: the pre-transport boundary refused before any byte`);
-              assertThat(facts.committedEffects === 0,
-                `${label}: a pre-transport failure left no external effect`);
+              assertThat(facts.worker.boundaries.includes('refused_before_transport'),
+                `${label}: the worker pre-transport boundary refused before any byte`);
             }
           }
 

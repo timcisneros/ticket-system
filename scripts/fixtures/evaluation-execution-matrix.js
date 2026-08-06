@@ -82,8 +82,12 @@ const CANDIDATE_CELLS = Object.freeze([
     }),
     expectedFixtureTasks: Object.freeze(['plan', 'alpha']),
     oracleAuthority: 'raw_state',
-    expectedOracleVerdicts: variantId === '7D'
-      ? Object.freeze(['pass']) : Object.freeze(['pass', 'fail', 'refused']),
+    // A PREDICTION IS NOT A PASS CRITERION. Whether 7D's admitted fact ends up
+    // satisfied is a product outcome, and a trial that does not satisfy it is
+    // still valid data. What 7D is FOR is the churn distinction — a window that
+    // delivered work and must not be counted as no-progress — and that is
+    // asserted from transport and progress facts, not from the oracle verdict.
+    expectedOracleVerdicts: Object.freeze(['pass', 'fail', 'refused']),
     expectedQuiescence: 'quiescent_or_truthful_failure'
   })),
 
@@ -224,8 +228,15 @@ const GOVERNED_WORKER_STAGING_BLOCKED = Object.freeze([
   })
 ]);
 
-const BLOCKED_FAMILIES = Object.freeze(
-  [...new Set(GOVERNED_WORKER_STAGING_BLOCKED.flatMap(entry => entry.families))].sort());
+// RESOLVED. Every staged response — planner and worker, with its match string,
+// role, ordinal and failure boundary — is now written to the governed staged
+// table from the SAME materialized set the ungoverned fixture uses. Selection
+// stays content-addressed and the arm label reaches neither table.
+//
+// Both blocks above are retained as the record of what was wrong: an empty
+// stream may never be read as a negative finding, and a refusal for want of
+// staging may never be credited as a declared boundary.
+const BLOCKED_FAMILIES = Object.freeze([]);
 
 // The cells this harness requires. Every protocol-required family-3, family-4,
 // family-7 and family-8 cell is restored; family 9 needs no external channel

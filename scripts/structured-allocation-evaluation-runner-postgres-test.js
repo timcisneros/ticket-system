@@ -191,8 +191,19 @@ async function main() {
           `${armId}: the selected planner and worker policy hashes remain distinct`);
 
           // ── AGGREGATE ────────────────────────────────────────────────
+          // A SETTLED aggregate, with the exact status recorded beside it.
+          //
+          // Serving governed WORKER responses changed the structured arms from
+          // `failed` to `blocked`: the workers now genuinely execute, and the
+          // Ticket ends awaiting intervention rather than failing outright.
+          // Both are settled outcomes with nothing outstanding, and quiescence
+          // is asserted separately, so the status itself is reported rather
+          // than required to be one particular value.
           assertThat(artifact.pathProof.aggregateReconciliationObserved === true,
-            `${armId}: the Ticket aggregate was reconciled to a terminal status`);
+            `${armId}: the Ticket aggregate settled with nothing outstanding ` +
+            `(status ${artifact.pathProof.ticketStatus})`);
+          assertThat(artifact.quiescence.quiescent === true,
+            `${armId}: and quiescence confirms no work remained`);
         }
 
         // ── CANONICAL PATH STAGE, one classifier ───────────────────────────
