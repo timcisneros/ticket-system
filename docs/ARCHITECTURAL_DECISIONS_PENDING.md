@@ -1,3 +1,32 @@
+## TIMELINE DETERMINISM ASSERTION IS LOAD-SENSITIVE (2026-08-06)
+
+**Status: OPEN. Pre-existing; not caused by the evaluation work.**
+
+`timeline-authority-evidence-test.js` §4 asserts that projecting the same
+timeline twice yields identical entries in identical order. It failed once
+inside a full release checkpoint and passes reliably in isolation (3/3
+immediately afterwards). The suite is untouched by this branch — no commit
+since `master` modifies it.
+
+**Mechanism.** The assertion is made against a Ticket whose Run has FAILED, but
+the suite does not first establish that the Ticket is quiescent. Under checkpoint
+concurrency, background terminalization and consequence writing can still be in
+flight, so the second projection legitimately contains an entry the first did
+not. The projection is deterministic *given stable state*; the suite asserts
+determinism without establishing stable state.
+
+So this is a test-design weakness, not a product non-determinism defect: nothing
+here shows the projection reordering or rewriting anything.
+
+**Fix:** wait for canonical quiescence — the same contract the evaluation harness
+uses — before the second projection, so the assertion compares two reads of a
+settled Ticket.
+
+Recorded rather than resolved by re-running: a later pass does not explain a
+failure, and the explanation is what makes the definitive checkpoint meaningful.
+
+---
+
 ## AGGREGATE RECONCILIATION WAS INFERRED, NOT OBSERVED (2026-08-06)
 
 **Status: RESOLVED 2026-08-06.**
