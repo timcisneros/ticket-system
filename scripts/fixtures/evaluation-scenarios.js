@@ -56,10 +56,37 @@ function writeFile(pathValue, content) {
   return { operation: 'writeFile', args: { path: pathValue, content } };
 }
 
-// The planner proposal shape for the structured arms. Only B and C ever request
-// it; the legacy and direct arms never issue a planner request at all.
+// THE MODEL-OWNED PROPOSAL, and only the model-owned parts.
+//
+// `normalizePlannerProposal` accepts exactly `version`, `sharedConstraints` and
+// `items`, and each item exactly `assignedAgentId`, `objective`,
+// `expectedOutputs`, `successCriteria` and `evidenceRequirements` — the last of
+// which must be EMPTY, because evidence identities are runtime-bound. Owned
+// output paths are deliberately absent: production assigns them, which is
+// precisely why one proposal serves both the allocated and dynamic arms.
+//
+// `assignedAgentId` is a real agent id created per trial, so a proposal cannot
+// be frozen in the catalog; it is materialized from the planning request's own
+// candidate agents. That keeps response selection keyed by scenario, task,
+// seed, role and ordinal — never by the arm.
 function plannerProposal(items) {
-  return JSON.stringify({ items });
+  return JSON.stringify({
+    version: 1,
+    sharedConstraints: [
+      { kind: 'text', declaration: 'Write only inside your own allocated path' }
+    ],
+    items
+  });
+}
+
+function proposalItem({ assignedAgentId, objective, output, criterion }) {
+  return {
+    assignedAgentId,
+    objective,
+    expectedOutputs: [{ kind: 'text', declaration: output }],
+    successCriteria: [{ kind: 'text', declaration: criterion }],
+    evidenceRequirements: []
+  };
 }
 
 const SCENARIOS = Object.freeze({
@@ -96,16 +123,14 @@ const SCENARIOS = Object.freeze({
     }),
     ownedOutputPaths: Object.freeze({ alpha: 'reports/alpha/', beta: 'reports-b/beta/' }),
     logicalTasks: Object.freeze(['alpha', 'beta']),
-    plannerResponses: Object.freeze([
-      Object.freeze({
-        role: 'planner', logicalTaskId: 'plan', ordinal: 1,
-        inputTokens: 400, outputTokens: 120,
-        body: plannerProposal([
-          { subtask: 'Create reports/alpha', ownedOutputPaths: ['reports/alpha/'] },
-          { subtask: 'Create reports/beta', ownedOutputPaths: ['reports/beta/'] }
-        ])
-      })
-    ]),
+    plannerResponseTemplate: Object.freeze({
+      role: 'planner', logicalTaskId: 'plan', ordinal: 1,
+      inputTokens: 400, outputTokens: 120,
+      itemObjectives: Object.freeze([
+        'Create the alpha report folder inside your allocated path',
+        'Create the beta report folder inside your allocated path'
+      ])
+    }),
     workerResponses: Object.freeze([
       Object.freeze({
         role: 'worker', logicalTaskId: 'alpha', ordinal: 1,
@@ -121,6 +146,17 @@ const SCENARIOS = Object.freeze({
         body: workerPlan({
           message: 'Creating the beta folder.',
           actions: [createFolder('reports-b/beta')], complete: true
+        })
+      }),
+      // Any additional captured candidate — the planner agent is a group member
+      // and therefore receives an allocation item of its own. Its output is not
+      // part of the objective, so the oracle does not expect it.
+      Object.freeze({
+        role: 'worker', logicalTaskId: 'extra', ordinal: 1,
+        match: 'reports/agent-', inputTokens: 260, outputTokens: 50,
+        body: workerPlan({
+          message: 'Creating the allocated folder.',
+          actions: [createFolder('reports/agent-2/output')], complete: true
         })
       })
     ]),
@@ -514,7 +550,7 @@ function assertArmAllowed(scenario, armId) {
 // Turn a scenario's response definitions into the staged table for one trial.
 // Seed-dependent bodies are generated here, which is what stops a staged
 // response from hard-coding the family 3/4 answer.
-function materializeResponses(scenario, seed) {
+function materializeResponses(scenario, seed, { candidateAgentIds = [] } = {}) {
   if (typeof seed !== 'string' || !seed) {
     throw new EvaluationScenarioError('a trial seed is required');
   }
@@ -522,6 +558,29 @@ function materializeResponses(scenario, seed) {
     ...response, protocolVersion: scenario.protocolVersion,
     scenarioId: scenario.scenarioId, seed
   }))];
+
+  // The planner proposal binds real agent ids, so it is built from the
+  // planning request's own candidates rather than frozen in the catalog.
+  const template = scenario.plannerResponseTemplate;
+  if (template && candidateAgentIds.length > 0) {
+    // ONE ITEM PER CAPTURED CANDIDATE. Lowering refuses a proposal that omits
+    // any candidate the planning authority captured — and the planner agent is
+    // itself a group member, so it is a candidate too. Covering every candidate
+    // is the contract, not a convenience.
+    const items = candidateAgentIds.map((agentId, index) => proposalItem({
+      assignedAgentId: agentId,
+      objective: template.itemObjectives[index] ||
+        `Create your allocated report folder (candidate ${index + 1})`,
+      output: 'One declared folder',
+      criterion: 'The declared folder exists'
+    }));
+    staged.push({
+      protocolVersion: scenario.protocolVersion, scenarioId: scenario.scenarioId,
+      seed, role: template.role, logicalTaskId: template.logicalTaskId,
+      ordinal: template.ordinal, inputTokens: template.inputTokens,
+      outputTokens: template.outputTokens, body: plannerProposal(items)
+    });
+  }
 
   for (const response of scenario.workerResponses || []) {
     staged.push({
@@ -629,5 +688,7 @@ module.exports = {
   materializeResponses,
   buildOracleFor,
   validateScenario,
-  workerPlan
+  workerPlan,
+  plannerProposal,
+  proposalItem
 };

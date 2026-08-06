@@ -931,9 +931,28 @@ const ok = (condition, message) => {
 
   // Planner responses exist only for the structured arms to consume; the
   // catalog never varies content by arm.
-  ok(family1.plannerResponses.length === 1 &&
-    family1.plannerResponses[0].role === 'planner',
-  '12 catalog: one planner response is staged, for whichever arm requests it');
+  // The planner proposal binds real agent ids, so it is a per-trial template
+  // rather than a frozen response — and it is built from the planning
+  // request's own candidates, never from the arm.
+  ok(family1.plannerResponseTemplate &&
+    family1.plannerResponseTemplate.role === 'planner' &&
+    family1.plannerResponseTemplate.itemObjectives.length === 2,
+  '12 catalog: family 1 carries a planner proposal TEMPLATE, not a frozen response');
+  const withAgents = materializeResponses(family1, 'seed-x',
+    { candidateAgentIds: [11, 22] });
+  const proposal = JSON.parse(
+    withAgents.find(entry => entry.role === 'planner').body);
+  ok(proposal.version === 1 && Array.isArray(proposal.sharedConstraints) &&
+    proposal.items.length === 2,
+  '12 catalog: the materialized proposal carries version, sharedConstraints and items');
+  ok(proposal.items.map(item => item.assignedAgentId).join(',') === '11,22',
+    '12 catalog: and binds the trial\'s real candidate agent ids');
+  ok(proposal.items.every(item => Array.isArray(item.evidenceRequirements) &&
+    item.evidenceRequirements.length === 0),
+  '12 catalog: evidence requirements stay empty — they are runtime-bound');
+  ok(!JSON.stringify(proposal).includes('ownedOutputPaths'),
+    '12 catalog: the proposal claims no owned paths — production assigns them, ' +
+    'which is why one proposal serves both the allocated and dynamic arms');
   ok(!JSON.stringify(family1).includes('"A2a"') || family1.allowedArms.includes('A2a'),
     '12 catalog: arm identifiers appear only in allowedArms, never in response selection');
 

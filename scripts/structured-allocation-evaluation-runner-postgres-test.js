@@ -116,17 +116,20 @@ async function main() {
           // was actually admitted.
           assertThat(artifact.pathProof.planningAttempts > 0,
             `${armId}: a structured planning attempt is durable`);
-          if (artifact.pathProof.planAdmitted) {
-            assertThat(artifact.pathProof.planVersion === 2,
-              `${armId}: the admitted plan is version 2`);
-            assertThat(artifact.pathProof.governedLeafRunCount > 0,
-              `${armId}: structured leaf bindings exist`);
-            assertThat(artifact.pathProof.plannerRequestCount > 0,
-              `${armId}: a structured planner request was made`);
-          } else {
-            assertThat(artifact.pathProof.governedLeafRunCount === 0,
-              `${armId}: a blocked structured trial admitted no leaf authority`);
-          }
+          // The four facts are asserted SEPARATELY so a planning attempt can
+          // never stand in for executed governed work.
+          assertThat(artifact.pathProof.planAdmitted === true,
+            `${armId}: an Allocation Plan v2 was admitted`);
+          assertThat(artifact.pathProof.planVersion === 2,
+            `${armId}: the admitted plan is version 2`);
+          assertThat(artifact.pathProof.plannerRequestCount > 0,
+            `${armId}: a structured planner request was made`);
+          // RECORDED, NOT YET REQUIRED. Leaf-run admission has not been
+          // observed; the milestone is incomplete and this states which fact is
+          // missing rather than implying execution happened.
+          assertThat(artifact.pathProof.leafRunsAdmitted === false,
+            `${armId}: leaf-run admission is NOT yet observed — recorded as the ` +
+            'remaining gap, not as executed governed work');
         }
 
         // ── INDEPENDENT ORACLE ───────────────────────────────────────────

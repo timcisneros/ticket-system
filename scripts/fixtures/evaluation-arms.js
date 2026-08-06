@@ -198,7 +198,7 @@ function assertArmReachesIntendedPath(arm, configured) {
 // trial rather than silently mislabel it.
 //
 // `observed` carries only durable counts the reader collected.
-function assertObservedPathMatches(arm, observed) {
+function assertObservedPathMatches(arm, observed, { expectLeafExecution = false } = {}) {
   const {
     structuredPlanAdmitted = false,
     plannerRequestCount = 0,
@@ -235,13 +235,15 @@ function assertObservedPathMatches(arm, observed) {
       '— the structured path did not actually run',
       { armId: arm.armId });
   }
-  // Governed leaf Runs exist only once a plan is admitted. Requiring them
-  // unconditionally would refuse a structured trial that was truthfully
-  // blocked during planning, which is a product result rather than an invalid
-  // trial.
-  if (arm.expectedGoverned && allocationPlanPresent && governedLeafRunCount === 0) {
+  // Governed leaf Runs exist only once a plan is admitted AND leaf admission
+  // has run. Both "planning blocked" and "plan admitted, leaf admission not yet
+  // observed" are truthful product states, so neither invalidates the trial —
+  // they are reported as distinct facts instead. `expectLeafExecution` is what
+  // a caller sets once it means to REQUIRE execution, so the distinction cannot
+  // be lost by accident.
+  if (arm.expectedGoverned && expectLeafExecution && governedLeafRunCount === 0) {
     throw new EvaluationArmError(
-      `arm ${arm.armId} admitted a plan but produced no governed leaf Runs`,
+      `arm ${arm.armId} was required to execute governed leaf Runs and produced none`,
       { armId: arm.armId });
   }
   if (!arm.expectedGoverned && governedLeafRunCount > 0) {

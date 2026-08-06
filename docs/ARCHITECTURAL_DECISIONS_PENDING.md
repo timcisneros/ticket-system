@@ -1,3 +1,29 @@
+## Tranche 6 Controlled Evaluation: B AND C ADMIT PLAN v2 (2026-08-06)
+
+**Session 6.** The structured arms previously failed planning outright. Four
+distinct refusal causes were identified from durable authority and corrected at
+the harness — **no production file changed** — and B and C now admit Allocation
+Plan v2: missing governed routing policy, missing `economicPolicy.capturedAt`, a
+planner body that was not a v2 proposal, and a proposal omitting the planner
+agent as a captured candidate. A fifth defect was harness-only: seeding a
+routing policy per trial made the second structured trial fail, because exactly
+one active governed policy may exist.
+
+`planVersion` was being derived from leaf Runs and reported a genuinely admitted
+v2 plan as v1 whenever leaf admission had not run; it now derives from how the
+plan was admitted.
+
+**The session goal is NOT fully met.** Leaf-Run admission is still unobserved, so
+governed execution, governed economics, verified-progress controls and aggregate
+structured completion remain unexercised. The runner now reports
+`planningAttempted`, `planAdmitted`, `leafRunsAdmitted` and
+`governedLeafExecutionObserved` as separate facts so a planning attempt can never
+be read as executed governed work.
+
+**PREREQUISITE 3 REMAINS PARTIALLY CLOSED — EVALUATION MAY NOT RUN.**
+
+**Previous session record, retained:**
+
 ## Tranche 6 Controlled Evaluation: RUNNER EXECUTES ALL FIVE ARMS (2026-08-05)
 
 **Session 5.** The executable runner exists and family 1 has run through all

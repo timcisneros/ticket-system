@@ -190,9 +190,11 @@ async function proveDurablePath(store, ticketId, arm) {
   }
   const observedPath = assertObservedPathMatches(arm, observed);
 
-  // Version is a fact about the admitted plan, not about the arm.
+  // Version is a fact about how the plan was ADMITTED, not about the arm and
+  // not about how many Runs followed. Deriving it from leaf Runs reported a
+  // genuinely admitted v2 plan as v1 whenever leaf admission had not yet run.
   const planVersion = plans.length === 0 ? null
-    : (runs.some(run => run.governed_leaf) ? 2 : 1);
+    : (planningAttempts > 0 || runs.some(run => run.governed_leaf) ? 2 : 1);
   if (arm.expectedPath === 'legacy_v1' && planVersion !== 1) {
     throw new EvaluationRunnerError(
       `arm ${arm.armId} must show allocation plan version 1, observed ${planVersion}`);
@@ -213,9 +215,15 @@ async function proveDurablePath(store, ticketId, arm) {
     `SELECT payload FROM ${store.table('events')}
       WHERE ticket_id = $1 AND type = 'ticket.structured_planning_failed'
       ORDER BY seq DESC LIMIT 1`, [ticketId])).rows;
+  // The four separate facts the milestone distinguishes, so a planning attempt
+  // can never be read as executed governed work.
   return Object.freeze({
     observedPath, planVersion, planningAttempts,
+    planningAttempted: planningAttempts > 0,
     planAdmitted: plans.length > 0,
+    leafRunsAdmitted: observed.governedLeafRunCount > 0,
+    governedLeafExecutionObserved: runs.some(run =>
+      run.governed_leaf && run.governed_envelope),
     planningFailureReason: planningFailures.length > 0
       ? JSON.stringify(planningFailures[0].payload).slice(0, 300) : null,
     plannerRequestCount: plannerReservations,
@@ -313,6 +321,88 @@ async function runTrial({
   // unused would 400 the legacy arms at ticket creation. It is also the
   // truthful configuration: an operator running the legacy path does not
   // designate a planner.
+  // GOVERNED ROUTING AUTHORITY, for the structured arms only.
+  //
+  // The previous B/C trials failed at `invocation_readiness` with
+  // `planner_route_unavailable` and `requestHash: null` — no planner request
+  // was ever issued. The cause was not the planner fixture response and not the
+  // declared work: `loadGovernedPlannerPolicyContainer` requires exactly one
+  // ACTIVE model routing policy carrying `governedExecution`, and the trial
+  // environment had none. Production was refusing to spend without captured
+  // routing and pricing authority, which is correct.
+  //
+  // Seeding it is configuration the operator supplies, not a contract change:
+  // one policy carrying role routes and economic policy for the planner and the
+  // leaf executor, priced from the same catalog the evaluation's normalized
+  // cost uses.
+  if (arm.plannerAgent) {
+    // EXACTLY ONE active governed routing policy may exist:
+    // `loadGovernedPlannerPolicyContainer` refuses when two do. Seeding one per
+    // trial made the SECOND structured trial in a run fail planning with an
+    // ambiguity the first trial had caused — so an existing policy is reused
+    // rather than duplicated.
+    const existing = await store.listModelRoutingPolicies({
+      statuses: ['active'], limit: 100
+    });
+    const rows = Array.isArray(existing) ? existing : (existing && existing.policies) || [];
+    const alreadyGoverned = rows.some(row => row && row.governedExecution);
+    const catalog = buildPricingCatalog(pricedCatalogValue());
+    const roleEntry = role => ({
+      role,
+      primaryRoute: {
+        adapterId: 'openai.responses.v1', provider: 'openai',
+        model: 'gpt-4o-mini-2024-07-18'
+      },
+      fallbackRoute: null,
+      authorizedFallbackReasons: []
+    });
+    const economics = role => ({
+      policyId: `${role}-economics-eval`,
+      role,
+      authorizedMicroUsd: 500_000,
+      maximumProviderRequests: 3,
+      maximumOutputTokensPerRequest: 2048,
+      pricingCatalogId: catalog.catalogId,
+      pricingCatalogHash: catalog.catalogHash,
+      fallbackLiabilityAuthorized: false,
+      fallbackProviderRequests: 0,
+      // Required by the economic-authority contract: an economic policy that
+      // cannot say when it was captured cannot be bound to a request.
+      capturedAt: '2026-08-01T00:00:00.000Z'
+    });
+    if (!alreadyGoverned) await store.createModelRoutingPolicy({
+      value: {
+        name: `Eval governed routing ${stamp}`,
+        status: 'active',
+        workContextId: null,
+        capabilityId: null,
+        allowedProviders: ['openai'],
+        preferredProvider: 'openai',
+        preferredModel: 'gpt-4o-mini-2024-07-18',
+        fallbackProviders: [],
+        maxCost: null,
+        maxLatency: null,
+        riskClass: 'standard',
+        toolRequirements: [],
+        targetRequirements: [],
+        verificationRequirement: null,
+        triageOnNoRoute: true,
+        governedExecution: {
+          roleRoutingPolicy: {
+            policyId: 'eval-routing-1',
+            rolePolicies: [
+              roleEntry('structured_planner'),
+              roleEntry('structured_leaf_executor')
+            ]
+          },
+          economicPolicy: economics('structured_planner'),
+          pricingCatalog: pricedCatalogValue()
+        }
+      },
+      changedBy: 'evaluation-runner'
+    });
+  }
+
   let planner = null;
   if (arm.plannerAgent) {
     planner = await makeAgent('Planner');
@@ -322,7 +412,14 @@ async function runTrial({
     });
   }
 
-  const staged = materializeResponses(scenario, seed);
+  // Candidate agents are the group's WORKERS: the proposal assigns work to
+  // them, and the planner is not a candidate for its own plan.
+  // EVERY group member is a captured candidate, planner included, and lowering
+  // refuses a proposal that omits one.
+  const staged = materializeResponses(scenario, seed, {
+    candidateAgentIds: [workerOne.id, workerTwo.id,
+      ...(planner ? [planner.id] : [])]
+  });
   stageResponses(namespace, staged);
   // The fetch adapter recovers the logical task from what production sent.
   const table = JSON.parse(fs.readFileSync(namespace.stagedPath, 'utf8'));
@@ -358,10 +455,35 @@ async function runTrial({
     verificationPolicy: 'when_declared'
   });
 
+  // THE GOVERNED PLANNER RESPONSE, from the same staged table.
+  //
+  // The planner request goes through the governed transport's `https.request`
+  // seam, which the hermetic preload feeds from `HERMETIC_TRANSPORT_RESPONSE`.
+  // Writing it from the SAME staged entries keeps one response source for both
+  // transports; a second table would let the two arms diverge invisibly.
+  const plannerStaged = staged.filter(entry => entry.role === 'planner');
+  const governedResponsePath = path.join(namespace.dir, 'governed-responses.json');
+  fs.writeFileSync(governedResponsePath, JSON.stringify({
+    responses: plannerStaged.map(entry => ({
+      statusCode: 200,
+      body: JSON.stringify({
+        id: `fixture-planner-${entry.ordinal}`,
+        output_text: entry.body,
+        usage: {
+          input_tokens: entry.inputTokens,
+          output_tokens: entry.outputTokens,
+          total_tokens: entry.inputTokens + entry.outputTokens
+        }
+      })
+    }))
+  }));
+
   const server = await startServer({
     env: {
       NODE_OPTIONS: `--require ${path.join(__dirname, 'fixtures', 'evaluation-preload.js')}`,
       EVALUATION_FIXTURE_NAMESPACE: namespace.dir,
+      HERMETIC_TRANSPORT_RESPONSE: governedResponsePath,
+      HERMETIC_TRANSPORT_CAPTURE: path.join(namespace.dir, 'governed-capture.jsonl'),
       OPENAI_API_KEY: 'test-only-sentinel-not-a-real-credential',
       RUNTIME_SCHEDULER_INTERVAL_MS: '200'
     }

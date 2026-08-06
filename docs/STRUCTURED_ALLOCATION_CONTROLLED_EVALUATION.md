@@ -805,6 +805,59 @@ asserted to contain no rank, winner, score or aggregate.
 
 ---
 
+## 3c. B and C now admit Allocation Plan v2 (session 6)
+
+The previous result was `structured planning attempted, no plan admitted,
+ticket.structured_planning_failed`. Four distinct causes were found, each from
+durable authority rather than inference, and each corrected at the harness — no
+production file changed.
+
+| # | Durable evidence | Cause | Correction |
+|---|---|---|---|
+| 1 | `failureStage: invocation_readiness`, `failureReason: planner_route_unavailable`, `requestHash: null` | No active model routing policy carried `governedExecution`, so `loadGovernedPlannerPolicyContainer` refused. Production was correctly declining to spend without captured routing and pricing authority. | The runner seeds one governed routing policy with role routes and economic policy for the planner and leaf executor. |
+| 2 | `failureDetail: economicPolicy is missing field(s): capturedAt` | The seeded economic policy omitted `capturedAt`. | Added — a policy that cannot say when it was captured cannot bind a request. |
+| 3 | `failureStage: proposal_validation`, `plannerProposal is missing field(s): version, sharedConstraints, items` | The staged planner body was not a v2 proposal. | The proposal is now materialized per trial from the real contract: `version`, `sharedConstraints`, and items carrying exactly `assignedAgentId`, `objective`, `expectedOutputs`, `successCriteria` and an EMPTY `evidenceRequirements`. Owned paths are absent because production assigns them — which is why one proposal serves both the allocated and dynamic arms. |
+| 4 | `failureStage: lowering`, `proposal_candidate_mismatch: plannerProposal omitted captured candidate 3` | The planner agent is a group member and therefore a captured candidate, and lowering refuses a proposal that omits one. | One proposal item per captured candidate. |
+
+A fifth defect was in the harness itself: seeding a routing policy per trial made
+the **second** structured trial fail, because `loadGovernedPlannerPolicyContainer`
+refuses when two active governed policies exist. The runner now reuses an
+existing one. C admitted a plan in isolation before this fix, which is what
+identified it as cross-trial interference rather than an arm difference.
+
+`planVersion` was also being derived from leaf Runs, which reported a genuinely
+admitted v2 plan as v1 whenever leaf admission had not yet run. It is now derived
+from how the plan was **admitted**.
+
+### The four path facts are now separate
+
+`planningAttempted`, `planAdmitted`, `leafRunsAdmitted` and
+`governedLeafExecutionObserved` are reported individually, so a planning attempt
+can never stand in for executed governed work. `assertObservedPathMatches` takes
+an explicit `expectLeafExecution` flag rather than inferring the requirement.
+
+### Current five-arm matrix — 91 assertions
+
+| Arm | Path | Planning attempted | Plan admitted | Leaf Runs admitted |
+|---|---|---|---|---|
+| A | `direct` | n/a | n/a | n/a |
+| A2a | `legacy_v1` (operator ownership) | no | yes (v1) | n/a |
+| A2b | `legacy_v1` (system-derived ownership) | no | yes (v1) | n/a |
+| B | `structured_v2` (allocated) | **yes** | **yes, v2** | **not yet** |
+| C | `structured_v2` (dynamic) | **yes** | **yes, v2** | **not yet** |
+
+**The session goal is not fully met.** B and C admit v2 plans but structured
+leaf-Run admission has not been observed, so governed execution, governed
+economics, verified-progress controls and aggregate structured completion remain
+unexercised. That is recorded as the remaining gap rather than implied to have
+happened.
+
+Artifacts:
+`/tmp/ticket-system-structured-evaluation-smoke/<commit>/fixture/family1-<arm>.json`,
+each labelled `UNSCORED HARNESS SMOKE — NOT PRODUCT EVIDENCE`.
+
+---
+
 ## 5a. The normalized cost method
 
 One method, every arm:
