@@ -1,4 +1,64 @@
-## PRODUCTION DEFECT — structured leaf admission cannot succeed (2026-08-06)
+## PRODUCTION DEFECT — structured leaf admission is unreachable (2026-08-06)
+
+**Status: OPEN. NOT a wiring omission. It cannot be corrected without a product
+decision, and the correction was therefore not attempted.**
+
+### Phase 1 verdict (2026-08-06, second audit)
+
+**NEITHER of the offered verdicts is right.** Not "server omitted an
+already-captured governed authority", and not "server must derive the capture
+from the admitted policy snapshot" — because **no such authority exists to
+capture or derive from.**
+
+Supplying `governedLeafCapture` requires `{ policySource, progressControlPolicy }`.
+The policy source could be read the same way the planner's already is. The
+progress-control policy cannot, and three independent facts establish that:
+
+1. **`buildProgressControlPolicy` has no production caller.** Its only callers
+   are the contract that defines it, its own contract test, and
+   `scripts/governed-structured-fixture.js`. Production never builds one.
+2. **The governed policy container cannot carry one.**
+   `runtime/governed-policy-source.js` admits exactly three subdocuments —
+   `roleRoutingPolicy`, `economicPolicy`, `pricingCatalog` — and its own comment
+   states that "a fourth is a configuration error, not an extension point."
+3. **No migration defines a durable progress-control policy.** There is no
+   configuration surface, operator or otherwise, from which one could be read.
+
+So structured leaf admission is unreachable **by construction**. Only test
+fixtures have ever supplied the capture the store requires.
+
+### Why the correction was not made
+
+The brief instructed: *"Do not invent policySource or progress-control values
+merely to satisfy the store."* Any wiring change would have to invent a
+progress-control policy — choosing churn tolerances, duration bounds and
+resource dimensions that no operator granted — and bind it as immutable
+governance authority to every structured Run. That is a product decision about
+where governed progress policy lives and who sets it, not a bounded correction,
+and inventing a default would be exactly the "silent reinterpretation" the
+policy-source contract exists to prevent.
+
+**The failure-classification correction was also deferred**, because it is only
+reachable through the same code path and shipping it alone would produce a
+production change requiring the full checkpoint and mutation gate while leaving
+the substantive defect open.
+
+### The smallest correct fix, for whoever authorizes it
+
+One of:
+
+* extend the governed policy source to a fourth subdocument carrying the
+  progress-control policy, accepting that this reverses an explicit contract
+  decision; or
+* add a separate durable progress-policy configuration surface with its own
+  migration, admission and immutability rules, read at leaf admission; or
+* decide that governed leaf execution requires no progress control and relax
+  the store's requirement — which would reopen the Tranche 5 verified-progress
+  guarantees and should not be done casually.
+
+All three are architecture decisions. None belongs in an evaluation branch.
+
+### Original entry, retained
 
 **Status: OPEN. Not repaired here — it needs its own authorization.**
 

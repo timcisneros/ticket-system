@@ -1025,6 +1025,50 @@ const ok = (condition, message) => {
     'reported as a lost concurrency race, so the real cause is unrecoverable ' +
     'from durable state');
 
+  // ── THE DEFECT IS DEEPER THAN A MISSING ARGUMENT ──────────────────────
+  //
+  // Supplying `governedLeafCapture` requires a `progressControlPolicy`, and
+  // production has NO source for one:
+  //
+  //   * `buildProgressControlPolicy` has no production caller — only the
+  //     contract that defines it, its own contract test, and a test fixture;
+  //   * the governed policy container carries exactly three subdocuments
+  //     (roleRoutingPolicy, economicPolicy, pricingCatalog) and its own comment
+  //     says "a fourth is a configuration error, not an extension point";
+  //   * no migration defines a durable progress-control policy anywhere.
+  //
+  // So structured leaf admission is unreachable in production BY
+  // CONSTRUCTION, not by an omitted argument. Wiring it would require
+  // inventing governance authority nobody granted, which the container
+  // explicitly forbids. These assertions pin that, so the day a canonical
+  // source appears they fail and force this pin to be replaced.
+  const churnSource = fs.readFileSync(
+    path.join(__dirname, '..', 'runtime', 'churn-decision-contract.js'), 'utf8');
+  ok(churnSource.includes('function buildProgressControlPolicy'),
+    '13 plan-to-leaf: the progress-control policy builder exists');
+
+  const productionFiles = [
+    path.join(__dirname, '..', 'server.js'),
+    ...fs.readdirSync(path.join(__dirname, '..', 'runtime'))
+      .filter(name => name.endsWith('.js') && name !== 'churn-decision-contract.js')
+      .map(name => path.join(__dirname, '..', 'runtime', name)),
+    path.join(__dirname, '..', 'persistence', 'postgres', 'store.js')
+  ];
+  const buildersInProduction = productionFiles.filter(file =>
+    fs.readFileSync(file, 'utf8').includes('buildProgressControlPolicy'));
+  ok(buildersInProduction.length === 0,
+    '13 plan-to-leaf: DEFECT — NO production source builds a progress-control ' +
+    'policy, so the capture the store requires cannot be assembled without ' +
+    'inventing authority');
+
+  const policySourceContract = fs.readFileSync(
+    path.join(__dirname, '..', 'runtime', 'governed-policy-source.js'), 'utf8');
+  ok(policySourceContract.includes("'roleRoutingPolicy'") &&
+    policySourceContract.includes("'pricingCatalog'") &&
+    !policySourceContract.includes("'progressControlPolicy'"),
+  '13 plan-to-leaf: and the governed policy container cannot carry one — it ' +
+  'admits exactly three subdocuments by contract');
+
   // The mislabelling is what made this expensive to find: the vocabulary
   // message is rendered instead of the captured error message.
   const { STRUCTURED_LEAF_REFUSAL_MESSAGES } = (() => {
