@@ -1,6 +1,7 @@
 # Structured Leaf Progress-Policy Authority — Decision Required
 
-**Status: DECISION REQUIRED. Read-only audit; no production behaviour changed.**
+**Status: OPTION B ACCEPTED. Implementation BLOCKED on the version-1 tolerance
+values — see §6b. No production behaviour changed.**
 
 Recorded 2026-08-06 from `structured-allocation-controlled-evaluation`.
 
@@ -168,6 +169,84 @@ The repository supports this conclusion: `runtimeBudgetSnapshot` already
 demonstrates the pattern (repository-built, hashed, immutable, Run-scoped,
 derived from the execution policy), and `maxRuntimeDurationMs` already supplies
 one of the seven fields.
+
+---
+
+## 6a. Phase 1 scope verdict — ALL LEAVES SHARE ONE POLICY-RELEVANT EXECUTION SNAPSHOT
+
+Proved from source rather than sampled. Inside `prepareAgentRunDraft`,
+`buildRuntimeBudgetSnapshot` takes exactly two inputs:
+
+```js
+buildRuntimeBudgetSnapshot({
+  runtimeLimits: { ...runtimeLimitsSnapshot, revision: …runtimeLimitsRevision },
+  executionPolicy: executionPolicySnapshot
+})
+```
+
+* `runtimeLimitsSnapshot` ← `resolveAgentRuntimeLimits(ticket.objective, { workflow })`
+  — the **agent is not a parameter**;
+* `executionPolicySnapshot` ← `copyExecutionPolicy(ticket.executionPolicy, 'owned_paths')`
+  — Ticket policy plus a scope constant across the items of one structured plan.
+
+Neither the assigned agent nor the allocation item participates, so every leaf
+draft of one plan necessarily yields an identical `runtimeBudgetSnapshot`,
+including `snapshotHash`, `executionPolicyHash`, `runtimeLimitsRevision` and
+`maxRuntimeDurationMs`.
+
+**One canonical `governedLeafCapture` per plan admission is therefore correct**,
+and the store may copy that immutable capture to every leaf Run.
+
+**Equality must still be verified at runtime, not assumed.**
+`resolveAgentRuntimeLimits` re-reads the current runtime-limits configuration on
+each draft, so a configuration change mid-admission could in principle produce
+drafts that disagree. The implementation must compare the policy-relevant fields
+across all drafts and refuse before admission when they differ — never take the
+first draft's snapshot on faith.
+
+---
+
+## 6b. BLOCKING — the version-1 tolerance values are not decided
+
+**Implementation stopped here, deliberately.** The implementing brief states:
+*"Do not invent different version-1 values during implementation. If the memo
+does not state an exact value needed by the builder, stop and report the missing
+decision rather than choosing one implicitly."*
+
+This memo fixes two of the three groups and **not** the third:
+
+| Group | Decided? |
+|---|---|
+| `maximumCumulativeExecutionDurationMs` | **yes** — derived from `runtimeBudgetSnapshot.maxRuntimeDurationMs` |
+| `resourceDimensions` | **yes** — `['provider_requests', 'settled_micro_usd']` |
+| the five churn tolerances | **NO — numeric values were never stated** |
+
+The builder cannot be written without them, and choosing them silently is
+exactly the fabrication this decision exists to prevent. Each one changes when a
+Run stops and therefore what it spends.
+
+### Recommended version 1, for approval
+
+`boundedTolerance` requires a positive integer ≤ 1000; there is no default.
+The values below are the ones the test fixture has used throughout Tranches 4-5,
+so adopting them keeps every existing governed suite's behaviour unchanged and
+makes the production policy identical to the one already exercised:
+
+| Field | Recommended | Rationale |
+|---|---|---|
+| `maximumConsecutiveNoProgressWindows` | 3 | three answered windows crediting no declared fact before stopping |
+| `maximumRepeatedMutations` | 3 | tolerates a retry and a correction, stops the third repeat |
+| `maximumFailedOperationStreak` | 4 | one more than the mutation tolerance: failures are often transient |
+| `maximumMutationReversals` | 3 | write/undo oscillation past three is not progress |
+| `maximumInspectionOnlyStreak` | 4 | reading is legitimate work; four consecutive read-only windows is not |
+
+**Explicitly NOT adopted from the fixture:**
+`maximumCumulativeExecutionDurationMs: 3_600_000`. The fixture calls it
+"generous by design" so unrelated suites are not incidentally blocked — a
+test-harness convenience, not product authority. Production derives duration
+from `runtimeBudgetSnapshot.maxRuntimeDurationMs`.
+
+**These five numbers require explicit approval before implementation proceeds.**
 
 ---
 

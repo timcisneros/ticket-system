@@ -1,4 +1,26 @@
-## STRUCTURED LEAF PROGRESS POLICY AUTHORITY — DECISION REQUIRED (2026-08-06)
+## STRUCTURED LEAF PROGRESS POLICY AUTHORITY — OPTION B ACCEPTED, VALUES REQUIRED (2026-08-06)
+
+**Status: Option B accepted. Implementation BLOCKED on five undecided numbers.**
+
+**Phase 1 scope verdict: ALL LEAVES SHARE ONE POLICY-RELEVANT EXECUTION
+SNAPSHOT**, proved from source — `buildRuntimeBudgetSnapshot` takes only the
+Ticket's runtime limits and execution policy, and neither the assigned agent nor
+the allocation item participates. One canonical capture per plan admission is
+therefore correct. Runtime equality must still be verified across drafts rather
+than assumed, because `resolveAgentRuntimeLimits` re-reads current configuration
+per draft.
+
+**BLOCKED: the five churn tolerance values were never decided.** The decision
+memo fixed the duration derivation and `resourceDimensions` but stated the
+tolerances only as "declared explicitly in the contract". The implementing brief
+forbids inventing them, so implementation stopped rather than choosing silently
+— each value changes when a Run stops and therefore what it spends. A
+recommended set is proposed in the memo §6b for approval: the values the test
+fixture has used throughout Tranches 4-5, which keeps existing governed suite
+behaviour unchanged. The fixture's duration value is explicitly NOT adopted; it
+is a harness convenience, not product authority.
+
+**Original status, retained:**
 
 **Status: DECISION REQUIRED. Not closed, not implemented.**
 
