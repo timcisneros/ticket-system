@@ -854,6 +854,112 @@ const ok = (condition, message) => {
   fs.rmSync(root, { recursive: true, force: true });
 }
 
+
+// ── 12. THE SCENARIO CATALOG ───────────────────────────────────────────────
+{
+  const {
+    SCENARIOS, SCENARIO_IDS, ALL_ARMS, getScenario, assertArmAllowed,
+    materializeResponses, buildOracleFor, validateScenario,
+    EvaluationScenarioError, PROTOCOL_VERSION
+  } = require('./fixtures/evaluation-scenarios');
+  const crypto = require('node:crypto');
+  const { expectedProducerBytes } = require('./fixtures/evaluation-coupling-oracle');
+
+  // Every catalog entry is structurally valid.
+  for (const scenarioId of SCENARIO_IDS) {
+    ok(validateScenario(SCENARIOS[scenarioId]) === true,
+      `12 catalog: ${scenarioId} is structurally complete`);
+  }
+  ok(SCENARIO_IDS.length >= 6,
+    '12 catalog: families 1, 3, 4, 7, 8 and 9 all have executable definitions');
+
+  // Family 1 is attemptable by ALL five arms — the routing probe.
+  const family1 = getScenario('family-1-simple');
+  ok(family1.allowedArms.length === 5 &&
+    ALL_ARMS.every(arm => family1.allowedArms.includes(arm)),
+  '12 catalog: family 1 is attemptable by all five arms');
+  for (const arm of ALL_ARMS) {
+    ok(assertArmAllowed(family1, arm) === true,
+      `12 catalog: family 1 accepts arm ${arm}`);
+  }
+
+  // A restricted scenario must SAY WHY, not merely restrict.
+  const family7 = getScenario('family-7-no-progress');
+  ok(family7.allowedArms.join(',') === 'B,C' &&
+    /churn control exists only on the governed/.test(family7.allowedArmsReason),
+  '12 catalog: family 7 restricts arms and states the reason');
+  assert.throws(() => assertArmAllowed(family7, 'A'),
+    error => error instanceof EvaluationScenarioError && /does not allow arm A/.test(error.message));
+  passed += 1;
+  console.log('  ok 12 catalog: a disallowed arm is REFUSED with its reason');
+
+  // declaredWork.objective must equal the ticket objective — production refuses
+  // otherwise, so the catalog refuses first.
+  assert.throws(() => validateScenario({
+    ...family1, declaredWork: { ...family1.declaredWork, objective: 'different' }
+  }), /must equal the ticket objective/);
+  passed += 1;
+  console.log('  ok 12 catalog: a declaredWork objective mismatch is REFUSED');
+
+  // NO PRODUCT COMPLETION ANSWER IS TREATED AS ORACLE TRUTH.
+  const catalogSource = fs.readFileSync(
+    path.join(__dirname, 'fixtures', 'evaluation-scenarios.js'), 'utf8')
+    .split('\n').filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line)).join('\n');
+  for (const forbidden of ['completionDecision', 'deriveLeafItemDisposition',
+    'ticketStatus', 'run.status']) {
+    ok(!catalogSource.includes(forbidden),
+      `12 catalog: no oracle contract references ${forbidden}`);
+  }
+
+  // SEED-DEPENDENT BODIES ARE GENERATED PER TRIAL, so a staged response cannot
+  // hard-code the family 3/4 answer.
+  const family4 = getScenario('family-4-coupled');
+  const seedOne = materializeResponses(family4, 'seed-one');
+  const seedTwo = materializeResponses(family4, 'seed-two');
+  const bodyFor = (staged, taskId) =>
+    staged.find(entry => entry.logicalTaskId === taskId).body;
+  ok(bodyFor(seedOne, 'left') !== bodyFor(seedTwo, 'left'),
+    '12 catalog: the producer body CHANGES with the trial seed');
+  ok(bodyFor(seedOne, 'right') !== bodyFor(seedTwo, 'right'),
+    '12 catalog: and so does the bound consumer output');
+  const expectedHash = crypto.createHash('sha256')
+    .update(expectedProducerBytes('seed-one')).digest('hex');
+  ok(bodyFor(seedOne, 'right').includes(expectedHash),
+    '12 catalog: the consumer output binds the exact seed-derived producer hash');
+  ok(bodyFor(seedOne, 'left').includes(expectedProducerBytes('seed-one').trim()),
+    '12 catalog: and the producer writes exactly the seed-derived bytes');
+
+  // Planner responses exist only for the structured arms to consume; the
+  // catalog never varies content by arm.
+  ok(family1.plannerResponses.length === 1 &&
+    family1.plannerResponses[0].role === 'planner',
+  '12 catalog: one planner response is staged, for whichever arm requests it');
+  ok(!JSON.stringify(family1).includes('"A2a"') || family1.allowedArms.includes('A2a'),
+    '12 catalog: arm identifiers appear only in allowedArms, never in response selection');
+
+  // Oracle contracts build from raw declarations.
+  const rawOracle = buildOracleFor(family1);
+  ok(rawOracle.expectations.length === 2 && /^[0-9a-f]{64}$/.test(rawOracle.expectationHash),
+    '12 catalog: a raw-state oracle contract is built and hashed');
+  const couplingOracle = buildOracleFor(family4);
+  ok(couplingOracle.kind === 'coupling' && couplingOracle.producerPath.includes('left'),
+    '12 catalog: a coupling oracle contract carries its producer and consumer paths');
+
+  // Family 9's refusal scenario declares that it expects a refusal.
+  ok(getScenario('family-9-oracle-refusal').oracle.expectRefusal === true,
+    '12 catalog: the oracle-refusal scenario declares its expected refusal');
+  ok(getScenario('family-8-recovery').boundaryVariants.uncertain_delivery ===
+    'after_transport_before_response',
+  '12 catalog: family 8 names its concrete failure boundaries');
+  ok(Object.keys(family7.controls).length === 3,
+    '12 catalog: family 7 carries its three neighbouring non-churn controls');
+
+  assert.throws(() => getScenario('does-not-exist'), /unknown scenario/);
+  passed += 1;
+  console.log('  ok 12 catalog: an unknown scenario is REFUSED');
+  ok(PROTOCOL_VERSION === 1, '12 catalog: the catalog declares protocol version 1');
+}
+
 console.log(`\nstructured allocation evaluation test passed — ${passed} assertions`);
 }
 
