@@ -1353,16 +1353,26 @@ const ok = (condition, message) => {
   // computed from an absent observer — "no consumer read" instead of "no
   // observation", which inverts the finding rather than weakening it. They are
   // recorded as blocked, and this pin fails the day the channel is connected.
-  ok(BLOCKED_FAMILIES.join(',') === '3,4,7,8',
-    '14 matrix: families 3, 4, 7 and 8 are recorded as OBSERVATION-BLOCKED');
+  // The OBSERVATION block is resolved: the shared sink is installed in the
+  // spawned server and families 3 and 4 execute with complete observation. What
+  // remains is a narrower STAGING gap on the governed worker request.
+  const { GOVERNED_WORKER_STAGING_BLOCKED } =
+    require('./fixtures/evaluation-execution-matrix');
+  ok(OBSERVATION_BLOCKED.length > 0 && BLOCKED_FAMILIES.join(',') === '7,8',
+    '14 matrix: the observation block is resolved; only families 7 and 8 remain, ' +
+    'and for a different reason');
+  ok(GOVERNED_WORKER_STAGING_BLOCKED.every(entry =>
+    entry.requires && entry.blockedBy && entry.wouldFabricate && entry.fix),
+  '14 matrix: the remaining block names what it needs, what blocks it, what a ' +
+  'false reading would credit, and the exact fix');
   ok(OBSERVATION_BLOCKED.every(entry =>
     entry.requires && entry.blockedBy && entry.wouldFabricate && entry.fix),
   '14 matrix: each block names what it needs, what blocks it, what a false ' +
   'reading would claim, and the exact fix');
   ok(MATRIX.every(cell => !BLOCKED_FAMILIES.includes(cell.family)),
     '14 matrix: no blocked family is required until its observation exists');
-  ok(MATRIX.length === 2 && requiredTrials().length === 10,
-    '14 matrix: only family 9 is required today — ten trials it can observe');
+  ok(MATRIX.length === 4 && requiredTrials().length === 20,
+    '14 matrix: families 3, 4 and 9 are required and observable — twenty trials');
   const seven7 = CANDIDATE_CELLS.filter(cell => cell.family === 7);
   ok(seven7.every(cell => cell.requiredArms.join(',') === 'B,C'),
     '14 matrix: family 7 runs the structured arms only');

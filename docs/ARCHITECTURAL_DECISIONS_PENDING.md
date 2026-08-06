@@ -1,6 +1,29 @@
+## GOVERNED WORKER RESPONSES ARE NOT STAGED FOR THE GOVERNED TRANSPORT (2026-08-06)
+
+**Status: OPEN. Blocks families 7 and 8, and therefore prerequisite 3.**
+
+Only PLANNER responses are written to `HERMETIC_TRANSPORT_RESPONSE`. Families 7
+and 8 inject their boundaries on the WORKER request, so on the structured arms
+the governed transport refuses for want of a staged worker response — which is
+`refused_before_transport`, not the `bytes_sent` boundary the variant declares.
+Recording it as the declared boundary would credit a variant with a boundary it
+never reached.
+
+**Fix:** write worker responses, with their failure boundaries, into the governed
+staged table from the same materialized set the ungoverned fetch fixture uses.
+
+This is a STAGING gap, not an observation gap. The shared observation sink is
+proved working by families 3 and 4, which execute with complete observation and
+record actual consumer reads.
+
+---
+
 ## EVALUATION FIXTURE OBSERVATION DOES NOT REACH THE SPAWNED SERVER (2026-08-06)
 
-**Status: OPEN. Blocks evaluation prerequisite 3.**
+**Status: RESOLVED 2026-08-06 by the shared observation sink
+(`scripts/fixtures/evaluation-observation-sink.js`). Retained as the record of
+what was wrong and why an empty stream may never be read as a negative
+finding — a rule the sink now enforces through its completeness contract.**
 
 Scenario families 3, 4, 7 and 8 depend on fixture-owned external observation:
 the consumer access log (coupling) and the served-call transcript (churn and

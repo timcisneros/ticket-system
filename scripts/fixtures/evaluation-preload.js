@@ -24,6 +24,69 @@ const path = require('node:path');
 
 const NAMESPACE_DIR = process.env.EVALUATION_FIXTURE_NAMESPACE || null;
 
+// ── 0. THE SHARED OBSERVATION SINK, installed FIRST ────────────────────────
+//
+// Both transport adapters and the real read seam write through this one sink,
+// so a governed request, an ungoverned request and an actual file read are all
+// described in the same per-trial streams. Installing it before anything else
+// means the marker exists for the whole trial — which is what lets an empty
+// stream be read as "nothing happened" rather than "nobody was watching".
+const DESCRIPTOR_JSON = process.env.EVALUATION_OBSERVATION_DESCRIPTOR || null;
+if (DESCRIPTOR_JSON) {
+  const {
+    createObservationSink, markSinkInstalled, hashBytes
+  } = require(path.join(__dirname, 'evaluation-observation-sink.js'));
+  const descriptor = markSinkInstalled(JSON.parse(DESCRIPTOR_JSON));
+  const sink = createObservationSink(descriptor);
+  globalThis.__EVALUATION_OBSERVATION_SINK__ = sink;
+
+  // ── THE REAL READ SEAM ──────────────────────────────────────────────
+  //
+  // The workspace provider is built inside `server.js` from a function defined
+  // in that same file, so a `--require` preload cannot wrap it: the preload
+  // runs first. The narrowest seam that still observes the ACTUAL read is the
+  // `fs` call the provider makes, wrapped here and scoped hard:
+  //
+  //   * only paths inside this trial's workspace root;
+  //   * only after the real read RETURNS — a throw is re-thrown untouched and
+  //     records nothing, because a failed read is not an access;
+  //   * the exact returned value is hashed and then handed back UNCHANGED.
+  //
+  // It fabricates nothing, pre-reads nothing, widens no authorization and
+  // suppresses no error. It cannot run outside a trial: without the descriptor
+  // environment value this whole block is skipped.
+  const WORKSPACE_ROOT = process.env.EVALUATION_OBSERVED_WORKSPACE_ROOT || null;
+  if (WORKSPACE_ROOT) {
+    const nodeFs = require('node:fs');
+    const nodePath = require('node:path');
+    const realReadFileSync = nodeFs.readFileSync;
+    const observedRoot = nodePath.resolve(WORKSPACE_ROOT);
+    nodeFs.readFileSync = function observedReadFileSync(target, ...rest) {
+      // The real call first. Its result and its errors are authoritative.
+      const value = realReadFileSync.call(this, target, ...rest);
+      try {
+        if (typeof target === 'string') {
+          const resolved = nodePath.resolve(target);
+          if (resolved === observedRoot ||
+              resolved.startsWith(`${observedRoot}${nodePath.sep}`)) {
+            sink.recordConsumerRead({
+              readerTaskId: null,
+              requestedPath: nodePath.relative(observedRoot, resolved),
+              returnedBytes: value
+            });
+          }
+        }
+      } catch (_) {
+        // An observation must never change what production returns, including
+        // by failing. A sink write that cannot happen is a lost observation,
+        // and the completeness contract is what reports that — not an
+        // exception thrown into the middle of a workspace read.
+      }
+      return value;
+    };
+  }
+}
+
 // 1. The existing hermetic boundary, including the governed injection seam.
 require(path.join(__dirname, 'hermetic-governed-transport-preload.js'));
 

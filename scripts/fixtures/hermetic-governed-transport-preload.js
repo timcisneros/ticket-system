@@ -49,6 +49,29 @@ function record(entry) {
   require('node:fs').appendFileSync(CAPTURE_PATH, `${JSON.stringify(entry)}\n`);
 }
 
+// ── THE SHARED OBSERVATION SINK ─────────────────────────────────────────────
+//
+// The governed path previously wrote only `governed-capture.jsonl`, which no
+// evaluation consumer reads. It now ALSO writes the same per-trial transport
+// stream the ungoverned fetch fixture writes, so a governed and an ungoverned
+// request are described identically and neither can be told apart by which file
+// it landed in. The capture file is kept: it is a different artifact, for
+// transport-shape diagnostics rather than for evaluation observation.
+//
+// This shares the SINK, not the transport. Production still sends governed
+// bytes through the real `httpsRequest` seam; nothing here routes the governed
+// path into the ungoverned provider code.
+function observeTransport(fields) {
+  const sink = globalThis.__EVALUATION_OBSERVATION_SINK__;
+  if (!sink) return;
+  try { sink.recordTransport(fields); } catch (_) { /* never alter the transport */ }
+}
+
+function requestHashOf(body) {
+  return require('node:crypto').createHash('sha256')
+    .update(String(body || ''), 'utf8').digest('hex');
+}
+
 // ── 1. Inject through the documented seam ───────────────────────────────────
 const transportModulePath = path.join(
   __dirname, '..', '..', 'runtime', 'governed-openai-transport.js');
@@ -139,6 +162,12 @@ function fixtureHttpsRequest(options, onResponse) {
         !servedIndexes.has(index) &&
         (!entry.match || body.includes(entry.match)));
       if (!candidate) {
+        // An unexpected request records NO successful transport. It is refused,
+        // and the refusal is what the stream shows.
+        observeTransport({
+          logicalRequestId: null, role: null, ordinal: null,
+          requestHash: requestHashOf(body), boundary: 'refused_before_transport'
+        });
         throw new Error(
           `HERMETIC_FIXTURE_UNPLANNED_REQUEST_${fixtureRequestCount}: ` +
           'no staged response matches these request bytes');
@@ -164,6 +193,13 @@ function fixtureHttpsRequest(options, onResponse) {
         // durable state this is a request that may or may not have left. The
         // staged response is deliberately NOT consumed, so a legitimate retry
         // of the same request can still be answered.
+        // Bytes did NOT leave. The stream records exactly that and nothing
+        // more — no response identity, because none exists.
+        observeTransport({
+          logicalRequestId: candidate.match || null,
+          role: candidate.role || null, ordinal: candidate.ordinal || null,
+          requestHash: requestHashOf(body), boundary: 'refused_before_transport'
+        });
         const detail = 'BOUNDARY_PRE_TRANSPORT_REACHED ' +
           `match=${candidate.match || 'any'}`;
         if (FAULT_STATE) crashState.writeFileSync(FAULT_STATE, detail);
@@ -175,9 +211,20 @@ function fixtureHttpsRequest(options, onResponse) {
 
       servedIndexes.add(staged.indexOf(candidate));
       response.statusCode = candidate.statusCode || 200;
-      response.headers = {
-        'x-request-id': `fixture-governed-request-${fixtureRequestCount}`
-      };
+      const responseIdentity = `fixture-governed-request-${fixtureRequestCount}`;
+      response.headers = { 'x-request-id': responseIdentity };
+      // Bytes left AND a response is being handed back, so the durable boundary
+      // is the truthful one. A post-transport crash boundary below may still
+      // interrupt what the product does with it; that is a different fact, and
+      // the product's own durable state — not this stream — records it.
+      observeTransport({
+        logicalRequestId: candidate.match || null,
+        role: candidate.role || null, ordinal: candidate.ordinal || null,
+        requestHash: requestHashOf(body),
+        responseIdentity,
+        responseHash: requestHashOf(candidate.body || ''),
+        boundary: 'response_durable'
+      });
       // Headers are captured WITHOUT the Authorization value: the test needs to
       // know a credential header was formed, never what it contained.
       record({

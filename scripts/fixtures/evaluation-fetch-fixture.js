@@ -34,6 +34,19 @@
 
 const fs = require('node:fs');
 const { observeArtifactRead } = require('./evaluation-artifact-observer');
+
+// The SAME shared sink the governed preload writes. Sharing it is what makes a
+// governed and an ungoverned observation comparable at all.
+function observeTransport(fields) {
+  const sink = globalThis.__EVALUATION_OBSERVATION_SINK__;
+  if (!sink) return;
+  try { sink.recordTransport(fields); } catch (_) { /* never alter the transport */ }
+}
+
+function requestHashOf(body) {
+  return require('node:crypto').createHash('sha256')
+    .update(String(body || ''), 'utf8').digest('hex');
+}
 const path = require('node:path');
 
 const PROVIDER_URL = 'https://api.openai.com/v1/responses';
@@ -145,6 +158,11 @@ function installEvaluationFetchFixture({ namespaceDir, providerUrl = PROVIDER_UR
           transport: 'fetch', served: false, refused: 'no_staged_response',
           at: Date.now()
         })}\n`);
+        observeTransport({
+          logicalRequestId: null, role: null, ordinal: null,
+          requestHash: requestHashOf(requestBody),
+          boundary: 'refused_before_transport'
+        });
         throw new EvaluationFetchFixtureError(
           'no staged fixture response matches this ungoverned request — refusing ' +
           'rather than inventing one');
@@ -154,6 +172,10 @@ function installEvaluationFetchFixture({ namespaceDir, providerUrl = PROVIDER_UR
           transport: 'fetch', key: staged.key, served: false,
           refused: 'before_transport', at: Date.now()
         })}\n`);
+        observeTransport({
+          logicalRequestId: staged.key, role: staged.role, ordinal: staged.ordinal,
+          requestHash: requestHashOf(requestBody), boundary: 'refused_before_transport'
+        });
         throw new EvaluationFetchFixtureError('injected pre-transport provider failure');
       }
 
@@ -174,8 +196,22 @@ function installEvaluationFetchFixture({ namespaceDir, providerUrl = PROVIDER_UR
       })}\n`);
 
       if (staged.failureBoundary === 'after_transport_before_response') {
+        // Bytes left; no durable response comes back. That is exactly the
+        // delivery-uncertainty boundary, and it is recorded as ONE attempted
+        // transport rather than as a refusal or as a durable response.
+        observeTransport({
+          logicalRequestId: staged.key, role: staged.role, ordinal: staged.ordinal,
+          requestHash: requestHashOf(requestBody), boundary: 'bytes_sent'
+        });
         throw new EvaluationFetchFixtureError('injected post-transport response loss');
       }
+      observeTransport({
+        logicalRequestId: staged.key, role: staged.role, ordinal: staged.ordinal,
+        requestHash: requestHashOf(requestBody),
+        responseIdentity: staged.responseIdentity,
+        responseHash: requestHashOf(staged.body || ''),
+        boundary: 'response_durable'
+      });
 
       return buildFixtureResponse({
         headers: { 'content-type': 'application/json', 'x-request-id': staged.responseIdentity },

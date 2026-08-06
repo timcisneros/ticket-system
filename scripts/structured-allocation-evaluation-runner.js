@@ -42,6 +42,9 @@ const {
   evaluateCouplingWithFixture
 } = require('./fixtures/evaluation-coupling-oracle');
 const { assertAllWorkerResponsesConsumed } = require('./fixtures/evaluation-fetch-fixture');
+const {
+  OBSERVATION_SINK_VERSION, readObservations
+} = require('./fixtures/evaluation-observation-sink');
 const { evaluateScenarioOutcome, classifyTruthfulness } = require('./fixtures/evaluation-oracle');
 const {
   observeQuiescence, buildTrialArtifact, writeTrialArtifact, assertMode
@@ -186,15 +189,17 @@ function trialIdFor(scenario, arm, repetition) {
 // product behaved correctly, and neither is compared between arms — they exist
 // so a reader can tell a genuine no-progress window from an undelivered
 // response, and a reused durable response from a retransmission.
-function buildChurnFacts(report, transcript) {
-  const served = transcript.filter(entry => entry.served);
-  const refused = transcript.filter(entry => entry.served === false);
+function buildChurnFacts(report, observations) {
+  const transport = observations.transport;
+  const served = transport.filter(entry => entry.boundary === 'response_durable');
+  const refused = transport.filter(entry => entry.boundary !== 'response_durable');
   return Object.freeze({
+    observationCompleteness: observations.completeness,
     // Did a response become durable at all? A refused transport produced none,
     // so no window may be judged from it.
     durableResponses: served.length,
     refusedTransports: refused.length,
-    refusalReasons: Object.freeze([...new Set(refused.map(e => e.refused))].sort()),
+    refusalReasons: Object.freeze([...new Set(refused.map(e => e.boundary))].sort()),
     // The canonical churn block the product itself recorded, if any. Reported
     // beside the fixture facts rather than derived from them.
     noProgressStreak: report.churn && report.churn.noProgressStreak !== undefined
@@ -208,8 +213,13 @@ function buildChurnFacts(report, transcript) {
   });
 }
 
-function buildRecoveryFacts(transcript, workspaceRoot, scenario) {
-  const served = transcript.filter(entry => entry.served);
+function buildRecoveryFacts(observations, workspaceRoot, scenario) {
+  const transport = observations.transport;
+  // A transport ATTEMPT is any request whose bytes left, whether or not a
+  // response came back. That is the count family 8 needs: retransmission is
+  // about attempts, not about answers.
+  const attempted = transport.filter(entry => entry.boundary !== 'refused_before_transport');
+  const served = transport.filter(entry => entry.boundary === 'response_durable');
   const identities = served.map(entry => entry.responseIdentity).filter(Boolean);
   // A committed effect is observed in RAW workspace state, never inferred from
   // a receipt: the question is whether the world changed, and how many times.
@@ -218,14 +228,15 @@ function buildRecoveryFacts(transcript, workspaceRoot, scenario) {
     ? path.join(workspaceRoot, scenario.oracle.expectations[0].path) : null;
   const committedEffects = effectPath && fs.existsSync(effectPath) ? 1 : 0;
   return Object.freeze({
+    observationCompleteness: observations.completeness,
     servedCalls: served.length,
+    attemptedTransports: attempted.length,
     // Serving the same staged response twice is a RETRANSMISSION, which the
     // uncertain-delivery boundary must never produce.
     duplicateServedCalls: identities.length - new Set(identities).size,
     responseIdentities: Object.freeze([...new Set(identities)].sort()),
-    durableResponse: served.some(entry =>
-      !entry.refused && entry.responseIdentity),
-    refusedBefore: transcript.filter(e => e.refused === 'before_transport').length,
+    durableResponse: served.some(entry => Boolean(entry.responseIdentity)),
+    refusedBefore: transport.filter(e => e.boundary === 'refused_before_transport').length,
     committedEffects,
     // One effect path, observed once. A duplicated effect would appear as a
     // second distinct artifact, which the scenarios deliberately do not stage.
@@ -681,6 +692,23 @@ async function runTrial({
     env: {
       NODE_OPTIONS: `--require ${path.join(__dirname, 'fixtures', 'evaluation-preload.js')}`,
       EVALUATION_FIXTURE_NAMESPACE: namespace.dir,
+      // ONE immutable descriptor, carried as a single serialized value. Every
+      // observation the spawned server writes names this exact trial, so two
+      // trials can never be averaged into one set of streams.
+      EVALUATION_OBSERVATION_DESCRIPTOR: JSON.stringify({
+        protocolVersion: PROTOCOL_VERSION,
+        trialId,
+        namespaceDir: namespace.dir,
+        scenarioId: scenario.scenarioId,
+        variantId: scenario.variantId || null,
+        repetition,
+        seed,
+        fixtureTableHash: crypto.createHash('sha256')
+          .update(fs.readFileSync(namespace.stagedPath)).digest('hex')
+      }),
+      // Scopes the real-read observer to THIS trial's workspace. Without it the
+      // wrapper does not install at all.
+      EVALUATION_OBSERVED_WORKSPACE_ROOT: trialWorkspace,
       ...(process.env.EVALUATION_CAPTURE_LEAF_ADMISSION === '1'
         ? { EVALUATION_CAPTURE_LEAF_ADMISSION: '1' } : {}),
       HERMETIC_TRANSPORT_RESPONSE: governedResponsePath,
@@ -793,6 +821,10 @@ async function runTrial({
     // response already contained it. Both kinds are arm-blind and neither reads
     // any product table.
     const oracleContract = buildOracleFor(scenario);
+    // The shared sink is the ONE observation authority. Completeness is read
+    // before any count, so an absent observer can never be reported as a
+    // negative finding.
+    const observations = readObservations(namespace.dir);
     let oracleResult;
     if (scenario.oracle.kind === 'coupling') {
       // AVAILABILITY IS ABOUT THE OBSERVER, NOT ABOUT WHAT IT SAW.
@@ -804,15 +836,25 @@ async function runTrial({
       // observer was installed for the whole trial whenever the namespace
       // exists, so that is what availability means; an empty log is zero
       // observed reads.
-      const accessLogAvailable = fs.existsSync(namespace.dir);
+      // An oracle that needs an access observation may return PASS or FAIL only
+      // when the observation is COMPLETE. Anything else refuses.
       oracleResult = evaluateCouplingWithFixture({
         workspaceRoot: trialWorkspace,
         seed,
         producerPath: oracleContract.producerPath,
         consumerPath: oracleContract.consumerPath,
         consumerReaderId: oracleContract.consumerReaderId,
-        accessLogAvailable,
-        accessLog: accessLogAvailable ? readAccessLog(namespace) : []
+        accessLogAvailable: observations.completeness === 'complete',
+        // Real reads, observed by the shared sink AFTER the production read
+        // returned. The reader identity is the consumer task the scenario
+        // declared; the sink records the path and the exact returned bytes.
+        accessLog: observations.consumerReads
+          .filter(entry => entry.requestedPath === oracleContract.producerPath)
+          .map(entry => ({
+            reader: oracleContract.consumerReaderId,
+            artifactPath: entry.requestedPath,
+            artifactHash: entry.contentHash
+          }))
       });
     } else {
       oracleResult = evaluateScenarioOutcome({
@@ -856,8 +898,11 @@ async function runTrial({
       durableGovernedCost: firstReport.durableGovernedMicroUsd,
       latency: firstReport.latency,
       churn: firstReport.churn,
-      churnFacts: buildChurnFacts(firstReport, transcript),
-      recoveryFacts: buildRecoveryFacts(transcript, trialWorkspace, scenario),
+      churnFacts: buildChurnFacts(firstReport, observations),
+      recoveryFacts: buildRecoveryFacts(observations, trialWorkspace, scenario),
+      observationSinkVersion: OBSERVATION_SINK_VERSION,
+      observationCompleteness: observations.completeness,
+      observationStreamIdentities: observations.streamIdentities,
       truthfulness,
       quiescence,
       fixtureTranscriptHash: transcriptHash(namespace),

@@ -200,6 +200,15 @@ function buildTrialArtifact(input) {
     // Family-7 and family-8 observations, recorded as facts rather than as a
     // pass/fail judgement. They say what the fixture and durable state showed;
     // nothing here is scored or compared.
+    // The observation contract, recorded on every artifact. A consumer that
+    // reads a count without reading this is reading a number it cannot
+    // interpret.
+    observationSinkVersion: input.observationSinkVersion === undefined
+      ? null : input.observationSinkVersion,
+    observationCompleteness: input.observationCompleteness === undefined
+      ? null : input.observationCompleteness,
+    observationStreamIdentities: input.observationStreamIdentities === undefined
+      ? null : input.observationStreamIdentities,
     churnFacts: input.churnFacts === undefined ? null : input.churnFacts,
     recoveryFacts: input.recoveryFacts === undefined ? null : input.recoveryFacts,
     variantExpectation: input.variantExpectation === undefined

@@ -56,6 +56,18 @@ function writeFile(pathValue, content) {
   return { operation: 'writeFile', args: { path: pathValue, content } };
 }
 
+// A REAL read through the production workspace operation.
+//
+// Families 3 and 4 ask whether a dependent task genuinely consumed a sibling's
+// output. Previously the staged consumer response only WROTE a summary already
+// containing the producer hash, so no read ever happened and there was nothing
+// to observe. The consumer now issues a real `readFile`, which production
+// executes through the workspace provider — and which the shared observation
+// sink sees returning the exact bytes.
+function readFile(pathValue) {
+  return { operation: 'readFile', args: { path: pathValue } };
+}
+
 // THE MODEL-OWNED PROPOSAL, and only the model-owned parts.
 //
 // `normalizePlannerProposal` accepts exactly `version`, `sharedConstraints` and
@@ -184,7 +196,7 @@ const SCENARIOS = Object.freeze({
     scenarioId: 'family-3-sibling-dependency',
     version: 1,
     family: 3,
-    objective: 'Create folders reports/producer and reports/consumer',
+    objective: 'Create reports/producer/artifact.txt and reports/consumer/summary.md',
     // THREE top-level folders, matching family 1.
     //
     // Dynamic allocation derives one owned root PER AGENT from the usable
@@ -197,7 +209,7 @@ const SCENARIOS = Object.freeze({
       folders: Object.freeze(['reports', 'reports-b', 'reports-c'])
     }),
     declaredWork: Object.freeze({
-      objective: 'Create folders reports/producer and reports/consumer',
+      objective: 'Create reports/producer/artifact.txt and reports/consumer/summary.md',
       expectedOutputs: Object.freeze([
         Object.freeze({ kind: 'text', declaration: 'A producer artifact and a bound consumer summary' })
       ]),
@@ -268,7 +280,7 @@ const SCENARIOS = Object.freeze({
     scenarioId: 'family-4-coupled',
     version: 1,
     family: 4,
-    objective: 'Create folders reports/left and reports/right',
+    objective: 'Create reports/left/artifact.txt and reports/right/summary.md',
     // THREE top-level folders, matching family 1.
     //
     // Dynamic allocation derives one owned root PER AGENT from the usable
@@ -281,7 +293,7 @@ const SCENARIOS = Object.freeze({
       folders: Object.freeze(['reports', 'reports-b', 'reports-c'])
     }),
     declaredWork: Object.freeze({
-      objective: 'Create folders reports/left and reports/right',
+      objective: 'Create reports/left/artifact.txt and reports/right/summary.md',
       expectedOutputs: Object.freeze([
         Object.freeze({ kind: 'text', declaration: 'Two apparently independent outputs' })
       ]),
@@ -930,8 +942,12 @@ function materializeResponses(scenario, seed, { candidateAgentIds = [] } = {}) {
       staged.push({
         ...base,
         body: workerPlan({
-          message: 'Binding the produced artifact.',
+          message: 'Reading and binding the produced artifact.',
           actions: [
+            // THE READ COMES FIRST, and it is a real production operation.
+            // Without it the binding below would be a claim about an artifact
+            // nothing ever opened.
+            readFile(scenario.oracle.producerPath),
             createFolder(scenario.oracle.consumerPath.replace(/\/[^/]+$/, '')),
             writeFile(scenario.oracle.consumerPath, `derived from ${producerHash}\n`)
           ],

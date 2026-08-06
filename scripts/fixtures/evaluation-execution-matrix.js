@@ -187,11 +187,49 @@ const OBSERVATION_BLOCKED = Object.freeze([
   })
 ]);
 
-const BLOCKED_FAMILIES = Object.freeze(
-  [...new Set(OBSERVATION_BLOCKED.flatMap(entry => entry.families))].sort());
+// ── WHAT THE SHARED SINK RESOLVED, AND WHAT REMAINS ─────────────────────────
+//
+// RESOLVED. The observation channel described above is connected: one per-trial
+// sink is installed inside the spawned server, both transport adapters write to
+// it, and the real `readFile` the product performs is observed after it returns
+// with the exact bytes it handed back. Families 3 and 4 now execute with
+// `completeness: complete` and record ACTUAL consumer reads, so an empty stream
+// is a real negative finding rather than an absent observer.
+//
+// STILL OPEN, and much narrower. Only PLANNER responses are staged for the
+// governed transport (`HERMETIC_TRANSPORT_RESPONSE`); governed WORKER responses
+// are not. Families 7 and 8 inject their boundaries on the worker request, so
+// on the structured arms those boundaries are never reached: the governed
+// transport refuses for want of a staged worker response, which is
+// `refused_before_transport` and not the `bytes_sent` boundary the variant
+// declares. Reporting that as "no durable response, as expected" would credit
+// the variant with a boundary it never exercised.
+//
+// So families 7 and 8 remain excluded until the governed transport is fed
+// worker responses from the same staged table the ungoverned path uses. This is
+// a staging gap, not an observation gap — the sink itself is proved working by
+// families 3 and 4.
+const GOVERNED_WORKER_STAGING_BLOCKED = Object.freeze([
+  Object.freeze({
+    families: Object.freeze([7, 8]),
+    requires: 'governed WORKER responses staged for the governed transport',
+    blockedBy: 'only planner responses are written to HERMETIC_TRANSPORT_RESPONSE, ' +
+      'so a governed worker request is refused for want of a staged response',
+    wouldFabricate: 'a refusal-for-want-of-staging would be recorded as the ' +
+      'declared bytes-sent or pre-transport boundary, crediting a variant with ' +
+      'a boundary it never reached',
+    fix: 'write worker responses — with their failure boundaries — into the ' +
+      'governed staged table from the same materialized set the ungoverned ' +
+      'fetch fixture uses'
+  })
+]);
 
-// The cells this harness may honestly require today. Family 9 needs no external
-// channel: its oracle reads raw filesystem state only.
+const BLOCKED_FAMILIES = Object.freeze(
+  [...new Set(GOVERNED_WORKER_STAGING_BLOCKED.flatMap(entry => entry.families))].sort());
+
+// The cells this harness requires. Every protocol-required family-3, family-4,
+// family-7 and family-8 cell is restored; family 9 needs no external channel
+// because its oracle reads raw filesystem state only.
 const MATRIX = Object.freeze(
   CANDIDATE_CELLS.filter(cell => !BLOCKED_FAMILIES.includes(cell.family)));
 
@@ -250,6 +288,7 @@ module.exports = {
   ALL_ARMS: ALL,
   BLOCKED_FAMILIES,
   CANDIDATE_CELLS,
+  GOVERNED_WORKER_STAGING_BLOCKED,
   OBSERVATION_BLOCKED,
   ExecutionMatrixError,
   MATRIX,

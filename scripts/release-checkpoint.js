@@ -34,6 +34,9 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'governed-planner-cutover-boundary-test.js',
   'governed-policy-source-test.js',
   'governed-role-economic-policy-set-test.js',
+  // Tranche 6 — the shared per-trial observation sink. Deterministic: it
+  // touches only temporary directories.
+  'evaluation-observation-sink-test.js',
   'governed-provider-transport-test.js',
   'governed-provider-request-contract-test.js',
   'model-pricing-catalog-test.js',

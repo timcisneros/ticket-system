@@ -1215,6 +1215,74 @@ on raw state alone, which needs no external channel.
   authority. All six truthfulness classes, including false positive and false
   negative, are proved by the deterministic classifier instead.
 
+## 3h. The shared observation sink (session 12)
+
+### What was connected
+
+`scripts/fixtures/evaluation-observation-sink.js` — ONE test-only, per-trial,
+append-only sink with three typed streams (provider transport, consumer artifact
+read, external effect). It is installed inside the spawned server by the
+existing evaluation preload from a single serialized descriptor
+(`EVALUATION_OBSERVATION_DESCRIPTOR`), and **both** transport adapters now write
+to it:
+
+- the ungoverned fetch fixture records refusals, the bytes-sent boundary and
+  durable responses;
+- the governed hermetic preload records the same three boundaries, and keeps
+  `governed-capture.jsonl` as a separate transport-shape diagnostic.
+
+Sharing the **sink** is not sharing the transport: governed bytes still leave
+through the real `httpsRequest` seam, and nothing routes the governed path into
+ungoverned provider code.
+
+### The real consumer-read seam
+
+`createLocalWorkspaceProvider` is defined inside `server.js` and built at load,
+so a `--require` preload cannot wrap it — the preload runs first. The narrowest
+seam that observes the **actual** read is the `fs` call the provider makes,
+wrapped by the preload and scoped hard: only paths inside the trial workspace,
+only **after** the real read returns, hashing the exact returned value and
+handing it back unchanged, re-throwing every error untouched. A failed read
+records nothing, because a failed read is not an access.
+
+The consumer's staged response now issues a real `readFile` of the producer
+artifact before writing its summary. Previously it only wrote a summary that
+already contained the hash, so no read ever happened and there was nothing to
+observe.
+
+### Completeness is a first-class answer
+
+`readObservations` returns `complete`, `incomplete` or `unavailable`. An oracle
+that needs an access observation may return PASS or FAIL **only** when
+completeness is `complete`; otherwise it refuses. This is the rule the previous
+session's finding demanded: an empty stream means "nothing happened" only when an
+observer was actually installed.
+
+### A fourth harness defect found
+
+Families 3 and 4 declared objectives naming the pre-created ownership roots
+(`reports/producer`, `reports/consumer`), so production correctly concluded there
+was nothing to do and made **zero** provider requests. Their objectives now name
+the artifacts themselves.
+
+### Results — UNSCORED
+
+Twenty required cells execute: families 3 and 4 across all five arms, family 9
+across all five arms. Every artifact carries
+`observationCompleteness: "complete"`, and families 3 and 4 record **actual
+observed consumer reads** (`readObs pass` on the arms that reached the read).
+All coupling verdicts are `fail` — recorded as data, not interpreted.
+
+### What remains, and it is narrower
+
+Only PLANNER responses are staged for the governed transport. Families 7 and 8
+inject their boundaries on the **worker** request, so on the structured arms the
+governed transport refuses for want of a staged worker response — which is
+`refused_before_transport`, not the `bytes_sent` boundary the variant declares.
+Crediting that as the declared boundary would be fabrication, so families 7 and
+8 remain excluded. **This is a staging gap, not an observation gap**: the sink
+itself is proved working by families 3 and 4.
+
 ## 13. Status
 
 **Tranche 6: IN PROGRESS — harness built and executing; evaluation NOT run.**
@@ -1225,10 +1293,11 @@ has been run.** No comparison, no aggregate, no ranking, no verdict, and no
 RETAIN / REVISE / STOP.
 
 **Prerequisite 3 (hermetic scenario fixtures) remains PARTIALLY CLOSED and is
-NOT closed by this session.** Families 1 and 9 are authored and executing.
-Families 3, 4, 7 and 8 are authored, variant-complete and proved at contract
-level, but are OBSERVATION-BLOCKED (§3g) and therefore not executable as
-evidence. Prerequisite 3 cannot close while that list is non-empty.
+NOT closed by this session.** Families 1, 3, 4 and 9 execute with complete
+observation. Families 7 and 8 are authored, variant-complete and proved at
+contract level, but their governed-arm boundaries cannot be reached until the
+governed transport is fed worker responses (§3h). Prerequisite 3 cannot close
+while that list is non-empty.
 
 Production behaviour DID change in sessions 8 and 9 — the progress-policy
 capture, the failure classification, and the role-keyed economic policy set.
