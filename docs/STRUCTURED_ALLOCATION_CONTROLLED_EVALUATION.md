@@ -726,6 +726,85 @@ only once the ungoverned transport is interceptable at the same boundary.
 
 ---
 
+## 3b. The executable runner (session 5)
+
+`scripts/structured-allocation-evaluation-runner.js`, driven by
+`scripts/structured-allocation-evaluation-runner-postgres-test.js` (registered
+required).
+
+```
+node scripts/structured-allocation-evaluation-runner.js \
+  --mode fixture --scenario family-1-simple --arm <A|A2a|A2b|B|C> \
+  --repetition <n> --seed <value> --output <path>
+```
+
+The runner executes inside the canonical PostgreSQL real-server harness, which
+supplies the store, workspace and server lifecycle. It uses the real
+`POST /tickets` form, the existing scheduler and workers, and the existing
+terminalization and reconciliation. It inserts no plan, planning attempt, Run,
+leaf binding, receipt, evidence, block, consequence, completion decision or
+terminal status.
+
+**Live mode is refused outright**, so a typo cannot make a live call.
+
+### Family-1 five-arm milestone — EXECUTED
+
+All five arms ran through their real production paths and resolved to exactly
+**three distinct paths**. 85 smoke assertions.
+
+| Arm | Observed path | Plan admitted | Oracle | Quiescent | Zero drift |
+|---|---|---|---|---|---|
+| A | `direct` | n/a | pass | yes | yes |
+| A2a | `legacy_v1` | yes | pass | yes | yes |
+| A2b | `legacy_v1` | yes | pass | yes | yes |
+| B | `structured_v2` | no — planning blocked | pass | yes | yes |
+| C | `structured_v2` | no — planning blocked | pass | yes | yes |
+
+**This is not a comparison.** No arm is ranked, no threshold is computed, and
+the table is a routing and harness-integrity record.
+
+**B and C reached structured planning and were blocked before admitting a
+plan** (two planning attempts each, `ticket.structured_planning_failed`). That
+is a truthful product result and valid trial data, not a harness failure — but
+it means the structured arms have not yet been observed executing leaf Runs, and
+the planning-refusal cause is the first thing the next session must resolve.
+
+### What the path proof rests on
+
+Durable state only: `runs.body` leaf bindings and governed envelopes,
+`allocation_plans`, `ticket.structured_planning*` events and
+`structured_planner` reservations. The arm label is never evidence. A trial
+whose durable facts belong to another path is refused as **invalid**, not
+relabelled.
+
+A structured planning attempt is itself proof the structured path ran — a
+blocked trial admits no plan and creates no Run, and counting only plans and
+Runs would have reported it as `direct`.
+
+### Scenario preconditions discovered by execution
+
+Family 1 now starts with **three** top-level folders and pre-created owned
+paths, because production refuses an allocated ticket whose owned paths are
+absent and refuses dynamic allocation with fewer usable top-level directories
+than the group has agents. The initial state is identical for every arm, so it
+remains a controlled variable.
+
+### Isolation and zero drift
+
+Each trial resets the workspace to the scenario's declared initial state, takes
+a fresh fixture namespace that refuses reuse, and creates a fresh group, agents
+and Ticket. After quiescence the read-only report is invoked **twice** and the
+durable fingerprint — runs, run revisions, events, receipts, reservations,
+consequences and diagnostic logs — is captured before, between and after. Any
+difference fails the trial. All five arms showed zero drift.
+
+Artifacts:
+`/tmp/ticket-system-structured-evaluation-smoke/<commit>/fixture/family1-<arm>.json`,
+each labelled `UNSCORED HARNESS SMOKE — NOT PRODUCT EVIDENCE`, write-once, and
+asserted to contain no rank, winner, score or aggregate.
+
+---
+
 ## 5a. The normalized cost method
 
 One method, every arm:

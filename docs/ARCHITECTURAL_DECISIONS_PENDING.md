@@ -1,3 +1,30 @@
+## Tranche 6 Controlled Evaluation: RUNNER EXECUTES ALL FIVE ARMS (2026-08-05)
+
+**Session 5.** The executable runner exists and family 1 has run through all
+five production configurations, resolving to exactly three distinct durable
+paths. 85 smoke assertions; artifacts under
+`/tmp/ticket-system-structured-evaluation-smoke/<commit>/fixture/`.
+
+Durable path proof rests on `runs.body` leaf bindings and governed envelopes,
+`allocation_plans`, `ticket.structured_planning*` events and `structured_planner`
+reservations — never the arm label. A trial whose durable facts belong to
+another path is refused as invalid rather than relabelled.
+
+**B and C reached structured planning and were blocked before admitting a
+plan.** That is a truthful product result and valid trial data, but the
+structured arms have not yet been observed executing leaf Runs. Resolving the
+planning refusal is the first task of the next session.
+
+Report zero drift proved for all five arms: the read-only report was invoked
+twice after quiescence and the durable fingerprint was identical before, between
+and after.
+
+**PREREQUISITE 3 REMAINS PARTIALLY CLOSED — EVALUATION MAY NOT RUN.** Families
+3, 4, 7, 8 and 9 have executable definitions but have not been executed, and the
+structured arms have not yet admitted a plan.
+
+**Previous session record, retained:**
+
 ## Tranche 6 Controlled Evaluation: FIXTURE SEAMS BUILT (2026-08-05)
 
 **Session 3.** The complete release checkpoint was run against
