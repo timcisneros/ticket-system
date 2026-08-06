@@ -1283,6 +1283,15 @@ Crediting that as the declared boundary would be fabrication, so families 7 and
 8 remain excluded. **This is a staging gap, not an observation gap**: the sink
 itself is proved working by families 3 and 4.
 
+The same gap has a measurable consequence for mutation coverage. On every
+currently required cell the structured arms make **zero** provider requests, so
+the governed transport is never exercised and two focused mutations survive —
+removing its durable-response observation, and making an unexpected governed
+request record success. The equivalent ungoverned mutations are killed, which is
+what shows the sink reports correctly; the governed pair closes when the
+structured arms reach the transport. Both are recorded rather than worked
+around.
+
 ## 13. Status
 
 **Tranche 6: IN PROGRESS — harness built and executing; evaluation NOT run.**

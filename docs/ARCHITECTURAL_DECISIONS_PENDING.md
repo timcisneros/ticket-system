@@ -12,6 +12,22 @@ never reached.
 **Fix:** write worker responses, with their failure boundaries, into the governed
 staged table from the same materialized set the ungoverned fetch fixture uses.
 
+**Second, related symptom, measured rather than inferred.** On families 3, 4 and
+9 the structured arms (B, C) make ZERO provider requests: the plan is refused
+before any governed request is issued. So the governed transport is not
+exercised by any currently required cell, and two focused mutations survive as a
+direct consequence:
+
+- removing the governed transport's durable-response observation;
+- making an unexpected governed request record success instead of a refusal.
+
+Both are real coverage gaps and neither was papered over. They cannot be closed
+by a better assertion — nothing currently drives a governed request to
+completion in these scenarios — so they close when the governed worker staging
+above is fixed and the structured arms reach the transport. The equivalent
+UNGOVERNED mutations are killed today, which is what shows the sink itself
+reports correctly.
+
 This is a STAGING gap, not an observation gap. The shared observation sink is
 proved working by families 3 and 4, which execute with complete observation and
 record actual consumer reads.
