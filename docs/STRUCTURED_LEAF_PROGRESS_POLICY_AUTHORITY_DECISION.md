@@ -1,7 +1,7 @@
 # Structured Leaf Progress-Policy Authority — Decision Required
 
-**Status: OPTION B ACCEPTED. Implementation BLOCKED on the version-1 tolerance
-values — see §6b. No production behaviour changed.**
+**Status: OPTION B ACCEPTED. Version-1 values APPROVED 2026-08-06 — see §6b.
+Implementation authorized.**
 
 Recorded 2026-08-06 from `structured-allocation-controlled-evaluation`.
 
@@ -246,7 +246,32 @@ makes the production policy identical to the one already exercised:
 test-harness convenience, not product authority. Production derives duration
 from `runtimeBudgetSnapshot.maxRuntimeDurationMs`.
 
-**These five numbers require explicit approval before implementation proceeds.**
+### APPROVED VERSION 1 — 2026-08-06
+
+The numeric decision is **RESOLVED**. Version 1 of the structured leaf
+progress-control policy is exactly:
+
+```
+version:                              1
+maximumConsecutiveNoProgressWindows:  3
+maximumRepeatedMutations:             3
+maximumFailedOperationStreak:         4
+maximumMutationReversals:             3
+maximumInspectionOnlyStreak:          4
+resourceDimensions:                   ['provider_requests', 'settled_micro_usd']
+maximumCumulativeExecutionDurationMs: runtimeBudgetSnapshot.maxRuntimeDurationMs
+```
+
+These constitute **explicit version-1 runtime execution policy**. They are not
+environment defaults, model output, operator configuration, routing policy or
+economic policy.
+
+`maximumCumulativeExecutionDurationMs` is derived **only** from
+`runtimeBudgetSnapshot.maxRuntimeDurationMs`. The fixture's 3 600 000 ms value is
+a harness convenience and is explicitly **not** adopted.
+
+Historical Runs are unchanged. A later adjustment requires an explicit version
+bump and must not rewrite existing captured Runs.
 
 ---
 

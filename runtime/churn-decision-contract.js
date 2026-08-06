@@ -277,6 +277,125 @@ function buildProgressControlPolicy({
   return deepFreeze(fields);
 }
 
+// ── The repository-owned version-1 progress-control policy ──────────────────
+//
+// WHY THIS EXISTS. Governed structured leaf admission requires a captured
+// progress-control policy, and until this builder there was no production
+// source for one: only test fixtures ever constructed it, so leaf admission
+// could never succeed outside a test. Every governed structured Ticket was
+// blocked, and the refusal was mislabelled as a concurrency conflict.
+//
+// WHAT KIND OF AUTHORITY THIS IS. Progress control is RUNTIME EXECUTION POLICY.
+// It is not model output, not objective interpretation, not completion
+// authority, not provider routing and not economic policy. It decides when
+// execution stops making progress — a different question from who may be called
+// or what may be spent — which is why it does not live in the governed
+// policy-source container alongside those.
+//
+// THE VALUES ARE A STATED PRODUCT DECISION, NOT A DEFAULT. A default is an
+// unstated value silently substituted. These are declared here, versioned,
+// hashed, and captured immutably onto every governed Run, so a Run's stop
+// reason stays explainable from the authority it actually ran under. Changing
+// any of them requires an explicit PROGRESS_POLICY_VERSION bump; historical
+// Runs keep the version they captured and are never rewritten.
+//
+// Approved 2026-08-06. See docs/STRUCTURED_LEAF_PROGRESS_POLICY_AUTHORITY_DECISION.md.
+const VERSION_1_PROGRESS_TOLERANCES = Object.freeze({
+  // Three answered windows crediting no newly satisfied declared fact.
+  maximumConsecutiveNoProgressWindows: 3,
+  // Tolerates a retry and a correction; the third identical mutation is churn.
+  maximumRepeatedMutations: 3,
+  // One above the mutation tolerance: operation failures are often transient.
+  maximumFailedOperationStreak: 4,
+  // Write/undo oscillation past three is not progress.
+  maximumMutationReversals: 3,
+  // Reading is legitimate work; four consecutive read-only windows is not.
+  maximumInspectionOnlyStreak: 4
+});
+
+// The dimensions the projection reports. Repository-owned, from the closed
+// vocabulary above — not a deployment choice.
+const VERSION_1_RESOURCE_DIMENSIONS = Object.freeze([
+  'provider_requests',
+  'settled_micro_usd'
+]);
+
+// The runtime-budget snapshot fields this builder reads. Named so that a
+// snapshot missing its immutable identity cannot silently produce a policy that
+// claims to be bound to one.
+const REQUIRED_BUDGET_SNAPSHOT_FIELDS = Object.freeze([
+  'maxRuntimeDurationMs',
+  'snapshotHash'
+]);
+
+// Build the canonical version-1 policy for one governed structured leaf plan.
+//
+// DURATION IS DERIVED, NEVER DECLARED HERE. `maximumCumulativeExecutionDurationMs`
+// comes only from the already-captured, already-hashed
+// `runtimeBudgetSnapshot.maxRuntimeDurationMs`. Restating it as a constant would
+// create a second duration authority that could silently disagree with the
+// budget the Run was actually admitted under.
+//
+// It reads no environment variable and no current mutable configuration: every
+// input is either declared above or carried on the immutable snapshot passed in.
+function buildDefaultProgressControlPolicy({ runtimeBudgetSnapshot } = {}) {
+  if (!isPlainObject(runtimeBudgetSnapshot)) {
+    refuse('progress_policy_malformed',
+      'a captured runtime budget snapshot is required to derive progress control');
+  }
+  const missing = REQUIRED_BUDGET_SNAPSHOT_FIELDS.filter(field =>
+    runtimeBudgetSnapshot[field] === undefined || runtimeBudgetSnapshot[field] === null);
+  if (missing.length > 0) {
+    refuse('progress_policy_malformed',
+      `runtime budget snapshot is missing field(s): ${missing.join(', ')}`);
+  }
+  if (typeof runtimeBudgetSnapshot.snapshotHash !== 'string' ||
+      !/^[0-9a-f]{64}$/.test(runtimeBudgetSnapshot.snapshotHash)) {
+    refuse('progress_policy_malformed',
+      'runtime budget snapshot carries no usable immutable identity');
+  }
+  return buildProgressControlPolicy({
+    ...VERSION_1_PROGRESS_TOLERANCES,
+    maximumCumulativeExecutionDurationMs: runtimeBudgetSnapshot.maxRuntimeDurationMs,
+    resourceDimensions: [...VERSION_1_RESOURCE_DIMENSIONS]
+  });
+}
+
+// Two leaf drafts of one plan must agree on every input this policy derives
+// from, or one plan-scoped capture would misrepresent at least one of them.
+//
+// The inputs are Ticket-scoped by construction — `buildRuntimeBudgetSnapshot`
+// takes only the Ticket's resolved runtime limits and its execution policy, and
+// neither the assigned agent nor the allocation item participates. But the
+// limits are re-resolved per draft against current configuration, so a change
+// landing mid-admission could still produce disagreeing drafts. This proves
+// equality rather than assuming it, and refuses before anything is admitted.
+function assertUniformProgressPolicyInputs(snapshots) {
+  if (!Array.isArray(snapshots) || snapshots.length === 0) {
+    refuse('progress_policy_malformed',
+      'at least one runtime budget snapshot is required');
+  }
+  const identities = snapshots.map(snapshot => {
+    if (!isPlainObject(snapshot)) {
+      refuse('progress_policy_malformed',
+        'every leaf draft must carry a runtime budget snapshot');
+    }
+    return JSON.stringify({
+      snapshotHash: snapshot.snapshotHash,
+      executionPolicyHash: snapshot.executionPolicyHash,
+      runtimeLimitsRevision: snapshot.runtimeLimitsRevision,
+      maxRuntimeDurationMs: snapshot.maxRuntimeDurationMs
+    });
+  });
+  const distinct = new Set(identities);
+  if (distinct.size !== 1) {
+    refuse('progress_policy_malformed',
+      `leaf drafts disagree on the execution authority a plan-scoped progress ` +
+      `policy would be derived from (${distinct.size} distinct snapshots)`);
+  }
+  return snapshots[0];
+}
+
 function normalizeProgressControlPolicy(value) {
   if (!isPlainObject(value)) {
     refuse('progress_policy_malformed', 'progress-control policy must be an object');
@@ -469,6 +588,10 @@ module.exports = {
   PROGRESS_POLICY_VERSION,
   RESOURCE_DIMENSIONS,
   buildProgressControlPolicy,
+  buildDefaultProgressControlPolicy,
+  assertUniformProgressPolicyInputs,
+  VERSION_1_PROGRESS_TOLERANCES,
+  VERSION_1_RESOURCE_DIMENSIONS,
   decideChurn,
   elapsedExecutionDurationMs,
   normalizeChurnDecision,

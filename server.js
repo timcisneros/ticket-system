@@ -102,6 +102,18 @@ const {
   summarizeTypedOperationConsequences
 } = require('./runtime/typed-evidence-projection');
 const {
+  assertUniformProgressPolicyInputs,
+  buildDefaultProgressControlPolicy
+} = require('./runtime/churn-decision-contract');
+// The canonical worker role, from the orchestration that already owns it —
+// not a new literal.
+const {
+  WORKER_ROLE: GOVERNED_STRUCTURED_LEAF_ROLE
+} = require('./runtime/governed-leaf-orchestration');
+const {
+  readGovernedPolicySource
+} = require('./runtime/governed-policy-source');
+const {
   buildRuntimeBudgetSnapshot,
   getRunRuntimeBudgetSnapshot
 } = require('./runtime/runtime-budget-contract');
@@ -17061,6 +17073,43 @@ async function admitStructuredAllocationLeafRuns(ticket, plan) {
     leafDrafts.push({ allocationItemId: item.allocationItemId, run: prepared.run });
   }
 
+  // ── The mandatory governed leaf capture ──────────────────────────────────
+  //
+  // The store requires `{ policySource, progressControlPolicy }` and refuses
+  // ungoverned structured leaf admission outright — the Tranche 4 cutover
+  // removed it. Nothing here supplied the capture, so every structured Ticket
+  // that reached this point was blocked, and the refusal was reported as a
+  // concurrency conflict by the catch below.
+  //
+  // TWO SEPARATE AUTHORITIES, captured together and never merged. `policySource`
+  // is the existing provider/routing/economic provenance container, read for the
+  // worker role. `progressControlPolicy` is versioned runtime execution control,
+  // built from the immutable runtime budget snapshot the drafts already carry.
+  let governedLeafCapture;
+  try {
+    const policySource = readGovernedPolicySource(
+      await loadGovernedPlannerPolicyContainer(),
+      { role: GOVERNED_STRUCTURED_LEAF_ROLE });
+    // PROVED, NOT ASSUMED. The inputs are Ticket-scoped by construction, but the
+    // runtime limits are re-resolved per draft, so a configuration change
+    // landing mid-admission could still leave drafts disagreeing. Equality is
+    // checked across every draft and refuses before anything is admitted.
+    const uniformBudget = assertUniformProgressPolicyInputs(
+      leafDrafts.map(draft => draft.run && draft.run.runtimeBudgetSnapshot));
+    governedLeafCapture = {
+      policySource,
+      progressControlPolicy: buildDefaultProgressControlPolicy({
+        runtimeBudgetSnapshot: uniformBudget
+      })
+    };
+  } catch (error) {
+    // Missing or contradictory governed authority refuses BEFORE any leaf Run
+    // commits. No fallback policy is fabricated here: a capture invented to get
+    // past this point would bind governance nobody granted to every sibling Run.
+    return refuse('leaf_governed_authority_unavailable',
+      error && error.message ? error.message : 'governed leaf capture unavailable');
+  }
+
   let admission;
   try {
     admission = await getStructuredAllocationLeafExecutionRepository()
@@ -17068,14 +17117,48 @@ async function admitStructuredAllocationLeafRuns(ticket, plan) {
         ticketId: ticket.id,
         allocationPlanId: plan.id,
         leafDrafts,
+        governedLeafCapture,
         runEventPayload: buildRunCreatedEventPayload,
         eventPayload: { source: 'structured_allocation_leaf_admission' }
       });
   } catch (error) {
+    // KNOWN REFUSALS KEEP THEIR EXACT CODE.
     if (error instanceof StructuredAllocationLeafRunError && error.reason) {
       return refuse(error.reason, error.message);
     }
-    return refuse('leaf_admission_conflict', error.message);
+    // A GENUINE RACE IS A NARROW, NAMED SET — not "everything unexpected".
+    //
+    // Mapping every exception here to `leaf_admission_conflict` told operators a
+    // concurrency story about failures involving no concurrency at all, and
+    // discarded the only evidence of what actually happened. The real cause of a
+    // months-old structured-execution outage was unrecoverable from durable
+    // state because of this line.
+    // Matched by stable CODE rather than constructor: the error crosses a module
+    // boundary, and an `instanceof` that silently fails would send every genuine
+    // race down the internal-failure path.
+    const optimistic = error && (error.code === 'OPTIMISTIC_CONCURRENCY_CONFLICT' ||
+      error.code === 'STATE_TRANSITION_CONFLICT');
+    // PostgreSQL serialization and deadlock classes are the database's own
+    // statement that a concurrent transaction interfered.
+    const serialization = error && (error.code === '40001' || error.code === '40P01');
+    if (optimistic || serialization) {
+      return refuse('leaf_admission_conflict', error.message);
+    }
+    // Everything else is an internal or infrastructure failure. Only bounded,
+    // stable diagnostics reach durable authority: the stable application code or
+    // SQLSTATE. The raw message and stack stay in server diagnostics under the
+    // existing logging policy — they may carry request bodies, provider
+    // responses or filesystem detail.
+    const causeCode = error && typeof error.code === 'string' ? error.code : null;
+    appendSystemLog('allocation:structured_leaf_admission_internal_failure',
+      `Ticket #${ticket.id} leaf admission failed unexpectedly`, null, {
+        ticketId: ticket.id,
+        allocationPlanId: plan.id,
+        causeCode,
+        error: sanitizeLogMessage(error && error.message ? error.message : String(error))
+      });
+    return refuse('leaf_admission_internal_failure',
+      causeCode ? `cause ${causeCode}` : 'unclassified internal failure');
   }
 
   broadcastTicketChange();
