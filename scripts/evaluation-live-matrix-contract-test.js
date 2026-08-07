@@ -20,9 +20,14 @@ const {
   LiveJournalError, acceptedSlots, appendJournal, readJournal, unresolvedReservations
 } = require('./fixtures/evaluation-live-run-journal');
 const {
-  COMPLETE_VERDICT, LiveCorpusError, SYNTHETIC_ACCEPTANCE_LABEL,
-  assertScorableLiveCorpus, auditLiveCorpus, buildExclusionArtifact
+  ABORTED_LABEL, COMPLETE_VERDICT, LiveCorpusError, PERMANENTLY_ABORTED_RUNS,
+  SYNTHETIC_ACCEPTANCE_LABEL, assertScorableLiveCorpus, auditLiveCorpus,
+  buildExclusionArtifact, isAbortedRunHeader
 } = require('./fixtures/evaluation-live-corpus-integrity');
+const {
+  EvidenceCombinationError, combineEvidence
+} = require('./fixtures/evaluation-evidence-combination');
+const { assertCorpusIntegrity } = require('./structured-allocation-evaluation-scorer');
 const { trialIdFor } = require('./structured-allocation-evaluation-scored-runner');
 
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config',
@@ -232,6 +237,89 @@ function main() {
     'and is REFUSED as live product evidence anyway — complete is not the same as real');
     ok(SYNTHETIC_ACCEPTANCE_LABEL.includes('NOT PRODUCT EVIDENCE'),
       'the label says so in terms');
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  // ── AN ABORTED RUN IS NOT A CORPUS ───────────────────────────────────
+  //
+  // A run abandoned partway through can be internally consistent over the slots
+  // it reached, and that consistency is exactly what must not be mistaken for
+  // completeness: which slots it holds was decided by WHEN the abort happened,
+  // so scoring them would report the first N trials as though they were the
+  // experiment. The historical 31-of-120 run additionally did not retain its
+  // provider responses, so nothing in it can be re-examined either.
+  //
+  // Refused at all THREE doors into a decision. A rule enforced at one of them
+  // is a rule that can be walked around.
+  {
+    const root = freshRoot();
+    seedCorpus(root, manifest.slots.length);
+
+    // 1. BY IDENTITY, with no label at all. The header hash IS the run, so a
+    //    rewritten header cannot launder it back in.
+    const abortedIdentity = PERMANENTLY_ABORTED_RUNS[0].runHeaderHash;
+    ok(abortedIdentity ===
+       'b2b59ad2b9d9fafc8ac860838b0530cb8f90bc02907b36a3a230b560bece2eef',
+    'the aborted 31-slot run is listed by its exact run header identity');
+    ok(isAbortedRunHeader({ runHeaderHash: abortedIdentity }) === true,
+      'and is recognized from that identity alone, with no label present');
+    ok(isAbortedRunHeader({ label: ABORTED_LABEL }) === true &&
+       isAbortedRunHeader({ aborted: true }) === true &&
+       isAbortedRunHeader({ runHeaderHash: 'some-other-run' }) === false,
+    'the label and the explicit flag are recognized too, and an ordinary run is not');
+
+    // 2. AT THE LIVE CORPUS GATE, even though this corpus is complete.
+    const abortedAudit = auditLiveCorpus({
+      manifest, header: { ...HEADER, aborted: true }, outputRoot: root, trialIdFor });
+    ok(abortedAudit.aborted === true,
+      'the corpus audit marks an aborted run as aborted');
+    ok(abortedAudit.failures.some(failure =>
+      failure.code === 'LIVE_CORPUS_ABORTED_NOT_DECISION_EVIDENCE'),
+    'and records it as an integrity failure rather than a note');
+    const gateRefusal = refuses(() => assertScorableLiveCorpus(abortedAudit));
+    ok(gateRefusal instanceof LiveCorpusError &&
+       gateRefusal.code === 'LIVE_CORPUS_ABORTED_NOT_DECISION_EVIDENCE',
+    'the scorer door REFUSES it');
+
+    // AND IT REFUSES EVEN A COMPLETE, OTHERWISE-PERFECT AUDIT — being
+    // consistent is not the same as being the experiment.
+    const perfectButAborted = refuses(() =>
+      assertScorableLiveCorpus({ aborted: true, complete: true, failures: [] }));
+    ok(perfectButAborted instanceof LiveCorpusError &&
+       perfectButAborted.code === 'LIVE_CORPUS_ABORTED_NOT_DECISION_EVIDENCE',
+    'including one that is complete and carries no other failure');
+
+    // 3. AT THE SCORER, by header and by artifact.
+    const byHeader = refuses(() => assertCorpusIntegrity({
+      manifest: { trials: [], manifestHash: 'm', failureHandling: { infrastructureExclusions: [] } },
+      header: { runHeaderHash: abortedIdentity }, artifacts: [] }));
+    ok(byHeader !== null &&
+       byHeader.detail.code === 'SCORER_ABORTED_RUN_NOT_DECISION_EVIDENCE',
+    'the scorer refuses an aborted run header before it reads any artifact');
+    const byArtifact = refuses(() => assertCorpusIntegrity({
+      manifest: { trials: [], manifestHash: 'm', failureHandling: { infrastructureExclusions: [] } },
+      header: { runHeaderHash: 'a-valid-run' },
+      artifacts: [{ trialId: 't1', scoredRunHash: abortedIdentity }] }));
+    ok(byArtifact !== null &&
+       byArtifact.detail.code === 'SCORER_ABORTED_ARTIFACT_NOT_DECISION_EVIDENCE',
+    'and refuses an artifact imported from it into an otherwise valid corpus');
+
+    // 4. AT THE FINAL EVIDENCE-COMBINATION CONTRACT.
+    const combined = refuses(() => combineEvidence({
+      fixture: { hardDisqualifierTriggered: false, ordinaryDecision: 'RETAIN' },
+      live: { ordinaryDecision: 'RETAIN', corpusComplete: true,
+        runHeader: { runHeaderHash: abortedIdentity } } }));
+    ok(combined instanceof EvidenceCombinationError &&
+       combined.code === 'EVIDENCE_ABORTED_NOT_DECISION_EVIDENCE',
+    'the final evidence-combination contract refuses it as well');
+    // REFUSED, NOT DOWNGRADED. "Not yet decidable" invites more evidence of the
+    // same kind, and there is no amount of an aborted run that becomes evidence.
+    ok(combineEvidence({
+      fixture: { hardDisqualifierTriggered: false, ordinaryDecision: 'STOP' },
+      live: { ordinaryDecision: 'RETAIN', corpusComplete: true }
+    }).finalProductDecision === 'RETAIN',
+    'while an ordinary live corpus still combines exactly as before');
+
     fs.rmSync(root, { recursive: true, force: true });
   }
 

@@ -47,6 +47,11 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'evaluation-live-budget-test.js',
   // Tranche 6 — the live matrix executor's refusals. Deterministic, no server.
   'evaluation-live-matrix-contract-test.js',
+  // Tranche 6 — the live artifact's durable-observation projection: what an
+  // operator can still distinguish once the ephemeral database is gone.
+  'evaluation-live-observation-projection-test.js',
+  // Tranche 6 — the transport-observation contract, at the module that owns it.
+  'provider-transport-observation-test.js',
   // Tranche 6 — the scored executor and pure scorer. Deterministic: config only.
   'structured-allocation-scored-evaluation-test.js',
   'governed-provider-transport-test.js',
@@ -132,6 +137,12 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'structured-allocation-live-dispatch-postgres-test.js',
   'structured-allocation-live-matrix-postgres-test.js',
   'evaluation-live-credential-postgres-test.js',
+  // Tranche 6 — the durable provider-transport observation, on both production
+  // transports and all three roles. Replaces the final hop; zero external calls.
+  'provider-transport-invocation-postgres-test.js',
+  // Tranche 6 — the ungoverned pipeline against the REAL Responses envelope:
+  // one valid action to a receipt, four over the cap to a product refusal.
+  'ungoverned-real-envelope-pipeline-postgres-test.js',
   'postgres-persistence-integration-test.js',
   'postgres-runtime-cutover-test.js',
   'page-render-regression-test.js',

@@ -165,9 +165,90 @@ function main() {
   ok(fixtureManifest.mode === 'fixture',
     'the executed manifest is explicitly fixture mode');
 
+  // ── THE LAYERS ADDED AFTER THE ABORTED RUN ───────────────────────────
+  //
+  // Six facts, six separate proofs. They are asserted individually because a
+  // verdict that once claimed three roles on two captured requests is exactly
+  // what happens when one boolean is allowed to stand in for several layers.
+  const NEW_LAYER_FACTS = [
+    'realProviderEnvelopeShapeProved',
+    'ungovernedOneActionResponsePipelineProved',
+    'ungovernedActionLimitProductRefusalProved',
+    'providerTransportInvocationObservationProved',
+    'liveFailureObservationProjectionProved',
+    'abortedCorpusMechanicallyUnscorableProved'
+  ];
+  for (const id of NEW_LAYER_FACTS) {
+    const item = audit.items.find(entry => entry.id === id);
+    ok(item !== undefined && item.state === 'FROZEN',
+      `${id} is FROZEN, on its own evidence`);
+    ok(item.source !== audit.items.find(entry =>
+      entry.id === 'ungovernedWorkerDispatchProved').source,
+    `${id} reads a different authority from the dispatch proof`);
+  }
+
+  // EACH IS INDEPENDENTLY FALSIFIABLE. Removing ONE assertion from the suite
+  // that owns it must block readiness — and must block ONLY that fact, which
+  // is what proves they are not one boolean wearing six names.
+  const envelopeSuiteSource = fs.readFileSync(path.join(__dirname,
+    'ungoverned-real-envelope-pipeline-postgres-test.js'), 'utf8');
+  const falsifications = [
+    ['realProviderEnvelopeShapeProved', 'carries NO top-level output_text'],
+    ['ungovernedOneActionResponsePipelineProved', 'exactly one durable createFolder receipt'],
+    ['ungovernedActionLimitProductRefusalProved', 'the refused response produced ZERO operations']
+  ];
+  for (const [id, proof] of falsifications) {
+    const withoutProof = auditLiveReadiness({
+      sources: { envelopeSuiteSource: envelopeSuiteSource.replace(proof, 'REMOVED') }
+    });
+    ok(withoutProof.unresolved.includes(id) &&
+       withoutProof.verdict === 'TRANCHE 6 LIVE-MODEL EVALUATION BLOCKED',
+    `removing "${proof.slice(0, 44)}…" BLOCKS readiness at ${id}`);
+    const collateral = withoutProof.unresolved.filter(other =>
+      NEW_LAYER_FACTS.includes(other) && other !== id);
+    ok(collateral.length === 0,
+      `and blocks ONLY ${id} — the other layers keep their own proofs`);
+  }
+
+  // The transport fact reads the PRODUCTION WIRING, not only its own suite:
+  // a seam that exists but is never called at the transport owner proves
+  // nothing about production.
+  const unwired = auditLiveReadiness({
+    sources: { governedTransportSource: '// no observation here' }
+  });
+  ok(unwired.unresolved.includes('providerTransportInvocationObservationProved') &&
+     unwired.verdict === 'TRANCHE 6 LIVE-MODEL EVALUATION BLOCKED',
+  'unwiring the governed transport owner BLOCKS the transport-invocation fact');
+
+  // And the projection fact reads whether the READER actually projects it.
+  const unprojected = auditLiveReadiness({
+    sources: { reportSource: '// the reader never projects the observation' }
+  });
+  ok(unprojected.unresolved.includes('liveFailureObservationProjectionProved') &&
+     unprojected.verdict === 'TRANCHE 6 LIVE-MODEL EVALUATION BLOCKED',
+  'a projection the evaluation reader never calls BLOCKS its own fact');
+
   console.log(`\nevaluation live readiness test passed — ${passed} assertions`);
   console.log(`VERDICT: ${audit.verdict}`);
   console.log(`unresolved: ${audit.unresolved.join(', ')}`);
+  console.log('\nconditional results for the Tranche 6 layers:');
+  const labelled = [
+    ['REAL PROVIDER ENVELOPE SHAPE', 'realProviderEnvelopeShapeProved'],
+    ['UNGOVERNED ONE-ACTION RESPONSE PIPELINE', 'ungovernedOneActionResponsePipelineProved'],
+    ['UNGOVERNED ACTION-LIMIT PRODUCT REFUSAL', 'ungovernedActionLimitProductRefusalProved'],
+    ['LIVE FAILURE OBSERVATION PROJECTION', 'liveFailureObservationProjectionProved'],
+    ['TRANSPORT INVOCATION OBSERVATION', 'providerTransportInvocationObservationProved'],
+    ['ABORTED CORPUS REJECTION', 'abortedCorpusMechanicallyUnscorableProved'],
+    ['FULL 120 FROZEN SLOT EXECUTION', 'liveFullCaptured120SlotExecutionProved'],
+    ['THREE-ROLE DISPATCH — ungoverned worker', 'ungovernedWorkerDispatchProved'],
+    ['THREE-ROLE DISPATCH — structured planner', 'structuredPlannerDispatchProved'],
+    ['THREE-ROLE DISPATCH — governed leaf', 'governedLeafDispatchProved'],
+    ['REAL UNCAPTURED CREDENTIAL PROPAGATION', 'realLiveCredentialPropagationBehaviourallyProved']
+  ];
+  for (const [label, id] of labelled) {
+    const item = audit.items.find(entry => entry.id === id);
+    console.log(`  ${label.padEnd(42)} ${item ? item.state : 'MISSING'}`);
+  }
 }
 
 main();

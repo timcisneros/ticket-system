@@ -118,7 +118,13 @@ async function dispatchGovernedRequest({
   resolveCredentials,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   maxResponseBytes = MAX_GOVERNED_RESPONSE_BYTES,
-  serializedRequest: callerBytes = undefined
+  serializedRequest: callerBytes = undefined,
+  // APPEND-ONLY EVIDENCE, passed straight through to the transport owner. This
+  // seam deliberately does NOT record the observation itself: it is not the
+  // function that performs the platform call, and a fact recorded here would
+  // describe reaching a dispatch helper rather than crossing into transport.
+  observeTransportInvocation = null,
+  transportInvocationIdentity = null
 }) {
   // A caller with bytes of its own has no business here. Refusing the parameter
   // outright is what makes byte substitution unrepresentable rather than merely
@@ -205,7 +211,19 @@ async function dispatchGovernedRequest({
       byteCount: reservation.serializedRequestByteCount,
       credentials,
       timeoutMs,
-      maxResponseBytes
+      maxResponseBytes,
+      observeTransportInvocation,
+      // The canonical governed request identity, taken from the reservation
+      // this dispatch is authorized by rather than from the caller.
+      transportInvocationIdentity: transportInvocationIdentity === null
+        ? null
+        : {
+          ...transportInvocationIdentity,
+          reservationId: reservation.id,
+          modelRequestOrdinal: reservation.modelRequestOrdinal === undefined
+            ? null
+            : reservation.modelRequestOrdinal
+        }
     });
   } catch (error) {
     if (error && error.name === 'AbortError') {

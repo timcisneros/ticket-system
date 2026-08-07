@@ -24,6 +24,9 @@ const {
   ARMS,
   assertObservedPathMatches
 } = require('./fixtures/evaluation-arms');
+const {
+  projectLiveDurableObservation
+} = require('./fixtures/evaluation-live-observation-projection');
 
 const GOVERNED_WORKER_ROLE = 'structured_leaf_executor';
 const GOVERNED_PLANNER_ROLE = 'structured_planner';
@@ -73,13 +76,20 @@ async function collectTicketFacts(store, ticketId) {
        FROM ${store.table('economic_request_reservations')}
       WHERE ticket_id = $1 ORDER BY id`, [ticketId]);
 
+  // The receipt document carries the operation's stable refusal code. Without
+  // it a refused workspace action projects only as "not succeeded".
   const receipts = await readOnly(store,
-    `SELECT id, run_id, operation, outcome, workspace_path, recorded_at
+    `SELECT id, run_id, operation, outcome, workspace_path, recorded_at, receipt
        FROM ${store.table('operation_receipts')}
       WHERE ticket_id = $1 ORDER BY id`, [ticketId]);
 
+  // PAYLOADS ARE READ, not just types. The live artifact must survive the
+  // ephemeral database, and the stable codes that distinguish a parser refusal
+  // from a per-response action-limit refusal from a workspace refusal live in
+  // the payloads. Reading only types is what left the artifact with counts it
+  // could not interpret.
   const events = await readOnly(store,
-    `SELECT type, run_id, ts FROM ${store.table('events')}
+    `SELECT type, run_id, seq, ts, payload FROM ${store.table('events')}
       WHERE ticket_id = $1 ORDER BY seq`, [ticketId]);
 
   const ticket = (await readOnly(store,
@@ -254,9 +264,20 @@ async function collectTrialObservations(store, { ticketId, armId, pricingInputs 
     allocationPlanId: facts.plans.length > 0 ? facts.plans[0].id : null,
     allocationItemIds: facts.runs.map(run => run.allocation_item_id).filter(Boolean),
     plannerRequestCount: observedPath.plannerRequestCount,
+    // A GOVERNED RESERVATION COUNT, and nothing more. The ungoverned arms hold
+    // none, so this is not — and never was — a count of provider contacts. The
+    // durable observation below is where that question is answered.
     workerRequestCount: facts.reservations
       .filter(r => r.role === GOVERNED_WORKER_ROLE).length,
     operationReceiptCount: facts.receipts.length,
+    // THE PROJECTION THAT SURVIVES THE EPHEMERAL DATABASE. Derived entirely
+    // from the durable events and records collected above; it decides nothing
+    // and adds no authority of its own.
+    durableObservation: projectLiveDurableObservation({
+      events: facts.events,
+      receipts: facts.receipts,
+      reservations: facts.reservations
+    }),
     terminalRunStatuses: facts.runs.map(run => run.status),
     terminalTicketStatus: facts.ticket ? facts.ticket.status : null,
     ...deriveProductCompletionClaim(facts),

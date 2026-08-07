@@ -24,6 +24,12 @@ const LIFECYCLE_RANK = Object.freeze({
   'run.lease_acquired': 2,
   'run.started': 3,
   'provider.request.persisted': 10,
+  // Between the two provider facts, and deliberately fractional: it is inserted
+  // where it belongs in the lifecycle without renumbering ranks other code was
+  // written against. It is listed here so that a transport observation appearing
+  // AFTER terminalization is detected as post-terminal activity rather than
+  // silently ignored, which is what an unranked type would be.
+  'provider.transport_invoked': 10.5,
   'provider.response.persisted': 11,
   'model.plan.parsed': 12,
   'model:stalled': 13,

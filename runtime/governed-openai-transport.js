@@ -14,6 +14,9 @@
 // value can ever redirect a real governed request.
 
 const https = require('node:https');
+const {
+  observeProviderTransportInvocation
+} = require('./provider-transport-observation');
 
 const GOVERNED_OPENAI_HOSTNAME = 'api.openai.com';
 const GOVERNED_OPENAI_PATH = '/v1/responses';
@@ -35,7 +38,14 @@ function createOpenAiGovernedTransport({ httpsRequest = https.request } = {}) {
     serializedRequest,
     credentials,
     timeoutMs,
-    maxResponseBytes
+    maxResponseBytes,
+    // APPEND-ONLY EVIDENCE, supplied per request. It is invoked AFTER the
+    // platform call below, never before it, so the fact it records is one that
+    // already happened. It cannot influence the endpoint, the bytes, the
+    // credential, the timeout or the outcome: it receives none of them and its
+    // return value is discarded.
+    observeTransportInvocation = null,
+    transportInvocationIdentity = null
   }) {
     // The endpoint is verified rather than trusted: a captured request whose
     // endpoint is not the official one is refused instead of being sent
@@ -50,7 +60,18 @@ function createOpenAiGovernedTransport({ httpsRequest = https.request } = {}) {
     // The bytes, measured once, sent once.
     const payload = Buffer.from(serializedRequest, 'utf8');
 
-    return await new Promise((resolve, reject) => {
+    // THE PLATFORM CALL HAPPENS INSIDE THIS EXECUTOR, SYNCHRONOUSLY.
+    //
+    // `new Promise` runs its executor before it returns, so by the time
+    // `settled` exists, `httpsRequest` has been invoked and `request.end` has
+    // handed it the payload. That is what makes the observation below a record
+    // of an invocation that ALREADY OCCURRED rather than one about to be
+    // attempted — and it is why the promise is hoisted out of the `return`
+    // instead of being awaited in place.
+    //
+    // Nothing about the request itself changed: the same options, the same
+    // listeners, the same `end(payload)`, in the same order.
+    const settled = new Promise((resolve, reject) => {
       const request = httpsRequest({
         // Spelled as discrete options rather than a URL string so a test can
         // read back exactly what production sends.
@@ -128,6 +149,28 @@ function createOpenAiGovernedTransport({ httpsRequest = https.request } = {}) {
       request.on('error', reject);
       request.end(payload);
     });
+
+    // The settlement promise is already live and may reject before the await
+    // below reaches it. Marking it handled here is not a swallow: the rejection
+    // is still delivered by `await settled`, and without this an early socket
+    // error during the observation write would surface as an unhandled
+    // rejection and take the process down.
+    settled.catch(() => {});
+
+    // THE OBSERVATION, WITH THE REQUEST ALREADY IN FLIGHT.
+    //
+    // A failure here is reported as a failure — evidence that vanishes quietly
+    // is worse than none — and the caller classifies it as possibly dispatched,
+    // which is the truth: the bytes were handed to the platform before this
+    // line was reached.
+    await observeProviderTransportInvocation(observeTransportInvocation, {
+      ...(transportInvocationIdentity || {}),
+      endpointIdentity,
+      method: 'POST',
+      requestByteCount: payload.byteLength
+    });
+
+    return await settled;
   };
 }
 

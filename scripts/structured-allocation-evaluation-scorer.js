@@ -22,6 +22,14 @@
 
 const crypto = require('node:crypto');
 
+// THE ONLY IMPORT, and it is a pure predicate: which run identities are not
+// decision evidence. It reads no filesystem, no database and no fixture, so the
+// scorer stays a pure function of the corpus it is handed while still refusing
+// a corpus that may never be scored.
+const {
+  abortedRunDetail, isAbortedRunHeader
+} = require('./fixtures/evaluation-aborted-runs');
+
 const AUTHORIZED_DIMENSIONS = Object.freeze([
   'allocation_quality', 'completion_truthfulness', 'latency', 'cost', 'churn'
 ]);
@@ -56,6 +64,31 @@ function hashCanonical(value) {
 function assertCorpusIntegrity({ manifest, header, artifacts, exclusions = [] }) {
   const problems = [];
   const expected = manifest.trials.length;
+
+  // ── AN ABORTED RUN IS NOT A CORPUS ────────────────────────────────────
+  //
+  // Refused here as well as at the live corpus gate, because these are two
+  // different doors into a score and a rule enforced at only one of them is a
+  // rule that can be walked around. It refuses before any artifact is read: an
+  // aborted run's slots were selected by when the abort happened, so scoring
+  // them would report the first N trials as though they were the experiment.
+  if (isAbortedRunHeader(header)) {
+    throw new ScorerError(
+      'refusing to score a run marked ABORTED — NOT DECISION EVIDENCE',
+      { code: 'SCORER_ABORTED_RUN_NOT_DECISION_EVIDENCE',
+        aborted: abortedRunDetail(header) });
+  }
+  for (const artifact of artifacts) {
+    if (isAbortedRunHeader({ runHeaderHash: artifact.scoredRunHash,
+      label: artifact.label })) {
+      throw new ScorerError(
+        `refusing to score ${artifact.trialId}: it belongs to a run marked ` +
+        'ABORTED — NOT DECISION EVIDENCE',
+        { code: 'SCORER_ABORTED_ARTIFACT_NOT_DECISION_EVIDENCE',
+          trialId: artifact.trialId,
+          aborted: abortedRunDetail({ runHeaderHash: artifact.scoredRunHash }) });
+    }
+  }
 
   const bySlot = new Map();
   const ids = new Set();

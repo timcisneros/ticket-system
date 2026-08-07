@@ -188,6 +188,10 @@ const {
   GOVERNED_OPENAI_ENDPOINT
 } = require('./runtime/governed-openai-transport');
 const {
+  PROVIDER_TRANSPORT_INVOKED_EVENT,
+  observeProviderTransportInvocation
+} = require('./runtime/provider-transport-observation');
+const {
   runGovernedLeafRequest,
   selectRunProviderPath
 } = require('./runtime/governed-leaf-orchestration');
@@ -886,6 +890,62 @@ async function recordNonTerminalRunEvidence(run, options) {
     throw error;
   }
   return { ...recorded, evidenceKey: input.evidenceKey };
+}
+
+// ── The durable provider-transport observation writers ─────────────────────
+//
+// Two writers, because there are two canonical request identities — and NOT
+// because there are two transports. A Run-scoped provider request is identified
+// by the Run and its evidence slot; a structured planner request has no Run and
+// is identified by its Ticket and its economic reservation. Forcing either into
+// the other's shape would mean inventing an identity the record does not have.
+//
+// Both are append-only, both are event-only, and neither returns anything the
+// caller can act on.
+
+function buildRunTransportObservationKey(run, slot) {
+  return buildRunEvidenceKey(run, 'provider-transport', slot);
+}
+
+// Run-scoped: the ungoverned worker and the governed leaf executor.
+function createRunTransportInvocationObserver(run, slot, executionTurn = null) {
+  const evidenceKey = buildRunTransportObservationKey(run, slot);
+  const identity = {
+    evidenceKey,
+    slot,
+    executionTurn,
+    providerRequestEvidenceKey: buildRunEvidenceKey(run, 'provider-request', slot)
+  };
+  return {
+    identity,
+    observe: async payload => {
+      await getNonTerminalEvidenceRepository().recordProviderTransportInvocation({
+        runId: run.id,
+        ticketId: run.ticketId,
+        evidenceKey,
+        eventType: PROVIDER_TRANSPORT_INVOKED_EVENT,
+        payload: sanitizeSnapshotValue(payload)
+      });
+    }
+  };
+}
+
+// Ticket-scoped: the structured planner, which dispatches against a planning
+// attempt rather than a Run.
+function createPlannerTransportInvocationObserver(ticketId, attemptId) {
+  const evidenceKey = `provider-transport:ticket:${ticketId}:planning-attempt:${attemptId}`;
+  return {
+    identity: { evidenceKey },
+    observe: async payload => {
+      await getGovernedPlannerDispatchRepository().recordProviderTransportInvocation({
+        runId: null,
+        ticketId,
+        evidenceKey,
+        eventType: PROVIDER_TRANSPORT_INVOKED_EVENT,
+        payload: sanitizeSnapshotValue(payload)
+      });
+    }
+  };
 }
 
 async function findPersistedMutationConflict(run, operation, args, provider) {
@@ -12042,7 +12102,11 @@ async function callModelProviderWithRunTimeout(run, agent, input, startedAtMs, l
   try {
     return await callModelProvider(agent, input, {
       signal: controller.signal,
-      onRequest: options.onRequest
+      onRequest: options.onRequest,
+      // Passed through untouched. This seam bounds the request's DURATION; it
+      // is not the transport owner and records nothing itself.
+      observeTransportInvocation: options.observeTransportInvocation,
+      transportInvocationIdentity: options.transportInvocationIdentity
     });
   } catch (error) {
     if (error && error.name === 'AbortError') {
@@ -12210,6 +12274,11 @@ async function dispatchGovernedLeafModelRequest({
   let governedResponseCompletedAtMs = null;
   let governedResponseEvidenceKey = null;
 
+  // The Run-scoped transport observer, on exactly the same identity the
+  // ungoverned path uses — the governed leaf executes under a Run too.
+  const governedTransportObserver =
+    createRunTransportInvocationObserver(run, slot);
+
   // Reserve and record only once the request is ADMITTED and about to be sent.
   // See `persistRequestEvidence` below.
   const result = await runGovernedLeafRequest({
@@ -12229,6 +12298,8 @@ async function dispatchGovernedLeafModelRequest({
     runtimeModelRequestMaximum: limits && limits.maxModelRequestsPerRun
       ? limits.maxModelRequestsPerRun
       : null,
+    observeTransportInvocation: governedTransportObserver.observe,
+    transportInvocationIdentity: governedTransportObserver.identity,
     // Invoked after admission and after this caller wins dispatch authority,
     // and before any byte leaves. Both the runtime-budget charge and the
     // provider-request replay item live here because both assert "a request is
@@ -12468,11 +12539,18 @@ async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, 
     requestPersisted = true;
   };
 
+  // Built here, where the Run's canonical evidence keys are owned. The
+  // transport owner invokes it; this function never records the fact itself,
+  // because reaching this line is not the same as reaching the wire.
+  const transportObserver = createRunTransportInvocationObserver(run, slot);
+
   let response;
   try {
     response = await withInFlightRunLeaseRenewal(run, () =>
       callModelProviderWithRunTimeout(run, agent, input, startedAtMs, limits, {
-        onRequest: persistRequest
+        onRequest: persistRequest,
+        observeTransportInvocation: transportObserver.observe,
+        transportInvocationIdentity: transportObserver.identity
       }));
   } catch (error) {
     if (error.providerRequestPayload && !requestPersisted) {
@@ -16812,6 +16890,15 @@ async function runStructuredAllocationPlanning(ticket) {
     resolveCredentials: resolveGovernedPlannerCredentials,
     timeoutMs: getPlannerRequestTimeoutMs(),
     maxResponseBytes: PLANNER_REQUEST_LIMITS.maxResponseBytes,
+    // Ticket-scoped, because a planning attempt has no Run to bind to.
+    ...(() => {
+      const observer = createPlannerTransportInvocationObserver(
+        ticket.id, attempt.attemptId);
+      return {
+        observeTransportInvocation: observer.observe,
+        transportInvocationIdentity: observer.identity
+      };
+    })(),
     // The attempt carries the reservation identity, which does not exist until
     // the reservation commits, so the governed block is attached here rather
     // than at attempt creation.
@@ -17793,19 +17880,46 @@ async function callOpenAI(agent, input, options = {}) {
     await options.onRequest(requestSnapshot);
   }
 
+  const serializedBody = JSON.stringify(responseBody);
+
   let response = null;
   try {
-    response = await fetch('https://api.openai.com/v1/responses', {
+    // THE PLATFORM CALL, ON ITS OWN LINE AND NOT INSIDE THE AWAIT.
+    //
+    // `fetch` is invoked here and the request is in flight from this point. The
+    // observation below is therefore a record of an invocation that ALREADY
+    // HAPPENED — the reason it is not written before this line, where a crash
+    // in the gap would leave durable evidence claiming a call that never
+    // occurred. Nothing about the request changed: same URL, same headers, same
+    // signal, same body.
+    const pending = fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${openAIConfig.apiKey}`,
         'Content-Type': 'application/json'
       },
       signal: options.signal,
-      body: JSON.stringify(responseBody)
+      body: serializedBody
     });
+    // The rejection is delivered by `await pending` below; this only marks it
+    // handled so an early failure during the observation write cannot surface
+    // as an unhandled rejection.
+    pending.catch(() => {});
+    await observeProviderTransportInvocation(options.observeTransportInvocation, {
+      ...(options.transportInvocationIdentity || {}),
+      role: 'ungoverned_worker',
+      endpointIdentity: 'https://api.openai.com/v1/responses',
+      method: 'POST',
+      requestByteCount: Buffer.byteLength(serializedBody, 'utf8')
+    });
+    response = await pending;
   } catch (fetchError) {
     if (fetchError && fetchError.name === 'AbortError') {
+      throw fetchError;
+    }
+    // An evidence failure is not a provider fault. Reclassifying it as one
+    // would attribute a database outage to the model.
+    if (fetchError && fetchError.providerTransportObservationFailure === true) {
       throw fetchError;
     }
     if (fetchError && fetchError.responseTooLarge === true) throw fetchError;

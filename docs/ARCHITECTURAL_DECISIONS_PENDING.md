@@ -7155,6 +7155,39 @@ Runs cannot be reopened; that half is covered where it occurs naturally, in
 Constraints were NOT disabled to build a richer scenario. Doing so would have
 proved something about a database this system does not run on.
 
+## Provider Transport Invocation — Residual Crash Window (recorded 2026-08-07)
+
+**Status:** informational — a permanent, unavoidable limitation, recorded so it
+is never mistaken for a defect and never quietly relied on as if it were absent.
+
+`provider.transport_invoked` is written by the two production transport owners
+(`server.js:callOpenAI` → `fetch`, and
+`runtime/governed-openai-transport.js` → `https.request`) **after** the platform
+call has been made. It therefore has no false positives: if the event exists,
+the transport function was invoked.
+
+It does have **false negatives**, and cannot be made not to. The platform call is
+an OS operation and the observation is a database transaction, so the two cannot
+be atomic. A process that dies between the call returning and the event
+committing leaves the request in flight with no durable transport observation.
+
+**The consequence, stated as a rule:** absence of `provider.transport_invoked`
+means UNKNOWN. It is never proof that a provider was not called. The projection
+carries that rule beside the value (`transport.absenceMeans`), and the
+`nonImplications` list on every live artifact repeats it, precisely so a consumer
+reading a zero cannot lose it.
+
+**What was deliberately NOT done.** Recording the observation *before* the
+platform call would remove the false negatives and introduce false positives — a
+crash in that gap would leave durable evidence asserting an invocation that never
+happened. For an evidence system, an event that can overstate is worse than one
+that can be missing, so the window is placed where it can only lose a true fact.
+
+**The no-repeat authority is unchanged.** Whether a request may be retried is
+decided by the economic reservation state, not by this observation. A missing
+transport event does not make a possibly-dispatched request look undispatched.
+
+
 ---
 
 *Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and closed 2026-08-03 (one shared authority, both consumers). Governed Lifecycle Transport-Count Flake recorded and closed 2026-08-03 (fixture arrival counter conflated with canonical ordinal). Intermittent Guard Mutation Limit recorded and closed 2026-08-03 (deterministic correlation contract). Fixture Crash Boundary Arrival Counter recorded and closed 2026-08-03. Parent-Fixture Hash Handshake recorded and closed as NOT REQUIRED 2026-08-03. Concurrent-Duplicate Misclassification regression recorded and closed 2026-08-03 by claim-epoch classification. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*

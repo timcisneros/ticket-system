@@ -106,6 +106,11 @@ async function runGovernedPlannerRequest({
   resolveCredentials,
   timeoutMs,
   maxResponseBytes,
+  // APPEND-ONLY EVIDENCE, invoked by the transport owner AFTER its platform
+  // call. The planner dispatches against a planning attempt rather than a Run,
+  // so the observation this produces binds the Ticket and the reservation.
+  observeTransportInvocation = null,
+  transportInvocationIdentity = null,
   attachGovernedExecution,
   // The hash of the attempt state this start replaces — the `created` state,
   // not the `request_started` one being written. Passing the new state's own
@@ -208,7 +213,11 @@ async function runGovernedPlannerRequest({
     transport,
     resolveCredentials: async () => credentials,
     timeoutMs,
-    maxResponseBytes
+    maxResponseBytes,
+    observeTransportInvocation,
+    transportInvocationIdentity: {
+      ...(transportInvocationIdentity || {}), role: 'structured_planner'
+    }
   });
 
   if (dispatched.status !== 'received') {

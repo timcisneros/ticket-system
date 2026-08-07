@@ -11,8 +11,40 @@
 
 const VETO = 'hard_disqualifier_veto';
 
+// The same aborted-run predicate the live corpus gate and the scorer enforce.
+// This is the LAST door into a product decision, so it is refused here too: a
+// rule enforced at two of three doors is a rule that can be walked around.
+const {
+  ABORTED_CODE, abortedRunDetail, isAbortedRunHeader
+} = require('./evaluation-aborted-runs');
+
+class EvidenceCombinationError extends Error {
+  constructor(message, detail = {}) {
+    super(message);
+    this.name = 'EvidenceCombinationError';
+    this.code = detail.code || 'EVIDENCE_COMBINATION_REFUSED';
+    this.detail = detail;
+  }
+}
+
 function combineEvidence({ fixture, live }) {
   if (!fixture) throw new Error('fixture evidence is required');
+
+  // ── AN ABORTED RUN CAN NEVER REACH A PRODUCT DECISION ─────────────────
+  //
+  // It is refused rather than downgraded to NOT YET DECIDABLE, because the two
+  // mean different things: "not yet decidable" invites more evidence of the
+  // same kind, and there is no amount of an aborted run that becomes evidence.
+  for (const [source, evidence] of [['fixture', fixture], ['live', live]]) {
+    if (!evidence) continue;
+    const header = evidence.runHeader || evidence;
+    if (evidence.aborted === true || isAbortedRunHeader(header)) {
+      throw new EvidenceCombinationError(
+        `refusing to combine ${source} evidence from a run marked ABORTED — ` +
+        'NOT DECISION EVIDENCE',
+        { code: `EVIDENCE_${ABORTED_CODE}`, source, aborted: abortedRunDetail(header) });
+    }
+  }
 
   const vetoes = [];
   // A fixture hard disqualifier is a VETO that live evidence may not rescue.
@@ -79,4 +111,4 @@ function combineEvidence({ fixture, live }) {
   });
 }
 
-module.exports = { VETO, combineEvidence };
+module.exports = { EvidenceCombinationError, VETO, combineEvidence };

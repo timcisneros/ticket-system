@@ -660,6 +660,257 @@ function auditLiveReadiness({ liveManifest, sources = {} } = {}) {
     'a real live trial with no credential refuses before a server is spawned',
     'evaluation-server-env REAL_LIVE_CREDENTIAL_ABSENT');
 
+  // ── THE LAYERS THE THREE-ROLE DISPATCH PROOF DOES NOT COVER ─────────────
+  //
+  // `ungovernedWorkerDispatchProved` and `liveFullCaptured120SlotExecutionProved`
+  // were both true while production had NEVER been observed consuming the
+  // envelope the provider actually returns: every proof answered with a
+  // top-level `output_text` on a hand-written Response clone, and the real API
+  // returns neither. A fixture defect was reported as a product runtime defect
+  // because of it.
+  //
+  // Each fact below reads its OWN evidence. They deliberately do not share a
+  // single boolean, because one boolean standing in for several unexercised
+  // layers is exactly the failure these items exist to prevent.
+  const registeredSuite = name => {
+    try {
+      return require('node:fs').readFileSync(
+        require('node:path').join(__dirname, '..', 'test-manifest.js'), 'utf8')
+        .includes(name);
+    } catch (_) { return false; }
+  };
+  const suiteText = name => {
+    try {
+      return require('node:fs').readFileSync(
+        require('node:path').join(__dirname, '..', name), 'utf8');
+    } catch (_) { return ''; }
+  };
+
+  const envelopeSuite = 'ungoverned-real-envelope-pipeline-postgres-test.js';
+  const envelopeSource = sources.envelopeSuiteSource !== undefined
+    ? sources.envelopeSuiteSource : suiteText(envelopeSuite);
+  const envelopeRegistered = sources.envelopeSuiteRegistered !== undefined
+    ? sources.envelopeSuiteRegistered : registeredSuite(envelopeSuite);
+  const envelopeProves = statement =>
+    envelopeRegistered && envelopeSource.includes(statement);
+
+  record('realProviderEnvelopeShapeProved',
+    envelopeProves('it is the REAL Responses envelope — output[].content[] ') &&
+      envelopeProves('carries NO top-level output_text')
+      ? 'FROZEN' : 'UNRESOLVED',
+    'production is observed consuming output[].content[] with type output_text, ' +
+    'and the envelope it never receives is proved absent',
+    `${envelopeSuite} — persisted provider response body`);
+
+  record('ungovernedOneActionResponsePipelineProved',
+    envelopeProves('exactly one durable createFolder receipt') &&
+      envelopeProves('the child was ABSENT immediately before the mutation') &&
+      envelopeProves('the Run truthfully completes')
+      ? 'FROZEN' : 'UNRESOLVED',
+    'one valid createFolder traverses the whole ungoverned pipeline to a durable ' +
+    'receipt and a truthful completion, against the real envelope',
+    `${envelopeSuite} — A one action`);
+
+  record('ungovernedActionLimitProductRefusalProved',
+    envelopeProves('under the stable code reason=mutating_action_limit') &&
+      envelopeProves('the refused response produced ZERO operations') &&
+      envelopeProves('the parser ACCEPTED the response — it is structurally valid')
+      ? 'FROZEN' : 'UNRESOLVED',
+    'four canonical mutations are structurally valid and refused by the ' +
+    'per-response action authority — product/model data, not a harness defect',
+    `${envelopeSuite} — A four actions`);
+
+  // ── THE DURABLE TRANSPORT SEAM ──────────────────────────────────────────
+  //
+  // BEHAVIOURAL, then wired, then proved. The contract is CALLED so a fact
+  // cannot survive the semantics being weakened; the production wiring is read
+  // so the seam cannot exist unused; the suite is required so the durable
+  // ordering is actually exercised.
+  const transportSuite = 'provider-transport-invocation-postgres-test.js';
+  const transportSuiteSource = sources.transportSuiteSource !== undefined
+    ? sources.transportSuiteSource : suiteText(transportSuite);
+  const transportRegistered = sources.transportSuiteRegistered !== undefined
+    ? sources.transportSuiteRegistered : registeredSuite(transportSuite);
+  const transportContract = (() => {
+    try {
+      // eslint-disable-next-line global-require
+      const contract = require('../../runtime/provider-transport-observation');
+      const built = contract.buildProviderTransportInvocationPayload({
+        role: 'ungoverned_worker', evidenceKey: 'probe',
+        endpointIdentity: 'https://api.openai.com/v1/responses',
+        transportOwner: 'a-dispatch-helper'
+      });
+      let refusedCredential = false;
+      try {
+        contract.buildProviderTransportInvocationPayload({
+          role: 'ungoverned_worker', evidenceKey: 'probe',
+          endpointIdentity: 'https://api.openai.com/v1/responses',
+          Authorization: 'x'
+        });
+      } catch (error) {
+        refusedCredential =
+          error.code === 'PROVIDER_TRANSPORT_OBSERVATION_CREDENTIAL_MATERIAL';
+      }
+      return {
+        recordedAfter: contract.PROVIDER_TRANSPORT_INVOKED_STRENGTH
+          .recordedRelativeToInvocation === 'after',
+        absenceUnknown: /UNKNOWN/.test(
+          contract.PROVIDER_TRANSPORT_INVOKED_STRENGTH.absenceMeans),
+        // The owner is DERIVED from the role, so a caller cannot record a
+        // higher-level dispatch site as though it were the wire.
+        ownerDerived: built.transportOwner === contract.TRANSPORT_OWNERS.ungoverned_worker,
+        refusedCredential,
+        roles: contract.TRANSPORT_INVOCATION_ROLES.length
+      };
+    } catch (_) { return null; }
+  })();
+  const governedTransportSource = sources.governedTransportSource !== undefined
+    ? sources.governedTransportSource : (() => {
+      try {
+        return require('node:fs').readFileSync(
+          require('node:path').join(__dirname, '..', '..', 'runtime',
+            'governed-openai-transport.js'), 'utf8');
+      } catch (_) { return ''; }
+    })();
+
+  record('providerTransportInvocationObservationProved',
+    transportContract !== null && transportContract.recordedAfter &&
+      transportContract.absenceUnknown && transportContract.ownerDerived &&
+      transportContract.refusedCredential && transportContract.roles === 3 &&
+      // WIRED AT THE ACTUAL TRANSPORT OWNERS, not at a dispatch helper.
+      governedTransportSource.includes('observeProviderTransportInvocation(') &&
+      serverSource.includes('createRunTransportInvocationObserver(') &&
+      serverSource.includes('observeProviderTransportInvocation(options.observeTransportInvocation') &&
+      transportRegistered &&
+      transportSuiteSource.includes('THE OBSERVATION IS RECORDED AFTER THE PLATFORM CALL') &&
+      transportSuiteSource.includes('a reservation count can never stand in for a ')
+      ? 'FROZEN' : 'UNRESOLVED',
+    'production crossing into external transport is durably observed at both ' +
+    'transport owners, recorded AFTER the platform call, with absence meaning UNKNOWN',
+    'runtime/provider-transport-observation + provider-transport-invocation-postgres-test');
+
+  // ── THE LIVE FAILURE OBSERVATION PROJECTION ─────────────────────────────
+  //
+  // BEHAVIOURAL. The projection is CALLED with a durable state that carries no
+  // transport observation and no receipts, and it must answer UNKNOWN rather
+  // than "not invoked" — which is the whole point of the layer. A text match
+  // could not tell the two apart.
+  const reportSource = sources.reportSource !== undefined ? sources.reportSource : (() => {
+    try {
+      return require('node:fs').readFileSync(
+        require('node:path').join(__dirname, '..',
+          'structured-allocation-evaluation-report.js'), 'utf8');
+    } catch (_) { return ''; }
+  })();
+  const projectionBehaviour = (() => {
+    try {
+      // eslint-disable-next-line global-require
+      const { projectLiveDurableObservation } =
+        require('./evaluation-live-observation-projection');
+      // A request was authorized and NOTHING else is known.
+      const silent = projectLiveDurableObservation({
+        events: [{ type: 'provider.request.persisted', payload: {} }]
+      });
+      // Transport was invoked and no workspace work followed.
+      const invoked = projectLiveDurableObservation({
+        events: [
+          { type: 'provider.request.persisted', payload: {} },
+          { type: 'provider.transport_invoked', payload: { role: 'ungoverned_worker' } },
+          { type: 'run.execution_completed',
+            payload: { failure: { code: 'MODEL_MALFORMED_JSON', kind: 'invalid_action' } } }
+        ]
+      });
+      // A structurally valid response refused by the per-response authority.
+      const overLimit = projectLiveDurableObservation({
+        events: [
+          { type: 'model.plan.parsed', payload: { actionCount: 4 } },
+          { type: 'action.suppressed',
+            payload: { reason: 'mutating_action_limit', limit: 2, mutatingCount: 4 } }
+        ]
+      });
+      // A workspace refusal keeps its own stable code.
+      const workspaceRefused = projectLiveDurableObservation({
+        events: [{ type: 'authority.denied', payload: { rule: 'owned_output_path' } }],
+        receipts: [{ operation: 'createFolder', outcome: 'refused',
+          receipt: { error: { code: 'WORKSPACE_OWNERSHIP_VIOLATION' } } }]
+      });
+      return silent.transport.state === 'UNKNOWN' &&
+        silent.response.state === 'UNKNOWN' &&
+        silent.extraction.state === 'UNKNOWN' &&
+        silent.parser.state === 'UNKNOWN' &&
+        invoked.transport.state === 'INVOKED' &&
+        invoked.operationReceipts.count === 0 &&
+        invoked.parser.refusalCode === 'MODEL_MALFORMED_JSON' &&
+        overLimit.actionLimit.state === 'REFUSED' &&
+        overLimit.actionLimit.classification === 'product_model_response_authority' &&
+        overLimit.parser.state === 'ACCEPTED' &&
+        workspaceRefused.workspace.refusalCodes.WORKSPACE_OWNERSHIP_VIOLATION === 1 &&
+        workspaceRefused.workspace.authorityDenialRules.owned_output_path === 1;
+    } catch (_) { return false; }
+  })();
+
+  record('liveFailureObservationProjectionProved',
+    projectionBehaviour &&
+      // AND THE READER ACTUALLY PROJECTS IT ONTO THE ARTIFACT. A correct
+      // projection nobody calls survives no teardown.
+      reportSource.includes('projectLiveDurableObservation({') &&
+      reportSource.includes('durableObservation:')
+      ? 'FROZEN' : 'UNRESOLVED',
+    'the live artifact preserves dispatch, transport, response, extraction, ' +
+    'parser, action-limit and workspace evidence — and keeps UNKNOWN unknown',
+    'evaluation-live-observation-projection + evaluation reader');
+
+  // ── THE ABORTED CORPUS ──────────────────────────────────────────────────
+  //
+  // BEHAVIOURAL at all three doors into a decision. Each is called; none is
+  // matched by text.
+  const abortedRejection = (() => {
+    try {
+      // eslint-disable-next-line global-require
+      const corpus = require('./evaluation-live-corpus-integrity');
+      // eslint-disable-next-line global-require
+      const { combineEvidence } = require('./evaluation-evidence-combination');
+      // eslint-disable-next-line global-require
+      const scorer = require('../structured-allocation-evaluation-scorer');
+      const abortedHeader = { runHeaderHash: corpus.PERMANENTLY_ABORTED_RUNS[0].runHeaderHash };
+
+      let corpusRefused = false;
+      try {
+        corpus.assertScorableLiveCorpus({ aborted: true, complete: true });
+      } catch (error) {
+        corpusRefused = error.code === 'LIVE_CORPUS_ABORTED_NOT_DECISION_EVIDENCE';
+      }
+      let scorerRefused = false;
+      try {
+        scorer.assertCorpusIntegrity({
+          manifest: { trials: [], manifestHash: 'm', failureHandling: { infrastructureExclusions: [] } },
+          header: abortedHeader, artifacts: [] });
+      } catch (error) {
+        scorerRefused = error.detail &&
+          error.detail.code === 'SCORER_ABORTED_RUN_NOT_DECISION_EVIDENCE';
+      }
+      let combinationRefused = false;
+      try {
+        combineEvidence({
+          fixture: { ordinaryDecision: 'RETAIN' },
+          live: { ordinaryDecision: 'RETAIN', corpusComplete: true, runHeader: abortedHeader }
+        });
+      } catch (error) {
+        combinationRefused = error.code === 'EVIDENCE_ABORTED_NOT_DECISION_EVIDENCE';
+      }
+      // AND THE IDENTITY IS RECOGNIZED WITHOUT A LABEL, so a rewritten header
+      // cannot launder it back in.
+      const identityRecognized = corpus.isAbortedRunHeader(abortedHeader) === true;
+      return corpusRefused && scorerRefused && combinationRefused && identityRecognized;
+    } catch (_) { return false; }
+  })();
+
+  record('abortedCorpusMechanicallyUnscorableProved',
+    abortedRejection ? 'FROZEN' : 'UNRESOLVED',
+    'a run marked ABORTED — NOT DECISION EVIDENCE is refused by identity at the ' +
+    'corpus gate, the scorer and the evidence-combination contract',
+    'evaluation-aborted-runs enforced at all three doors');
+
   const unresolved = items.filter(item => item.state === 'UNRESOLVED');
   return Object.freeze({
     version: LIVE_READINESS_VERSION,

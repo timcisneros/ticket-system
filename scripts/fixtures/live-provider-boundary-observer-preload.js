@@ -33,10 +33,73 @@ const OBSERVATION_PATH = process.env.LIVE_PROVIDER_BOUNDARY_OBSERVATION || null;
 // receipts, terminalization. The old final-hop capture cannot serve this
 // purpose because it answers with a top-level `output_text` the real API never
 // returns, so it never exercised real-envelope handling.
+//
+// ── THE RESPONSE SPEC ───────────────────────────────────────────────────────
+//
+// The file is a JSON SPEC, never raw model text, so that what the boundary
+// answers is always declared rather than inferred:
+//
+//   { "kind": "literal", "text": "<the exact model text>" }
+//
+//     Answers every request with those exact bytes. Used where the response
+//     must be fixed regardless of who asked — an over-limit batch, for
+//     instance, is refused before any path is looked at.
+//
+//   { "kind": "one-action-createFolder-by-owned-root",
+//     "message": "...", "complete": true,
+//     "byOwnedRoot": { "<ownedOutputPaths[0] or empty>": "<target path>" } }
+//
+//     Answers with ONE canonical createFolder action, selecting the target from
+//     the request's OWN runtime envelope. The mapping lives in the calling test
+//     rather than here: which folder each allocated agent should produce is
+//     knowledge about the scenario, not about the transport boundary. Selection
+//     reads the request and never an arm label, so it cannot force a path.
 const RESPONSE_PATH = process.env.LIVE_PROVIDER_BOUNDARY_RESPONSE || null;
 
-function realShapedResponse() {
-  const workerText = fs.readFileSync(RESPONSE_PATH, 'utf8');
+function requestMessages(body) {
+  try {
+    const parsed = JSON.parse(body);
+    return Array.isArray(parsed.input) ? parsed.input : [];
+  } catch (_) { return []; }
+}
+
+// The runtime envelope this request carried. It is the production message the
+// worker prompt is built from, so reading it is reading the request itself.
+function runtimeEnvelopeOf(body) {
+  for (const message of requestMessages(body)) {
+    if (typeof message.content !== 'string') continue;
+    try {
+      const parsed = JSON.parse(message.content);
+      if (parsed && parsed.runtimeEnvelope) return parsed.runtimeEnvelope;
+    } catch (_) { /* not the envelope message */ }
+  }
+  return null;
+}
+
+function modelTextFor(body) {
+  const spec = JSON.parse(fs.readFileSync(RESPONSE_PATH, 'utf8'));
+  if (spec.kind === 'literal') return spec.text;
+  if (spec.kind === 'one-action-createFolder-by-owned-root') {
+    const envelope = runtimeEnvelopeOf(body) || {};
+    const owned = Array.isArray(envelope.ownedOutputPaths) && envelope.ownedOutputPaths[0]
+      ? String(envelope.ownedOutputPaths[0])
+      : '';
+    const target = spec.byOwnedRoot[owned];
+    if (!target) {
+      throw new Error(
+        `LIVE_PROVIDER_BOUNDARY_RESPONSE has no target for owned root ${JSON.stringify(owned)}`);
+    }
+    return JSON.stringify({
+      message: spec.message,
+      // THE CANONICAL ACTION SHAPE production accepts: `operation` plus `args`.
+      actions: [{ operation: 'createFolder', args: { path: target } }],
+      complete: spec.complete === true
+    });
+  }
+  throw new Error(`unsupported boundary response kind: ${String(spec.kind)}`);
+}
+
+function realShapedResponse(body) {
   return JSON.stringify({
     id: 'resp_boundary_controlled',
     object: 'response',
@@ -45,7 +108,7 @@ function realShapedResponse() {
     output: [{
       type: 'message',
       role: 'assistant',
-      content: [{ type: 'output_text', text: workerText }]
+      content: [{ type: 'output_text', text: modelTextFor(body) }]
     }],
     usage: { input_tokens: 1737, output_tokens: 77, total_tokens: 1814 }
   });
@@ -86,7 +149,8 @@ globalThis.fetch = async function observedFetch(input, init) {
     body: init && typeof init.body === 'string' ? init.body : ''
   });
   if (RESPONSE_PATH) {
-    const payload = realShapedResponse();
+    const payload = realShapedResponse(
+      init && typeof init.body === 'string' ? init.body : '');
     // The real platform Response, for the same reason: production consumes
     // more of this interface than a hand-written stub tends to provide.
     return new Response(payload, {

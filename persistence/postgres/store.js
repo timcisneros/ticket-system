@@ -10571,6 +10571,75 @@ class PostgresRuntimeStore {
     };
   }
 
+  // ── The durable provider-transport observation ────────────────────────────
+  //
+  // APPEND-ONLY EVIDENCE, AND NOTHING ELSE. It records that a production
+  // transport owner executed its platform call for one canonical provider
+  // request. It transitions no reservation, charges no budget, touches no
+  // replay snapshot and returns no authority: a caller cannot use it to change
+  // what happens next, which is what keeps an evidence seam from becoming a
+  // control point.
+  //
+  // NO REPLAY ITEM. `appendRunEvidence` also mutates the run's replay snapshot,
+  // and this fact has no replay meaning — recovery decides what to do from the
+  // reservation and the persisted request, never from this. Writing an event
+  // alone is the smallest durable representation that carries it.
+  //
+  // TICKET-SCOPED WHEN THERE IS NO RUN. The structured planner dispatches
+  // against a planning attempt, not a Run, so `runId` is null there and the
+  // event binds the Ticket. Run-scoped observations join the run event chain
+  // like every other run event.
+  //
+  // IDEMPOTENT ON THE EVIDENCE KEY, so a retried orchestration cannot make one
+  // invocation look like two, and a DIFFERENT payload under the same key is a
+  // conflict rather than a silent overwrite.
+  async recordProviderTransportInvocation({
+    runId = null,
+    ticketId,
+    evidenceKey,
+    eventType,
+    payload
+  }, { client = null } = {}) {
+    const ownerTicketId = positiveSafeInteger(ticketId, 'ticketId');
+    const id = nullablePositiveSafeInteger(runId, 'runId');
+    const key = requiredString(evidenceKey, 'evidenceKey', 512);
+    const type = requiredString(eventType, 'eventType');
+    const eventPayload = {
+      ...this.assertJsonRecord(payload || {}, 'payload'),
+      evidenceKey: key
+    };
+
+    const execute = async connection => {
+      const scoped = id === null
+        ? await connection.query(
+          `SELECT * FROM ${this.table('events')}
+            WHERE ticket_id = $1 AND run_id IS NULL AND payload->>'evidenceKey' = $2
+            ORDER BY position LIMIT 1`,
+          [ownerTicketId, key])
+        : await connection.query(
+          `SELECT * FROM ${this.table('events')}
+            WHERE run_id = $1 AND payload->>'evidenceKey' = $2
+            ORDER BY position LIMIT 1`,
+          [id, key]);
+      if (scoped.rowCount > 0) {
+        const existing = eventFromRow(scoped.rows[0]);
+        if (existing.type !== type ||
+            canonicalJson(existing.payload) !== canonicalJson(eventPayload)) {
+          throw new IdempotencyConflictError(id === null ? ownerTicketId : id, key);
+        }
+        return { event: existing, inserted: false };
+      }
+      const stored = await this._appendEvent(connection, {
+        type,
+        ticketId: ownerTicketId,
+        ...(id === null ? {} : { runId: id }),
+        payload: eventPayload
+      });
+      return { event: stored, inserted: true };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
   async appendRunEvidence({
     runId,
     ticketId,

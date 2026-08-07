@@ -23,9 +23,9 @@ const CONTRACTS = Object.freeze({
     'appendGovernedPostconditionEvidenceSet',
     'readGovernedPostconditionEvidence'
   ],
-  governedPlannerDispatch: ['startGovernedPlannerRequest', 'persistGovernedPlannerResponse', 'settleEconomicRequest', 'getEconomicReservation'],
+  governedPlannerDispatch: ['startGovernedPlannerRequest', 'persistGovernedPlannerResponse', 'settleEconomicRequest', 'getEconomicReservation', 'recordProviderTransportInvocation'],
   economicAccounting: ['admitTicketEconomicAccount', 'reserveEconomicRequest', 'markEconomicRequestStarted', 'markEconomicResponsePersisted', 'settleEconomicRequest', 'releaseUndispatchedEconomicReservation', 'getEconomicReservation', 'listRecoverableEconomicReservations'],
-  nonTerminalEvidence: ['appendRunEvidence', 'completeActionReceipt', 'prepareTargetOperation', 'completeTargetOperation', 'getTargetOperation', 'withTargetOperationLock'],
+  nonTerminalEvidence: ['appendRunEvidence', 'recordProviderTransportInvocation', 'completeActionReceipt', 'prepareTargetOperation', 'completeTargetOperation', 'getTargetOperation', 'withTargetOperationLock'],
   workspaceMutationBoundary: ['withTargetOperationLock', 'withWorkspaceMutationBoundary'],
   workspaceOwnership: ['findMutationConflict', 'listArtifactOwners'],
   operatorRecovery: ['getOperatorRecovery', 'prepareOperatorRecovery', 'completeOperatorRecovery', 'withOperatorRecoveryLock'],

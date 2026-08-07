@@ -27,6 +27,17 @@ const COMPLETE_VERDICT = 'LIVE CORPUS COMPLETE AND INTERNALLY CONSISTENT';
 const SYNTHETIC_ACCEPTANCE_LABEL =
   'LIVE EXECUTOR ACCEPTANCE — SYNTHETIC FINAL-TRANSPORT CAPTURE — NOT PRODUCT EVIDENCE';
 
+// ── ABORTED RUNS ────────────────────────────────────────────────────────────
+//
+// The identity and the predicate live in `evaluation-aborted-runs`, which has
+// no filesystem or scoring dependency, precisely so the SAME rule can be
+// enforced at this gate, at the scorer's door and at the final
+// evidence-combination contract. A rule enforced at one of three doors is a
+// rule that can be walked around.
+const {
+  ABORTED_LABEL, PERMANENTLY_ABORTED_RUNS, abortedRunDetail, isAbortedRunHeader
+} = require('./evaluation-aborted-runs');
+
 class LiveCorpusError extends Error {
   constructor(message, detail = {}) {
     super(message);
@@ -74,6 +85,23 @@ function auditLiveCorpus({ manifest, header, outputRoot, trialIdFor }) {
   const failures = [];
   const fail = (code, message, detail = {}) =>
     failures.push({ code, message, ...detail });
+
+  // ── An aborted run is refused before anything else is measured ───────
+  //
+  // First, because every count below would otherwise describe a corpus that
+  // may not exist. A partially executed run can be internally consistent over
+  // the slots it reached, and consistency is exactly what must not be mistaken
+  // for completeness here.
+  const aborted = isAbortedRunHeader(header);
+  if (aborted) {
+    // NESTED, not spread: `fail` spreads its detail, and the aborted detail
+    // carries its own `code` — which would silently replace the failure code
+    // this gate is identified by.
+    fail('LIVE_CORPUS_ABORTED_NOT_DECISION_EVIDENCE',
+      'this run is marked ABORTED — NOT DECISION EVIDENCE and may never be ' +
+      'imported into a valid corpus',
+      { aborted: abortedRunDetail(header) });
+  }
 
   const assigned = manifest.slots;
   const assignedIds = assigned.map(trialIdFor);
@@ -206,6 +234,10 @@ function auditLiveCorpus({ manifest, header, outputRoot, trialIdFor }) {
     // A synthetic acceptance corpus is marked here so the scorer can refuse it
     // by contract rather than by convention.
     syntheticAcceptance: header.syntheticAcceptance === true,
+    // Carried as its own field rather than only as a failure, so a consumer
+    // that never looks at `failures` still cannot score it.
+    aborted,
+    abortedDetail: aborted ? Object.freeze(abortedRunDetail(header)) : null,
     failures: Object.freeze(failures)
   });
 }
@@ -214,6 +246,16 @@ function auditLiveCorpus({ manifest, header, outputRoot, trialIdFor }) {
 // synthetic acceptance corpus even when that corpus is internally perfect —
 // being complete is not the same as being product evidence.
 function assertScorableLiveCorpus(audit) {
+  // FIRST, AND BEFORE COMPLETENESS. An aborted corpus that happens to be
+  // internally perfect over the slots it reached must still be refused: being
+  // consistent is not the same as being the experiment.
+  if (audit && audit.aborted === true) {
+    throw new LiveCorpusError(
+      'this corpus belongs to a run marked ABORTED — NOT DECISION EVIDENCE; ' +
+      'it may never be scored and may never be imported into a valid corpus',
+      { code: 'LIVE_CORPUS_ABORTED_NOT_DECISION_EVIDENCE',
+        aborted: audit.abortedDetail || null });
+  }
   if (audit.syntheticAcceptance === true) {
     throw new LiveCorpusError(
       'this corpus is the synthetic final-transport acceptance run and is NOT ' +
@@ -229,10 +271,14 @@ function assertScorableLiveCorpus(audit) {
 }
 
 module.exports = {
+  ABORTED_LABEL,
   COMPLETE_VERDICT,
+  PERMANENTLY_ABORTED_RUNS,
   buildExclusionArtifact,
   LiveCorpusError,
   SYNTHETIC_ACCEPTANCE_LABEL,
+  abortedRunDetail,
   assertScorableLiveCorpus,
-  auditLiveCorpus
+  auditLiveCorpus,
+  isAbortedRunHeader
 };

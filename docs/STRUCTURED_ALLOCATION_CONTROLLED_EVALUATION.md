@@ -2106,6 +2106,231 @@ corpus — one `GET /v1/models/…` (metadata, not billed) and one 19-token
 `computeActualCost`. An earlier handoff said "3 preflight calls"; the correct
 count is **2**.
 
+## 3s. The transport seam, the real envelope, and the aborted run (session 23)
+
+### The question the durable record could not answer
+
+An authorized 120-slot live matrix was started and deliberately aborted after 31
+accepted slots. Afterwards the only honest answer to *"was the provider actually
+called for slot N?"* was **we do not know** — and that was not a gap in the
+investigation, it was a gap in the record.
+
+Production wrote two provider facts and nothing between them:
+
+| fact | when it is written |
+|---|---|
+| `provider.request.persisted` | after admission, after dispatch authority is won, **before any byte leaves** |
+| `provider.response.persisted` | after a response returned and became durable |
+
+So a Run holding a request and no response was indistinguishable from three
+different histories: production never reached its transport, production invoked
+it and the process died mid-flight, or the provider answered and the response
+could not be stored. `provider.request.persisted` cannot close that gap — it is
+written *before* the wire — and projecting it as a transport attempt would state
+something production never observed.
+
+### `provider.transport_invoked`
+
+One new durable fact, emitted by the two functions that actually make the
+platform call and by nothing above them:
+
+| role | transport owner |
+|---|---|
+| `ungoverned_worker` | `server.js:callOpenAI` → `fetch()` |
+| `structured_planner` | `runtime/governed-openai-transport.js` → `https.request()` |
+| `governed_leaf_worker` | `runtime/governed-openai-transport.js` → `https.request()` |
+
+The two governed roles share one owner because they genuinely share one: both
+reach the provider through the same transport function. They are **not** forced
+through a new abstraction for symmetry with the ungoverned path, which has a
+different owner and a different canonical identity.
+
+**It is recorded AFTER the platform call, not before it.** That ordering is the
+whole design:
+
+- **presence ⇒ the transport function was invoked** — there are no false
+  positives;
+- **absence ⇏ it was not invoked** — a crash between the platform call and the
+  commit loses the fact.
+
+An observation written *before* the call would be a claim about the future, and
+a crash in the gap would leave durable evidence asserting an invocation that
+never happened. A fact that can be wrong in the direction of overstating is
+worse than no fact at all, so the unavoidable window is placed where it can only
+ever lose a true fact.
+
+**The crash window, stated precisely.** The platform call is an OS operation and
+the observation is a database transaction; they cannot be made atomic. Between
+`fetch()`/`https.request()` returning and the event committing, a process death
+leaves the request in flight with no durable transport observation. Every
+consumer must therefore treat absence as UNKNOWN. The economic reservation — not
+this event — remains the authority on whether a request may be repeated.
+
+**What it does not claim.** Application code cannot prove that bytes reached a
+socket, that a request reached the network, that the provider received it, or
+that the provider processed it. The event asserts none of those, which is why it
+is not named `bytesSent`, `requestDelivered`, `providerReceivedRequest` or
+`networkTransmissionConfirmed`. `PROVIDER_TRANSPORT_INVOKED_STRENGTH` carries
+those disclaimers as data, and the projection copies them beside the value so a
+reader cannot lose the limitation on the way.
+
+**It is append-only evidence.** It changes no retry decision, no timeout, no
+request body, no credential and no economic authority, and it never turns a
+transport failure into a success. It introduces no table: it is one event, in
+the existing event log, Run-scoped for the two Run-executed roles and
+Ticket-scoped for the planner, which dispatches against a planning attempt and
+has no Run. Its payload carries bounded non-secret identity only — role,
+transport owner, endpoint, method, byte count, evidence key, reservation id and
+model-request ordinal — and the builder **refuses** an input carrying
+`Authorization`, an API key, a credential hash/prefix/length, headers or the
+request body rather than dropping it silently.
+
+An evidence-write failure is reported as a failure, never swallowed, and is
+classified `possiblyDispatched` — which is the truth, because by then the bytes
+had already been handed to the platform.
+
+### Durable observation inventory — final form
+
+| # | fact | state | canonical authority |
+|---|---|---|---|
+| 1 | dispatch authorized | KNOWN | `provider.request.persisted`, `ticket.economic_request_started` |
+| 2 | provider request persisted | KNOWN | `provider.request.persisted` + `providerRequests` replay |
+| 3 | **external transport invocation** | **KNOWN (new)** | `provider.transport_invoked` |
+| 4 | provider request id | KNOWN when a response arrived | `provider.response.persisted` `requestId` |
+| 5–6 | provider response received / persisted | KNOWN | `provider.response.persisted` |
+| 7 | extraction succeeded | **KNOWN — already canonical** | `provider.response.persisted` `outcome`; failure code `OPENAI_NO_OUTPUT` |
+| 8–9 | parser accepted / refused + code | KNOWN | `model.plan.parsed`; `run.execution_completed` `failure.code = MODEL_MALFORMED_JSON` |
+| 10 | per-response action-limit refusal | **KNOWN — stable code identified** | `action.suppressed` / `action.truncated`, `payload.reason = mutating_action_limit`, with `limit` and `mutatingCount` |
+| 11–12 | workspace action accepted / refused + code | KNOWN | `workspace.operation`; `operation_receipts.receipt.error.code`; `authority.denied` `payload.rule` |
+| 13 | operation receipt persisted | KNOWN | `operation_receipts` |
+| 14 | response delivered into execution | KNOWN | `run.execution_completed` |
+| 15 | terminal Run result | KNOWN | `run.terminalized` |
+
+**Item 7 needed no new event.** Production already refuses an empty extraction
+with its own stable code (`OPENAI_NO_OUTPUT`, phase `model_output`) *before* a
+successful response can be persisted. A persisted successful response therefore
+**is** proof that extraction succeeded, and a persisted failure under that code
+**is** proof that it failed. Nothing is inferred from a later terminal state, and
+parser acceptance is deliberately not used as a proxy: a response can extract
+cleanly and still fail to parse, and those are different findings.
+
+**Item 10 needed no new event either.** The canonical durable owner is the
+worker execution loop's `action.suppressed` event (or `action.truncated` when
+prefix truncation is enabled), whose `payload.reason` is the stable code. The
+four-`createFolder` case lands there with `mutatingCount: 4` against `limit: 2`.
+
+### The live artifact projection
+
+`projectLiveDurableObservation` derives one `durableObservation` block per trial
+from durable events and records only. It is a **projection, not a second
+authority**: every field names the durable owner it read, the object is frozen,
+and it decides nothing.
+
+`UNKNOWN` is a value. The four prohibitions are asserted individually and travel
+with the data as `nonImplications`:
+
+- `workerRequestCount = 0` — a *governed reservation* count — does not imply
+  transport was not invoked; the ungoverned arms hold zero reservations and still
+  call providers;
+- no `provider.response.persisted` does not imply transport was not invoked;
+- `operationReceiptCount = 0` does not imply no provider was called;
+- a failed Run does not imply the model response was malformed.
+
+### The ungoverned pipeline against the envelope the provider actually returns
+
+Every acceptance proof before this session answered the ungoverned worker with a
+top-level `output_text` on a hand-written `Response` clone. The real Responses
+API returns neither — it returns `output[].content[]` with type `output_text`, on
+a platform `Response` whose headers production iterates with `headers.entries()`
+— so a fixture defect was once reported as a production runtime defect.
+
+Both are now proved from production's own durable record, on the **real
+uncaptured live branch** with only the final hop replaced:
+
+| proof | result |
+|---|---|
+| A — one action | real envelope consumed, parser accepted, 1 mutation within the cap of 2, workspace operation reached, **one durable `createFolder` receipt**, child absent before and present after, Run truthfully `completed` |
+| A — four actions | parser **accepted** the response (structurally valid), per-response mutating authority **refused** it under `reason = mutating_action_limit`, `limit 2` vs `mutatingCount 4`, **zero** operations, no transport/extraction/parser/harness failure code — product/model data |
+| A2a | its own per-agent Runs, real envelope, 2 receipts, both `completed` |
+| A2b | its own per-agent Runs, real envelope, 2 receipts, both `completed` |
+| B / C | three-role dispatch re-proved on the corrected `Response`/`Headers` and the real envelope: ungoverned worker 1, structured planner 1, governed leaf 3 |
+
+A2a and A2b are executed independently. Neither is inferred from A, because they
+are a different production path (legacy v1 group allocation) and arm A cannot
+stand in for either.
+
+**No product or runtime relaxation was made.** The four-mutation refusal is
+correct behaviour of the per-response action authority; the one-action success
+was always available and had been masked by the fixture.
+
+### The aborted run is mechanically unscorable
+
+A run abandoned partway through is not a small corpus. Which slots it holds was
+decided by *when* the abort happened, so scoring them would report the first N
+trials as though they were the experiment — and this run's provider responses
+were not retained, so nothing in it can be re-examined either.
+
+The run
+
+```
+b2b59ad2b9d9fafc8ac860838b0530cb8f90bc02907b36a3a230b560bece2eef
+```
+
+is listed **by identity**, not only by label, in `evaluation-aborted-runs`. A
+header hash *is* the run, so a rewritten header cannot launder it back in. The
+refusal is enforced at all three doors into a decision — the live corpus gate,
+the scorer (by header **and** by imported artifact), and the final
+evidence-combination contract — because a rule enforced at one of three doors is
+a rule that can be walked around. It is **refused**, not downgraded to NOT YET
+DECIDABLE: there is no amount of an aborted run that becomes evidence.
+
+Its artifacts are not modified. Preserving an aborted run's evidence and
+refusing to score it are the same discipline, not opposite ones.
+
+### Accounting and abort record
+
+| item | value |
+|---|---|
+| PRE-FLIGHT ACTUAL | **9 micro-USD** |
+| DIAGNOSTICS ACTUAL | **890 micro-USD** |
+| TOTAL PRE-FLIGHT + DIAGNOSTICS | **899 micro-USD** |
+| ABORTED MATRIX ACTUAL PROVIDER COST | **UNKNOWN** |
+| KNOWN GOVERNED DURABLE SETTLEMENT LOWER BOUND | **20,046 micro-USD** |
+| ABORTED MATRIX NORMALIZED COST | **213,752 micro-USD** — *not actual spend* |
+| ABORTED MATRIX COMMITTED MAXIMUM LIABILITY | **4,412,664 micro-USD** — *not actual spend* |
+
+The normalized cost and the committed maximum liability are **not** measurements
+of money spent. The normalized figure is a pricing model applied to a request
+list; the committed figure is the ceiling that was reserved before dispatch.
+Neither becomes an actual-spend number by being written down next to one.
+
+Historical facts about the aborted run, stated exactly:
+
+- 120 slots assigned;
+- 31 accepted before the deliberate abort;
+- 67 known governed provider requests;
+- historical **ungoverned** transport attempts **NOT ESTABLISHED**;
+- historical ungoverned provider responses **NOT RETAINED**;
+- the exact cause of the abort **NOT ESTABLISHED**;
+- **no product conclusion is drawn** from any of it.
+
+`provider.transport_invoked` is **not** retroactively populated for that run.
+The seam did not exist when it executed, and writing the fact now would be
+manufacturing evidence rather than recording it. Its transport history stays
+UNKNOWN, permanently and by design.
+
+### Readiness now has six more facts
+
+`realProviderEnvelopeShapeProved`, `ungovernedOneActionResponsePipelineProved`,
+`ungovernedActionLimitProductRefusalProved`,
+`providerTransportInvocationObservationProved`,
+`liveFailureObservationProjectionProved` and
+`abortedCorpusMechanicallyUnscorableProved`. Each reads its own evidence and
+each independently turns the verdict BLOCKED when its own proof is removed —
+proved negatively in `evaluation-live-readiness-test`, including that removing
+one blocks **only** that fact. Neither `liveFullCaptured120SlotExecutionProved`
+nor the three-role dispatch facts can substitute for any of them.
+
 ## 13. Status
 
 **Tranche 6: IN PROGRESS — harness built and executing; evaluation NOT run.**

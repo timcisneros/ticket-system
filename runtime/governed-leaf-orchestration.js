@@ -200,6 +200,15 @@ async function runGovernedLeafRequest({
   // Invoked once, after admission and dispatch authority are won and before
   // any byte leaves. See step 4b.
   persistRequestEvidence = null,
+  // APPEND-ONLY EVIDENCE, invoked by the transport owner AFTER it has made its
+  // platform call. Distinct from `persistRequestEvidence` on purpose: that one
+  // runs before any byte leaves and proves a request was AUTHORIZED; this one
+  // runs with the request already in flight and proves transport was ENTERED.
+  observeTransportInvocation = null,
+  // The canonical evidence identity of THIS request, supplied by the caller
+  // that owns the Run's evidence keys. The role is set here rather than by the
+  // caller, so a leaf dispatch cannot be recorded under another role's name.
+  transportInvocationIdentity = null,
   recoveredProviderCall = null
 }) {
   const selected = selectRunProviderPath(run);
@@ -405,7 +414,11 @@ async function runGovernedLeafRequest({
     transport,
     resolveCredentials: async () => credentials,
     timeoutMs,
-    maxResponseBytes
+    maxResponseBytes,
+    observeTransportInvocation,
+    transportInvocationIdentity: {
+      ...(transportInvocationIdentity || {}), role: 'governed_leaf_worker'
+    }
   });
 
   if (dispatched.status !== 'received') {
