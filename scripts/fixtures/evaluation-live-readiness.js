@@ -475,16 +475,16 @@ function auditLiveReadiness({ liveManifest, sources = {} } = {}) {
         .includes('structured-allocation-live-matrix-postgres-test.js');
     } catch (_) { return false; }
   })();
-  const journalModule = (() => {
-    try {
-      // eslint-disable-next-line global-require
-      return require('./evaluation-live-run-journal');
-    } catch (_) { return null; }
-  })();
   const corpusModule = (() => {
     try {
       // eslint-disable-next-line global-require
       return require('./evaluation-live-corpus-integrity');
+    } catch (_) { return null; }
+  })();
+  const journalModule = (() => {
+    try {
+      // eslint-disable-next-line global-require
+      return require('./evaluation-live-run-journal');
     } catch (_) { return null; }
   })();
 
@@ -519,11 +519,32 @@ function auditLiveReadiness({ liveManifest, sources = {} } = {}) {
       matrixSuite.includes('BEFORE its trial started') ? 'FROZEN' : 'UNRESOLVED',
     'every slot reserves its canonical whole-trial bound before transport',
     'executor reservation ordering');
+  // BEHAVIOURAL, not a text match. The artifact's shape is owned by
+  // `buildExclusionArtifact`, so the fact CALLS it and inspects the result —
+  // a grep for the literal `replacementSlot: null` would have gone stale the
+  // moment that line moved to the module that owns it, which is exactly what
+  // happened.
   record('liveMatrixInfrastructureExclusionProved',
     scoredSource.includes("classified.classification === 'infrastructure_exclusion'") &&
-      scoredSource.includes('replacementSlot: null') ? 'FROZEN' : 'UNRESOLVED',
+      corpusModule !== null &&
+      typeof corpusModule.buildExclusionArtifact === 'function' &&
+      (() => {
+        try {
+          const built = corpusModule.buildExclusionArtifact({
+            label: 'probe', trialId: 'probe',
+            header: { runHeaderHash: 'r', manifestHash: 'm', repositoryCommit: 'c' },
+            slot: { slot: 1, armId: 'A', scenarioId: 's', variantId: null,
+              repetition: 1, stochasticIdentity: 'frozen-identity' },
+            classified: { classification: 'infrastructure_exclusion',
+              reason: 'probe', evidence: {} }
+          });
+          return built.replacementSlot === null &&
+            built.assignedSlot.seed === 'frozen-identity' &&
+            built.assignedSlot.slot === 1;
+        } catch (_) { return false; }
+      })() ? 'FROZEN' : 'UNRESOLVED',
     'infrastructure exclusions keep their slot and gain no replacement',
-    'executor frozen-classifier integration');
+    'evaluation-live-corpus-integrity buildExclusionArtifact');
   record('liveCorpusIntegrityGateImplemented',
     corpusModule !== null &&
       typeof corpusModule.auditLiveCorpus === 'function' &&
