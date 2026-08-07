@@ -136,9 +136,22 @@ function responsePayload(body, transport) {
   return {
     identity,
     role: planner ? 'planner' : 'worker',
+    // THE ACTUAL PROVIDER ENVELOPE. The real Responses API returns
+    // output[].content[].output_text and NO top-level output_text; answering
+    // with the latter meant every acceptance proof validated production against
+    // a contract the provider does not use.
     payload: JSON.stringify({
       id: identity,
-      output_text: planner ? plannerProposal(body) : workerAnswer(body),
+      object: 'response',
+      status: 'completed',
+      output: [{
+        type: 'message',
+        role: 'assistant',
+        content: [{
+          type: 'output_text',
+          text: planner ? plannerProposal(body) : workerAnswer(body)
+        }]
+      }],
       usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 }
     })
   };
@@ -210,16 +223,18 @@ globalThis.fetch = async function capturedFetch(input, init) {
     body,
     at: Date.now()
   });
-  return {
-    ok: true,
+  // THE REAL PLATFORM Response, not a partial clone. Production iterates
+  // response headers with `.entries()`; a stub exposing only `.get` fails
+  // there, and the failure looks exactly like a product defect. A fixture must
+  // never be the thing under test.
+  return new Response(answer.payload, {
     status: 200,
     statusText: 'OK',
     headers: {
-      get: name => (name.toLowerCase() === 'x-request-id' ? answer.identity : null)
-    },
-    async text() { return answer.payload; },
-    async json() { return JSON.parse(answer.payload); }
-  };
+      'x-request-id': answer.identity,
+      'content-type': 'application/json'
+    }
+  });
 };
 
 // ── 3. Nothing else may reach a network ─────────────────────────────────────

@@ -592,7 +592,16 @@ async function runTrial({
   // TEST-ONLY. Observes the exact child environment at the spawn boundary and
   // may stop there, so the REAL uncaptured live credential branch can be proved
   // without creating a process able to contact a provider.
-  spawnEnvObserver = null
+  spawnEnvObserver = null,
+  // TEST-ONLY. Loads a preload that observes the FINAL provider boundary and
+  // then refuses, WITHOUT changing the branch under test: the server still
+  // takes the real uncaptured live path with real credential resolution. The
+  // final-hop capture cannot serve this purpose — its presence switches the
+  // spawn to a sentinel credential, which is what masked the ungoverned defect.
+  liveProviderBoundaryObservation = null,
+  // TEST-ONLY. A file holding the worker JSON the boundary should answer with,
+  // wrapped in the ACTUAL provider envelope.
+  liveProviderBoundaryResponse = null
 }) {
   assertMode(mode);
   // ONE RESOLUTION POINT. The variant is resolved into a complete scenario here
@@ -855,7 +864,10 @@ async function runTrial({
   const preload = isLive
     ? (liveTransportCapture
       ? path.join(__dirname, 'fixtures', 'live-transport-capture-preload.js')
-      : null)
+      : (liveProviderBoundaryObservation
+        ? path.join(__dirname, 'fixtures',
+          'live-provider-boundary-observer-preload.js')
+        : null))
     : path.join(__dirname, 'fixtures', 'evaluation-preload.js');
 
   // THE RESERVATION HAPPENS HERE — before the server exists, not after it
@@ -921,6 +933,13 @@ async function runTrial({
         ...(liveTransportCapture ? {
           LIVE_TRANSPORT_CAPTURE: liveTransportCapture,
           LIVE_TRANSPORT_CAPTURE_TRIAL_ID: trialId
+        } : {}),
+        ...(liveProviderBoundaryObservation ? {
+          LIVE_PROVIDER_BOUNDARY_OBSERVATION: liveProviderBoundaryObservation,
+          LIVE_PROVIDER_BOUNDARY_TRIAL_ID: trialId
+        } : {}),
+        ...(liveProviderBoundaryResponse ? {
+          LIVE_PROVIDER_BOUNDARY_RESPONSE: liveProviderBoundaryResponse
         } : {})
       } : {}),
       ...(isLive ? {} : { EVALUATION_OBSERVATION_DESCRIPTOR: JSON.stringify({
