@@ -180,10 +180,20 @@ function trialWorstCaseMicroUsd({ perRequestMicroUsd = null, ...bounds }) {
   const worker = canonicalPerRequestMicroUsd({
     role: attempts.governed ? 'structured_leaf_executor' : 'ungoverned_worker'
   });
+  // ROLE PARITY, stated once. Every role prices against the same catalog entry,
+  // the same model and the same frozen output cap, so their per-request maxima
+  // must be the same integer. If they ever diverge, one role is using a
+  // different monetary bound method and the matrix total means nothing.
+  if (planner.perRequestMicroUsd !== worker.perRequestMicroUsd) {
+    throw new TrialLiabilityError(
+      `planner maximum ${planner.perRequestMicroUsd} disagrees with worker ` +
+      `maximum ${worker.perRequestMicroUsd}; roles must share one bound method`,
+      { code: 'TRIAL_LIABILITY_ROLE_BOUND_DIVERGENCE',
+        planner: planner.perRequestMicroUsd, worker: worker.perRequestMicroUsd });
+  }
   if (perRequestMicroUsd !== null && perRequestMicroUsd !== undefined) {
     assertIntegerMicroUsd(perRequestMicroUsd, 'perRequestMicroUsd');
-    if (perRequestMicroUsd !== worker.perRequestMicroUsd ||
-        perRequestMicroUsd !== planner.perRequestMicroUsd) {
+    if (perRequestMicroUsd !== worker.perRequestMicroUsd) {
       throw new TrialLiabilityError(
         `supplied perRequestMicroUsd ${perRequestMicroUsd} disagrees with the ` +
         `canonical maximum ${worker.perRequestMicroUsd}; the pricing kernel owns ` +

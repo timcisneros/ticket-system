@@ -394,17 +394,83 @@ function main() {
     fs.rmSync(root, { recursive: true, force: true });
   }
 
-  // A TRIAL BOUND MAY NOT BE PINNED TO A NON-CANONICAL PRICE.
-  const stale = refuses(() => trialWorstCaseMicroUsd({
-    armId: 'B', perRequestMicroUsd: 20_428.8,
+  // A TRIAL BOUND MAY NOT BE PINNED TO A NON-CANONICAL PRICE. Both shapes are
+  // proved: the old FRACTIONAL price, and an INTEGER price that simply is not
+  // the canonical one — the second is what a plausible stale constant looks
+  // like, and it would pass a validity check that only asked "is it an integer".
+  const pinned = price => refuses(() => trialWorstCaseMicroUsd({
+    armId: 'B', perRequestMicroUsd: price,
     runtimeMaxModelRequestsPerRun: RUNTIME_REQUESTS_PER_RUN,
     governedLeafMaximumProviderRequests:
       ROLE_ECONOMICS.structured_leaf_executor.maximumProviderRequests,
     governedPlannerMaximumProviderRequests:
       ROLE_ECONOMICS.structured_planner.maximumProviderRequests,
     autoRetryEnabled: false, maxAttempts: null }));
-  ok(stale !== null,
+  ok(pinned(20_428.8) !== null,
     'a trial bound pinned to the old fractional price REFUSES');
+  const staleInteger = pinned(PER_REQUEST + 1);
+  ok(staleInteger !== null &&
+     staleInteger.code === 'TRIAL_LIABILITY_PRICE_NOT_CANONICAL',
+  'and an integer price that is not the canonical one REFUSES by name');
+  ok(pinned(PER_REQUEST) === null,
+    'while the canonical price is accepted — the pin is checked, not trusted');
+
+  // THE EXACT INTEGER TRIAL MAXIMUM PER ARM. Asserting the composition alone
+  // would not distinguish a bound that multiplied first and rounded once; these
+  // exact values do.
+  const armBound = armId => trialWorstCaseMicroUsd({ armId,
+    runtimeMaxModelRequestsPerRun: RUNTIME_REQUESTS_PER_RUN,
+    governedLeafMaximumProviderRequests:
+      ROLE_ECONOMICS.structured_leaf_executor.maximumProviderRequests,
+    governedPlannerMaximumProviderRequests:
+      ROLE_ECONOMICS.structured_planner.maximumProviderRequests,
+    autoRetryEnabled: false, maxAttempts: null });
+  for (const [armId, attempts] of [['A', 3], ['A2a', 6], ['A2b', 6],
+    ['B', 10], ['C', 10]]) {
+    const bound = armBound(armId);
+    ok(bound.totalProviderAttempts === attempts &&
+       bound.trialWorstCaseMicroUsd === PER_REQUEST * attempts,
+    `${armId}: ${attempts} attempts x ${PER_REQUEST} = ` +
+    `${bound.trialWorstCaseMicroUsd} micro-USD, exactly`);
+    ok(Number.isSafeInteger(bound.trialWorstCaseMicroUsd) &&
+       Number.isSafeInteger(bound.plannerLiabilityMicroUsd) &&
+       Number.isSafeInteger(bound.workerLiabilityMicroUsd),
+    `${armId}: planner, worker and trial components are all safe integers`);
+    ok(bound.plannerLiabilityMicroUsd + bound.workerLiabilityMicroUsd ===
+       bound.trialWorstCaseMicroUsd,
+    `${armId}: trial = planner + SUM(worker Runs), with no residue`);
+  }
+  // AND THE WHOLE MATRIX, from the manifest's own per-arm figures.
+  const matrixAttempts = Object.entries(liveManifest.economics.liability.byArm)
+    .reduce((sum, [, arm]) => sum + arm.totalProviderAttempts * arm.trials, 0);
+  ok(matrixAttempts === 888 &&
+     liveManifest.economics.computedWorstCaseMicroUsd === PER_REQUEST * 888,
+  `the matrix is ${matrixAttempts} chargeable attempts x ${PER_REQUEST} = ` +
+  `${liveManifest.economics.computedWorstCaseMicroUsd} micro-USD`);
+
+  // A DURABLE LEDGER THAT SUMS TO A FRACTION IS UNREADABLE, not rounded. Such a
+  // file can only have been written by something that bypassed the canonical
+  // calculation, and handing its total to the ceiling comparison would launder
+  // the bypass into an authority.
+  {
+    const root = freshRoot();
+    assertDispatchWithinGlobalCeiling({
+      runRoot: root, ceilingMicroUsd: CAP, maximumLiabilityMicroUsd: PER_REQUEST,
+      trialId: 't', role: 'worker', ordinal: 1
+    });
+    fs.appendFileSync(ledgerPath(root), `${JSON.stringify({
+      kind: 'reserve', reservationId: 'forged', trialId: 't', role: 'worker',
+      ordinal: 2, maximumLiabilityMicroUsd: 0.5
+    })}\n`);
+    const unreadable = refuses(() => reconstructCommittedLiability(root));
+    ok(unreadable !== null,
+      'a ledger whose durable records sum to a fraction REFUSES to be read');
+    ok(refuses(() => assertDispatchWithinGlobalCeiling({
+      runRoot: root, ceilingMicroUsd: CAP, maximumLiabilityMicroUsd: PER_REQUEST,
+      trialId: 'next', role: 'worker', ordinal: 1 })) !== null,
+    'and no further dispatch may be admitted against it');
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 
   // THE WHOLE MATRIX IS INTEGER.
   ok(Number.isSafeInteger(liveManifest.economics.computedWorstCaseMicroUsd) &&
