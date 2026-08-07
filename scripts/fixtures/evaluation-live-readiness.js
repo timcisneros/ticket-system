@@ -445,6 +445,116 @@ function auditLiveReadiness({ liveManifest, sources = {} } = {}) {
     'the acceptance proof makes zero external calls and refuses any escape route',
     'live-transport-capture-preload escape guard');
 
+  // ── THE MATRIX EXECUTOR ─────────────────────────────────────────────────
+  //
+  // THE LAYER TWO EARLIER VERDICTS MISSED. `liveDispatchPathImplemented` proves
+  // a trial can dispatch; `liveDryRunReachedProviderBoundary` proves a dry run
+  // reaches the boundary. Both were true while NOTHING could execute slot 2
+  // through slot 120, and an authorized run halted at the gate because of it.
+  // These facts are deliberately separate: collapsing them into the dispatch
+  // fact is exactly the mistake that was made.
+  const scoredSource = sources.scoredSource !== undefined ? sources.scoredSource : (() => {
+    try {
+      return require('node:fs').readFileSync(
+        require('node:path').join(__dirname, '..',
+          'structured-allocation-evaluation-scored-runner.js'), 'utf8');
+    } catch (_) { return ''; }
+  })();
+  const matrixSuite = sources.matrixSuiteSource !== undefined
+    ? sources.matrixSuiteSource : (() => {
+      try {
+        return require('node:fs').readFileSync(
+          require('node:path').join(__dirname, '..',
+            'structured-allocation-live-matrix-postgres-test.js'), 'utf8');
+      } catch (_) { return ''; }
+    })();
+  const matrixRegistered = registered && (() => {
+    try {
+      return require('node:fs').readFileSync(
+        require('node:path').join(__dirname, '..', 'test-manifest.js'), 'utf8')
+        .includes('structured-allocation-live-matrix-postgres-test.js');
+    } catch (_) { return false; }
+  })();
+  const journalModule = (() => {
+    try {
+      // eslint-disable-next-line global-require
+      return require('./evaluation-live-run-journal');
+    } catch (_) { return null; }
+  })();
+  const corpusModule = (() => {
+    try {
+      // eslint-disable-next-line global-require
+      return require('./evaluation-live-corpus-integrity');
+    } catch (_) { return null; }
+  })();
+
+  record('liveMatrixExecutorImplemented',
+    scoredSource.includes('async function executeLiveRun(') ? 'FROZEN' : 'UNRESOLVED',
+    'an executor exists that runs the assigned live matrix, not just one trial',
+    'scored runner executeLiveRun');
+  record('liveManifestSlotsConsumedByExecutor',
+    scoredSource.includes('for (const slot of plan)') &&
+      scoredSource.includes('manifest.slots') ? 'FROZEN' : 'UNRESOLVED',
+    'the executor consumes the manifest preassigned slots',
+    'scored runner executeLiveRun slot iteration');
+  record('liveMatrixOrderingProved',
+    matrixRegistered &&
+      matrixSuite.includes('exactly the frozen manifest order') ? 'FROZEN' : 'UNRESOLVED',
+    'slots execute in the frozen manifest order, proved across a restart',
+    'live matrix acceptance suite');
+  record('liveMatrixJournalProved',
+    journalModule !== null &&
+      typeof journalModule.appendJournal === 'function' &&
+      typeof journalModule.acceptedSlots === 'function' ? 'FROZEN' : 'UNRESOLVED',
+    'an append-only hash-chained journal owns which slot is accepted',
+    'evaluation-live-run-journal');
+  record('liveMatrixResumeProved',
+    matrixRegistered && matrixSuite.includes('never re-executed') &&
+      scoredSource.includes('alreadyAccepted.has(id)') ? 'FROZEN' : 'UNRESOLVED',
+    'resume reuses accepted slots and never re-executes them',
+    'live matrix acceptance suite + executor resume');
+  record('liveMatrixEconomicReservationProved',
+    scoredSource.includes('assertDispatchWithinGlobalCeiling({') &&
+      scoredSource.includes('liveReservationAlreadyCommitted: true') &&
+      matrixSuite.includes('BEFORE its trial started') ? 'FROZEN' : 'UNRESOLVED',
+    'every slot reserves its canonical whole-trial bound before transport',
+    'executor reservation ordering');
+  record('liveMatrixInfrastructureExclusionProved',
+    scoredSource.includes("classified.classification === 'infrastructure_exclusion'") &&
+      scoredSource.includes('replacementSlot: null') ? 'FROZEN' : 'UNRESOLVED',
+    'infrastructure exclusions keep their slot and gain no replacement',
+    'executor frozen-classifier integration');
+  record('liveCorpusIntegrityGateImplemented',
+    corpusModule !== null &&
+      typeof corpusModule.auditLiveCorpus === 'function' &&
+      typeof corpusModule.assertScorableLiveCorpus === 'function'
+      ? 'FROZEN' : 'UNRESOLVED',
+    'a corpus integrity gate exists and the scorer refuses anything it rejects',
+    'evaluation-live-corpus-integrity');
+  record('liveFullCaptured120SlotExecutionProved',
+    matrixRegistered &&
+      matrixSuite.includes('all 120 assigned slots are accounted for')
+      ? 'FROZEN' : 'UNRESOLVED',
+    'the complete 120-slot matrix executes under the final-hop capture',
+    'live matrix acceptance suite');
+  record('liveFullCapturedRunExternalProviderCallsZero',
+    matrixRegistered &&
+      matrixSuite.includes('EXTERNAL PROVIDER CALLS MADE: 0') ? 'FROZEN' : 'UNRESOLVED',
+    'that full-matrix proof makes zero external provider calls',
+    'live matrix acceptance suite');
+  record('liveSyntheticAcceptanceCannotBeScoredAsProductEvidence',
+    corpusModule !== null &&
+      (() => {
+        try {
+          corpusModule.assertScorableLiveCorpus({ syntheticAcceptance: true, complete: true });
+          return false;
+        } catch (error) {
+          return error.code === 'LIVE_CORPUS_SYNTHETIC_NOT_PRODUCT_EVIDENCE';
+        }
+      })() ? 'FROZEN' : 'UNRESOLVED',
+    'the synthetic acceptance corpus can never be scored as live product evidence',
+    'evaluation-live-corpus-integrity assertScorableLiveCorpus');
+
   const unresolved = items.filter(item => item.state === 'UNRESOLVED');
   return Object.freeze({
     version: LIVE_READINESS_VERSION,

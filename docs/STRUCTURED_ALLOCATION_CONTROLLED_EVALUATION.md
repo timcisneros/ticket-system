@@ -2013,6 +2013,99 @@ rule and the ordering. Fixture bodies remain byte-identical
 Regenerating the manifest was legitimate because **no live trial has ever run**:
 this corrects a pre-evidence artifact, not a result.
 
+## 3r. The frozen-matrix executor (session 22)
+
+The authorized live run halted at the gate. Every check passed — commit,
+manifest, matrix, economics, credential, authentication, model availability,
+Responses endpoint, adapter, pricing parity — and then there was nothing to run
+it with.
+
+### What was actually missing
+
+The repository could dispatch **one** live trial and could reach the dispatch
+boundary in a dry run. `executeScoredRun` **refuses** a live manifest by design;
+`preflightLiveRun` stops before dispatch by design. Nothing consumed the
+manifest's 120 preassigned slots. The only code calling
+`runTrial({ mode: 'live' })` was the acceptance suite, driving two hand-picked
+cells.
+
+**This was a readiness-audit failure, and it is worth naming exactly.** The
+eighteen facts in §3q were all true. `liveDispatchPathImplemented` proves a
+trial *can* dispatch. `liveDryRunReachedProviderBoundary` proves a dry run
+reaches the boundary. Neither would fail if slot 2 through slot 120 were
+unreachable — and they were. Twice now a verdict has rested on a proof one layer
+below the claim: first a boundary mistaken for a dispatch path, then a dispatch
+path mistaken for the ability to run the experiment.
+
+### The owner that now exists
+
+`executeLiveRun` in the scored runner owns orchestration and nothing else —
+product execution stays in `runTrial`, un-duplicated, because a second execution
+implementation would mean the live corpus came from a different path than the
+one proved.
+
+- **Slots are never generated.** Order, arm, repetition and the frozen
+  `stochasticIdentity` all come from the manifest. Nothing is chosen after a
+  result is observed, which is the difference between an experiment and a search.
+- **Reservation precedes reachability.** Each slot's canonical whole-trial bound
+  is derived from its arm and durably committed *before* any process capable of
+  provider transport is spawned. The caller cannot supply the amount.
+- **The journal is append-only and hash-chained.** It answers one question —
+  which frozen slot is accepted into this corpus — and never restates product
+  truth, which durable Ticket/Run state and the artifact already own. An edited
+  journal refuses to be read.
+- **Accepted is forever.** A slot is accepted exactly once; a second acceptance
+  refuses, and an exclusion can never replace an accepted trial.
+- **Exclusions keep their slot.** The frozen classifier decides; the artifact
+  records the assigned slot with no replacement, so 120 assigned stays 120
+  accounted for. A run-fatal configuration failure aborts the run rather than
+  manufacturing 120 exclusions from one mistake.
+
+### The corpus integrity gate
+
+`auditLiveCorpus` was written **before any evidence existed** — a completeness
+check authored after seeing results is a check shaped to the results it found.
+It refuses anything that is not 120 assigned slots, each accepted once, from one
+source commit, one manifest and one run header, with zero-drift proof and no
+fixture/live mixing.
+
+### The synthetic acceptance corpus is not evidence
+
+The 120-slot proof runs the real executor against the real manifest with only
+the final network hop replaced. Its run header records
+`syntheticAcceptance: true` and carries the label **LIVE EXECUTOR ACCEPTANCE —
+SYNTHETIC FINAL-TRANSPORT CAPTURE — NOT PRODUCT EVIDENCE**. `assertScorableLiveCorpus`
+refuses it *even when it is internally complete* — being complete is not the
+same as being real.
+
+### Eleven new readiness facts
+
+`liveMatrixExecutorImplemented`, `liveManifestSlotsConsumedByExecutor`,
+`liveMatrixOrderingProved`, `liveMatrixJournalProved`, `liveMatrixResumeProved`,
+`liveMatrixEconomicReservationProved`,
+`liveMatrixInfrastructureExclusionProved`, `liveCorpusIntegrityGateImplemented`,
+`liveFullCaptured120SlotExecutionProved`,
+`liveFullCapturedRunExternalProviderCallsZero`,
+`liveSyntheticAcceptanceCannotBeScoredAsProductEvidence`.
+
+They are deliberately **not** collapsed into `liveDispatchPathImplemented` —
+that fact proves a different layer, and conflating them is the exact mistake
+that produced two overstated verdicts.
+
+### No live corpus was created
+
+No product live trial has ever run. Executed 0, exclusions 0, committed
+liability 0, experiment spend **$0.00**. The manifest is unchanged
+(`792d228f…`): it binds no commit — `repositoryBaselineRule` requires each
+artifact to bind the commit it came from, and the run header does that — so an
+executor-only change does not regenerate it.
+
+**Preflight, separately accounted:** 2 authenticated requests, both outside any
+corpus — one `GET /v1/models/…` (metadata, not billed) and one 19-token
+`POST /v1/responses` costing **9 micro-USD ($0.000009)** by the canonical
+`computeActualCost`. An earlier handoff said "3 preflight calls"; the correct
+count is **2**.
+
 ## 13. Status
 
 **Tranche 6: IN PROGRESS — harness built and executing; evaluation NOT run.**

@@ -1,5 +1,25 @@
 # Decision Log
 
+## Frozen-matrix executor built; live run had halted at the gate (2026-08-07)
+
+The authorized 120-slot live run passed every opening and preflight check and
+then found nothing capable of executing the matrix. `executeScoredRun` refuses a
+live manifest by design and `preflightLiveRun` stops before dispatch by design;
+no code consumed the manifest's preassigned slots. The previous READY verdict
+proved live *trial dispatch* capability and was mistaken for live *frozen-matrix
+execution* capability.
+
+`executeLiveRun` now owns slot iteration, run identity, an append-only
+hash-chained journal, resume, per-slot canonical reservation before transport is
+reachable, infrastructure exclusions that keep their slot, and the corpus
+integrity gate — with product execution left in `runTrial`, un-duplicated. The
+full 120-slot matrix is proved end to end with only the final network hop
+replaced, and that synthetic corpus can never be scored as product evidence.
+
+Eleven new readiness facts make LIVE READY impossible without matrix
+executability. **No live corpus exists: executed 0, spend $0.00.** Preflight was
+2 authenticated requests costing 9 micro-USD, outside any corpus.
+
 ## Canonical integer monetary authority for the live evaluation (2026-08-07)
 
 The live evaluation had been pricing requests itself — a single floating

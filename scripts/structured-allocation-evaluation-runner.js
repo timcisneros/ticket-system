@@ -582,7 +582,10 @@ async function runTrial({
   // look unspent on resume. Reserving per-request inside the server would need
   // a production hook into the transport, which is exactly the backdoor this
   // evaluation must not add.
-  liveBudget = null
+  liveBudget = null,
+  // Set by the live matrix executor, which commits the reservation itself
+  // before spawning anything capable of provider transport.
+  liveReservationAlreadyCommitted = false
 }) {
   assertMode(mode);
   // ONE RESOLUTION POINT. The variant is resolved into a complete scenario here
@@ -857,7 +860,15 @@ async function runTrial({
   // enforced per-Run request ceilings, so it cannot drift from what the product
   // can actually spend.
   let liveTrialBound = null;
-  if (isLive) {
+  if (isLive && liveReservationAlreadyCommitted) {
+    // THE ORCHESTRATOR ALREADY RESERVED THIS SLOT. Reserving again here would
+    // double-commit the trial's liability and shrink the ceiling for the run.
+    if (!liveBudget) {
+      throw new EvaluationRunnerError(
+        'a live trial requires an explicit global budget authority; refusing to ' +
+        'dispatch against an unbounded ceiling');
+    }
+  } else if (isLive) {
     if (!liveBudget) {
       throw new EvaluationRunnerError(
         'a live trial requires an explicit global budget authority; refusing to ' +

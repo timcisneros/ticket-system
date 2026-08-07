@@ -35,6 +35,13 @@ const { runTrial } = require('./structured-allocation-evaluation-runner');
 const {
   assertDispatchWithinGlobalCeiling, releaseUndispatchedReservation
 } = require('./fixtures/evaluation-live-budget-ledger');
+const {
+  acceptedSlots, appendJournal, readJournal
+} = require('./fixtures/evaluation-live-run-journal');
+const {
+  SYNTHETIC_ACCEPTANCE_LABEL, assertScorableLiveCorpus, auditLiveCorpus
+} = require('./fixtures/evaluation-live-corpus-integrity');
+const { classifyLiveFailure } = require('./fixtures/evaluation-live-failure-classifier');
 const { trialWorstCaseMicroUsd } = require('./fixtures/evaluation-live-trial-liability');
 const { ROLE_ECONOMICS } = require('./fixtures/governed-role-policy-container');
 const { withHarness } = require('./postgres-test-harness');
@@ -294,6 +301,323 @@ async function preflightLiveRun({ manifestPath, outputRoot }) {
   });
 }
 
+
+// ── THE LIVE MATRIX EXECUTOR ────────────────────────────────────────────────
+//
+// THE CAPABILITY THAT WAS MISSING. The repository could dispatch ONE live trial
+// and could reach the dispatch boundary in a dry run, and a readiness audit
+// mistook those for the ability to run the experiment. Nothing consumed the
+// frozen manifest's 120 preassigned slots. This is that owner.
+//
+// It owns orchestration only — slot iteration, run identity, journal, resume,
+// per-slot reservation, acceptance and exclusion. Product execution stays in
+// `runTrial`, unchanged and un-duplicated: a second execution implementation
+// would mean the live corpus was produced by a different path than the one
+// proved.
+//
+// SLOTS ARE NEVER GENERATED. The order is the manifest's order, the seed is the
+// manifest's seed, the arm is the manifest's arm. Nothing is chosen after a
+// result is observed, which is the difference between an experiment and a
+// search.
+async function executeLiveRun({
+  manifestPath, outputRoot, resume = false, limit = null,
+  // TEST-ONLY. When set, the final network hop is replaced by the role-aware
+  // capture and the run is permanently marked as NOT product evidence.
+  syntheticTransportCapture = null,
+  // Deterministic crash injection for the recovery proofs. Never set in a real
+  // run; the executor refuses to treat an injected stop as an outcome.
+  stopAfter = null
+}) {
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  if (manifest.mode !== 'live') {
+    throw new ScoredRunnerError(
+      'the live matrix executor requires a live manifest; this one declares ' +
+      `mode ${manifest.mode}`, { mode: manifest.mode });
+  }
+  if (manifest.containsResults !== false) {
+    throw new ScoredRunnerError('a manifest that carries results may not drive a run');
+  }
+  assertRuntimeMatchesManifest(manifest, {
+    protocolId: manifest.protocolId,
+    protocolVersion: manifest.protocolVersion,
+    mode: manifest.mode,
+    repetitions: manifest.repetitions,
+    protocolSeed: manifest.protocolSeed,
+    manifestHash: manifest.manifestHash
+  });
+
+  fs.mkdirSync(path.join(outputRoot, 'trials'), { recursive: true });
+  fs.mkdirSync(path.join(outputRoot, 'exclusions'), { recursive: true });
+
+  // ── THE IMMUTABLE RUN IDENTITY ──────────────────────────────────────
+  const headerPath = path.join(outputRoot, 'live-run-header.json');
+  let header;
+  if (fs.existsSync(headerPath)) {
+    if (!resume) {
+      throw new ScoredRunnerError(
+        `${outputRoot} already holds a live-run header; pass resume to continue it, ` +
+        'or choose a new empty directory. A live run is never restarted in place, ' +
+        'because that would silently discard accepted slots.');
+    }
+    header = JSON.parse(fs.readFileSync(headerPath, 'utf8'));
+    // REFUSE A SECOND CORPUS IN ONE DIRECTORY. Source, manifest and run header
+    // must all be the ones this corpus began under.
+    if (header.manifestHash !== manifest.manifestHash) {
+      throw new ScoredRunnerError('refusing to resume: another manifest started this directory',
+        { existing: header.manifestHash, supplied: manifest.manifestHash });
+    }
+    if (header.repositoryCommit !== repositoryCommit()) {
+      throw new ScoredRunnerError('refusing to resume: the source commit has changed',
+        { existing: header.repositoryCommit, current: repositoryCommit() });
+    }
+    const rebuilt = { ...header };
+    delete rebuilt.runHeaderHash;
+    if (hashCanonical(rebuilt) !== header.runHeaderHash) {
+      throw new ScoredRunnerError('refusing to resume: the run header has been altered',
+        { code: 'LIVE_RUN_HEADER_ALTERED' });
+    }
+    if (Boolean(header.syntheticAcceptance) !== Boolean(syntheticTransportCapture)) {
+      throw new ScoredRunnerError(
+        'refusing to resume: this directory was started under a different transport ' +
+        'class; a synthetic acceptance corpus and a product corpus never mix');
+    }
+  } else {
+    const base = buildRunHeader({ manifest, manifestPath, outputRoot });
+    const identity = {
+      ...base,
+      liveRunVersion: LIVE_RUN_VERSION,
+      provider: manifest.provider,
+      model: manifest.model,
+      adapterId: manifest.adapterId,
+      sampling: manifest.sampling,
+      providerSeed: manifest.providerSeed,
+      maximumOutputTokensPerRequest: manifest.maximumOutputTokensPerRequest,
+      pricing: manifest.pricing,
+      monetaryAuthorityVersion: 'canonical-integer-micro-usd/v1',
+      hardDisqualifierVersion: manifest.hardDisqualifierVersion,
+      fixtureSource: manifest.source,
+      economics: {
+        maximumTotalLiveMicroUsd: manifest.economics.maximumTotalLiveMicroUsd,
+        canonicalMatrixMaximumMicroUsd: manifest.economics.computedWorstCaseMicroUsd,
+        perRequestMicroUsd: manifest.economics.liability.perRequestMicroUsd
+      },
+      // A synthetic run says so in its own identity, so nothing downstream has
+      // to infer it from how the run was invoked.
+      syntheticAcceptance: Boolean(syntheticTransportCapture),
+      syntheticAcceptanceLabel: syntheticTransportCapture
+        ? SYNTHETIC_ACCEPTANCE_LABEL : null
+    };
+    delete identity.runHeaderHash;
+    identity.runHeaderHash = hashCanonical(identity);
+    header = Object.freeze(identity);
+    fs.writeFileSync(headerPath, JSON.stringify(header, null, 2));
+  }
+
+  const bind = { runHeaderHash: header.runHeaderHash, manifestHash: header.manifestHash };
+  const alreadyAccepted = acceptedSlots(outputRoot);
+  const assigned = manifest.slots;
+  const plan = limit ? assigned.slice(0, limit) : assigned;
+
+  const liveBudget = {
+    runRoot: outputRoot,
+    ceilingMicroUsd: manifest.economics.maximumTotalLiveMicroUsd,
+    perRequestMicroUsd: manifest.economics.liability.perRequestMicroUsd,
+    runtimeMaxModelRequestsPerRun: manifest.economics.liability.runtimeMaxModelRequestsPerRun,
+    governedLeafMaximumProviderRequests:
+      ROLE_ECONOMICS.structured_leaf_executor.maximumProviderRequests,
+    governedPlannerMaximumProviderRequests:
+      ROLE_ECONOMICS.structured_planner.maximumProviderRequests
+  };
+  const controls = {
+    temperature: manifest.sampling.temperature,
+    topP: manifest.sampling.topP,
+    maxOutputTokens: manifest.maximumOutputTokensPerRequest
+  };
+
+  let executed = 0;
+  let reused = 0;
+  let excluded = 0;
+  let stopped = null;
+
+  await withHarness('structured allocation live matrix run',
+    async ({ store, workspaceRoot, startServer }) => {
+      const namespaceRoot = path.join(outputRoot, 'namespaces');
+      fs.mkdirSync(namespaceRoot, { recursive: true });
+
+      for (const slot of plan) {
+        const id = trialIdFor(slot);
+
+        // ACCEPTED IS FOREVER. Neither a completed trial nor an accepted
+        // exclusion is ever executed again or replaced.
+        if (alreadyAccepted.has(id)) { reused += 1; continue; }
+
+        const target = artifactPathFor(outputRoot, slot);
+        const existing = classifyExistingArtifact(target, header);
+        if (existing.state === 'partial' || existing.state === 'foreign') {
+          throw new ScoredRunnerError(
+            `refusing to proceed at ${id}: ${existing.reason}`, { trialId: id });
+        }
+        if (existing.state === 'complete') {
+          // The artifact survived a crash before its acceptance was journalled.
+          // Accept it rather than re-running: the provider was already paid.
+          appendJournal(outputRoot, { ...bind, event: 'slot_accepted', trialId: id,
+            slotOrdinal: slot.slot, recoveredArtifact: true });
+          reused += 1;
+          continue;
+        }
+
+        // ── RESERVE BEFORE ANYTHING CAN REACH THE PROVIDER ─────────────
+        //
+        // Derived from the slot's arm and the canonical contracts. A caller
+        // cannot supply the amount: an executor that accepted an arbitrary
+        // bound would be a gate sized by whoever called it.
+        const bound = trialWorstCaseMicroUsd({
+          armId: slot.armId,
+          runtimeMaxModelRequestsPerRun: liveBudget.runtimeMaxModelRequestsPerRun,
+          governedLeafMaximumProviderRequests:
+            liveBudget.governedLeafMaximumProviderRequests,
+          governedPlannerMaximumProviderRequests:
+            liveBudget.governedPlannerMaximumProviderRequests,
+          autoRetryEnabled: false, maxAttempts: null
+        });
+        assertDispatchWithinGlobalCeiling({
+          runRoot: outputRoot,
+          ceilingMicroUsd: liveBudget.ceilingMicroUsd,
+          maximumLiabilityMicroUsd: bound.trialWorstCaseMicroUsd,
+          trialId: id, role: `trial_worst_case:${slot.armId}`, ordinal: slot.slot
+        });
+        appendJournal(outputRoot, { ...bind, event: 'reservation_committed', trialId: id,
+          slotOrdinal: slot.slot, reservedMicroUsd: bound.trialWorstCaseMicroUsd });
+        if (stopAfter && stopAfter.event === 'reservation_committed' &&
+            stopAfter.trialId === id) { stopped = stopAfter; break; }
+
+        appendJournal(outputRoot, { ...bind, event: 'trial_started', trialId: id,
+          slotOrdinal: slot.slot });
+        if (stopAfter && stopAfter.event === 'trial_started' &&
+            stopAfter.trialId === id) { stopped = stopAfter; break; }
+
+        let artifact = null;
+        let failure = null;
+        try {
+          artifact = await runTrial({
+            store, startServer, workspaceRoot,
+            scenario: getScenario(slot.scenarioId),
+            arm: ARMS[slot.armId],
+            variant: slot.variantId,
+            repetition: slot.repetition,
+            // THE FROZEN PER-SLOT IDENTITY. A live slot carries no provider
+            // seed — the contract owns no seed field — so the manifest's
+            // `stochasticIdentity` is the frozen value that identifies this
+            // slot's request tuple. It is read, never generated, and never
+            // chosen after a result is observed.
+            seed: slot.stochasticIdentity,
+            outputPath: target,
+            commit: header.repositoryCommit,
+            smokeRoot: outputRoot,
+            namespaceRoot,
+            mode: 'live',
+            liveRequestControls: controls,
+            liveTransportCapture: syntheticTransportCapture
+              ? path.join(syntheticTransportCapture, `${id}.jsonl`) : null,
+            liveBudget,
+            // The reservation is already committed for this slot; runTrial must
+            // not take a second one.
+            liveReservationAlreadyCommitted: true,
+            scoredIdentity: {
+              label: header.syntheticAcceptance
+                ? SYNTHETIC_ACCEPTANCE_LABEL : SCORED_ARTIFACT_LABEL,
+              scoredRunHash: header.runHeaderHash,
+              manifestHash: header.manifestHash,
+              trialSlot: slot.slot,
+              trialId: id
+            }
+          });
+        } catch (error) { failure = error; }
+
+        appendJournal(outputRoot, { ...bind, event: 'product_terminal_or_stable',
+          trialId: id, slotOrdinal: slot.slot, harnessError: failure ? true : false });
+
+        if (failure) {
+          // ── THE FROZEN PREDICATE DECIDES, NOT THE EXECUTOR ───────────
+          const classified = classifyLiveFailure({
+            httpStatus: failure.httpStatus || null,
+            errorCode: failure.code || null,
+            requestDelivered: failure.requestDelivered ?? null,
+            modelResultObserved: failure.modelResultObserved === true,
+            phase: failure.phase || null
+          });
+          if (classified.classification === 'run_fatal_configuration') {
+            // Not 120 exclusions from one mistake.
+            throw new ScoredRunnerError(
+              `RUN-LEVEL FATAL CONFIGURATION FAILURE at ${id}: ${classified.reason}`,
+              { trialId: id, classification: classified.classification });
+          }
+          if (classified.classification === 'infrastructure_exclusion') {
+            const exclusion = {
+              label: header.syntheticAcceptance
+                ? SYNTHETIC_ACCEPTANCE_LABEL : SCORED_ARTIFACT_LABEL,
+              trialId: id,
+              scoredRunHash: header.runHeaderHash,
+              manifestHash: header.manifestHash,
+              sourceCommit: header.repositoryCommit,
+              // THE SLOT IS PRESERVED. No substitute seed, no replacement.
+              assignedSlot: {
+                slot: slot.slot, armId: slot.armId, scenarioId: slot.scenarioId,
+                variantId: slot.variantId || null, repetition: slot.repetition,
+                seed: slot.stochasticIdentity
+              },
+              frozenReason: classified.reason,
+              classification: classified.classification,
+              evidence: classified.evidence,
+              replacementSlot: null,
+              at: new Date().toISOString()
+            };
+            fs.writeFileSync(path.join(outputRoot, 'exclusions', `${id}.json`),
+              JSON.stringify(exclusion, null, 2));
+            appendJournal(outputRoot, { ...bind, event: 'infrastructure_excluded',
+              trialId: id, slotOrdinal: slot.slot, reason: classified.reason });
+            excluded += 1;
+            continue;
+          }
+          // PRODUCT DATA. A bad outcome is evidence, not an exclusion — but a
+          // trial that produced no artifact at all cannot be evidence either.
+          throw new ScoredRunnerError(
+            `trial ${id} produced no artifact and was not an infrastructure ` +
+            `failure: ${failure.message}`, { trialId: id });
+        }
+
+        appendJournal(outputRoot, { ...bind, event: 'artifact_committed', trialId: id,
+          slotOrdinal: slot.slot });
+        if (stopAfter && stopAfter.event === 'artifact_committed' &&
+            stopAfter.trialId === id) { stopped = stopAfter; break; }
+
+        appendJournal(outputRoot, { ...bind, event: 'slot_accepted', trialId: id,
+          slotOrdinal: slot.slot,
+          oracleVerdict: artifact && artifact.oracleResult
+            ? artifact.oracleResult.verdict : null });
+        executed += 1;
+        if (stopAfter && stopAfter.event === 'slot_accepted' &&
+            stopAfter.trialId === id) { stopped = stopAfter; break; }
+      }
+    }, { timeoutMs: 12 * 60 * 60 * 1000 });
+
+  const acceptedNow = acceptedSlots(outputRoot);
+  const complete = assigned.every(slot => acceptedNow.has(trialIdFor(slot)));
+  appendJournal(outputRoot, { ...bind,
+    event: complete ? 'run_complete' : 'run_paused',
+    trialId: null, slotOrdinal: null,
+    acceptedCount: acceptedNow.size, assignedCount: assigned.length });
+
+  return Object.freeze({
+    header, executed, reused, excluded,
+    assigned: assigned.length,
+    accepted: acceptedNow.size,
+    complete,
+    stoppedAfter: stopped,
+    syntheticAcceptance: header.syntheticAcceptance === true
+  });
+}
+
 async function executeScoredRun({ manifestPath, outputRoot, resume = false, limit = null }) {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
@@ -430,8 +754,15 @@ async function executeScoredRun({ manifestPath, outputRoot, resume = false, limi
   return Object.freeze({ header, executed, reused, planned: plan.length });
 }
 
+const LIVE_RUN_VERSION = 1;
+
 module.exports = {
+  LIVE_RUN_VERSION,
   assignedSetOf,
+  auditLiveCorpus,
+  assertScorableLiveCorpus,
+  executeLiveRun,
+  readJournal,
   preflightLiveRun,
   FROZEN_EXPERIMENTAL_OPTIONS,
   OPERATIONAL_OPTIONS,
