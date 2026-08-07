@@ -598,6 +598,35 @@ function main() {
     ok(auditLiveReadiness({ sources: override }).unresolved.includes(id),
       `${id} goes UNRESOLVED when its source evidence is absent`);
   }
+
+  // ── AND THE MATRIX FACTS CAN FAIL TOO ───────────────────────────────
+  //
+  // These are the facts whose absence let an authorized run reach the gate and
+  // find nothing able to execute the experiment. A fact that only ever reports
+  // FROZEN would repeat that exactly.
+  const withoutExecutor = auditLiveReadiness({ sources: { scoredSource: '' } });
+  for (const id of ['liveMatrixExecutorImplemented',
+    'liveManifestSlotsConsumedByExecutor', 'liveMatrixEconomicReservationProved',
+    'liveMatrixInfrastructureExclusionProved', 'liveMatrixResumeProved']) {
+    ok(withoutExecutor.unresolved.includes(id),
+      `${id} goes UNRESOLVED when no matrix executor exists`);
+  }
+  ok(withoutExecutor.verdict === 'TRANCHE 6 LIVE-MODEL EVALUATION BLOCKED',
+    'READY is IMPOSSIBLE without a matrix executor — the gap that halted a run');
+
+  const withoutMatrixProof = auditLiveReadiness({ sources: { matrixSuiteSource: '' } });
+  for (const id of ['liveMatrixOrderingProved', 'liveMatrixResumeProved',
+    'liveFullCaptured120SlotExecutionProved',
+    'liveFullCapturedRunExternalProviderCallsZero']) {
+    ok(withoutMatrixProof.unresolved.includes(id),
+      `${id} goes UNRESOLVED without the 120-slot acceptance proof`);
+  }
+  ok(withoutMatrixProof.verdict === 'TRANCHE 6 LIVE-MODEL EVALUATION BLOCKED',
+    'and READY is impossible without the full-matrix proof');
+
+  ok(auditLiveReadiness({ sources: { registered: false } }).unresolved
+    .includes('liveFullCaptured120SlotExecutionProved'),
+  'an unregistered acceptance suite blocks too — an unrun proof is not a proof');
   ok(assertLiveExecutionPermitted(audit) === true,
     'and live execution would be permitted — READY does not authorize spending');
 
