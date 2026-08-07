@@ -1,3 +1,58 @@
+## LOAD-SENSITIVE CONCURRENCY LIVENESS OBSERVATION (2026-08-07)
+
+**Status: OPEN — not attributed to the Tranche-6 live-evaluation diff, and not
+dismissed. Worth separate investigation.**
+
+The first complete release checkpoint against commit `a9f8c0ca` **failed** at
+the concurrency-conflict suite:
+
+```
+permitted cross-ticket delete: NOT_PROVEN — owner run did not complete (null)
+FAIL: concurrency conflict — 16 scenarios, 1 hard failure(s),
+      0 observed-unsafe, 1 not-proven (PostgreSQL-native)
+```
+
+Liveness diagnostics captured at the failure:
+
+- the owner Run's **lease expired**;
+- **recovery claimed** it (`run.recovery_claimed`);
+- it then reached **`budget.exhausted`**, twice, and never completed;
+- the scheduler was running, one active Run, one expired lease;
+- health additionally reported `PROCESS_RELEASE_CONTRACT_INVALID`
+  (`processExecutionRelease.state = blocked`).
+
+### Why it is not presently attributed to the live-evaluation work
+
+- the diff between the previously passing 209/209 checkpoint (`c5449e3c`) and
+  `a9f8c0ca` touches **only** the live-evaluation harness: the live manifest
+  config, `evaluation-live-*` fixtures and two of their tests. **No production
+  source, no runtime, no scheduler, no store;**
+- the concurrency-conflict suite **loads none of those files**;
+- run **in isolation the suite passed 16/16**, with 0 hard failures and 0
+  not-proven;
+- a **second complete checkpoint against the identical source passed 209/209**.
+
+### Why it is still recorded
+
+The failure was observed on a machine that had been running heavy PostgreSQL
+suites back to back for hours. That is a plausible explanation, but "the machine
+was busy" is a description of the conditions, **not a diagnosis**. A scheduler
+liveness path where a lease expires, recovery claims the Run and the Run then
+exhausts its budget instead of completing is a real product-behaviour question
+under sustained load, and calling it environmental noise would be a conclusion
+the evidence does not support.
+
+Deliberately **not** labelled flaky-and-ignorable. What is not yet known: whether
+the lease expiry is the cause or a symptom, whether the budget exhaustion is
+correct behaviour for a recovery-claimed Run, and whether
+`PROCESS_RELEASE_CONTRACT_INVALID` is incidental to this environment or
+contributory.
+
+No production behaviour was changed in response, and none should be until the
+question above is answered on an idle machine.
+
+---
+
 ## LIVE READINESS AUDIT FINDINGS — CLOSED (2026-08-06)
 
 The eight-audit repeat blocked live readiness on three proven defects: the
@@ -5,7 +60,9 @@ governed leaf executor had no captured outbound request; ungoverned requests
 carried no output cap while being priced as if they did; and the ledger reserved
 one request's liability for a whole trial. All three are closed and proved
 without a network — see `docs/STRUCTURED_ALLOCATION_CONTROLLED_EVALUATION.md`
-§3p. Recomputed worst case 18,140,774.4 of 20,000,000 micro-USD. $0.00 spent.
+§3p. Recomputed worst case at the time 18,140,774.4 of 20,000,000 micro-USD —
+**superseded**; the canonical integer authority is 18,140,952, see §3q and the
+entry immediately below. $0.00 spent.
 
 ---
 

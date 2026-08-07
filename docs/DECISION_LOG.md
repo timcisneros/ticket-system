@@ -1,5 +1,38 @@
 # Decision Log
 
+## Canonical integer monetary authority for the live evaluation (2026-08-07)
+
+The live evaluation had been pricing requests itself — a single floating
+division of the summed product, with no rounding — and that fractional number
+was hashed into the manifest, committed to the durable ledger and compared
+against the $20 ceiling. The pricing contract's first rule is that every amount
+is an integer count of micro-USD and every division rounds up, so this was a
+second monetary semantics living beside the canonical one.
+
+The live layer no longer prices anything. It consumes `computeMaximumLiability`,
+the same function governed economics already trusts, and answers only how many
+independently chargeable bounded requests a trial can authorize. Rounding stays
+with `chargeForUnits`, per charge component. The ledger refuses fractional, NaN,
+infinite, negative and unsafe amounts rather than repairing them.
+
+**Canonical authority:** 20,429 micro-USD per request (19,200 input + 1,229
+output rounded up + 0 fixed). Trial maxima A 61,287 · A2a 122,574 · A2b 122,574
+· B 204,290 · C 204,290. Matrix maximum **18,140,952** of **20,000,000**,
+headroom **1,859,048**. Live manifest
+`config/structured-allocation-evaluation-live-v1.json`, hash
+**`792d228f939d597891da25bd4d779d76999940c2040e7e846afaf81fc35530b6`**.
+
+Superseded pre-live values, retained in the record rather than erased:
+20,428.8 micro-USD per request, 18,140,774.4 matrix maximum, manifest
+`2bb886c3…`. No live trial ran against them.
+
+Unchanged: 40 cells, 3 repetitions, 120 slots, `gpt-4o-mini-2024-07-18`,
+`openai.responses.v1`, temperature 0, top_p 1, no provider seed,
+`max_output_tokens` 2048, the five metrics, the hard disqualifiers and the
+fixture/live evidence-combination rule.
+
+**External provider calls: 0. Total spent: $0.00.**
+
 ## Three roles proved, wire capped, whole trial reserved (2026-08-06)
 
 The blocking audit was right on all three counts. The governed leaf executor now
@@ -12,8 +45,10 @@ for governed roles, and a live control that disagreed refuses. The ledger
 reserves the whole trial, derived from Run topology and both enforced per-Run
 ceilings, with retries priced rather than assumed away.
 
-Recomputed worst case **18,140,774.4 of 20,000,000 micro-USD**. Manifest
-`2bb886c3…`. Every frozen decision unchanged.
+Recomputed worst case at the time **18,140,774.4 of 20,000,000 micro-USD**,
+manifest `2bb886c3…`. **Both are superseded pre-live figures** — the entry above
+replaces them with the canonical integer authority. Every frozen decision
+unchanged.
 
 Captured: ungoverned 1, planner 1, governed leaf 3. **External provider calls: 0.
 Total spent: $0.00.**

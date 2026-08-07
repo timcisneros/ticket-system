@@ -1865,8 +1865,8 @@ byte-identical bodies. The historical hash
 
 ### 3. The ledger reserved one request for a whole trial
 
-`perRequestMicroUsd` (20,428.8) was reserved for trials that may issue three or
-ten requests. The bound is now derived in
+`perRequestMicroUsd` (20,428.8 at the time — see §3q, where that figure is
+itself superseded) was reserved for trials that may issue three or ten requests. The bound is now derived in
 `scripts/fixtures/evaluation-live-trial-liability.js` from Run topology and both
 enforced per-Run ceilings — the economic `maximumProviderRequests` and the
 runtime `maxModelRequestsPerRun`, whichever binds first.
@@ -1881,7 +1881,13 @@ The runtime per-Run ceiling is pinned for live trials through the existing
 production configuration knob, because a bound nobody pinned is a bound nobody
 proved.
 
-| arm | Runs | planner | worker/Run | attempts | per trial (micro-USD) |
+> **SUPERSEDED — the attempt counts below are current, the money is not.** The
+> figures in this table were computed by the live layer's own arithmetic, which
+> did not round and was therefore fractional. §3q replaces every monetary value
+> here with the canonical integer liability. The per-arm attempt counts (3, 6,
+> 6, 10, 10) and the topology that derives them are unchanged.
+
+| arm | Runs | planner | worker/Run | attempts | per trial (micro-USD) — SUPERSEDED |
 |---|---|---|---|---|---|
 | A | 1 | 0 | 3 | 3 | 61,286.4 |
 | A2a | 2 | 0 | 3 | 6 | 122,572.8 |
@@ -1889,12 +1895,16 @@ proved.
 | B | 3 + planner | 1 | 3 | 10 | 204,288 |
 | C | 3 + planner | 1 | 3 | 10 | 204,288 |
 
-**Recomputed worst case: 18,140,774.4 of 20,000,000 micro-USD** (headroom
-1,859,225.6). Manifest hash
-`2bb886c3fa28935a1c09b98357aaa4acc7db1f953f295ede069e6017263227df`. The frozen
-decisions are untouched: 40 cells, 3 repetitions, 120 slots, the dated model
-snapshot, temperature 0, top_p 1, no seed, the 2,048-token cap, the ceiling, the
-five metrics, the hard disqualifiers and the evidence-combination rule.
+**Recomputed worst case at the time: 18,140,774.4 of 20,000,000 micro-USD**
+(headroom 1,859,225.6), manifest hash
+`2bb886c3fa28935a1c09b98357aaa4acc7db1f953f295ede069e6017263227df`. **All three
+of those values are superseded pre-live figures, not current authority** — see
+§3q. No live trial had run against them, and none has run since.
+
+The frozen decisions are untouched: 40 cells, 3 repetitions, 120 slots, the
+dated model snapshot, temperature 0, top_p 1, no seed, the 2,048-token cap, the
+ceiling, the five metrics, the hard disqualifiers and the evidence-combination
+rule.
 
 ### Readiness now has eighteen facts, and each one can fail
 
@@ -1910,6 +1920,98 @@ five metrics, the hard disqualifiers and the evidence-combination rule.
 No boolean stands in for several unexercised roles. The audit takes injectable
 sources so each fact is shown going UNRESOLVED when its evidence is removed — a
 fact only ever observed saying FROZEN is not a gate.
+
+## 3q. Canonical integer monetary authority (session 21)
+
+The live evaluation had grown a **second pricing implementation**:
+
+```
+(contextWindowTokens * inputRate + maxOutputTokens * outputRate) / 1e6
+```
+
+It disagreed with the pricing kernel in two ways, not one. It never rounded, so
+it produced **20,428.8** — a fractional monetary authority in a contract whose
+first paragraph states that every amount is an integer count of micro-USD and
+every division rounds UP. And it divided the *summed* product once, where the
+kernel rounds **each charge component separately**. Those two agree after a
+ceiling at these particular rates and do not agree in general; an economic bound
+must not rest on a coincidence of prices.
+
+The fractional value was **not informational**. It was hashed into the live
+manifest, committed to the durable ledger, and compared against the $20 ceiling.
+
+### One kernel, consumed rather than reimplemented
+
+`scripts/fixtures/evaluation-live-canonical-price.js` is now the only place the
+live evaluation learns what a request is worth, and it learns it by asking
+`computeMaximumLiability` — the same function governed economics already
+trusts. The live trial module answers one question only:
+
+> HOW MANY independently chargeable bounded requests can this trial authorize?
+
+It never answers what one request is worth. A caller may pin the per-request
+maximum, but the pin is **checked against the canonical value rather than
+trusted**, so a stale or fractional constant refuses instead of quietly becoming
+the authority.
+
+**Rounding owner:** `runtime/model-pricing-catalog.js` → `chargeForUnits`,
+ceiling division on integers, applied per charge component, reached through
+`computeMaximumLiability`. Nothing in the evaluation harness rounds.
+
+### The canonical authority
+
+| quantity | value (micro-USD) |
+|---|---|
+| raw input charge | 128,000 x 150,000 / 1e6 = 19,200 (exact) |
+| raw output charge | 2,048 x 600,000 / 1e6 = 1,228.8 -> rounded **up** to 1,229 |
+| fixed per-request charge | 0 |
+| **canonical per-request maximum** | **20,429** |
+
+| arm | attempts | trial maximum (micro-USD) |
+|---|---|---|
+| A | 3 | **61,287** |
+| A2a | 6 | **122,574** |
+| A2b | 6 | **122,574** |
+| B | 10 | **204,290** |
+| C | 10 | **204,290** |
+
+- **Matrix maximum: 18,140,952 micro-USD** (888 chargeable attempts x 20,429)
+- **Global ceiling: 20,000,000 micro-USD**
+- **Headroom: 1,859,048 micro-USD**
+- Live manifest: `config/structured-allocation-evaluation-live-v1.json`
+- **Canonical manifest hash:
+  `792d228f939d597891da25bd4d779d76999940c2040e7e846afaf81fc35530b6`**
+
+All three roles — ungoverned worker, structured planner, governed leaf worker —
+are priced at the same 20,429 against the same catalog identity, model and
+2,048-token cap, which is what makes "no role uses a different bound method" a
+checkable statement rather than an assurance.
+
+Every authoritative monetary field is a safe integer. The only fractional number
+remaining is named `totalUsdInformational`, and nothing reserves or compares
+against it.
+
+### Fail-closed at the durable owner
+
+The ledger refuses fractional, NaN, infinite, negative and unsafe amounts rather
+than repairing them. Rounding belongs at the canonical calculation: a ledger
+that silently rounds cannot tell a correct authority from a broken one. A ledger
+whose durable records *sum* to a fraction refuses to be read at all, because
+such a file can only have been written by something that bypassed the kernel,
+and handing its total to the ceiling comparison would launder the bypass into an
+authority.
+
+### What did not change
+
+40 unique cells, 3 repetitions, 120 slots, `gpt-4o-mini-2024-07-18`,
+`openai.responses.v1`, temperature 0, top_p 1, no provider seed,
+`max_output_tokens` 2,048, the 20,000,000 micro-USD ceiling, the five metrics,
+the existing hard disqualifiers, the existing fixture/live evidence-combination
+rule and the ordering. Fixture bodies remain byte-identical
+(`559a044d666a2e59410cf434b121443f92150a941bd81dcee57da4796d5eeb88`).
+
+Regenerating the manifest was legitimate because **no live trial has ever run**:
+this corrects a pre-evidence artifact, not a result.
 
 ## 13. Status
 
