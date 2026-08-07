@@ -166,6 +166,19 @@ function computeLiability(slots) {
   });
 }
 
+// The matrix is NEVER reduced to fit a budget. If the worst case exceeds the
+// frozen cap the run refuses, and the decision about what to do next belongs to
+// whoever set the cap.
+function assertWithinCap(totalMicroUsd, capMicroUsd) {
+  if (totalMicroUsd > capMicroUsd) {
+    throw new LiveManifestError(
+      `worst-case live liability ${totalMicroUsd} micro-USD exceeds the frozen ` +
+      `cap ${capMicroUsd}; the matrix is not reduced to fit a budget`,
+      { totalMicroUsd, capMicroUsd });
+  }
+  return true;
+}
+
 // ── The manifest ────────────────────────────────────────────────────────────
 
 function buildLiveManifest({ fixtureCorpusHash, fixtureReportHash, artifactRootRecipe }) {
@@ -216,13 +229,7 @@ function buildLiveManifest({ fixtureCorpusHash, fixtureReportHash, artifactRootR
   }
 
   const liability = computeLiability(slots);
-  if (liability.totalMicroUsd > APPROVED.maximumTotalLiveMicroUsd) {
-    // The matrix is NOT reduced to fit the budget. The run refuses.
-    throw new LiveManifestError(
-      `worst-case live liability ${liability.totalMicroUsd} micro-USD exceeds the ` +
-      `frozen cap ${APPROVED.maximumTotalLiveMicroUsd}; the matrix is not reduced ` +
-      'to fit a budget', { liability: liability.totalMicroUsd });
-  }
+  assertWithinCap(liability.totalMicroUsd, APPROVED.maximumTotalLiveMicroUsd);
 
   const manifest = {
     liveManifestVersion: LIVE_MANIFEST_VERSION,
@@ -307,6 +314,7 @@ function buildLiveManifest({ fixtureCorpusHash, fixtureReportHash, artifactRootR
 
 module.exports = {
   APPROVED,
+  assertWithinCap,
   LIVE_MANIFEST_VERSION,
   LiveManifestError,
   balancedArmOrder,

@@ -85,7 +85,10 @@ function worstCaseLiability({ trialsPerArm }) {
 // Each item names WHERE its value would live. An item is FROZEN only when the
 // authoritative source actually carries it — never because a sensible default
 // exists.
-function auditLiveReadiness() {
+// `liveManifest` is injectable so the audit's dependence on it can be proved:
+// with no manifest every derived decision must fall back to UNRESOLVED, which
+// is the state the repository was in before the decisions were approved.
+function auditLiveReadiness({ liveManifest } = {}) {
   const items = [];
   const record = (id, state, detail, source) =>
     items.push({ id, state, detail, source });
@@ -141,11 +144,13 @@ function auditLiveReadiness() {
   // manifest and is CLOSED only when the manifest actually carries the approved
   // value. A missing manifest leaves every one of them unresolved, which is the
   // state the repository was in before the decisions were approved.
-  let live = null;
-  try {
-    // eslint-disable-next-line global-require
-    live = require('../../config/structured-allocation-evaluation-live-v1.json');
-  } catch (_) { live = null; }
+  let live = liveManifest === undefined ? null : liveManifest;
+  if (liveManifest === undefined) {
+    try {
+      // eslint-disable-next-line global-require
+      live = require('../../config/structured-allocation-evaluation-live-v1.json');
+    } catch (_) { live = null; }
+  }
 
   const derived = (id, condition, detail, source) =>
     record(id, live && condition ? 'FROZEN' : 'UNRESOLVED', detail, source);

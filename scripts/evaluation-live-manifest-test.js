@@ -19,7 +19,8 @@ const live = require('../config/structured-allocation-evaluation-live-v1.json');
 const fixture = require('../config/structured-allocation-evaluation-scored-v1.json');
 const protocol = require('../config/structured-allocation-evaluation-v1.json');
 const {
-  APPROVED, LiveManifestError, buildLiveManifest, computeLiability, deriveLiveCells
+  APPROVED, LiveManifestError, assertWithinCap, buildLiveManifest, computeLiability,
+  deriveLiveCells
 } = require('./fixtures/evaluation-live-manifest');
 const { classifyLiveFailure, CLASSES } = require('./fixtures/evaluation-live-failure-classifier');
 const { combineEvidence } = require('./fixtures/evaluation-evidence-combination');
@@ -40,6 +41,23 @@ async function refusesAsync(fn) { try { await fn(); return false; } catch (_) { 
 
 async function main() {
   console.log('evaluation live manifest');
+
+  // ── THE COMMITTED MANIFEST REPRODUCES FROM SOURCE ────────────────────
+  //
+  // Rebuilding it here is what makes every assertion below a statement about
+  // the BUILDER as well as the file. Without this, a builder that hand-picked
+  // cells or dropped planner cost would be invisible: the committed JSON would
+  // still read correctly.
+  const rebuilt = buildLiveManifest({
+    fixtureCorpusHash: live.source.fixtureCorpusHash,
+    fixtureReportHash: live.source.fixtureReportHash,
+    artifactRootRecipe: live.artifactRootRecipe
+  });
+  ok(rebuilt.manifestHash === live.manifestHash,
+    'the committed live manifest reproduces byte-identically from source');
+  ok(rebuilt.economics.computedWorstCaseMicroUsd ===
+     live.economics.computedWorstCaseMicroUsd,
+  'including its recomputed worst-case liability');
 
   // ── 1-5. Membership is DERIVED from the immutable fixture manifest ────
   ok(live.uniqueCellCount === 40, '1 the live matrix has exactly 40 unique cells');
@@ -108,11 +126,14 @@ async function main() {
     'liability uses the frozen worst-case bound method');
   ok(live.contextWindowTokens === 128_000 && live.maximumOutputTokensPerRequest === 2_048,
     '14 context and output ceilings match the existing role authority');
-  // A matrix whose liability exceeded the cap REFUSES; it is not trimmed to fit.
-  ok(refuses(() => computeLiability(
-    Array.from({ length: 1_000_000 }, () => ({ armId: 'B', cellKey: 'x' })))
-    .totalMicroUsd > 0 ? (() => { throw new Error('force'); })() : null),
-  '12 an oversized matrix is refused rather than reduced to fit the budget');
+  // BOTH ROLES CONTRIBUTE. Dropping planner cost would understate the bound.
+  const structuredOnly = computeLiability([{ armId: 'B', cellKey: 'k' }]);
+  const directOnly = computeLiability([{ armId: 'A', cellKey: 'k' }]);
+  const perRequest = structuredOnly.perRequestMicroUsd;
+  ok(structuredOnly.totalMicroUsd === 10 * perRequest,
+    '10-11 a structured trial counts planner 1 + worker 9 = 10 requests');
+  ok(directOnly.totalMicroUsd === 3 * perRequest,
+    '11 a direct trial counts its 3 worker requests');
 
   // ── 15-21. Failure classification ─────────────────────────────────────
   const cases = [
@@ -248,6 +269,22 @@ async function main() {
   }
 
   // ── Readiness ─────────────────────────────────────────────────────────
+  // 12. A liability above the cap REFUSES, proved by calling the guard.
+  ok(assertWithinCap(19_999_999, 20_000_000) === true,
+    '12 a liability within the cap is permitted');
+  ok(refuses(() => assertWithinCap(20_000_001, 20_000_000)),
+    '12 a liability one micro-USD above the cap REFUSES');
+  ok(refuses(() => assertWithinCap(
+    live.economics.computedWorstCaseMicroUsd, live.economics.computedWorstCaseMicroUsd - 1)),
+  '12 and the matrix is never reduced to fit — the run refuses instead');
+
+  // The audit DEPENDS on the manifest: with none, every derived decision falls
+  // back to unresolved rather than reporting frozen from a literal.
+  const withoutManifest = auditLiveReadiness({ liveManifest: null });
+  ok(withoutManifest.verdict === 'TRANCHE 6 LIVE-MODEL EVALUATION BLOCKED' &&
+     withoutManifest.unresolved.length >= 6,
+  'without the live manifest the audit reports BLOCKED, not frozen literals');
+
   const audit = auditLiveReadiness();
   ok(audit.unresolved.length === 0 &&
      audit.verdict === 'TRANCHE 6 LIVE-MODEL EVALUATION READY',
