@@ -400,6 +400,8 @@ module.exports = {
 if (require.main === module) {
   const options = parseArguments(process.argv.slice(2));
   if (options.verbose) process.env.SCORED_RUNNER_VERBOSE = '1';
+  // A branch rather than an early return: the repository's syntax gate parses
+  // every file as a script, where a top-level `return` is illegal.
   if (options['dry-run']) {
     preflightLiveRun({
       manifestPath: options.manifest, outputRoot: options['output-root']
@@ -410,16 +412,16 @@ if (require.main === module) {
       console.log(`stopped before: ${result.stoppedBefore}`);
       console.log(`run header: ${result.header.runHeaderHash}`);
     }).catch(error => { console.error(error); process.exit(1); });
-    return;
+  } else {
+    executeScoredRun({
+      manifestPath: options.manifest,
+      outputRoot: options['output-root'],
+      resume: Boolean(options.resume),
+      limit: options.limit ? Number(options.limit) : null
+    }).then(result => {
+      console.log(`scored run complete: ${result.executed} executed, ` +
+        `${result.reused} reused, ${result.planned} planned`);
+      console.log(`run header: ${result.header.runHeaderHash}`);
+    }).catch(error => { console.error(error); process.exit(1); });
   }
-  executeScoredRun({
-    manifestPath: options.manifest,
-    outputRoot: options['output-root'],
-    resume: Boolean(options.resume),
-    limit: options.limit ? Number(options.limit) : null
-  }).then(result => {
-    console.log(`scored run complete: ${result.executed} executed, ` +
-      `${result.reused} reused, ${result.planned} planned`);
-    console.log(`run header: ${result.header.runHeaderHash}`);
-  }).catch(error => { console.error(error); process.exit(1); });
 }
