@@ -1,3 +1,71 @@
+## LIVE RUN HALTED BEFORE TRIAL 1 — NO DISPATCH PATH, SAMPLING NOT WIRED (2026-08-06)
+
+**Status: OPEN. Blocks the authorized live matrix. No money was spent.**
+
+Execution of the frozen 120-trial live matrix was explicitly authorized up to
+$20.00 against commit `78e4158d…` and manifest
+`9cbb38e5d9e6f665b8025efb08fe135e25ee86810e4953e704e9451dd621c43a`. Both were
+verified correct at the opening gate: hash matches, 40 cells / 3 repetitions /
+120 slots, worst case 15 934 464 <= 20 000 000 micro-USD, all focused gates
+green, credential present.
+
+The run was **halted before trial 1** on two source-proven contradictions.
+
+### 1. No live dispatch path exists
+
+- `executeScoredRun` **refuses** any manifest whose mode is `live`;
+- `preflightLiveRun` stops at `provider_dispatch` **by design** — it is a dry
+  run and contains no transport;
+- `runTrial` begins `assertMode('fixture')` and always loads the hermetic
+  preload, which guarantees zero network;
+- the runner's own CLI refuses `--mode live` outright.
+
+Nothing in the repository can issue a scored live provider request.
+
+### 2. The frozen sampling reaches no production request
+
+`buildOpenAiResponsesBody` accepts a `sampling` option, but **no caller passes
+it** — not the planner (`structured-planner-governance.js:150`), not the
+governed leaf (`server.js:12184`), not the ungoverned worker
+(`server.js:17755`). A planner body today serializes exactly:
+
+```
+model, input, text, max_output_tokens, truncation
+```
+
+with `temperature` and `top_p` absent, so every live request would inherit
+provider defaults. The authorization names `temperature: 0` and `top_p: 1` as
+frozen parameters, so a run today would violate its own terms while appearing
+to succeed.
+
+### Why this was not caught
+
+The previous session certified **TRANCHE 6 LIVE-MODEL EVALUATION READY**. That
+verdict verified the manifest, classifier, evidence contract, economic cap and a
+dry run that "stopped before dispatch" — and never verified that a dispatch path
+existed beyond that stop, nor that sampling reached a real request. The
+readiness audit had no item for either. **The READY verdict was overstated**, and
+the audit is the thing that must change: readiness may not be claimed again
+without an item that fails when no live transport exists.
+
+### What must be built before the authorization can be honoured
+
+1. a live trial path that spawns the server **without** the hermetic preload and
+   with real credentials, preserving governed role authority, economics,
+   quiescence, oracle, zero-drift and immutable artifacts;
+2. sampling threaded into all three request builders so `temperature 0` /
+   `top_p 1` appear in the canonical body of every planner and worker request;
+3. per-dispatch global budget enforcement against the $20 ceiling;
+4. readiness items that fail when either 1 or 2 is missing;
+5. at minimum one **single-trial** live validation before committing the full
+   120, so an executor defect costs one trial rather than an aborted corpus.
+
+Building an unproven executor and immediately spending the full authorization
+would risk exactly the outcome the freeze rule exists to prevent: a defect found
+after trial 1 aborts the corpus, and the money is gone.
+
+---
+
 ## LIVE-MODEL EVALUATION PHASE IS NOT FROZEN (2026-08-06)
 
 **Status: RESOLVED 2026-08-06.** All eight decisions were approved before any

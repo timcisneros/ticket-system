@@ -1701,6 +1701,35 @@ artifacts or logs.
 **TRANCHE 6 LIVE-MODEL EVALUATION READY.** Execution still requires explicit
 authorization; none was taken in this session.
 
+## 3n. Live run halted before trial 1 (session 18)
+
+The authorized 120-trial live matrix was **not executed**. No provider call was
+made and no money was spent.
+
+The opening gate passed completely — manifest hash
+`9cbb38e5…` matches the authorization, 40 cells / 3 repetitions / 120 slots,
+worst case $15.93 within the $20.00 ceiling, every focused gate green, credential
+present. The run halted on two contradictions proved from source:
+
+1. **no live dispatch path exists** — `executeScoredRun` refuses live manifests,
+   `preflightLiveRun` stops at `provider_dispatch` by design, `runTrial` begins
+   `assertMode('fixture')` and always loads the hermetic preload, and the CLI
+   refuses `--mode live`;
+2. **the frozen sampling reaches no production request** — no caller passes the
+   `sampling` option, so a planner body serializes `model, input, text,
+   max_output_tokens, truncation` with `temperature` and `top_p` absent. A live
+   run today would inherit provider defaults and violate the authorization's own
+   frozen parameters while appearing to succeed.
+
+The previous session's **READY** verdict was overstated: it verified the
+manifest, contracts, cap and a dry run that stopped before dispatch, but never
+that a dispatch path existed beyond that stop or that sampling reached a real
+request. The readiness audit had no item for either, which is the defect to fix
+first.
+
+Full record and the five prerequisites for honouring the authorization:
+`docs/ARCHITECTURAL_DECISIONS_PENDING.md`.
+
 ## 13. Status
 
 **Tranche 6: IN PROGRESS — harness built and executing; evaluation NOT run.**
