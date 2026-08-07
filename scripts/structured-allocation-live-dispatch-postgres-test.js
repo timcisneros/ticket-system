@@ -1,19 +1,26 @@
 #!/usr/bin/env node
 'use strict';
 
-// Tranche 6 — the LIVE dispatch acceptance proof.
+// Tranche 6 — the LIVE dispatch acceptance proof, for ALL THREE PROVIDER ROLES.
 //
-// THIS IS THE PROOF THAT WAS MISSING. The previous readiness gate certified
-// LIVE READY on a dry run that "stopped before dispatch" — while no dispatch
-// path existed beyond that stop, and the frozen sampling reached no request.
-// A verdict like that cannot be repaired by documentation; it needs a test that
-// drives the real path and inspects the bytes that would have left the machine.
+// THIS IS THE PROOF THAT WAS MISSING, TWICE. The first readiness gate certified
+// LIVE READY on a dry run that "stopped before dispatch" while no dispatch path
+// existed beyond that stop. The second captured two requests and called it
+// three roles — the planner received a worker-shaped answer, emitted no valid
+// proposal, and the governed leaf executor was never reached at all.
 //
-// So this suite spawns a real server in LIVE mode — no hermetic response
-// fixture, no staged answers — and replaces ONLY the final network hop. Every
-// layer above it is production: role routing, economic admission, adapter
-// selection and request-body construction. The recorded bodies are what
-// production would have put on the wire.
+// Two transports are not three role paths. This suite therefore proves each
+// role by an ACTUAL captured outbound request instance:
+//
+//   1. ungoverned worker      — global fetch
+//   2. structured planner     — https.request
+//   3. governed leaf worker   — https.request, reached only because the planner
+//                               received a valid proposal and a plan was admitted
+//
+// It spawns real servers in LIVE mode — no hermetic response fixture, no staged
+// answers — and replaces ONLY the final network hop. Every layer above it is
+// production: role routing, economic admission, adapter selection and request
+// body construction. The recorded bodies are what production would have sent.
 //
 // It makes ZERO external calls.
 
@@ -27,17 +34,29 @@ const { runTrial } = require('./structured-allocation-evaluation-runner');
 const {
   LiveBudgetError, reconstructCommittedLiability
 } = require('./fixtures/evaluation-live-budget-ledger');
+const { trialWorstCaseMicroUsd } = require('./fixtures/evaluation-live-trial-liability');
+const { ROLE_ECONOMICS } = require('./fixtures/governed-role-policy-container');
 const liveManifest = require('../config/structured-allocation-evaluation-live-v1.json');
 
-const SAMPLING = Object.freeze({
+// The frozen request controls, exactly as the live runner would supply them.
+const CONTROLS = Object.freeze({
   temperature: liveManifest.sampling.temperature,
-  topP: liveManifest.sampling.topP
+  topP: liveManifest.sampling.topP,
+  maxOutputTokens: liveManifest.maximumOutputTokensPerRequest
 });
 
 function capturedRequests(capturePath) {
   if (!fs.existsSync(capturePath)) return [];
   return fs.readFileSync(capturePath, 'utf8').split('\n').filter(Boolean)
     .map(line => JSON.parse(line));
+}
+
+// A captured request's ROLE is read from the request itself, never from the arm
+// that produced it: the planner contract's own system prompt identifies a
+// planning request, and the transport separates governed from ungoverned.
+function roleOf(entry) {
+  if (entry.transport === 'ungoverned') return 'ungoverned_worker';
+  return entry.role === 'planner' ? 'structured_planner' : 'governed_leaf_worker';
 }
 
 async function main() {
@@ -48,22 +67,37 @@ async function main() {
     async ({ store, workspaceRoot, startServer }) => {
       const assertThat = createAsserter();
 
+      const budgetRoot = path.join(root, 'budget');
+      fs.mkdirSync(budgetRoot, { recursive: true });
+      // THE SAME AUTHORITY THE LIVE RUN WOULD CARRY, derived not copied.
+      const liveBudget = {
+        runRoot: budgetRoot,
+        ceilingMicroUsd: liveManifest.economics.maximumTotalLiveMicroUsd,
+        perRequestMicroUsd: liveManifest.economics.liability.perRequestMicroUsd,
+        runtimeMaxModelRequestsPerRun:
+          liveManifest.economics.liability.runtimeMaxModelRequestsPerRun,
+        governedLeafMaximumProviderRequests:
+          ROLE_ECONOMICS.structured_leaf_executor.maximumProviderRequests,
+        governedPlannerMaximumProviderRequests:
+          ROLE_ECONOMICS.structured_planner.maximumProviderRequests
+      };
+      const boundFor = armId => trialWorstCaseMicroUsd({
+        armId,
+        perRequestMicroUsd: liveBudget.perRequestMicroUsd,
+        runtimeMaxModelRequestsPerRun: liveBudget.runtimeMaxModelRequestsPerRun,
+        governedLeafMaximumProviderRequests:
+          liveBudget.governedLeafMaximumProviderRequests,
+        governedPlannerMaximumProviderRequests:
+          liveBudget.governedPlannerMaximumProviderRequests,
+        autoRetryEnabled: false, maxAttempts: null
+      });
+
       // One direct arm and one structured arm: between them they exercise both
       // production transports and all three request roles.
       const cells = [
         { armId: 'A', scenarioId: 'family-1-simple', label: 'direct/legacy (fetch)' },
         { armId: 'B', scenarioId: 'family-1-simple', label: 'structured (https.request)' }
       ];
-
-      // THE GLOBAL CEILING, as the real live run would carry it.
-      const budgetRoot = path.join(root, 'budget');
-      fs.mkdirSync(budgetRoot, { recursive: true });
-      const perTrialMicroUsd = Math.round(liveManifest.economics.liability.perRequestMicroUsd);
-      const liveBudget = {
-        runRoot: budgetRoot,
-        ceilingMicroUsd: liveManifest.economics.maximumTotalLiveMicroUsd,
-        maximumTrialLiabilityMicroUsd: perTrialMicroUsd
-      };
 
       const allCaptured = [];
       for (const cell of cells) {
@@ -78,16 +112,15 @@ async function main() {
             namespaceRoot: path.join(root, 'ns'),
             // LIVE MODE, with the final hop captured.
             mode: 'live',
-            liveSampling: SAMPLING,
+            liveRequestControls: CONTROLS,
             liveTransportCapture: capturePath,
             liveBudget
           });
         } catch (error) {
           // A product outcome is irrelevant here: this suite is about the bytes
           // that reached the transport, not about whether the Ticket succeeded.
-          // A HARNESS failure is different and must be visible.
           if (process.env.LIVE_DISPATCH_DEBUG === '1') {
-            console.log(`  [debug ${cell.armId}] ${String(error.message).slice(0, 300)}`);
+            console.log(`  [debug ${cell.armId}] ${String(error.message).slice(0, 400)}`);
           }
         }
         const captured = capturedRequests(capturePath);
@@ -97,20 +130,87 @@ async function main() {
           `(${captured.length} outbound request(s))`);
       }
 
-      // ── THE GLOBAL CEILING WAS ENFORCED BEFORE THE BYTES LEFT ───────────
+      // ── THREE ROLES, EACH WITH ITS OWN CAPTURED REQUEST ──────────────────
+      const byRole = {
+        ungoverned_worker: allCaptured.filter(e => roleOf(e) === 'ungoverned_worker'),
+        structured_planner: allCaptured.filter(e => roleOf(e) === 'structured_planner'),
+        governed_leaf_worker: allCaptured.filter(e => roleOf(e) === 'governed_leaf_worker')
+      };
+      for (const [role, entries] of Object.entries(byRole)) {
+        assertThat(entries.length >= 1,
+          `${role}: at least one ACTUAL outbound request instance was captured ` +
+          `(${entries.length})`);
+      }
+      // The leaf request exists only because the planner's answer was a valid
+      // proposal that produced an admitted plan and a real leaf Run. That chain
+      // is what makes this a role proof rather than a transport proof.
+      assertThat(byRole.governed_leaf_worker.length >= 1 &&
+        byRole.structured_planner.length >= 1,
+      'the governed leaf request followed a real admitted plan, not a forced path');
+
+      // ── THE OUTBOUND BYTES, PER ROLE ────────────────────────────────────
+      for (const entry of allCaptured) {
+        const role = roleOf(entry);
+        const body = JSON.parse(entry.body);
+        assertThat(body.model === liveManifest.model,
+          `${role}: outbound model is the exact dated snapshot (${body.model})`);
+        assertThat(body.temperature === CONTROLS.temperature,
+          `${role}: outbound temperature is ${CONTROLS.temperature}`);
+        assertThat(body.top_p === CONTROLS.topP,
+          `${role}: outbound top_p is ${CONTROLS.topP}`);
+        // THE OUTPUT CAP ON EVERY ROLE. The ungoverned path used to send none,
+        // so the liability model priced a bound the wire did not carry.
+        assertThat(body.max_output_tokens === CONTROLS.maxOutputTokens,
+          `${role}: outbound max_output_tokens is ${CONTROLS.maxOutputTokens}`);
+        assertThat(body.truncation === 'disabled',
+          `${role}: truncation stays disabled, so the context ceiling still bounds cost`);
+        assertThat(!('seed' in body),
+          `${role}: no provider seed appears in the outbound body`);
+        assertThat(entry.hostname === 'api.openai.com',
+          `${role}: the request was addressed to the real provider`);
+        assertThat(entry.hasAuthorization === true,
+          `${role}: a credential header was formed without its value being recorded`);
+      }
+      // The adapter identity is the manifest's, on both transports.
+      assertThat(liveManifest.adapterId === 'openai.responses.v1' &&
+        liveManifest.provider === 'openai',
+      'the frozen adapter and provider identity are the ones the manifest names');
+      assertThat(allCaptured.every(entry =>
+        String(entry.path || entry.url).includes('/v1/responses')),
+      'every captured request used the Responses endpoint of that adapter');
+
+      // ── THE RESPONSE TRAVERSED THE PRODUCTION PATH ──────────────────────
       //
-      // Liability is committed BEFORE the process that could dispatch is
-      // spawned, so a request can never precede its own authorization.
+      // A captured answer that was parsed and persisted normally is what proves
+      // the capture replaced the transport and nothing above it. The leaf Run
+      // only exists because the planner's answer was parsed into a real plan.
+      const runs = await store.pool.query(
+        `SELECT COUNT(*)::int AS n FROM ${store.table('runs')} ` +
+        "WHERE body ? 'leafRunBinding'");
+      assertThat(runs.rows[0].n >= 1,
+        'the captured planner answer was parsed and persisted as real leaf Runs ' +
+        `(${runs.rows[0].n})`);
+
+      // ── THE GLOBAL CEILING WAS ENFORCED BEFORE THE BYTES LEFT ───────────
+      const expected = boundFor('A').trialWorstCaseMicroUsd +
+        boundFor('B').trialWorstCaseMicroUsd;
       const committed = reconstructCommittedLiability(budgetRoot);
-      assertThat(committed.committedMicroUsd === perTrialMicroUsd * cells.length,
-        'each live trial committed its worst-case liability before dispatching ' +
+      assertThat(committed.committedMicroUsd === expected,
+        'each live trial committed its WHOLE-TRIAL worst case before dispatching ' +
         `(${committed.committedMicroUsd} micro-USD)`);
-      // RESTART RECONSTRUCTION: a second reader, with no shared memory, derives
-      // the same committed total from the durable ledger alone.
+      assertThat(boundFor('B').totalProviderAttempts >
+        boundFor('A').totalProviderAttempts,
+      'a structured trial reserves for more authorized attempts than a direct one');
+      // The reservation must cover every request the trial actually made.
+      for (const cell of cells) {
+        const made = capturedRequests(path.join(root, `capture-${cell.armId}.jsonl`)).length;
+        assertThat(made <= boundFor(cell.armId).totalProviderAttempts,
+          `${cell.armId}: observed ${made} request(s) within the reserved bound of ` +
+          `${boundFor(cell.armId).totalProviderAttempts}`);
+      }
       delete require.cache[require.resolve('./fixtures/evaluation-live-budget-ledger')];
-      const afterRestart =
-        require('./fixtures/evaluation-live-budget-ledger')
-          .reconstructCommittedLiability(budgetRoot);
+      const afterRestart = require('./fixtures/evaluation-live-budget-ledger')
+        .reconstructCommittedLiability(budgetRoot);
       assertThat(afterRestart.committedMicroUsd === committed.committedMicroUsd,
         'a restarted executor reconstructs that liability from the ledger alone');
 
@@ -127,12 +227,12 @@ async function main() {
           outputPath: path.join(root, 'fixture', 'exhausted.json'),
           commit: 'live-dispatch-proof', smokeRoot: root,
           namespaceRoot: path.join(root, 'ns-exhausted'),
-          mode: 'live', liveSampling: SAMPLING,
+          mode: 'live', liveRequestControls: CONTROLS,
           liveTransportCapture: exhaustedCapture,
           liveBudget: {
+            ...liveBudget,
             runRoot: exhaustedRoot,
-            ceilingMicroUsd: perTrialMicroUsd - 1,
-            maximumTrialLiabilityMicroUsd: perTrialMicroUsd
+            ceilingMicroUsd: boundFor('A').trialWorstCaseMicroUsd - 1
           }
         });
       } catch (error) { refusal = error; }
@@ -154,7 +254,7 @@ async function main() {
           outputPath: path.join(root, 'fixture', 'unbounded.json'),
           commit: 'live-dispatch-proof', smokeRoot: root,
           namespaceRoot: path.join(root, 'ns-unbounded'),
-          mode: 'live', liveSampling: SAMPLING,
+          mode: 'live', liveRequestControls: CONTROLS,
           liveTransportCapture: path.join(root, 'capture-unbounded.jsonl')
         });
       } catch (error) { unbounded = error; }
@@ -162,47 +262,7 @@ async function main() {
         /unbounded ceiling/.test(String(unbounded.message)),
       'a live trial with no global budget authority is refused, not defaulted');
 
-      // ── THE OUTBOUND BYTES ──────────────────────────────────────────────
-      const governed = allCaptured.filter(entry => entry.transport === 'governed');
-      const ungoverned = allCaptured.filter(entry => entry.transport === 'ungoverned');
-      assertThat(governed.length > 0,
-        'the governed transport (https.request) carried structured requests');
-      assertThat(ungoverned.length > 0,
-        'the ungoverned transport (fetch) carried direct/legacy requests');
-
-      for (const entry of allCaptured) {
-        const body = JSON.parse(entry.body);
-        // THE FROZEN MANIFEST VALUES, on the wire.
-        assertThat(body.model === liveManifest.model,
-          `${entry.transport}: outbound model is the exact dated snapshot ` +
-          `(${body.model})`);
-        assertThat(body.temperature === SAMPLING.temperature,
-          `${entry.transport}: outbound temperature is ${SAMPLING.temperature}`);
-        assertThat(body.top_p === SAMPLING.topP,
-          `${entry.transport}: outbound top_p is ${SAMPLING.topP}`);
-        assertThat(!('seed' in body),
-          `${entry.transport}: no provider seed appears in the outbound body`);
-        assertThat(entry.hostname === 'api.openai.com',
-          `${entry.transport}: the request was addressed to the real provider`);
-      }
-      // The governed roles additionally carry the frozen output cap.
-      for (const entry of governed) {
-        const body = JSON.parse(entry.body);
-        assertThat(body.max_output_tokens === liveManifest.maximumOutputTokensPerRequest,
-          `governed: outbound max_output_tokens is ` +
-          `${liveManifest.maximumOutputTokensPerRequest}`);
-        assertThat(body.truncation === 'disabled',
-          'governed: truncation stays disabled, so the context ceiling still bounds cost');
-        assertThat(entry.hasAuthorization === true,
-          'governed: a credential header was formed without its value being recorded');
-      }
-
       // ── NO FIXTURE RESPONSE TABLE WAS CONSULTED ─────────────────────────
-      //
-      // The whole point: these bytes came from production, not from a staged
-      // answer selected by matching request text.
-      const namespaces = fs.existsSync(path.join(root, 'ns'))
-        ? fs.readdirSync(path.join(root, 'ns'), { withFileTypes: true }) : [];
       let stagedTables = 0;
       const walk = dir => {
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -211,24 +271,10 @@ async function main() {
           else if (entry.name === 'governed-responses.json') stagedTables += 1;
         }
       };
-      if (namespaces.length > 0) walk(path.join(root, 'ns'));
-      assertThat(stagedTables === 0,
-        'no governed response table was staged for the live run');
-
-      // ── THE REQUESTS ARE DURABLY RECORDED, NOT JUST COUNTED ─────────────
-      for (const entry of allCaptured) {
-        assertThat(typeof entry.trialId === 'string' && entry.trialId.length > 0,
-          `${entry.transport}: the outbound request is attributed to a named trial`);
-        assertThat(typeof entry.body === 'string' && entry.body.length > 0,
-          `${entry.transport}: the exact outbound body is durably recorded`);
-      }
+      if (fs.existsSync(path.join(root, 'ns'))) walk(path.join(root, 'ns'));
+      assertThat(stagedTables === 0, 'fixture response staging consumed = 0');
 
       // ── NOTHING MAY ESCAPE BY ANOTHER ROUTE ─────────────────────────────
-      //
-      // The capture replaces two boundaries. A request that left through a
-      // third would spend real money while this suite reported zero calls, so
-      // the guard is proved directly rather than assumed from a run that
-      // happens not to exercise it.
       const preloadPath = path.join(__dirname, 'fixtures',
         'live-transport-capture-preload.js');
       const attempt = (script, capturePath = '') => {
@@ -246,17 +292,12 @@ async function main() {
         ".on('error', () => {}).end()")),
       'while a local http.request still works — the harness itself needs it');
 
-      // LOCAL TRAFFIC IS NOT A PROVIDER CALL. If the capture intercepted it, the
-      // harness would report outbound requests that never existed — and the
-      // spawned server's own HTTP would stop working.
       const localCapture = path.join(root, 'capture-local.jsonl');
       attempt("require('node:https').request({ hostname: '127.0.0.1', port: 1, " +
         "path: '/' }).on('error', () => {}).end()", localCapture);
       assertThat(capturedRequests(localCapture).length === 0,
         'local https traffic is passed through untouched, never captured');
 
-      // AND THE CREDENTIAL FLAG IS OBSERVED, NOT ASSERTED. A constant `true`
-      // would make the governed assertion above vacuous.
       const bareCapture = path.join(root, 'capture-bare.jsonl');
       attempt("require('node:https').request({ hostname: 'api.openai.com', " +
         "path: '/v1/responses', method: 'POST' }, () => {}).end('{}')", bareCapture);
@@ -265,13 +306,18 @@ async function main() {
         'a request carrying no Authorization header records hasAuthorization false');
 
       // ── NO CREDENTIAL MATERIAL ANYWHERE ─────────────────────────────────
-      const serialized = JSON.stringify(allCaptured);
-      assertThat(!/sk-[A-Za-z0-9]{8}/.test(serialized),
+      assertThat(!/sk-[A-Za-z0-9]{8}/.test(JSON.stringify(allCaptured)),
         'no credential value appears in any captured request record');
 
       console.log(`\n  (${assertThat.count()} live dispatch assertions)`);
-      console.log(`  outbound requests captured: ${allCaptured.length} ` +
-        `(governed ${governed.length}, ungoverned ${ungoverned.length})`);
+      console.log('  captured outbound requests by role:');
+      for (const [role, entries] of Object.entries(byRole)) {
+        console.log(`    ${role.padEnd(22)} ${entries.length}`);
+      }
+      console.log('  by transport:' +
+        `  fetch ${allCaptured.filter(e => e.transport === 'ungoverned').length}` +
+        `, https.request ${allCaptured.filter(e => e.transport === 'governed').length}`);
+      console.log('  fixture response staging consumed: 0');
       console.log('  EXTERNAL PROVIDER CALLS MADE: 0');
     }, { timeoutMs: 900_000 });
 

@@ -14,7 +14,22 @@
 const crypto = require('node:crypto');
 const fixtureManifest = require('../../config/structured-allocation-evaluation-scored-v1.json');
 const protocol = require('../../config/structured-allocation-evaluation-v1.json');
-const { PRICING, MAX_REQUESTS_PER_TRIAL } = require('./evaluation-live-readiness');
+const { PRICING } = require('./evaluation-live-readiness');
+const { trialWorstCaseMicroUsd } = require('./evaluation-live-trial-liability');
+const { ROLE_ECONOMICS } = require('./governed-role-policy-container');
+
+// THE PINNED RUNTIME REQUEST CEILING.
+//
+// An ungoverned Run has no economic authority, so `maxModelRequestsPerRun` is
+// its ONLY bound on provider attempts — and it is operator-configurable, which
+// makes it unprovable unless the live run pins it. It is pinned here to the
+// same per-Run request ceiling the governed leaf executor already carries, so
+// every arm's Run is bounded identically, for the same reason the 2,048-token
+// output cap is common across arms. The live runner supplies it to the spawned
+// server through the existing production configuration knob, and the executor
+// refuses if the server's effective limit is larger than this.
+const RUNTIME_MAX_MODEL_REQUESTS_PER_RUN =
+  ROLE_ECONOMICS.structured_leaf_executor.maximumProviderRequests;
 
 const LIVE_MANIFEST_VERSION = 1;
 
@@ -131,6 +146,10 @@ function orderingBalanceReport(permutations, arms) {
 }
 
 // ── 4. Worst-case liability, recomputed from THIS manifest ──────────────────
+//
+// DERIVED, NOT DECLARED. Each arm's bound comes from its Run topology and the
+// two enforced request ceilings, so a changed topology or a raised ceiling
+// changes the money — which is the only way the reservation can stay true.
 function computeLiability(slots) {
   const perRequest = (PRICING.contextWindowTokens * PRICING.inputMicroUsdPerMillionTokens +
     PRICING.maximumOutputTokensPerRequest * PRICING.outputMicroUsdPerMillionTokens) / 1e6;
@@ -138,18 +157,31 @@ function computeLiability(slots) {
   const byCell = {};
   let totalMicroUsd = 0;
   for (const slot of slots) {
-    const caps = MAX_REQUESTS_PER_TRIAL[slot.armId];
-    if (!caps) {
-      throw new LiveManifestError(`no request ceiling is frozen for arm ${slot.armId}`);
-    }
-    // BOTH ROLES. Omitting either would understate the liability the cap has to
-    // cover, which is the one direction an economic bound must never err in.
-    const requests = caps.planner + caps.worker;
-    const perTrial = requests * perRequest;
+    const bound = trialWorstCaseMicroUsd({
+      armId: slot.armId,
+      perRequestMicroUsd: perRequest,
+      runtimeMaxModelRequestsPerRun: RUNTIME_MAX_MODEL_REQUESTS_PER_RUN,
+      governedLeafMaximumProviderRequests:
+        ROLE_ECONOMICS.structured_leaf_executor.maximumProviderRequests,
+      governedPlannerMaximumProviderRequests:
+        ROLE_ECONOMICS.structured_planner.maximumProviderRequests,
+      // Auto-retry is a strict opt-in the live trial construction never sets;
+      // `assertLiveTrialRetryDisabled` proves it per trial before reservation.
+      autoRetryEnabled: false,
+      maxAttempts: null
+    });
+    const perTrial = bound.trialWorstCaseMicroUsd;
     byArm[slot.armId] = byArm[slot.armId] || {
-      trials: 0, plannerRequestsPerTrial: caps.planner,
-      workerRequestsPerTrial: caps.worker, basis: caps.basis,
-      perTrialMicroUsd: perTrial, totalMicroUsd: 0
+      trials: 0,
+      plannerRequestsPerTrial: bound.plannerRequestMaximum,
+      workerRequestsPerTrial: bound.maximumWorkerRuns * bound.workerRequestsPerRun,
+      maximumWorkerRuns: bound.maximumWorkerRuns,
+      workerRequestsPerRun: bound.workerRequestsPerRun,
+      attemptsPerRun: bound.attemptsPerRun,
+      totalProviderAttempts: bound.totalProviderAttempts,
+      basis: bound.basis,
+      perTrialMicroUsd: perTrial,
+      totalMicroUsd: 0
     };
     byArm[slot.armId].trials += 1;
     byArm[slot.armId].totalMicroUsd += perTrial;
@@ -159,6 +191,7 @@ function computeLiability(slots) {
   return Object.freeze({
     boundMethod: PRICING.boundMethod,
     perRequestMicroUsd: perRequest,
+    runtimeMaxModelRequestsPerRun: RUNTIME_MAX_MODEL_REQUESTS_PER_RUN,
     byArm: Object.freeze(byArm),
     byCellMicroUsd: Object.freeze(byCell),
     totalMicroUsd,

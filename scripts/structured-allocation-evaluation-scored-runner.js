@@ -35,6 +35,8 @@ const { runTrial } = require('./structured-allocation-evaluation-runner');
 const {
   assertDispatchWithinGlobalCeiling, releaseUndispatchedReservation
 } = require('./fixtures/evaluation-live-budget-ledger');
+const { trialWorstCaseMicroUsd } = require('./fixtures/evaluation-live-trial-liability');
+const { ROLE_ECONOMICS } = require('./fixtures/governed-role-policy-container');
 const { withHarness } = require('./postgres-test-harness');
 
 const SCORED_RUNNER_VERSION = 1;
@@ -227,11 +229,25 @@ async function preflightLiveRun({ manifestPath, outputRoot }) {
   // request envelope — everything except the final hop.
   const firstSlot = manifest.slots[0];
   const ledgerRoot = outputRoot;
-  const perRequestMicroUsd = manifest.economics.liability.perRequestMicroUsd;
+  // THE WHOLE TRIAL, derived from the arm's Run topology and the two enforced
+  // per-Run request ceilings. Reserving one request's worth — as this did — let
+  // a trial that may issue ten requests pass a gate sized for one.
+  const trialBound = trialWorstCaseMicroUsd({
+    armId: firstSlot.armId,
+    perRequestMicroUsd: manifest.economics.liability.perRequestMicroUsd,
+    runtimeMaxModelRequestsPerRun:
+      manifest.economics.liability.runtimeMaxModelRequestsPerRun,
+    governedLeafMaximumProviderRequests:
+      ROLE_ECONOMICS.structured_leaf_executor.maximumProviderRequests,
+    governedPlannerMaximumProviderRequests:
+      ROLE_ECONOMICS.structured_planner.maximumProviderRequests,
+    autoRetryEnabled: false,
+    maxAttempts: null
+  });
   const reservation = assertDispatchWithinGlobalCeiling({
     runRoot: ledgerRoot,
     ceilingMicroUsd: manifest.economics.maximumTotalLiveMicroUsd,
-    maximumLiabilityMicroUsd: perRequestMicroUsd,
+    maximumLiabilityMicroUsd: trialBound.trialWorstCaseMicroUsd,
     trialId: trialIdFor(firstSlot),
     role: firstSlot.armId === 'B' || firstSlot.armId === 'C'
       ? 'structured_planner' : 'ungoverned_worker',
@@ -268,6 +284,8 @@ async function preflightLiveRun({ manifestPath, outputRoot }) {
     assignedTrials: manifest.slots.length,
     globalCeilingProved: true,
     reservationProved: reservation.reservationId,
+    firstTrialWorstCaseMicroUsd: trialBound.trialWorstCaseMicroUsd,
+    firstTrialProviderAttempts: trialBound.totalProviderAttempts,
     remainingEconomicAuthorityMicroUsd: manifest.economics.maximumTotalLiveMicroUsd,
     worstCaseMicroUsd: manifest.economics.computedWorstCaseMicroUsd,
     firstTrialEnvelope: Object.freeze(envelope),

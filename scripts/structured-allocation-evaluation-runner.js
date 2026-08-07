@@ -44,6 +44,7 @@ const {
 const { assertAllWorkerResponsesConsumed } = require('./fixtures/evaluation-fetch-fixture');
 const { assertDispatchWithinGlobalCeiling } =
   require('./fixtures/evaluation-live-budget-ledger');
+const { trialWorstCaseMicroUsd } = require('./fixtures/evaluation-live-trial-liability');
 const {
   OBSERVATION_SINK_VERSION, readObservations
 } = require('./fixtures/evaluation-observation-sink');
@@ -562,15 +563,15 @@ async function runTrial({
   // The difference between fixture and live is the PROVIDER ENVIRONMENT, not
   // the product semantics: the same trial construction, the same server, the
   // same scheduler, workers, quiescence, oracle and artifact contract. Live
-  // mode removes the hermetic response fixture and supplies the frozen sampling
-  // authority; it changes nothing else.
+  // mode removes the hermetic response fixture and supplies the frozen request
+  // controls — sampling and the output cap — and changes nothing else.
   //
   // `liveTransportCapture` is a TEST-ONLY path. When set, the spawned server
   // loads a preload that replaces only the final network hop, so the live
   // dispatch path can be proved without spending money. When it is null and
   // mode is live, the server reaches the real provider.
   mode = 'fixture',
-  liveSampling = null,
+  liveRequestControls = null,
   liveTransportCapture = null,
   // THE GLOBAL ECONOMIC CEILING, enforced at dispatch.
   //
@@ -849,16 +850,38 @@ async function runTrial({
 
   // THE RESERVATION HAPPENS HERE — before the server exists, not after it
   // answered. A refusal throws, and nothing is spawned.
+  //
+  // WHAT IS RESERVED IS THE WHOLE TRIAL. Reserving one request's worth, as an
+  // earlier version did, let a trial that may issue ten requests pass a gate
+  // sized for one. The bound is derived from the arm's Run topology and the two
+  // enforced per-Run request ceilings, so it cannot drift from what the product
+  // can actually spend.
+  let liveTrialBound = null;
   if (isLive) {
     if (!liveBudget) {
       throw new EvaluationRunnerError(
         'a live trial requires an explicit global budget authority; refusing to ' +
         'dispatch against an unbounded ceiling');
     }
+    liveTrialBound = trialWorstCaseMicroUsd({
+      armId: arm.armId,
+      perRequestMicroUsd: liveBudget.perRequestMicroUsd,
+      runtimeMaxModelRequestsPerRun: liveBudget.runtimeMaxModelRequestsPerRun,
+      governedLeafMaximumProviderRequests:
+        liveBudget.governedLeafMaximumProviderRequests,
+      governedPlannerMaximumProviderRequests:
+        liveBudget.governedPlannerMaximumProviderRequests,
+      // Proven off for every live trial: the trial form supplies no
+      // executionPolicy and `normalizeExecutionPolicy` makes autoRetry a strict
+      // opt-in. If that ever changed, the bound would grow, not silently
+      // understate.
+      autoRetryEnabled: false,
+      maxAttempts: null
+    });
     assertDispatchWithinGlobalCeiling({
       runRoot: liveBudget.runRoot,
       ceilingMicroUsd: liveBudget.ceilingMicroUsd,
-      maximumLiabilityMicroUsd: liveBudget.maximumTrialLiabilityMicroUsd,
+      maximumLiabilityMicroUsd: liveTrialBound.trialWorstCaseMicroUsd,
       trialId,
       role: `trial_worst_case:${arm.armId}`,
       ordinal: repetition
@@ -875,7 +898,7 @@ async function runTrial({
       ...(isLive ? {
         // THE FROZEN SAMPLING AUTHORITY, supplied only in live mode. Absent in
         // fixture mode, so every completed fixture body stays byte-identical.
-        EVALUATION_LIVE_SAMPLING: JSON.stringify(liveSampling),
+        EVALUATION_LIVE_REQUEST_CONTROLS: JSON.stringify(liveRequestControls),
         ...(liveTransportCapture ? {
           LIVE_TRANSPORT_CAPTURE: liveTransportCapture,
           LIVE_TRANSPORT_CAPTURE_TRIAL_ID: trialId
@@ -919,6 +942,15 @@ async function runTrial({
       // loser blocked the Ticket with `leaf_admission_conflict` before any leaf
       // Run was created. The race is real in production too, but forcing it
       // here measured the harness rather than the product.
+      // THE PINNED PER-RUN REQUEST CEILING. An ungoverned Run has no economic
+      // authority, so this production knob is its only bound on provider
+      // attempts — and the reservation is computed against exactly this number.
+      // Supplying it here is what makes the priced bound and the enforced bound
+      // the same bound.
+      ...(isLive ? {
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN:
+          String(liveBudget.runtimeMaxModelRequestsPerRun)
+      } : {}),
       RUNTIME_SCHEDULER_INTERVAL_MS: '2000'
     }
   });

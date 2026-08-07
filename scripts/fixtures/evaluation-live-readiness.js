@@ -264,28 +264,56 @@ function auditLiveReadiness({ liveManifest } = {}) {
     } catch (_) { return ''; }
   })();
 
+  const suiteSource = (() => {
+    try {
+      return require('node:fs').readFileSync(
+        require('node:path').join(__dirname, '..',
+          'structured-allocation-live-dispatch-postgres-test.js'), 'utf8');
+    } catch (_) { return ''; }
+  })();
+  const registered = (() => {
+    try {
+      return require('node:fs').readFileSync(
+        require('node:path').join(__dirname, '..', 'test-manifest.js'), 'utf8')
+        .includes('structured-allocation-live-dispatch-postgres-test.js');
+    } catch (_) { return false; }
+  })();
+
+  // ── THE THREE ROLES ARE THREE FACTS ─────────────────────────────────────
+  //
+  // One boolean must never stand in for several unexercised roles. That is
+  // exactly how a verdict came to claim three roles on two captured requests:
+  // the planner received a worker-shaped answer, no plan was admitted, and the
+  // governed leaf executor was never reached. Each role therefore has its own
+  // item, and each requires the acceptance suite to be registered AND to carry
+  // the assertion that fails when that role produces no outbound request.
+  const roleProved = role => registered &&
+    suiteSource.includes(`${role}: allCaptured.filter`) &&
+    suiteSource.includes('at least one ACTUAL outbound request instance was captured');
+
   // A live trial must be able to run WITHOUT the hermetic response fixture.
   record('liveDispatchPathImplemented',
-    runnerSource.includes("assertMode(mode)") &&
+    runnerSource.includes('assertMode(mode)') &&
       runnerSource.includes("const isLive = mode === 'live'") &&
-      runnerSource.includes("live-transport-capture-preload.js")
+      runnerSource.includes('live-transport-capture-preload.js')
       ? 'FROZEN' : 'UNRESOLVED',
     'runTrial accepts live mode and spawns without the hermetic response fixture',
     'structured-allocation-evaluation-runner runTrial');
 
-  // And it must be PROVED by a registered suite that inspects outbound bytes.
-  record('liveDispatchPathBehaviourallyProved',
-    (() => {
-      try {
-        const manifest = require('node:fs').readFileSync(
-          require('node:path').join(__dirname, '..', 'test-manifest.js'), 'utf8');
-        return manifest.includes('structured-allocation-live-dispatch-postgres-test.js');
-      } catch (_) { return false; }
-    })() ? 'FROZEN' : 'UNRESOLVED',
-    'a registered suite drives the live path and asserts the outbound request bytes',
-    'structured-allocation-live-dispatch-postgres-test');
+  record('ungovernedWorkerDispatchProved', roleProved('ungoverned_worker')
+    ? 'FROZEN' : 'UNRESOLVED',
+  'an actual ungoverned worker request was captured at the final network hop',
+  'structured-allocation-live-dispatch-postgres-test');
+  record('structuredPlannerDispatchProved', roleProved('structured_planner')
+    ? 'FROZEN' : 'UNRESOLVED',
+  'an actual structured planner request was captured at the final network hop',
+  'structured-allocation-live-dispatch-postgres-test');
+  record('governedLeafDispatchProved', roleProved('governed_leaf_worker')
+    ? 'FROZEN' : 'UNRESOLVED',
+  'an actual governed leaf worker request was captured, after a real admitted plan',
+  'structured-allocation-live-dispatch-postgres-test');
 
-  // One canonical sampling authority, read by all three roles.
+  // ── SAMPLING, PER ROLE ──────────────────────────────────────────────────
   const samplingWired = bodySource.includes('options.sampling');
   record('liveSamplingPlannerProved',
     samplingWired && plannerSource.includes('sampling: resolveProviderSampling()')
@@ -298,33 +326,83 @@ function auditLiveReadiness({ liveManifest } = {}) {
     'the governed leaf request body carries the canonical sampling authority',
     'server.js governed leaf body');
   record('liveSamplingUngovernedWorkerProved',
-    samplingWired &&
-      serverSource.includes('options: { ...options, sampling: resolveProviderSampling() }')
+    samplingWired && serverSource.includes('sampling: resolveProviderSampling(),')
       ? 'FROZEN' : 'UNRESOLVED',
     'the ungoverned worker request body carries the canonical sampling authority',
     'server.js callOpenAI');
 
+  // ── THE OUTPUT CAP, PER ROLE ────────────────────────────────────────────
+  //
+  // The liability model prices every request at one output cap. A role whose
+  // wire body omits it is priced against a bound it does not carry — which is
+  // what made the ungoverned arms' liability claim false.
+  const capAgrees = source => source.includes('assertOutputCapAgrees(');
+  record('liveOutputCapPlannerProved', capAgrees(plannerSource)
+    ? 'FROZEN' : 'UNRESOLVED',
+  'the planner output cap is checked to agree with the frozen live control',
+  'structured-planner-governance assertOutputCapAgrees');
+  record('liveOutputCapGovernedWorkerProved', capAgrees(serverSource)
+    ? 'FROZEN' : 'UNRESOLVED',
+  'the governed leaf output cap is checked to agree with the frozen live control',
+  'server.js governed leaf assertOutputCapAgrees');
+  record('liveOutputCapUngovernedWorkerProved',
+    serverSource.includes('resolveUngovernedOutputCap()')
+      ? 'FROZEN' : 'UNRESOLVED',
+    'the ungoverned worker carries the frozen live output cap on the wire',
+    'server.js callOpenAI resolveUngovernedOutputCap');
+
+  // ── HISTORICAL COMPATIBILITY ────────────────────────────────────────────
+  record('fixtureBodyCompatibilityProved',
+    bodySource.includes('options.sampling !== undefined && options.sampling !== null') &&
+      !bodySource.includes('sampling = { temperature')
+      ? 'FROZEN' : 'UNRESOLVED',
+    'a body built without live controls is byte-identical to its historical form',
+    'provider-request-body explicit sampling with no default');
+
+  // ── THE GLOBAL ECONOMIC GATE ────────────────────────────────────────────
+  const ledger = (() => {
+    try {
+      // eslint-disable-next-line global-require
+      return require('./evaluation-live-budget-ledger');
+    } catch (_) { return null; }
+  })();
   record('liveGlobalEconomicGateImplemented',
-    (() => {
-      try {
-        // eslint-disable-next-line global-require
-        const ledger = require('./evaluation-live-budget-ledger');
-        return typeof ledger.assertDispatchWithinGlobalCeiling === 'function';
-      } catch (_) { return false; }
-    })() ? 'FROZEN' : 'UNRESOLVED',
+    ledger && typeof ledger.assertDispatchWithinGlobalCeiling === 'function'
+      ? 'FROZEN' : 'UNRESOLVED',
     'a global ceiling is enforced before every provider dispatch',
     'evaluation-live-budget-ledger');
 
-  record('liveGlobalEconomicGateRecoveryProved',
+  // THE WHOLE TRIAL, NOT ONE REQUEST. Reserving `perRequestMicroUsd` for a
+  // trial that may issue ten requests is a gate sized for the wrong number.
+  record('liveTrialWorstCaseReservationProved',
+    runnerSource.includes('trialWorstCaseMicroUsd({') &&
+      runnerSource.includes('maximumLiabilityMicroUsd: liveTrialBound.trialWorstCaseMicroUsd')
+      ? 'FROZEN' : 'UNRESOLVED',
+    'the reservation is the whole trial worst case, derived from Run topology',
+    'evaluation-live-trial-liability trialWorstCaseMicroUsd');
+
+  record('liveRetryLiabilityBoundProved',
     (() => {
       try {
         // eslint-disable-next-line global-require
-        const ledger = require('./evaluation-live-budget-ledger');
-        return typeof ledger.reconstructCommittedLiability === 'function';
+        const liability = require('./evaluation-live-trial-liability');
+        return typeof liability.assertRetryLiabilityBounded === 'function';
       } catch (_) { return false; }
     })() ? 'FROZEN' : 'UNRESOLVED',
+    'every product-authorized retry attempt is inside the reserved bound',
+    'evaluation-live-trial-liability assertRetryLiabilityBounded');
+
+  record('liveGlobalEconomicGateRecoveryProved',
+    ledger && typeof ledger.reconstructCommittedLiability === 'function'
+      ? 'FROZEN' : 'UNRESOLVED',
     'committed live liability reconstructs after restart from durable records',
     'evaluation-live-budget-ledger reconstructCommittedLiability');
+
+  record('liveGlobalEconomicGateConcurrencyProved',
+    ledger && typeof ledger.withLedgerLock === 'function'
+      ? 'FROZEN' : 'UNRESOLVED',
+    'two concurrent dispatchers cannot spend the same remaining authority',
+    'evaluation-live-budget-ledger withLedgerLock');
 
   record('liveDryRunReachedProviderBoundary',
     runnerSource.includes("mode = 'fixture'") &&
@@ -338,6 +416,13 @@ function auditLiveReadiness({ liveManifest } = {}) {
       })() ? 'FROZEN' : 'UNRESOLVED',
     'the dry run traverses to the real provider dispatch boundary before stopping',
     'scored runner preflightLiveRun');
+
+  record('externalProviderCallsZero',
+    registered && suiteSource.includes('EXTERNAL PROVIDER CALLS MADE: 0') &&
+      suiteSource.includes('LIVE_CAPTURE_ESCAPE')
+      ? 'FROZEN' : 'UNRESOLVED',
+    'the acceptance proof makes zero external calls and refuses any escape route',
+    'live-transport-capture-preload escape guard');
 
   const unresolved = items.filter(item => item.state === 'UNRESOLVED');
   return Object.freeze({

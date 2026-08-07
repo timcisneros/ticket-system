@@ -170,7 +170,9 @@ const {
   buildOllamaChatBody,
   buildOpenAiResponsesBody
 } = require('./runtime/provider-request-body');
-const { resolveProviderSampling } = require('./runtime/provider-sampling-authority');
+const {
+  resolveProviderSampling, resolveUngovernedOutputCap, assertOutputCapAgrees
+} = require('./runtime/live-request-controls');
 const {
   capturePlannerGovernance,
   PLANNER_ROLE,
@@ -12189,7 +12191,12 @@ async function dispatchGovernedLeafModelRequest({
     input,
     options: {
       governed: true,
-      maxOutputTokens: run.governedExecution.economicAuthority.maximumOutputTokensPerRequest,
+      // THE AUTHORIZATION WINS. Live controls never enlarge a governed request;
+      // they must AGREE with it, because the liability model prices every
+      // request at one cap and a divergence would reserve against a bound the
+      // wire does not carry.
+      maxOutputTokens: assertOutputCapAgrees(
+        run.governedExecution.economicAuthority.maximumOutputTokensPerRequest),
       // The SAME canonical authority the planner reads.
       sampling: resolveProviderSampling()
     }
@@ -17760,7 +17767,17 @@ async function callOpenAI(agent, input, options = {}) {
     input,
     // The ungoverned worker reads the same canonical sampling authority, so no
     // role can silently use different sampling from another.
-    options: { ...options, sampling: resolveProviderSampling() }
+    // THE UNGOVERNED PATH HAS NO ECONOMIC AUTHORITY OF ITS OWN, so the frozen
+    // live control is where its output cap comes from. Absent live controls it
+    // stays null and the pre-Tranche-4 body is reproduced byte for byte.
+    options: {
+      ...options,
+      sampling: resolveProviderSampling(),
+      maxOutputTokens: options.maxOutputTokens === undefined ||
+        options.maxOutputTokens === null
+        ? resolveUngovernedOutputCap()
+        : options.maxOutputTokens
+    }
   });
   const requestSnapshot = {
     url: 'https://api.openai.com/v1/responses',

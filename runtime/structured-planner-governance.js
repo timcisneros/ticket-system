@@ -27,7 +27,9 @@ const { hashCanonical } = require('./declared-work-contract');
 const {
   buildParentPolicyReference, readGovernedPolicySource
 } = require('./governed-policy-source');
-const { resolveProviderSampling } = require('./provider-sampling-authority');
+const {
+  resolveProviderSampling, assertOutputCapAgrees
+} = require('./live-request-controls');
 const {
   buildRoleRoutingDecision
 } = require('./role-routing-contract');
@@ -153,7 +155,10 @@ function capturePlannerGovernance({
       input: plannerInput,
       options: {
         governed: true,
-        maxOutputTokens: economicAuthority.maximumOutputTokensPerRequest,
+        // The authorization wins; a live control must AGREE with it, never
+        // enlarge it. See live-request-controls.assertOutputCapAgrees.
+        maxOutputTokens: assertOutputCapAgrees(
+          economicAuthority.maximumOutputTokensPerRequest),
         // ONE canonical authority, read by every role. Null in fixture and
         // ordinary operation, so the body is unchanged.
         sampling: resolveProviderSampling()
