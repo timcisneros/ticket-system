@@ -184,7 +184,14 @@ function main() {
   });
   ok(liveBody.temperature === 0 && liveBody.top_p === 1 && !('seed' in liveBody),
     'a live body carries the frozen sampling and no seed');
-  for (const bad of ['{}', '{"temperature":0}', '{"temperature":0,"topP":1,"seed":7}', 'nonsense']) {
+  // A partial, mistyped or non-finite value REFUSES. A silent fallback here is
+  // exactly the ambient default this authority exists to remove, and it would be
+  // invisible in the request evidence afterwards.
+  for (const bad of ['{}', '{"temperature":0}', '{"topP":1}',
+    '{"temperature":0,"topP":1,"seed":7}', 'nonsense', '[0,1]', 'null',
+    '{"temperature":0,"topP":"1"}', '{"temperature":"0","topP":1}',
+    '{"temperature":0,"topP":null}', '{"temperature":0,"topP":1e999}',
+    '{"temperature":1e999,"topP":1}']) {
     ok(refuses(() => resolveProviderSampling({ EVALUATION_LIVE_SAMPLING: bad })) !== null,
       `an incomplete or malformed sampling value refuses rather than defaulting (${bad.slice(0, 24)})`);
   }

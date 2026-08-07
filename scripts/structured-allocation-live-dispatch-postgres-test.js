@@ -19,6 +19,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { withHarness, createAsserter } = require('./postgres-test-harness');
 const { ARMS } = require('./fixtures/evaluation-arms');
 const { getScenario } = require('./fixtures/evaluation-scenarios');
@@ -221,6 +222,47 @@ async function main() {
         assertThat(typeof entry.body === 'string' && entry.body.length > 0,
           `${entry.transport}: the exact outbound body is durably recorded`);
       }
+
+      // ── NOTHING MAY ESCAPE BY ANOTHER ROUTE ─────────────────────────────
+      //
+      // The capture replaces two boundaries. A request that left through a
+      // third would spend real money while this suite reported zero calls, so
+      // the guard is proved directly rather than assumed from a run that
+      // happens not to exercise it.
+      const preloadPath = path.join(__dirname, 'fixtures',
+        'live-transport-capture-preload.js');
+      const attempt = (script, capturePath = '') => {
+        const result = spawnSync(process.execPath,
+          ['--require', preloadPath, '-e', script],
+          { encoding: 'utf8',
+            env: { ...process.env, LIVE_TRANSPORT_CAPTURE: capturePath } });
+        return `${result.stdout}${result.stderr}`;
+      };
+      assertThat(/LIVE_CAPTURE_ESCAPE/.test(attempt(
+        "require('node:http').request({ hostname: 'api.openai.com', path: '/v1' })")),
+      'a non-local http.request is refused as an escape, not silently allowed');
+      assertThat(!/LIVE_CAPTURE_ESCAPE/.test(attempt(
+        "require('node:http').request({ hostname: '127.0.0.1', port: 1, path: '/' })" +
+        ".on('error', () => {}).end()")),
+      'while a local http.request still works — the harness itself needs it');
+
+      // LOCAL TRAFFIC IS NOT A PROVIDER CALL. If the capture intercepted it, the
+      // harness would report outbound requests that never existed — and the
+      // spawned server's own HTTP would stop working.
+      const localCapture = path.join(root, 'capture-local.jsonl');
+      attempt("require('node:https').request({ hostname: '127.0.0.1', port: 1, " +
+        "path: '/' }).on('error', () => {}).end()", localCapture);
+      assertThat(capturedRequests(localCapture).length === 0,
+        'local https traffic is passed through untouched, never captured');
+
+      // AND THE CREDENTIAL FLAG IS OBSERVED, NOT ASSERTED. A constant `true`
+      // would make the governed assertion above vacuous.
+      const bareCapture = path.join(root, 'capture-bare.jsonl');
+      attempt("require('node:https').request({ hostname: 'api.openai.com', " +
+        "path: '/v1/responses', method: 'POST' }, () => {}).end('{}')", bareCapture);
+      const bare = capturedRequests(bareCapture);
+      assertThat(bare.length === 1 && bare[0].hasAuthorization === false,
+        'a request carrying no Authorization header records hasAuthorization false');
 
       // ── NO CREDENTIAL MATERIAL ANYWHERE ─────────────────────────────────
       const serialized = JSON.stringify(allCaptured);

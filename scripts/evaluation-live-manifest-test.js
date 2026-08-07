@@ -38,6 +38,12 @@ function ok(condition, message) {
 }
 function refuses(fn) { try { fn(); return false; } catch (_) { return true; } }
 async function refusesAsync(fn) { try { await fn(); return false; } catch (_) { return true; } }
+// ANY throw is not proof of the RIGHT refusal. A helper that accepts every
+// error would keep passing after the guard it names was deleted, because some
+// later validation happens to fail too.
+async function refusesBecause(fn, pattern) {
+  try { await fn(); return false; } catch (error) { return pattern.test(String(error.message)); }
+}
 
 async function main() {
   console.log('evaluation live manifest');
@@ -244,22 +250,34 @@ async function main() {
   '28 and the first request envelope carries the frozen sampling and no seed');
   ok(typeof result.credentialPresent === 'boolean',
     '24 credential PRESENCE is recorded as a boolean');
+  // THE DRY RUN SPENDS NOTHING, and proves that by touching the real gate and
+  // then giving the authority back under the only proof that permits it. A
+  // reservation left committed would silently shrink the ceiling for the run
+  // that IS authorized.
+  ok(result.globalCeilingProved === true && typeof result.reservationProved === 'string',
+    '28 the dry run reserved against the durable global ceiling');
+  const { reconstructCommittedLiability } =
+    require('./fixtures/evaluation-live-budget-ledger');
+  ok(reconstructCommittedLiability(dryRoot).committedMicroUsd === 0,
+    '28 and released it, so a dry run leaves zero committed liability');
   const written = fs.readFileSync(path.join(dryRoot, 'scored-run-header.json'), 'utf8');
   ok(!/sk-[A-Za-z0-9]/.test(written) && !written.includes('OPENAI_API_KEY'),
     '24 and no secret material is written to the run header');
   fs.rmSync(dryRoot, { recursive: true, force: true });
 
   // 1-2 of the brief's list: the two executors refuse each other's manifest.
-  ok(await refusesAsync(() => executeScoredRun({
+  ok(await refusesBecause(() => executeScoredRun({
     manifestPath: path.join(__dirname, '..', 'config',
       'structured-allocation-evaluation-live-v1.json'),
     outputRoot: fs.mkdtempSync(path.join(os.tmpdir(), 'x-'))
-  })), '1 the fixture executor REFUSES a live manifest');
-  ok(await refusesAsync(() => preflightLiveRun({
+  }), /requires the authorized live run and is refused here/),
+  '1 the fixture executor REFUSES a live manifest, naming that as the reason');
+  ok(await refusesBecause(() => preflightLiveRun({
     manifestPath: path.join(__dirname, '..', 'config',
       'structured-allocation-evaluation-scored-v1.json'),
     outputRoot: fs.mkdtempSync(path.join(os.tmpdir(), 'y-'))
-  })), '2 the live pre-flight REFUSES a fixture manifest');
+  }), /live pre-flight requires a live manifest/),
+  '2 the live pre-flight REFUSES a fixture manifest, naming that as the reason');
 
   // 29. No CLI override of a frozen experimental variable.
   for (const option of ['repetitions', 'seed', 'arms', 'ordering', 'thresholds', 'scenario']) {
