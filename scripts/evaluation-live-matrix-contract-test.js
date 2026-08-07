@@ -61,7 +61,7 @@ function seedCorpus(root, count, overrides = {}) {
       armId: slot.armId,
       repetition: slot.repetition,
       seed: slot.stochasticIdentity,
-      reportZeroDrift: true,
+      ticketReport: { secondReadIdentical: true },
       ...overrides
     }));
     appendJournal(root, { ...bind, event: 'reservation_committed', trialId: id, slotOrdinal: slot.slot });
@@ -169,7 +169,7 @@ function main() {
     ['manifestHash', 'another-manifest', 'ARTIFACT_FOREIGN_MANIFEST'],
     ['scoredRunHash', 'another-run', 'ARTIFACT_FOREIGN_RUN'],
     ['mode', 'fixture', 'FIXTURE_LIVE_MIXING'],
-    ['reportZeroDrift', false, 'ZERO_DRIFT_UNPROVEN']]) {
+    ['ticketReport', { secondReadIdentical: false }, 'ZERO_DRIFT_UNPROVEN']]) {
     const root = freshRoot();
     seedCorpus(root, 2);
     // Corrupt the first artifact only.
@@ -281,7 +281,8 @@ function main() {
     fs.writeFileSync(path.join(root, 'trials', `${id}.json`), JSON.stringify({
       scoredRunHash: HEADER.runHeaderHash, manifestHash: HEADER.manifestHash,
       sourceCommit: HEADER.repositoryCommit, mode: 'live', armId: slot.armId,
-      repetition: slot.repetition, seed: slot.stochasticIdentity, reportZeroDrift: true
+      repetition: slot.repetition, seed: slot.stochasticIdentity,
+      ticketReport: { secondReadIdentical: true }
     }));
     appendJournal(root, { ...bind, event: 'reservation_committed', trialId: id, slotOrdinal: slot.slot });
     appendJournal(root, { ...bind, event: 'trial_started', trialId: id, slotOrdinal: slot.slot });

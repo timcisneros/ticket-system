@@ -135,8 +135,15 @@ function auditLiveCorpus({ manifest, header, outputRoot, trialIdFor }) {
       }
     }
     // ZERO-DRIFT. A report that cannot reproduce itself is not evidence.
-    if (parsed.reportZeroDrift !== true) {
-      fail('ZERO_DRIFT_UNPROVEN', `artifact ${id} carries no zero-drift proof`, { trialId: id });
+    //
+    // The proof is the runner's own: it collects the read-only report TWICE and
+    // records whether the second read was identical. This gate reads that field
+    // rather than a field of its own naming — an integrity check that invents
+    // the name of the thing it verifies proves nothing about the artifact.
+    if (parsed.ticketReport?.secondReadIdentical !== true) {
+      fail('ZERO_DRIFT_UNPROVEN',
+        `artifact ${id} carries no zero-drift proof (ticketReport.secondReadIdentical)`,
+        { trialId: id });
     }
     artifacts.push(parsed);
   }
