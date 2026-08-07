@@ -640,6 +640,16 @@ function main() {
   ok(withoutHarness.unresolved.includes('ordinaryHarnessCredentialStrippingStillProved') &&
      withoutHarness.verdict === 'TRANCHE 6 LIVE-MODEL EVALUATION BLOCKED',
   'READY is impossible if the harness stops stripping inherited credentials');
+  // EACH CONJUNCT IS LOAD-BEARING. Blanking the whole source falsifies both at
+  // once, which would let either one be deleted unnoticed.
+  ok(auditLiveReadiness({ sources: { harnessSource:
+    "delete inheritedEnv[credentialKey]" } })
+    .unresolved.includes('ordinaryHarnessCredentialStrippingStillProved'),
+  'the stripped KEY LIST is load-bearing on its own');
+  ok(auditLiveReadiness({ sources: { harnessSource:
+    "'OPENAI_API_KEY', 'OPENAI_ORG_ID', 'OPENAI_PROJECT_ID'" } })
+    .unresolved.includes('ordinaryHarnessCredentialStrippingStillProved'),
+  'and the DELETE itself is load-bearing on its own');
   const withoutWiring = auditLiveReadiness({ sources: { runnerSource: '' } });
   ok(withoutWiring.unresolved.includes('realLiveCredentialPropagationImplemented') &&
      withoutWiring.verdict === 'TRANCHE 6 LIVE-MODEL EVALUATION BLOCKED',

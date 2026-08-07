@@ -104,6 +104,27 @@ async function main() {
     assertThat(!String(missing.message).includes(DUMMY_LIVE_CREDENTIAL),
       'and the refusal interpolates no credential material');
 
+    // A REFUSAL THAT HAS A VALUE IN HAND MUST STILL NOT PRINT IT. The absent
+    // case above has nothing to leak; this one does — a whitespace credential
+    // is present as a string and still refuses.
+    let blankCredential = null;
+    try {
+      buildEvaluationServerCredentialEnv({ mode: 'live', liveTransportCapture: null,
+        env: { OPENAI_API_KEY: `   ${DUMMY_LIVE_CREDENTIAL}-blank   `.replace(/\S/g, ' ') } });
+    } catch (error) { blankCredential = error; }
+    assertThat(blankCredential !== null &&
+      blankCredential.code === 'REAL_LIVE_CREDENTIAL_ABSENT',
+    'a blank credential refuses as absent');
+    let leakyRefusal = null;
+    try {
+      buildEvaluationServerCredentialEnv({ mode: 'live', liveTransportCapture: null,
+        env: { OPENAI_API_KEY: '\t\n  ' } });
+    } catch (error) { leakyRefusal = error; }
+    assertThat(leakyRefusal !== null &&
+      !JSON.stringify(leakyRefusal.detail || {}).includes('OPENAI_API_KEY:') &&
+      !String(leakyRefusal.message).includes('\t'),
+    'and no refusal echoes the credential it was handed, even a malformed one');
+
     let sentinelAsReal = null;
     try {
       buildEvaluationServerCredentialEnv({ mode: 'live', liveTransportCapture: null,
