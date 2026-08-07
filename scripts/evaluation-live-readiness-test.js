@@ -76,6 +76,14 @@ function main() {
     'the live model is an exact dated snapshot, not a floating alias');
   ok(protocol.repetition.liveModelRepetitions === 3,
     'the live repetition count is the already-frozen 3, not chosen now');
+  // BEHAVIOURAL: the audit must REPORT the protocol's value, not a literal of
+  // its own. A duplicated constant would keep saying 3 after the protocol
+  // changed, which is how a chosen number masquerades as a frozen one.
+  const repetitionItem = audit.items.find(item => item.id === 'live_repetitions');
+  ok(repetitionItem.detail === protocol.repetition.liveModelRepetitions,
+    'and the audit reports that protocol value rather than a literal of its own');
+  ok(repetitionItem.source === 'protocol.repetition.liveModelRepetitions',
+    'naming the exact protocol field it read');
 
   // ── What is NOT, and must block ───────────────────────────────────────
   const unresolved = new Set(audit.unresolved);
