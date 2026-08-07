@@ -27,12 +27,28 @@ const crypto = require('node:crypto');
 const LEDGER_FILE = 'live-economic-ledger.jsonl';
 const LOCK_FILE = 'live-economic-ledger.lock';
 
+const {
+  assertIntegerMicroUsd: assertCanonicalIntegerMicroUsd
+} = require('./evaluation-live-canonical-price');
+
 class LiveBudgetError extends Error {
   constructor(message, detail = {}) {
     super(message);
     this.name = 'LiveBudgetError';
     this.code = detail.code || 'LIVE_BUDGET_REFUSED';
     this.detail = detail;
+  }
+}
+
+// ONE MONETARY RULE, reused rather than restated. The canonical guard decides
+// what a valid amount is; the ledger only translates the refusal into its own
+// error type, so a caller catching LiveBudgetError still sees every refusal.
+function assertIntegerMicroUsd(value, label) {
+  try {
+    return assertCanonicalIntegerMicroUsd(value, label);
+  } catch (error) {
+    throw new LiveBudgetError(error.message,
+      { code: error.code || 'LIVE_BUDGET_AMOUNT_INVALID', label, value: String(value) });
   }
 }
 
@@ -56,6 +72,10 @@ function reconstructCommittedLiability(runRoot) {
     if (entry.kind === 'reserve') committed += entry.maximumLiabilityMicroUsd;
     else if (entry.kind === 'release') committed -= entry.maximumLiabilityMicroUsd;
   }
+  // A ledger whose durable records sum to a fractional total has been written
+  // by something that bypassed the canonical calculation. Reading it must fail
+  // rather than hand a broken number to the ceiling comparison.
+  assertIntegerMicroUsd(committed, 'reconstructed committedMicroUsd');
   return Object.freeze({
     committedMicroUsd: committed,
     entries: Object.freeze(entries)
@@ -95,12 +115,19 @@ function withLedgerLock(runRoot, body) {
 function assertDispatchWithinGlobalCeiling({
   runRoot, ceilingMicroUsd, maximumLiabilityMicroUsd, trialId, role, ordinal
 }) {
-  if (!Number.isFinite(ceilingMicroUsd) || ceilingMicroUsd <= 0) {
-    throw new LiveBudgetError('a positive global ceiling is required');
+  // FAIL-CLOSED MONETARY VALIDATION.
+  //
+  // By the time an amount reaches this ledger it must ALREADY be an integer
+  // authority. Rounding here would be repairing a value that escaped the
+  // canonical pricing calculation, and a ledger that silently rounds is a
+  // ledger that cannot tell a correct authority from a broken one. So a
+  // fractional, NaN, infinite, negative or unsafe amount refuses instead.
+  assertIntegerMicroUsd(ceilingMicroUsd, 'ceilingMicroUsd');
+  if (ceilingMicroUsd <= 0) {
+    throw new LiveBudgetError('a positive global ceiling is required',
+      { code: 'LIVE_BUDGET_CEILING_INVALID', ceilingMicroUsd });
   }
-  if (!Number.isFinite(maximumLiabilityMicroUsd) || maximumLiabilityMicroUsd < 0) {
-    throw new LiveBudgetError('a dispatch must declare its bounded maximum liability');
-  }
+  assertIntegerMicroUsd(maximumLiabilityMicroUsd, 'maximumLiabilityMicroUsd');
   return withLedgerLock(runRoot, () => {
     const { committedMicroUsd } = reconstructCommittedLiability(runRoot);
     const projected = committedMicroUsd + maximumLiabilityMicroUsd;

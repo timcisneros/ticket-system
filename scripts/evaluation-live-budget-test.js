@@ -34,11 +34,21 @@ const {
   CaptureRoleError, ROLES, assertEveryRoleDispatched, classifyCapturedRole,
   countCapturedRoles
 } = require('./fixtures/evaluation-live-capture-roles');
+const {
+  LivePriceError, assertIntegerMicroUsd, canonicalPerRequestMicroUsd
+} = require('./fixtures/evaluation-live-canonical-price');
+const {
+  buildPricingCatalog, computeMaximumLiability, findPricingEntry
+} = require('../runtime/model-pricing-catalog');
+const { pricedCatalogValue } = require('./governed-structured-fixture');
 const { buildOpenAiResponsesBody } = require('../runtime/provider-request-body');
 const liveManifest = require('../config/structured-allocation-evaluation-live-v1.json');
 
 const CAP = liveManifest.economics.maximumTotalLiveMicroUsd;
 const PER_REQUEST = liveManifest.economics.liability.perRequestMicroUsd;
+const ROLE_PRICING_ROLES = Object.freeze([
+  'structured_planner', 'structured_leaf_executor', 'ungoverned_worker'
+]);
 const RUNTIME_REQUESTS_PER_RUN =
   liveManifest.economics.liability.runtimeMaxModelRequestsPerRun;
 // The exact bytes of an ungoverned body built with NO live controls. This hash
@@ -309,6 +319,105 @@ function main() {
      new Set(liveManifest.slots.map(s => s.cellKey)).size === 40 &&
      liveManifest.repetitions === 3,
   'and the frozen 40 cells x 3 repetitions = 120 slots are unchanged');
+
+  // ── MONETARY REPRESENTATION: ONE KERNEL, INTEGER MICRO-USD ────────────
+  //
+  // The live layer used to price requests itself — a single floating division
+  // of the summed product, with no rounding — and hashed 20,428.8 into the
+  // manifest as monetary authority. The pricing contract's first rule is that
+  // every amount is an integer count of micro-USD and every division rounds UP.
+  // These prove the live layer cannot hold that opinion any more.
+  const entry = findPricingEntry(buildPricingCatalog(pricedCatalogValue()), {
+    provider: 'openai', model: liveManifest.model, adapterId: liveManifest.adapterId
+  });
+  const kernel = computeMaximumLiability({
+    entry, maxOutputTokens: liveManifest.maximumOutputTokensPerRequest,
+    maxProviderRequests: 1
+  });
+  ok(PER_REQUEST === kernel.maximumMicroUsd && Number.isSafeInteger(PER_REQUEST),
+    `the manifest per-request liability IS the kernel maximum (${PER_REQUEST})`);
+  // ROUNDING IS PER CHARGE COMPONENT, and it is the kernel that does it. A
+  // ceiling applied to the total would agree here by coincidence of these rates
+  // and disagree in general.
+  ok(kernel.outputMicroUsdPerRequest === 1229 &&
+     kernel.inputMicroUsdPerRequest === 19_200,
+  'each component is rounded up separately (input 19200 + output 1229)');
+  ok(kernel.maximumMicroUsd === kernel.inputMicroUsdPerRequest +
+     kernel.outputMicroUsdPerRequest + kernel.requestMicroUsdPerRequest,
+  'and the per-request maximum is exactly their sum');
+
+  // EVERY ROLE IS PRICED BY THE SAME KERNEL CALL. No role may use a raw
+  // floating rate while another uses canonical economic authority.
+  const priced = ROLE_PRICING_ROLES.map(role => canonicalPerRequestMicroUsd({ role }));
+  for (const price of priced) {
+    ok(price.perRequestMicroUsd === kernel.maximumMicroUsd,
+      `${price.role}: priced at the canonical maximum ${price.perRequestMicroUsd}`);
+    ok(price.model === liveManifest.model &&
+       price.maxOutputTokens === liveManifest.maximumOutputTokensPerRequest &&
+       price.boundMethod === kernel.boundMethod,
+    `${price.role}: same model, same 2048 cap, same bound method as the wire`);
+    ok(price.pricingCatalogHash === priced[0].pricingCatalogHash,
+      `${price.role}: same pricing-catalog identity`);
+  }
+
+  // FAIL-CLOSED. A malformed amount refuses; it is never repaired here, because
+  // rounding belongs to the canonical calculation and a ledger that silently
+  // rounds cannot tell a correct authority from a broken one.
+  for (const [label, value, code] of [
+    ['fractional', 20_428.8, 'LIVE_PRICE_FRACTIONAL'],
+    ['NaN', NaN, 'LIVE_PRICE_NOT_A_NUMBER'],
+    ['Infinity', Infinity, 'LIVE_PRICE_NOT_FINITE'],
+    ['negative', -1, 'LIVE_PRICE_NEGATIVE'],
+    ['unsafe', Number.MAX_SAFE_INTEGER + 2, 'LIVE_PRICE_UNSAFE']]) {
+    const refusal = refuses(() => assertIntegerMicroUsd(value, 'amount'));
+    ok(refusal instanceof LivePriceError && refusal.code === code,
+      `a ${label} monetary amount refuses (${code})`);
+  }
+  // AT THE LEDGER TOO — the durable authority owner, not just the calculator.
+  {
+    const root = freshRoot();
+    for (const [label, amount, ceiling] of [
+      ['fractional liability', 20_428.8, CAP],
+      ['NaN liability', NaN, CAP],
+      ['Infinity liability', Infinity, CAP],
+      ['negative liability', -1, CAP],
+      ['fractional ceiling', 1, 20_000_000.5]]) {
+      const refusal = refuses(() => assertDispatchWithinGlobalCeiling({
+        runRoot: root, ceilingMicroUsd: ceiling, maximumLiabilityMicroUsd: amount,
+        trialId: 't', role: 'r', ordinal: 1
+      }));
+      ok(refusal instanceof LiveBudgetError,
+        `the ledger refuses a ${label} rather than rounding it`);
+    }
+    ok(reconstructCommittedLiability(root).committedMicroUsd === 0,
+      'and none of those refusals committed anything');
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  // A TRIAL BOUND MAY NOT BE PINNED TO A NON-CANONICAL PRICE.
+  const stale = refuses(() => trialWorstCaseMicroUsd({
+    armId: 'B', perRequestMicroUsd: 20_428.8,
+    runtimeMaxModelRequestsPerRun: RUNTIME_REQUESTS_PER_RUN,
+    governedLeafMaximumProviderRequests:
+      ROLE_ECONOMICS.structured_leaf_executor.maximumProviderRequests,
+    governedPlannerMaximumProviderRequests:
+      ROLE_ECONOMICS.structured_planner.maximumProviderRequests,
+    autoRetryEnabled: false, maxAttempts: null }));
+  ok(stale !== null,
+    'a trial bound pinned to the old fractional price REFUSES');
+
+  // THE WHOLE MATRIX IS INTEGER.
+  ok(Number.isSafeInteger(liveManifest.economics.computedWorstCaseMicroUsd) &&
+     Number.isSafeInteger(liveManifest.economics.maximumTotalLiveMicroUsd) &&
+     Number.isSafeInteger(liveManifest.economics.headroomMicroUsd),
+  'the matrix maximum, the ceiling and the headroom are all safe integers');
+  ok(Object.values(liveManifest.economics.liability.byArm)
+    .every(arm => Number.isSafeInteger(arm.perTrialMicroUsd) &&
+      Number.isSafeInteger(arm.totalMicroUsd)),
+  'every per-arm trial maximum and arm total is a safe integer');
+  ok(Object.values(liveManifest.economics.liability.byCellMicroUsd)
+    .every(Number.isSafeInteger),
+  'and every per-cell amount is a safe integer');
 
   // ── Role classification, from the request itself ──────────────────────
   //

@@ -16,6 +16,9 @@ const fixtureManifest = require('../../config/structured-allocation-evaluation-s
 const protocol = require('../../config/structured-allocation-evaluation-v1.json');
 const { PRICING } = require('./evaluation-live-readiness');
 const { trialWorstCaseMicroUsd } = require('./evaluation-live-trial-liability');
+const {
+  addMicroUsd, assertIntegerMicroUsd, canonicalPerRequestMicroUsd
+} = require('./evaluation-live-canonical-price');
 const { ROLE_ECONOMICS } = require('./governed-role-policy-container');
 
 // THE PINNED RUNTIME REQUEST CEILING.
@@ -151,8 +154,13 @@ function orderingBalanceReport(permutations, arms) {
 // two enforced request ceilings, so a changed topology or a raised ceiling
 // changes the money — which is the only way the reservation can stay true.
 function computeLiability(slots) {
-  const perRequest = (PRICING.contextWindowTokens * PRICING.inputMicroUsdPerMillionTokens +
-    PRICING.maximumOutputTokensPerRequest * PRICING.outputMicroUsdPerMillionTokens) / 1e6;
+  // THE KERNEL PRICES, THIS FUNCTION COUNTS. The live layer previously computed
+  // `(ctx * inRate + out * outRate) / 1e6` — a second pricing implementation
+  // that never rounded and divided the summed product once, producing a
+  // fractional monetary authority. The number now comes from
+  // `computeMaximumLiability`, the same function governed economics trusts.
+  const perRequest = canonicalPerRequestMicroUsd({
+    role: 'structured_leaf_executor' }).perRequestMicroUsd;
   const byArm = {};
   const byCell = {};
   let totalMicroUsd = 0;
@@ -184,9 +192,21 @@ function computeLiability(slots) {
       totalMicroUsd: 0
     };
     byArm[slot.armId].trials += 1;
-    byArm[slot.armId].totalMicroUsd += perTrial;
-    byCell[slot.cellKey] = (byCell[slot.cellKey] || 0) + perTrial;
-    totalMicroUsd += perTrial;
+    byArm[slot.armId].totalMicroUsd = addMicroUsd(
+      byArm[slot.armId].totalMicroUsd, perTrial, 'armTotal');
+    byCell[slot.cellKey] = addMicroUsd(
+      byCell[slot.cellKey] || 0, perTrial, 'cellTotal');
+    totalMicroUsd = addMicroUsd(totalMicroUsd, perTrial, 'matrixTotal');
+  }
+  // EVERY AUTHORITATIVE MONETARY FIELD IS A SAFE INTEGER, checked here rather
+  // than assumed, because these are the values that get hashed and reserved.
+  assertIntegerMicroUsd(totalMicroUsd, 'matrix totalMicroUsd');
+  for (const [armId, arm] of Object.entries(byArm)) {
+    assertIntegerMicroUsd(arm.perTrialMicroUsd, `${armId}.perTrialMicroUsd`);
+    assertIntegerMicroUsd(arm.totalMicroUsd, `${armId}.totalMicroUsd`);
+  }
+  for (const [cellKey, amount] of Object.entries(byCell)) {
+    assertIntegerMicroUsd(amount, `${cellKey}.micro-USD`);
   }
   return Object.freeze({
     boundMethod: PRICING.boundMethod,
@@ -195,7 +215,9 @@ function computeLiability(slots) {
     byArm: Object.freeze(byArm),
     byCellMicroUsd: Object.freeze(byCell),
     totalMicroUsd,
-    totalUsd: totalMicroUsd / 1e6
+    // Informational only, and named so. Every authority above is integer
+    // micro-USD; nothing compares or reserves against this field.
+    totalUsdInformational: totalMicroUsd / 1e6
   });
 }
 

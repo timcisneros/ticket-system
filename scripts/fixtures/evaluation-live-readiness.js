@@ -47,9 +47,17 @@ const MAX_REQUESTS_PER_TRIAL = Object.freeze({
   C: { planner: 1, worker: 9, basis: 'planner ceiling 1 + 3 leaf Runs x worker ceiling 3' }
 });
 
+// THE KERNEL OWNS THIS NUMBER. This used to be a second pricing implementation:
+// a single floating division of the summed product, with no rounding, which
+// produced a fractional monetary authority (20,428.8) in a contract whose
+// first rule is integer micro-USD rounded up. It now asks the same
+// `computeMaximumLiability` that governed economics trusts.
+const { canonicalPerRequestMicroUsd } =
+  require('./evaluation-live-canonical-price');
+
 function worstCaseMicroUsdPerRequest() {
-  return (PRICING.contextWindowTokens * PRICING.inputMicroUsdPerMillionTokens +
-    PRICING.maximumOutputTokensPerRequest * PRICING.outputMicroUsdPerMillionTokens) / 1e6;
+  return canonicalPerRequestMicroUsd({ role: 'structured_leaf_executor' })
+    .perRequestMicroUsd;
 }
 
 function worstCaseLiability({ trialsPerArm }) {
@@ -75,7 +83,8 @@ function worstCaseLiability({ trialsPerArm }) {
     perRequestMicroUsd: perRequest,
     byArm: Object.freeze(byArm),
     totalMicroUsd,
-    totalUsd: totalMicroUsd / 1e6,
+    // Informational only. Every authority here is integer micro-USD.
+    totalUsdInformational: totalMicroUsd / 1e6,
     note: 'worst case under the frozen bound method, not a nominal estimate'
   });
 }

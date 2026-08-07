@@ -24,6 +24,10 @@ const {
   MAX_REQUESTS_PER_TRIAL, PRICING, assertLiveExecutionPermitted,
   auditLiveReadiness, worstCaseLiability, worstCaseMicroUsdPerRequest
 } = require('./fixtures/evaluation-live-readiness');
+const {
+  buildPricingCatalog, computeMaximumLiability, findPricingEntry
+} = require('../runtime/model-pricing-catalog');
+const { pricedCatalogValue } = require('./governed-structured-fixture');
 const protocol = require('../config/structured-allocation-evaluation-v1.json');
 const fixtureManifest = require('../config/structured-allocation-evaluation-scored-v1.json');
 
@@ -113,11 +117,29 @@ function main() {
     'the fully frozen protocol permits execution — subject to explicit authorization');
 
   // ── The economic liability is the WORST case, not an estimate ─────────
+  // THE CANONICAL KERNEL, not a restatement of its arithmetic. Recomputing the
+  // formula here would only prove the test agrees with itself; asking
+  // `computeMaximumLiability` proves the live layer consumes the same number
+  // governed economics reserves against.
   const perRequest = worstCaseMicroUsdPerRequest();
-  const expected = (PRICING.contextWindowTokens * PRICING.inputMicroUsdPerMillionTokens +
-    PRICING.maximumOutputTokensPerRequest * PRICING.outputMicroUsdPerMillionTokens) / 1e6;
-  ok(perRequest === expected && PRICING.boundMethod === 'model_context_window_ceiling',
-    'per-request liability is a full context window plus the capped output');
+  const canonical = computeMaximumLiability({
+    entry: findPricingEntry(buildPricingCatalog(pricedCatalogValue()), {
+      provider: 'openai', model: protocol.fixedModel.model,
+      adapterId: protocol.fixedModel.adapterId
+    }),
+    maxOutputTokens: PRICING.maximumOutputTokensPerRequest,
+    maxProviderRequests: 1
+  });
+  ok(perRequest === canonical.maximumMicroUsd &&
+     PRICING.boundMethod === 'model_context_window_ceiling',
+  `per-request liability is the canonical kernel maximum (${perRequest} micro-USD)`);
+  // AND IT IS AN INTEGER. The previous implementation produced 20,428.8 — a
+  // fractional monetary authority in an integer micro-USD contract.
+  ok(Number.isSafeInteger(perRequest),
+    'and it is a safe integer, never a fractional monetary authority');
+  ok(perRequest === canonical.inputMicroUsdPerRequest +
+     canonical.outputMicroUsdPerRequest + canonical.requestMicroUsdPerRequest,
+  'each charge component is rounded UP separately, then summed — the kernel rule');
   const liability = worstCaseLiability({ trialsPerArm: { A: 10, B: 10 } });
   ok(liability.byArm.B.maxRequestsPerTrial > liability.byArm.A.maxRequestsPerTrial,
     'a structured trial carries more authorized requests than a direct one');

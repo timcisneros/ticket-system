@@ -26,6 +26,10 @@
 // `assertRetryLiabilityBounded`, so if the trial construction ever enabled
 // retry, the reservation would grow rather than silently understate.
 
+const {
+  addMicroUsd, assertIntegerMicroUsd, canonicalPerRequestMicroUsd, multiplyMicroUsd
+} = require('./evaluation-live-canonical-price');
+
 class TrialLiabilityError extends Error {
   constructor(message, detail = {}) {
     super(message);
@@ -156,19 +160,61 @@ function maximumProviderAttempts({
   });
 }
 
-function trialWorstCaseMicroUsd({ perRequestMicroUsd, ...bounds }) {
-  if (typeof perRequestMicroUsd !== 'number' || !Number.isFinite(perRequestMicroUsd) ||
-      perRequestMicroUsd <= 0) {
-    throw new TrialLiabilityError('perRequestMicroUsd must be a positive number',
-      { code: 'TRIAL_LIABILITY_PRICE_INVALID', perRequestMicroUsd });
-  }
+// THE TRIAL BOUND, IN CANONICAL INTEGER MICRO-USD.
+//
+// This module answers HOW MANY chargeable requests a trial can authorize. What
+// one request is worth comes from `canonicalPerRequestMicroUsd`, which asks the
+// same `computeMaximumLiability` governed economics already trusts. There is no
+// second pricing implementation here and no local rounding: an amount that
+// needed rounding at this layer would mean the kernel had been bypassed.
+//
+//   plannerLiability   = canonicalPerRequest x maximumPlannerRequests
+//   workerRunLiability = canonicalPerRequest x requestsPerRun x attempts
+//   trialLiability     = plannerLiability + SUM(workerRunLiability)
+function trialWorstCaseMicroUsd({ perRequestMicroUsd = null, ...bounds }) {
   const attempts = maximumProviderAttempts(bounds);
+  // A caller may PIN the per-request maximum, but only to the canonical value:
+  // the pin is checked, never trusted, so a stale or fractional number refuses
+  // instead of quietly becoming the authority.
+  const planner = canonicalPerRequestMicroUsd({ role: 'structured_planner' });
+  const worker = canonicalPerRequestMicroUsd({
+    role: attempts.governed ? 'structured_leaf_executor' : 'ungoverned_worker'
+  });
+  if (perRequestMicroUsd !== null && perRequestMicroUsd !== undefined) {
+    assertIntegerMicroUsd(perRequestMicroUsd, 'perRequestMicroUsd');
+    if (perRequestMicroUsd !== worker.perRequestMicroUsd ||
+        perRequestMicroUsd !== planner.perRequestMicroUsd) {
+      throw new TrialLiabilityError(
+        `supplied perRequestMicroUsd ${perRequestMicroUsd} disagrees with the ` +
+        `canonical maximum ${worker.perRequestMicroUsd}; the pricing kernel owns ` +
+        'this number',
+        { code: 'TRIAL_LIABILITY_PRICE_NOT_CANONICAL',
+          supplied: perRequestMicroUsd, canonical: worker.perRequestMicroUsd });
+    }
+  }
+  const plannerLiability = multiplyMicroUsd(
+    planner.perRequestMicroUsd, attempts.plannerRequestMaximum, 'plannerLiability');
+  // Every executable worker Run, each priced at the canonical maximum, and each
+  // attempt that Run may make.
+  let workerLiability = 0;
+  for (let run = 0; run < attempts.maximumWorkerRuns; run += 1) {
+    workerLiability = addMicroUsd(workerLiability, multiplyMicroUsd(
+      worker.perRequestMicroUsd,
+      attempts.workerRequestsPerRun * attempts.attemptsPerRun,
+      'workerRunLiability'), 'workerLiability');
+  }
   return Object.freeze({
     ...attempts,
-    perRequestMicroUsd,
-    // trialWorstCase = plannerWorstCase + sum(worker Run worst cases), where
-    // every attempt is priced at the same frozen per-request bound.
-    trialWorstCaseMicroUsd: attempts.totalProviderAttempts * perRequestMicroUsd
+    boundMethod: worker.boundMethod,
+    pricingCatalogHash: worker.pricingCatalogHash,
+    model: worker.model,
+    maxOutputTokens: worker.maxOutputTokens,
+    perRequestMicroUsd: worker.perRequestMicroUsd,
+    plannerPerRequestMicroUsd: planner.perRequestMicroUsd,
+    plannerLiabilityMicroUsd: plannerLiability,
+    workerLiabilityMicroUsd: workerLiability,
+    trialWorstCaseMicroUsd: addMicroUsd(
+      plannerLiability, workerLiability, 'trialWorstCase')
   });
 }
 
