@@ -40,6 +40,9 @@ const {
 const {
   buildPricingCatalog, computeMaximumLiability, findPricingEntry
 } = require('../runtime/model-pricing-catalog');
+const {
+  buildEvaluationServerCredentialEnv, describeEvaluationServerCredential
+} = require('./fixtures/evaluation-server-env');
 const { pricedCatalogValue } = require('./governed-structured-fixture');
 const { buildOpenAiResponsesBody } = require('../runtime/provider-request-body');
 const liveManifest = require('../config/structured-allocation-evaluation-live-v1.json');
@@ -627,6 +630,30 @@ function main() {
   ok(auditLiveReadiness({ sources: { registered: false } }).unresolved
     .includes('liveFullCaptured120SlotExecutionProved'),
   'an unregistered acceptance suite blocks too — an unrun proof is not a proof');
+
+  // ── AND THE CREDENTIAL FACTS CAN FAIL ───────────────────────────────
+  //
+  // This is the layer that let an authorized $20 matrix reach its gate unable
+  // to authenticate. Neither the dispatch fact nor the 120-slot fact would have
+  // gone UNRESOLVED for it, so each of these is shown failing on its own.
+  const withoutHarness = auditLiveReadiness({ sources: { harnessSource: '' } });
+  ok(withoutHarness.unresolved.includes('ordinaryHarnessCredentialStrippingStillProved') &&
+     withoutHarness.verdict === 'TRANCHE 6 LIVE-MODEL EVALUATION BLOCKED',
+  'READY is impossible if the harness stops stripping inherited credentials');
+  const withoutWiring = auditLiveReadiness({ sources: { runnerSource: '' } });
+  ok(withoutWiring.unresolved.includes('realLiveCredentialPropagationImplemented') &&
+     withoutWiring.verdict === 'TRANCHE 6 LIVE-MODEL EVALUATION BLOCKED',
+  'and impossible if the real live branch stops forwarding its credential');
+
+  // THE SECRET NEVER BECOMES OBSERVABLE.
+  const probe = 'probe-credential-value';
+  const built = buildEvaluationServerCredentialEnv({
+    mode: 'live', liveTransportCapture: null, env: { OPENAI_API_KEY: probe } });
+  ok(built.env.OPENAI_API_KEY === probe && built.usesRealCredential === true,
+    'the real live branch passes the credential through untouched');
+  const describedProbe = JSON.stringify(describeEvaluationServerCredential(built));
+  ok(!describedProbe.includes(probe) && describedProbe.includes('credentialPresent'),
+    'while its description reports presence and never the value');
   ok(assertLiveExecutionPermitted(audit) === true,
     'and live execution would be permitted — READY does not authorize spending');
 

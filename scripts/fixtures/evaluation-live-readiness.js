@@ -576,6 +576,90 @@ function auditLiveReadiness({ liveManifest, sources = {} } = {}) {
     'the synthetic acceptance corpus can never be scored as live product evidence',
     'evaluation-live-corpus-integrity assertScorableLiveCorpus');
 
+  // ── CREDENTIAL PROPAGATION ──────────────────────────────────────────────
+  //
+  // A LAYER NEITHER DISPATCH NOR MATRIX EXECUTION PROVES. The harness strips
+  // OPENAI_API_KEY before spawning — correct, and it stays — and the real
+  // uncaptured live branch must restore it through the override the harness
+  // applies afterwards. Every earlier live proof took the capture branch, which
+  // supplies a sentinel, so the branch a real matrix depends on was never
+  // exercised and an authorized run reached its gate unable to authenticate.
+  //
+  // `liveDispatchPathImplemented` and `liveFullCaptured120SlotExecutionProved`
+  // are both true while this is broken. They prove different layers.
+  const envModule = (() => {
+    try {
+      // eslint-disable-next-line global-require
+      return require('./evaluation-server-env');
+    } catch (_) { return null; }
+  })();
+  const harnessSource = sources.harnessSource !== undefined ? sources.harnessSource : (() => {
+    try {
+      return require('node:fs').readFileSync(
+        require('node:path').join(__dirname, '..', 'postgres-test-harness.js'), 'utf8');
+    } catch (_) { return ''; }
+  })();
+  const credentialSuiteRegistered = (() => {
+    try {
+      return require('node:fs').readFileSync(
+        require('node:path').join(__dirname, '..', 'test-manifest.js'), 'utf8')
+        .includes('evaluation-live-credential-postgres-test.js');
+    } catch (_) { return false; }
+  })();
+  // BEHAVIOURAL: the module is CALLED, in each of the three modes.
+  const credentialModes = envModule === null ? null : (() => {
+    try {
+      const probe = 'probe-credential-value';
+      const fixture = envModule.buildEvaluationServerCredentialEnv({
+        mode: 'fixture', env: { OPENAI_API_KEY: probe } });
+      const captured = envModule.buildEvaluationServerCredentialEnv({
+        mode: 'live', liveTransportCapture: '/x', env: { OPENAI_API_KEY: probe } });
+      const live = envModule.buildEvaluationServerCredentialEnv({
+        mode: 'live', liveTransportCapture: null, env: { OPENAI_API_KEY: probe } });
+      let refused = false;
+      try {
+        envModule.buildEvaluationServerCredentialEnv({
+          mode: 'live', liveTransportCapture: null, env: {} });
+      } catch (error) { refused = error.code === 'REAL_LIVE_CREDENTIAL_ABSENT'; }
+      return { fixture, captured, live, refused, probe };
+    } catch (_) { return null; }
+  })();
+
+  record('realLiveCredentialPropagationImplemented',
+    credentialModes !== null &&
+      credentialModes.live.env.OPENAI_API_KEY === credentialModes.probe &&
+      runnerSource.includes('buildEvaluationServerCredentialEnv({')
+      ? 'FROZEN' : 'UNRESOLVED',
+    'the real uncaptured live branch forwards the authorized credential',
+    'evaluation-server-env buildEvaluationServerCredentialEnv');
+
+  record('realLiveCredentialPropagationBehaviourallyProved',
+    credentialSuiteRegistered ? 'FROZEN' : 'UNRESOLVED',
+    'a registered suite observes the real branch at the spawn boundary',
+    'evaluation-live-credential-postgres-test');
+
+  record('ordinaryHarnessCredentialStrippingStillProved',
+    harnessSource.includes("'OPENAI_API_KEY', 'OPENAI_ORG_ID', 'OPENAI_PROJECT_ID'") &&
+      harnessSource.includes('delete inheritedEnv[credentialKey]') &&
+      credentialSuiteRegistered ? 'FROZEN' : 'UNRESOLVED',
+    'the harness still strips inherited credentials for every ordinary spawn',
+    'postgres-test-harness inheritedEnv stripping');
+
+  record('syntheticCaptureUsesSentinelNotRealCredential',
+    credentialModes !== null &&
+      credentialModes.captured.env.OPENAI_API_KEY === envModule.SENTINEL_CREDENTIAL &&
+      credentialModes.fixture.env.OPENAI_API_KEY === envModule.SENTINEL_CREDENTIAL &&
+      credentialModes.captured.usesRealCredential === false
+      ? 'FROZEN' : 'UNRESOLVED',
+    'fixture and captured live receive a sentinel, never the real credential',
+    'evaluation-server-env sentinel modes');
+
+  record('realLiveMissingCredentialRefusesBeforeSpawn',
+    credentialModes !== null && credentialModes.refused === true
+      ? 'FROZEN' : 'UNRESOLVED',
+    'a real live trial with no credential refuses before a server is spawned',
+    'evaluation-server-env REAL_LIVE_CREDENTIAL_ABSENT');
+
   const unresolved = items.filter(item => item.state === 'UNRESOLVED');
   return Object.freeze({
     version: LIVE_READINESS_VERSION,

@@ -216,6 +216,7 @@ const TESTS = Object.freeze([
   { file: "governed-evaluation-negative-path-postgres-test.js", status: "required" },
   { file: "structured-allocation-live-dispatch-postgres-test.js", status: "required" },
   { file: "structured-allocation-live-matrix-postgres-test.js", status: "required" },
+  { file: "evaluation-live-credential-postgres-test.js", status: "required" },
   { file: "structured-allocation-scenario-postgres-test.js", status: "required" },
   { file: "governed-provider-transport-test.js", status: "required" },
   { file: "governed-provider-request-contract-test.js", status: "required" },

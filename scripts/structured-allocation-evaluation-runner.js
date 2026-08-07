@@ -46,6 +46,9 @@ const { assertDispatchWithinGlobalCeiling } =
   require('./fixtures/evaluation-live-budget-ledger');
 const { trialWorstCaseMicroUsd } = require('./fixtures/evaluation-live-trial-liability');
 const {
+  buildEvaluationServerCredentialEnv
+} = require('./fixtures/evaluation-server-env');
+const {
   OBSERVATION_SINK_VERSION, readObservations
 } = require('./fixtures/evaluation-observation-sink');
 const { evaluateScenarioOutcome, classifyTruthfulness } = require('./fixtures/evaluation-oracle');
@@ -585,7 +588,11 @@ async function runTrial({
   liveBudget = null,
   // Set by the live matrix executor, which commits the reservation itself
   // before spawning anything capable of provider transport.
-  liveReservationAlreadyCommitted = false
+  liveReservationAlreadyCommitted = false,
+  // TEST-ONLY. Observes the exact child environment at the spawn boundary and
+  // may stop there, so the REAL uncaptured live credential branch can be proved
+  // without creating a process able to contact a provider.
+  spawnEnvObserver = null
 }) {
   assertMode(mode);
   // ONE RESOLUTION POINT. The variant is resolved into a complete scenario here
@@ -900,6 +907,7 @@ async function runTrial({
   }
 
   const server = await startServer({
+    ...(spawnEnvObserver ? { spawnEnvObserver } : {}),
     env: {
       ...(preload ? { NODE_OPTIONS: `--require ${preload}` } : {}),
       ...(isLive ? {} : { EVALUATION_FIXTURE_NAMESPACE: namespace.dir }),
@@ -938,16 +946,14 @@ async function runTrial({
       }),
       // CREDENTIALS.
       //
-      // Fixture mode uses a sentinel that is not a credential. A CAPTURED live
-      // run also uses a sentinel: the final network hop is replaced, so no
-      // request can leave the machine and a real key would be pointless risk —
-      // but the governed planner refuses to route without SOME credential
-      // present, so the sentinel is what lets the real dispatch path run at all.
-      // A genuine live run supplies neither, inheriting the real credential from
-      // normal secret configuration, and never writes it anywhere.
-      ...(isLive && !liveTransportCapture
-        ? {}
-        : { OPENAI_API_KEY: 'test-only-sentinel-not-a-real-credential' }),
+      // ONE OWNER, three modes, decided in `evaluation-server-env`. The harness
+      // strips the inherited credential before spawning — a rule that stays —
+      // and this override is applied after it, so it is what a real uncaptured
+      // live run depends on. That branch previously supplied nothing, on the
+      // false assumption that inheritance would carry it.
+      ...buildEvaluationServerCredentialEnv({
+        mode, liveTransportCapture, env: process.env
+      }).env,
       // NOT AGGRESSIVE. A 200 ms tick made a scheduler continuation race the
       // synchronous post-planning leaf admission for the same plan, and the
       // loser blocked the Ticket with `leaf_admission_conflict` before any leaf

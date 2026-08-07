@@ -154,7 +154,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 // where one is a superset of the other cannot be told apart by discipline, so
 // this refuses everything that is not exactly the supported shape.
 
-const START_ARGUMENT_KEYS = Object.freeze(['env', 'serverOptions']);
+const START_ARGUMENT_KEYS = Object.freeze(['env', 'serverOptions', 'spawnEnvObserver']);
 const START_SHAPE_ERROR = 'TEST_SERVER_START_ARGUMENT_SHAPE_INVALID';
 
 class TestServerStartArgumentError extends Error {
@@ -191,6 +191,15 @@ function readStartArgument(argument) {
   }
 
   for (const key of START_ARGUMENT_KEYS) {
+    // The spawn-boundary observer is a function by design; every other option
+    // is a plain map.
+    if (key === 'spawnEnvObserver') {
+      if (argument[key] !== undefined && typeof argument[key] !== 'function') {
+        throw new TestServerStartArgumentError('spawnEnvObserver must be a function',
+          { key, received: typeof argument[key] });
+      }
+      continue;
+    }
     if (argument[key] !== undefined && !isPlainObjectValue(argument[key])) {
       throw new TestServerStartArgumentError(`${key} must be a plain object`,
         { key, received: typeof argument[key] });
@@ -210,7 +219,11 @@ function readStartArgument(argument) {
       { nested });
   }
 
-  return { env, serverOptions: argument.serverOptions || {} };
+  return {
+    env,
+    serverOptions: argument.serverOptions || {},
+    spawnEnvObserver: argument.spawnEnvObserver || null
+  };
 }
 
 // Start the real server against the harness schema. Everything the JSON-era
@@ -227,6 +240,8 @@ async function spawnTestServer({
   schema,
   workspaceRoot,
   env = {},
+  // Test-only. See the spawn-boundary observer below.
+  spawnEnvObserver = null,
   adminPassword = 'admin123',
   readyTimeoutMs = 45000
 }) {
@@ -251,20 +266,42 @@ async function spawnTestServer({
     delete inheritedEnv[credentialKey];
   }
 
+  // THE EXACT ENVIRONMENT THE CHILD WILL RECEIVE. Built before spawning so the
+  // spawn-boundary observer below can inspect the real thing rather than a
+  // reconstruction of it.
+  const childEnv = {
+    ...inheritedEnv,
+    NODE_ENV: 'test',
+    DATABASE_URL: databaseUrl,
+    POSTGRES_SCHEMA: schema,
+    PORT: port,
+    WORKSPACE_ROOT: workspaceRoot,
+    SESSION_SECRET: 'postgres-test-harness-secret-0123456789abcdef0123456789abcdef',
+    ADMIN_BOOTSTRAP_PASSWORD: adminPassword,
+    PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS: '3600000',
+    // Applied LAST, so an explicit override wins over the stripped inherited
+    // environment. That precedence is what lets a real live run restore the
+    // credential the strip above removed.
+    ...env
+  };
+
+  // ── TEST-ONLY SPAWN-BOUNDARY OBSERVER ─────────────────────────────────
+  //
+  // The credential branch a REAL live run takes cannot be proved through the
+  // final-hop capture: that branch supplies a sentinel, which is precisely what
+  // hid the defect this seam exists to catch. So a test may observe the exact
+  // child environment at the moment before spawn and stop there — the real
+  // branch runs, and no child process capable of provider contact is created.
+  //
+  // It is never set in ordinary operation, and it receives the environment
+  // rather than being told about it, so it cannot be satisfied by a summary.
+  if (typeof spawnEnvObserver === 'function') {
+    spawnEnvObserver(childEnv);
+  }
+
   const child = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
-    env: {
-      ...inheritedEnv,
-      NODE_ENV: 'test',
-      DATABASE_URL: databaseUrl,
-      POSTGRES_SCHEMA: schema,
-      PORT: port,
-      WORKSPACE_ROOT: workspaceRoot,
-      SESSION_SECRET: 'postgres-test-harness-secret-0123456789abcdef0123456789abcdef',
-      ADMIN_BOOTSTRAP_PASSWORD: adminPassword,
-      PROCESS_TEMPLATE_SCHEDULER_INTERVAL_MS: '3600000',
-      ...env
-    },
+    env: childEnv,
     stdio: ['ignore', 'pipe', 'pipe']
   });
   child.stdout.on('data', chunk => { output += String(chunk); });
@@ -338,9 +375,9 @@ async function withHarness(suiteName, body, options = {}) {
     await reapStaleSchemas(store);
 
     const startTestServer = async (argument = {}) => {
-      const { env, serverOptions } = readStartArgument(argument);
+      const { env, serverOptions, spawnEnvObserver } = readStartArgument(argument);
       const server = await spawnTestServer({
-        databaseUrl, schema, workspaceRoot, env, ...serverOptions
+        databaseUrl, schema, workspaceRoot, env, spawnEnvObserver, ...serverOptions
       });
       servers.push(server);
       return server;

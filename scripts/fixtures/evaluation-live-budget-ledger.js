@@ -89,11 +89,23 @@ function reconstructCommittedLiability(runRoot) {
 // uses for single-holder operations, and it survives process death because the
 // caller always releases in `finally`.
 function withLedgerLock(runRoot, body) {
+  // The run root belongs to the executor, and creating it is idempotent. Doing
+  // it here means a missing directory cannot be MISREPORTED as a concurrency
+  // conflict — an operator told "another dispatcher holds the ledger" would go
+  // looking for a second process that never existed.
+  fs.mkdirSync(runRoot, { recursive: true });
   const lock = path.join(runRoot, LOCK_FILE);
   let handle = null;
   try {
     handle = fs.openSync(lock, 'wx');
   } catch (error) {
+    // Only EEXIST means contention. Anything else is a different fault and
+    // must say so rather than borrow the concurrency explanation.
+    if (error.code !== 'EEXIST') {
+      throw new LiveBudgetError(
+        `the live economic ledger could not be locked at ${runRoot}: ${error.code}`,
+        { code: 'LIVE_BUDGET_LOCK_UNAVAILABLE', cause: error.code });
+    }
     throw new LiveBudgetError(
       'another dispatcher holds the live economic ledger; refusing to compute ' +
       'remaining authority concurrently',

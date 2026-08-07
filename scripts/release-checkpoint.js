@@ -131,6 +131,7 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // hop; makes zero external calls.
   'structured-allocation-live-dispatch-postgres-test.js',
   'structured-allocation-live-matrix-postgres-test.js',
+  'evaluation-live-credential-postgres-test.js',
   'postgres-persistence-integration-test.js',
   'postgres-runtime-cutover-test.js',
   'page-render-regression-test.js',
