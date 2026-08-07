@@ -108,6 +108,25 @@ function main() {
   ok(NON_IMPLICATIONS.length === 5,
     'and all five non-implications travel with the projection itself');
 
+  // ── THE RESPONSE FACT ITSELF IS PROJECTED ─────────────────────────────
+  //
+  // Asserted on its own, not implied by the extraction field below. A
+  // projection that reported extraction correctly while dropping the
+  // response-persisted fact would leave an operator unable to say whether a
+  // provider answer ever became durable at all.
+  const answered = projectLiveDurableObservation({
+    events: [REQUEST, INVOKED('governed_leaf_worker'),
+      RESPONSE({ outcome: 'succeeded', requestId: 'req_1', status: 200 }),
+      RESPONSE({ outcome: 'failed', code: 'OPENAI_HTTP_ERROR', status: 500 })]
+  });
+  ok(answered.response.state === 'PERSISTED' && answered.response.count === 2,
+    'persisted provider responses are projected as PERSISTED, with their count');
+  ok(answered.response.succeeded === 1 && answered.response.failed === 1,
+    'and split into succeeded and failed, which are different findings');
+  ok(answered.response.failureCodes.OPENAI_HTTP_ERROR === 1 &&
+     answered.response.httpStatuses['500'] === 1,
+  'carrying the failure code and HTTP status each one reported');
+
   // ── EXTRACTION IS A CANONICAL FACT, NOT AN INFERENCE ──────────────────
   const extracted = projectLiveDurableObservation({
     events: [RESPONSE({ outcome: 'succeeded', requestId: 'req_ok', status: 200 })]
