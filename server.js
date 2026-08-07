@@ -26088,7 +26088,8 @@ fastify.post('/api/process-templates', { preHandler: fastify.requireAuth }, asyn
   const { name, tt } = normalizeProcessTemplateInput(body);
   if (!name) { reply.code(400); return { error: 'Template name is required' }; }
   if (!tt) { reply.code(400); return { error: 'ticketTemplate object is required' }; }
-  // guard removed
+  try { assertSupportedRequireVerification(tt.executionPolicy); }
+  catch (error) { reply.code(400); return { error: error.message }; }
   const actor = actorFromRequest(request);
   const changedBy = actor.username || (actor.userId != null ? String(actor.userId) : 'system');
   try {
