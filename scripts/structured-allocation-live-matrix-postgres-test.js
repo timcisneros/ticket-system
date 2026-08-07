@@ -171,6 +171,61 @@ async function main() {
       `corpus gate verdict: ${audit.verdict}` +
       (audit.failures.length ? ` — ${JSON.stringify(audit.failures.slice(0, 3))}` : ''));
 
+    // ── THE OBSERVATION PROJECTION SURVIVES TEARDOWN ────────────────────
+    //
+    // THE POINT OF THE WHOLE LAYER. The database these trials ran against is
+    // ephemeral; when it is gone the artifacts are all that remain. So the
+    // artifacts are read back HERE, from disk, and asked the questions an
+    // operator would ask months later — and the answers must be distinguishable
+    // rather than a set of counts that four different histories share.
+    const trialFiles = fs.readdirSync(path.join(outputRoot, 'trials'))
+      .filter(name => name.endsWith('.json'));
+    const artifacts = trialFiles.map(name =>
+      JSON.parse(fs.readFileSync(path.join(outputRoot, 'trials', name), 'utf8')));
+    assertThat(artifacts.length > 0 &&
+      artifacts.every(artifact => artifact.ticketReport &&
+        artifact.ticketReport.durableObservation &&
+        artifact.ticketReport.durableObservation.version === 1),
+    `every one of the ${artifacts.length} written artifacts carries its durable ` +
+    'observation projection');
+
+    const observed = artifacts.map(artifact => artifact.ticketReport.durableObservation);
+    assertThat(observed.every(projection =>
+      typeof projection.transport.state === 'string' &&
+      typeof projection.transport.absenceMeans === 'string' &&
+      Array.isArray(projection.transport.doesNotProve) &&
+      projection.transport.doesNotProve.length > 0),
+    'each carries the transport fact WITH its own strength and its disclaimers, ' +
+    'so a later reader cannot lose the limitation');
+    assertThat(observed.every(projection =>
+      Array.isArray(projection.nonImplications) && projection.nonImplications.length === 5),
+    'and the five non-implications, so a zero can never be read as a negative finding');
+
+    // A REPRESENTATIVE SUCCESS AND A REPRESENTATIVE FAILURE, distinguished.
+    const succeeded = artifacts.filter(artifact =>
+      artifact.ticketReport.durableObservation.terminal.statuses.completed > 0);
+    const failed = artifacts.filter(artifact =>
+      Object.keys(artifact.ticketReport.durableObservation.terminal.statuses)
+        .some(status => status !== 'completed'));
+    assertThat(succeeded.length > 0 || failed.length > 0,
+      `terminal outcomes are recorded per artifact ` +
+      `(${succeeded.length} with a completed Run, ${failed.length} with another)`);
+    const invoked = observed.filter(projection => projection.transport.state === 'INVOKED');
+    assertThat(invoked.length > 0,
+      `${invoked.length} artifacts durably record that production crossed into ` +
+      'external transport — a question no earlier artifact could answer');
+    // AND THE PROHIBITED INFERENCE IS DEMONSTRABLY UNAVAILABLE: artifacts exist
+    // that invoked transport while holding zero governed reservations.
+    const zeroReservationWithTransport = observed.filter(projection =>
+      projection.economics.reservations === 0 && projection.transport.state === 'INVOKED');
+    assertThat(zeroReservationWithTransport.length > 0,
+      `${zeroReservationWithTransport.length} artifacts hold ZERO economic ` +
+      'reservations while transport was invoked — a reservation count can never ' +
+      'stand in for a transport count');
+    assertThat(!/sk-[A-Za-z0-9]{8}|"authorization"|"apiKey"/i
+      .test(JSON.stringify(observed)),
+    'and no credential material appears in any projected artifact');
+
     // ── AND IT MAY NEVER BE SCORED AS PRODUCT EVIDENCE ──────────────────
     let refusal = null;
     try { assertScorableLiveCorpus(audit); } catch (error) { refusal = error; }
