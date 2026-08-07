@@ -21,7 +21,7 @@ const {
 } = require('./fixtures/evaluation-live-run-journal');
 const {
   COMPLETE_VERDICT, LiveCorpusError, SYNTHETIC_ACCEPTANCE_LABEL,
-  assertScorableLiveCorpus, auditLiveCorpus
+  assertScorableLiveCorpus, auditLiveCorpus, buildExclusionArtifact
 } = require('./fixtures/evaluation-live-corpus-integrity');
 const { trialIdFor } = require('./structured-allocation-evaluation-scored-runner');
 
@@ -232,6 +232,54 @@ function main() {
     'and is REFUSED as live product evidence anyway — complete is not the same as real');
     ok(SYNTHETIC_ACCEPTANCE_LABEL.includes('NOT PRODUCT EVIDENCE'),
       'the label says so in terms');
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  // ── THE EXECUTOR'S OWN EXCLUSION ARTIFACT ────────────────────────────
+  //
+  // The acceptance run produced zero exclusions, and a corpus seeded by a test
+  // proves only what the test wrote. This exercises the function the EXECUTOR
+  // actually calls, so the two rules that make an exclusion safe are checkable
+  // without provoking a provider outage.
+  {
+    const slot = manifest.slots[7];
+    const built = buildExclusionArtifact({
+      label: SYNTHETIC_ACCEPTANCE_LABEL,
+      trialId: trialIdFor(slot),
+      header: HEADER,
+      slot,
+      classified: {
+        classification: 'infrastructure_exclusion',
+        reason: 'provider 429 before useful inference',
+        evidence: { httpStatus: 429, modelResultObserved: false }
+      }
+    });
+    ok(built.replacementSlot === null,
+      'the executor-built exclusion carries NO replacement slot');
+    ok(built.assignedSlot.slot === slot.slot &&
+       built.assignedSlot.armId === slot.armId &&
+       built.assignedSlot.repetition === slot.repetition &&
+       built.assignedSlot.seed === slot.stochasticIdentity,
+    'and preserves its assigned slot, arm, repetition and frozen seed exactly');
+    ok(built.frozenReason === 'provider 429 before useful inference' &&
+       built.classification === 'infrastructure_exclusion',
+    'naming the frozen predicate reason it was classified under');
+    ok(built.scoredRunHash === HEADER.runHeaderHash &&
+       built.manifestHash === HEADER.manifestHash &&
+       built.sourceCommit === HEADER.repositoryCommit,
+    'and binds the same run, manifest and source commit as every other artifact');
+
+    // AND THE GATE ACCEPTS EXACTLY WHAT THE EXECUTOR BUILDS.
+    const root = freshRoot();
+    fs.mkdirSync(path.join(root, 'exclusions'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'trials'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'exclusions', `${trialIdFor(slot)}.json`),
+      JSON.stringify(built));
+    appendJournal(root, { ...bind, event: 'infrastructure_excluded',
+      trialId: trialIdFor(slot), slotOrdinal: slot.slot });
+    const audit = auditLiveCorpus({ manifest, header: HEADER, outputRoot: root, trialIdFor });
+    ok(!audit.failures.some(f => f.trialId === trialIdFor(slot)),
+      'the corpus gate accepts the exclusion the executor actually writes');
     fs.rmSync(root, { recursive: true, force: true });
   }
 

@@ -39,7 +39,8 @@ const {
   acceptedSlots, appendJournal, readJournal
 } = require('./fixtures/evaluation-live-run-journal');
 const {
-  SYNTHETIC_ACCEPTANCE_LABEL, assertScorableLiveCorpus, auditLiveCorpus
+  SYNTHETIC_ACCEPTANCE_LABEL, assertScorableLiveCorpus, auditLiveCorpus,
+  buildExclusionArtifact
 } = require('./fixtures/evaluation-live-corpus-integrity');
 const { classifyLiveFailure } = require('./fixtures/evaluation-live-failure-classifier');
 const { trialWorstCaseMicroUsd } = require('./fixtures/evaluation-live-trial-liability');
@@ -553,25 +554,11 @@ async function executeLiveRun({
               { trialId: id, classification: classified.classification });
           }
           if (classified.classification === 'infrastructure_exclusion') {
-            const exclusion = {
+            const exclusion = buildExclusionArtifact({
               label: header.syntheticAcceptance
                 ? SYNTHETIC_ACCEPTANCE_LABEL : SCORED_ARTIFACT_LABEL,
-              trialId: id,
-              scoredRunHash: header.runHeaderHash,
-              manifestHash: header.manifestHash,
-              sourceCommit: header.repositoryCommit,
-              // THE SLOT IS PRESERVED. No substitute seed, no replacement.
-              assignedSlot: {
-                slot: slot.slot, armId: slot.armId, scenarioId: slot.scenarioId,
-                variantId: slot.variantId || null, repetition: slot.repetition,
-                seed: slot.stochasticIdentity
-              },
-              frozenReason: classified.reason,
-              classification: classified.classification,
-              evidence: classified.evidence,
-              replacementSlot: null,
-              at: new Date().toISOString()
-            };
+              trialId: id, header, slot, classified
+            });
             fs.writeFileSync(path.join(outputRoot, 'exclusions', `${id}.json`),
               JSON.stringify(exclusion, null, 2));
             appendJournal(outputRoot, { ...bind, event: 'infrastructure_excluded',

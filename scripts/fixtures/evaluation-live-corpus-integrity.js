@@ -40,6 +40,36 @@ function readArtifact(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return null; }
 }
 
+// THE EXCLUSION ARTIFACT'S SHAPE IS A CONTRACT, so it lives here as a function
+// rather than inline in the executor loop. An exclusion is the only way a slot
+// leaves the corpus, and the two rules that make that safe — it keeps its
+// assigned identity, and it gains no replacement — must be checkable without
+// first provoking a provider outage.
+function buildExclusionArtifact({ label, trialId, header, slot, classified }) {
+  return Object.freeze({
+    label,
+    trialId,
+    scoredRunHash: header.runHeaderHash,
+    manifestHash: header.manifestHash,
+    sourceCommit: header.repositoryCommit,
+    // NO SUBSTITUTE SEED, NO REPLACEMENT TRIAL. The slot is preserved exactly
+    // as assigned, so 120 assigned stays 120 accounted for.
+    assignedSlot: Object.freeze({
+      slot: slot.slot,
+      armId: slot.armId,
+      scenarioId: slot.scenarioId,
+      variantId: slot.variantId || null,
+      repetition: slot.repetition,
+      seed: slot.stochasticIdentity
+    }),
+    frozenReason: classified.reason,
+    classification: classified.classification,
+    evidence: classified.evidence,
+    replacementSlot: null,
+    at: new Date().toISOString()
+  });
+}
+
 function auditLiveCorpus({ manifest, header, outputRoot, trialIdFor }) {
   const failures = [];
   const fail = (code, message, detail = {}) =>
@@ -200,6 +230,7 @@ function assertScorableLiveCorpus(audit) {
 
 module.exports = {
   COMPLETE_VERDICT,
+  buildExclusionArtifact,
   LiveCorpusError,
   SYNTHETIC_ACCEPTANCE_LABEL,
   assertScorableLiveCorpus,
