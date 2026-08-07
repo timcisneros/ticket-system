@@ -43,6 +43,8 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'evaluation-live-readiness-test.js',
   // Tranche 6 — the frozen live manifest and its guards. No provider call.
   'evaluation-live-manifest-test.js',
+  // Tranche 6 — the durable global live budget ceiling. No provider call.
+  'evaluation-live-budget-test.js',
   // Tranche 6 — the scored executor and pure scorer. Deterministic: config only.
   'structured-allocation-scored-evaluation-test.js',
   'governed-provider-transport-test.js',
@@ -123,6 +125,9 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'structured-allocation-scenario-postgres-test.js',
   // Tranche 6 — the governed unexpected-request negative control.
   'governed-evaluation-negative-path-postgres-test.js',
+  // Tranche 6 — the live dispatch acceptance proof. Captures the final network
+  // hop; makes zero external calls.
+  'structured-allocation-live-dispatch-postgres-test.js',
   'postgres-persistence-integration-test.js',
   'postgres-runtime-cutover-test.js',
   'page-render-regression-test.js',

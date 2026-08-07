@@ -229,6 +229,116 @@ function auditLiveReadiness({ liveManifest } = {}) {
     live && 'live evaluation is MANDATORY before the final product decision',
     'live manifest livePhaseMandatory');
 
+  // ── THE FACTS THE PREVIOUS READY VERDICT LACKED ───────────────────────
+  //
+  // That verdict verified the manifest, the contracts, the cap and a dry run
+  // that "stopped before dispatch" — while NO dispatch path existed beyond that
+  // stop and the frozen sampling reached no request. Documentation and config
+  // could satisfy every item it checked. These eight cannot be satisfied that
+  // way: each reads the implementation.
+  const runnerSource = (() => {
+    try {
+      return require('node:fs').readFileSync(
+        require('node:path').join(__dirname, '..',
+          'structured-allocation-evaluation-runner.js'), 'utf8');
+    } catch (_) { return ''; }
+  })();
+  const bodySource = (() => {
+    try {
+      return require('node:fs').readFileSync(
+        require('node:path').join(__dirname, '..', '..', 'runtime',
+          'provider-request-body.js'), 'utf8');
+    } catch (_) { return ''; }
+  })();
+  const serverSource = (() => {
+    try {
+      return require('node:fs').readFileSync(
+        require('node:path').join(__dirname, '..', '..', 'server.js'), 'utf8');
+    } catch (_) { return ''; }
+  })();
+  const plannerSource = (() => {
+    try {
+      return require('node:fs').readFileSync(
+        require('node:path').join(__dirname, '..', '..', 'runtime',
+          'structured-planner-governance.js'), 'utf8');
+    } catch (_) { return ''; }
+  })();
+
+  // A live trial must be able to run WITHOUT the hermetic response fixture.
+  record('liveDispatchPathImplemented',
+    runnerSource.includes("assertMode(mode)") &&
+      runnerSource.includes("const isLive = mode === 'live'") &&
+      runnerSource.includes("live-transport-capture-preload.js")
+      ? 'FROZEN' : 'UNRESOLVED',
+    'runTrial accepts live mode and spawns without the hermetic response fixture',
+    'structured-allocation-evaluation-runner runTrial');
+
+  // And it must be PROVED by a registered suite that inspects outbound bytes.
+  record('liveDispatchPathBehaviourallyProved',
+    (() => {
+      try {
+        const manifest = require('node:fs').readFileSync(
+          require('node:path').join(__dirname, '..', 'test-manifest.js'), 'utf8');
+        return manifest.includes('structured-allocation-live-dispatch-postgres-test.js');
+      } catch (_) { return false; }
+    })() ? 'FROZEN' : 'UNRESOLVED',
+    'a registered suite drives the live path and asserts the outbound request bytes',
+    'structured-allocation-live-dispatch-postgres-test');
+
+  // One canonical sampling authority, read by all three roles.
+  const samplingWired = bodySource.includes('options.sampling');
+  record('liveSamplingPlannerProved',
+    samplingWired && plannerSource.includes('sampling: resolveProviderSampling()')
+      ? 'FROZEN' : 'UNRESOLVED',
+    'the planner request body carries the canonical sampling authority',
+    'structured-planner-governance buildOpenAiResponsesBody options');
+  record('liveSamplingGovernedWorkerProved',
+    samplingWired && serverSource.includes('sampling: resolveProviderSampling()')
+      ? 'FROZEN' : 'UNRESOLVED',
+    'the governed leaf request body carries the canonical sampling authority',
+    'server.js governed leaf body');
+  record('liveSamplingUngovernedWorkerProved',
+    samplingWired &&
+      serverSource.includes('options: { ...options, sampling: resolveProviderSampling() }')
+      ? 'FROZEN' : 'UNRESOLVED',
+    'the ungoverned worker request body carries the canonical sampling authority',
+    'server.js callOpenAI');
+
+  record('liveGlobalEconomicGateImplemented',
+    (() => {
+      try {
+        // eslint-disable-next-line global-require
+        const ledger = require('./evaluation-live-budget-ledger');
+        return typeof ledger.assertDispatchWithinGlobalCeiling === 'function';
+      } catch (_) { return false; }
+    })() ? 'FROZEN' : 'UNRESOLVED',
+    'a global ceiling is enforced before every provider dispatch',
+    'evaluation-live-budget-ledger');
+
+  record('liveGlobalEconomicGateRecoveryProved',
+    (() => {
+      try {
+        // eslint-disable-next-line global-require
+        const ledger = require('./evaluation-live-budget-ledger');
+        return typeof ledger.reconstructCommittedLiability === 'function';
+      } catch (_) { return false; }
+    })() ? 'FROZEN' : 'UNRESOLVED',
+    'committed live liability reconstructs after restart from durable records',
+    'evaluation-live-budget-ledger reconstructCommittedLiability');
+
+  record('liveDryRunReachedProviderBoundary',
+    runnerSource.includes("mode = 'fixture'") &&
+      (() => {
+        try {
+          const scored = require('node:fs').readFileSync(
+            require('node:path').join(__dirname, '..',
+              'structured-allocation-evaluation-scored-runner.js'), 'utf8');
+          return scored.includes('LIVE DRY RUN REACHED REAL PROVIDER DISPATCH BOUNDARY');
+        } catch (_) { return false; }
+      })() ? 'FROZEN' : 'UNRESOLVED',
+    'the dry run traverses to the real provider dispatch boundary before stopping',
+    'scored runner preflightLiveRun');
+
   const unresolved = items.filter(item => item.state === 'UNRESOLVED');
   return Object.freeze({
     version: LIVE_READINESS_VERSION,

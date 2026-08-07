@@ -170,6 +170,7 @@ const {
   buildOllamaChatBody,
   buildOpenAiResponsesBody
 } = require('./runtime/provider-request-body');
+const { resolveProviderSampling } = require('./runtime/provider-sampling-authority');
 const {
   capturePlannerGovernance,
   PLANNER_ROLE,
@@ -12188,7 +12189,9 @@ async function dispatchGovernedLeafModelRequest({
     input,
     options: {
       governed: true,
-      maxOutputTokens: run.governedExecution.economicAuthority.maximumOutputTokensPerRequest
+      maxOutputTokens: run.governedExecution.economicAuthority.maximumOutputTokensPerRequest,
+      // The SAME canonical authority the planner reads.
+      sampling: resolveProviderSampling()
     }
   });
 
@@ -17755,7 +17758,9 @@ async function callOpenAI(agent, input, options = {}) {
   const responseBody = buildOpenAiResponsesBody({
     model: openAIConfig.model,
     input,
-    options
+    // The ungoverned worker reads the same canonical sampling authority, so no
+    // role can silently use different sampling from another.
+    options: { ...options, sampling: resolveProviderSampling() }
   });
   const requestSnapshot = {
     url: 'https://api.openai.com/v1/responses',

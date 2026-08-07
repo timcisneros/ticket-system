@@ -32,6 +32,9 @@ const {
   assertRuntimeMatchesManifest, hashCanonical
 } = require('./fixtures/evaluation-scored-manifest');
 const { runTrial } = require('./structured-allocation-evaluation-runner');
+const {
+  assertDispatchWithinGlobalCeiling, releaseUndispatchedReservation
+} = require('./fixtures/evaluation-live-budget-ledger');
 const { withHarness } = require('./postgres-test-harness');
 
 const SCORED_RUNNER_VERSION = 1;
@@ -216,7 +219,31 @@ async function preflightLiveRun({ manifestPath, outputRoot }) {
   fs.writeFileSync(path.join(outputRoot, 'scored-run-header.json'),
     JSON.stringify(header, null, 2));
 
+  // ── TRAVERSE TO THE REAL DISPATCH BOUNDARY ──────────────────────────
+  //
+  // The previous dry run stopped before a path that did not exist, which is why
+  // it proved nothing. It now materializes trial 1, reserves its bounded
+  // liability against the durable global ledger, and constructs the production
+  // request envelope — everything except the final hop.
   const firstSlot = manifest.slots[0];
+  const ledgerRoot = outputRoot;
+  const perRequestMicroUsd = manifest.economics.liability.perRequestMicroUsd;
+  const reservation = assertDispatchWithinGlobalCeiling({
+    runRoot: ledgerRoot,
+    ceilingMicroUsd: manifest.economics.maximumTotalLiveMicroUsd,
+    maximumLiabilityMicroUsd: perRequestMicroUsd,
+    trialId: trialIdFor(firstSlot),
+    role: firstSlot.armId === 'B' || firstSlot.armId === 'C'
+      ? 'structured_planner' : 'ungoverned_worker',
+    ordinal: 1
+  });
+  // A DRY RUN SPENDS NOTHING, so the reservation it took to prove the gate is
+  // released again under the only proof that permits it: nothing was dispatched.
+  releaseUndispatchedReservation({
+    runRoot: ledgerRoot,
+    reservationId: reservation.reservationId,
+    proof: 'pre_delivery_refusal_no_provider_contact'
+  });
   const envelope = {
     model: manifest.model,
     adapterId: manifest.adapterId,
@@ -234,13 +261,17 @@ async function preflightLiveRun({ manifestPath, outputRoot }) {
   };
   return Object.freeze({
     dryRun: true,
+    verdict: 'LIVE DRY RUN REACHED REAL PROVIDER DISPATCH BOUNDARY — 0 CALLS MADE',
     providerCallsMade: 0,
     credentialPresent,
     header,
     assignedTrials: manifest.slots.length,
+    globalCeilingProved: true,
+    reservationProved: reservation.reservationId,
     remainingEconomicAuthorityMicroUsd: manifest.economics.maximumTotalLiveMicroUsd,
     worstCaseMicroUsd: manifest.economics.computedWorstCaseMicroUsd,
     firstTrialEnvelope: Object.freeze(envelope),
+    liveModeSelected: true,
     stoppedBefore: 'provider_dispatch'
   });
 }
@@ -406,7 +437,7 @@ if (require.main === module) {
     preflightLiveRun({
       manifestPath: options.manifest, outputRoot: options['output-root']
     }).then(result => {
-      console.log(`LIVE DRY RUN — provider calls made: ${result.providerCallsMade}`);
+      console.log(result.verdict);
       console.log(`credential present: ${result.credentialPresent}`);
       console.log(`assigned trials: ${result.assignedTrials}`);
       console.log(`stopped before: ${result.stoppedBefore}`);

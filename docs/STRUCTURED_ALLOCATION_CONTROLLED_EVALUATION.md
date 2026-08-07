@@ -1730,6 +1730,99 @@ first.
 Full record and the five prerequisites for honouring the authorization:
 `docs/ARCHITECTURAL_DECISIONS_PENDING.md`.
 
+## 3o. The two defects are closed — READY FOR NEW AUTHORIZATION (session 19)
+
+The halt in §3n was correct, and it is now repaired at the source rather than in
+prose. **Zero provider calls were made in this session, and no live authorization
+was active during it.** The authorization bound to source
+`78e4158d9bf9563d920b542d138782fd17384617` **expired unused, with $0.00 spent.**
+
+### What was missing, and what closed it
+
+**1. There was no live dispatch path.** `runTrial` began `assertMode('fixture')`
+and always loaded the hermetic preload, so "stopped before dispatch" stopped
+before something that did not exist. `runTrial` now takes `mode: 'live'`, which
+removes the hermetic response staging, the fixture namespace and the response
+table entirely — and keeps every other layer identical, because the difference
+between fixture and live is the provider environment, not the product semantics.
+
+**2. The frozen sampling reached no request.** `buildOpenAiResponsesBody` accepts
+`sampling` as an explicit input with **no default**: absent, a body is
+byte-identical to its historical fixture form; present, it must carry an exact
+finite `temperature` and `topP` or it throws. `runtime/provider-sampling-authority.js`
+is the single canonical reader, and all three roles consult it — the governed
+planner, the governed leaf executor and the ungoverned worker.
+
+**3. The global ceiling was not enforced at dispatch.** It is now, durably:
+`scripts/fixtures/evaluation-live-budget-ledger.js` commits a trial's entire
+authorized worst case to an fsynced append-only ledger **before the process that
+could reach the provider is spawned**. A crash mid-trial therefore cannot make
+spent money look unspent on resume. Reserving per request inside the server
+would have required a production hook into the transport — the exact backdoor
+this evaluation must not add — so the reservation is conservative instead.
+
+A release requires positive proof: only
+`pre_delivery_refusal_no_provider_contact` releases a reservation. **Ambiguous
+delivery is never free** — "we are not sure it arrived" is not evidence that it
+did not.
+
+### How it is proved without a network
+
+`scripts/fixtures/live-transport-capture-preload.js` replaces **only the final
+network hop**. Everything above it is production: role routing, economic
+admission, adapter selection and request-body construction, so the recorded
+bytes are the bytes production would have put on the wire. It is loaded only by
+tests, only through an environment variable the harness sets, and it throws
+`LIVE_CAPTURE_ESCAPE` if anything reaches a non-local host by another route.
+
+`scripts/structured-allocation-live-dispatch-postgres-test.js` spawns real
+servers in live mode across a direct arm and a structured arm — both production
+transports, all three request roles — and asserts on the captured bytes:
+
+- the exact dated model snapshot, `temperature 0`, `top_p 1`, no `seed`;
+- `max_output_tokens 2048` and `truncation: disabled` on the governed roles, so
+  the context ceiling still bounds cost;
+- the request addressed to `api.openai.com`, with an Authorization header formed
+  and its value never recorded;
+- **no governed response table staged anywhere** — the bytes came from
+  production, not from a staged answer selected by matching request text;
+- each trial's worst-case liability committed *before* dispatch, reconstructed
+  after a simulated restart from the ledger alone;
+- an exhausted ceiling refusing the trial **before the server is spawned**, with
+  zero captured requests and zero committed liability;
+- a live trial with no budget authority refused outright rather than defaulted.
+
+Result: **29 assertions, 2 outbound requests captured, EXTERNAL PROVIDER CALLS
+MADE: 0.**
+
+`scripts/evaluation-live-budget-test.js` proves the ledger directly (33
+assertions): reservation, durability, restart reconstruction, retry consuming
+its own authority, refused release of ambiguous delivery, proven release of a
+pre-delivery refusal, the stop before transport when authority is insufficient,
+the ceiling never exceeded, headroom never widening a trial's own authority, and
+two concurrent dispatchers unable to spend the same remaining authority.
+
+### READY now means more than it did
+
+Eight mandatory facts were added to the readiness audit, and **LIVE READY is
+impossible unless every one is proved end to end**: `liveDispatchPathImplemented`,
+`liveDispatchPathBehaviourallyProved`, `liveSamplingPlannerProved`,
+`liveSamplingGovernedWorkerProved`, `liveSamplingUngovernedWorkerProved`,
+`liveGlobalEconomicGateImplemented`, `liveGlobalEconomicGateRecoveryProved`,
+`liveDryRunReachedProviderBoundary`. The audit reads source and manifest, so
+flipping a literal closes nothing.
+
+The dry run no longer stops at a wall. It materializes trial 1, reserves against
+the durable ledger, constructs the production request envelope, releases the
+reservation under proof, and returns **LIVE DRY RUN REACHED REAL PROVIDER
+DISPATCH BOUNDARY — 0 CALLS MADE**.
+
+### Verdict
+
+**TRANCHE 6 LIVE-MODEL EVALUATION READY FOR NEW AUTHORIZATION.** READY is not
+authorization to spend, and the previous authorization does not carry over: a
+new one must name this corrected commit.
+
 ## 13. Status
 
 **Tranche 6: IN PROGRESS — harness built and executing; evaluation NOT run.**

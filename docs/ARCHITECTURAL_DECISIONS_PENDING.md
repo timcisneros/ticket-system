@@ -1,6 +1,46 @@
 ## LIVE RUN HALTED BEFORE TRIAL 1 — NO DISPATCH PATH, SAMPLING NOT WIRED (2026-08-06)
 
-**Status: OPEN. Blocks the authorized live matrix. No money was spent.**
+**Status: CLOSED 2026-08-06 by the corrections below. $0.00 was ever spent.**
+
+**RESOLUTION.** All five prerequisites listed at the end of this entry are built
+and proved without touching a network:
+
+1. **live trial path** — `runTrial({ mode: 'live' })` spawns the server without
+   the hermetic preload, without the fixture namespace and without any staged
+   response table, preserving governed role authority, economics, quiescence,
+   oracle, zero-drift and immutable artifacts;
+2. **sampling threaded** — `runtime/provider-sampling-authority.js` is the single
+   canonical reader, consulted by the governed planner, the governed leaf and
+   the ungoverned worker. `buildOpenAiResponsesBody` takes `sampling` as an
+   explicit input with **no default**, so fixture bodies stay byte-identical and
+   a malformed live value throws instead of silently defaulting;
+3. **global budget enforced at dispatch** —
+   `scripts/fixtures/evaluation-live-budget-ledger.js` commits a trial's entire
+   authorized worst case to an fsynced append-only ledger *before* the process
+   that could reach the provider is spawned. Release requires the proof
+   `pre_delivery_refusal_no_provider_contact`; ambiguous delivery is never
+   released;
+4. **readiness items that fail when 1 or 2 is missing** — eight mandatory facts,
+   read from source and manifest rather than declared;
+5. **single-trial validation before the corpus** — the authorized live run must
+   still begin with one trial; that rule is unchanged and remains a term of any
+   new authorization.
+
+Proved by `scripts/structured-allocation-live-dispatch-postgres-test.js` (29
+assertions, 2 outbound requests captured at the replaced final hop, **external
+provider calls: 0**) and `scripts/evaluation-live-budget-test.js` (33
+assertions). Full narrative:
+`docs/STRUCTURED_ALLOCATION_CONTROLLED_EVALUATION.md` §3o.
+
+**The authorization bound to commit `78e4158d…` EXPIRED UNUSED.** It does not
+carry over. A new authorization must name the corrected commit.
+
+The original finding is preserved below unedited, because a readiness verdict
+that was wrong once is the reason the audit now has items that can fail.
+
+---
+
+**Original finding (2026-08-06). Status at the time: OPEN. No money was spent.**
 
 Execution of the frozen 120-trial live matrix was explicitly authorized up to
 $20.00 against commit `78e4158d…` and manifest

@@ -42,6 +42,8 @@ const {
   evaluateCouplingWithFixture
 } = require('./fixtures/evaluation-coupling-oracle');
 const { assertAllWorkerResponsesConsumed } = require('./fixtures/evaluation-fetch-fixture');
+const { assertDispatchWithinGlobalCeiling } =
+  require('./fixtures/evaluation-live-budget-ledger');
 const {
   OBSERVATION_SINK_VERSION, readObservations
 } = require('./fixtures/evaluation-observation-sink');
@@ -554,9 +556,34 @@ async function runTrial({
   omitStagedLogicalTasks = null,
   // Supplied ONLY by the scored executor. Its absence is what keeps every
   // other caller's artifact explicitly unscored.
-  scoredIdentity = null
+  scoredIdentity = null,
+  // ── LIVE MODE ────────────────────────────────────────────────────────────
+  //
+  // The difference between fixture and live is the PROVIDER ENVIRONMENT, not
+  // the product semantics: the same trial construction, the same server, the
+  // same scheduler, workers, quiescence, oracle and artifact contract. Live
+  // mode removes the hermetic response fixture and supplies the frozen sampling
+  // authority; it changes nothing else.
+  //
+  // `liveTransportCapture` is a TEST-ONLY path. When set, the spawned server
+  // loads a preload that replaces only the final network hop, so the live
+  // dispatch path can be proved without spending money. When it is null and
+  // mode is live, the server reaches the real provider.
+  mode = 'fixture',
+  liveSampling = null,
+  liveTransportCapture = null,
+  // THE GLOBAL ECONOMIC CEILING, enforced at dispatch.
+  //
+  // "At dispatch" is taken conservatively: the trial's ENTIRE authorized worst
+  // case is committed to the durable ledger BEFORE the process that could reach
+  // the provider is spawned. So no request can leave the machine without its
+  // liability already recorded, and a crash mid-trial cannot make spent money
+  // look unspent on resume. Reserving per-request inside the server would need
+  // a production hook into the transport, which is exactly the backdoor this
+  // evaluation must not add.
+  liveBudget = null
 }) {
-  assertMode('fixture');
+  assertMode(mode);
   // ONE RESOLUTION POINT. The variant is resolved into a complete scenario here
   // and nowhere else, so every downstream step — staging, oracle, artifact —
   // consumes it exactly as it consumes a single-variant scenario. An unknown
@@ -726,16 +753,22 @@ async function runTrial({
       `omitStagedLogicalTasks removed nothing: ${omitStagedLogicalTasks.join(', ')} ` +
       'matched no staged worker response, so the negative control would prove nothing');
   }
-  stageResponses(namespace, stagedForTrial);
-  // The fetch adapter recovers the logical task from what production sent.
-  const table = JSON.parse(fs.readFileSync(namespace.stagedPath, 'utf8'));
-  for (const entry of Object.values(table)) {
-    const source = staged.find(item =>
-      item.role === entry.role && item.ordinal === entry.ordinal &&
-      item.logicalTaskId === entry.logicalTaskId);
-    if (source && source.match) entry.match = source.match;
+  // A LIVE run stages NOTHING. Every step below that reads or annotates the
+  // staged table belongs to the fixture path, and running it for a live trial
+  // would leave staged-answer state beside a run that must have consulted the
+  // provider.
+  if (mode !== 'live') {
+    stageResponses(namespace, stagedForTrial);
+    // The fetch adapter recovers the logical task from what production sent.
+    const table = JSON.parse(fs.readFileSync(namespace.stagedPath, 'utf8'));
+    for (const entry of Object.values(table)) {
+      const source = staged.find(item =>
+        item.role === entry.role && item.ordinal === entry.ordinal &&
+        item.logicalTaskId === entry.logicalTaskId);
+      if (source && source.match) entry.match = source.match;
+    }
+    fs.writeFileSync(namespace.stagedPath, JSON.stringify(table));
   }
-  fs.writeFileSync(namespace.stagedPath, JSON.stringify(table));
 
   const envelope = buildComparisonEnvelope({
     objective: scenario.objective,
@@ -777,8 +810,11 @@ async function runTrial({
   //
   // Selection stays CONTENT-ADDRESSED: the preload matches `match` against the
   // request bytes. The arm label is not written here and cannot select anything.
+  // A LIVE run stages NOTHING. Writing the table and merely not loading it
+  // would leave a staged-answer file beside a run that must have consulted the
+  // provider, and "it was there but unused" is not a claim evidence can carry.
   const governedResponsePath = path.join(namespace.dir, 'governed-responses.json');
-  fs.writeFileSync(governedResponsePath, JSON.stringify({
+  if (mode !== 'live') fs.writeFileSync(governedResponsePath, JSON.stringify({
     responses: stagedForTrial.map(entry => ({
       statusCode: 200,
       role: entry.role,
@@ -801,14 +837,51 @@ async function runTrial({
     }))
   }));
 
+  const isLive = mode === 'live';
+  // The hermetic evaluation preload STAGES provider responses. A live run must
+  // not load it: a staged answer would mean the provider was never consulted,
+  // which is the exact defect that made the previous readiness verdict false.
+  const preload = isLive
+    ? (liveTransportCapture
+      ? path.join(__dirname, 'fixtures', 'live-transport-capture-preload.js')
+      : null)
+    : path.join(__dirname, 'fixtures', 'evaluation-preload.js');
+
+  // THE RESERVATION HAPPENS HERE — before the server exists, not after it
+  // answered. A refusal throws, and nothing is spawned.
+  if (isLive) {
+    if (!liveBudget) {
+      throw new EvaluationRunnerError(
+        'a live trial requires an explicit global budget authority; refusing to ' +
+        'dispatch against an unbounded ceiling');
+    }
+    assertDispatchWithinGlobalCeiling({
+      runRoot: liveBudget.runRoot,
+      ceilingMicroUsd: liveBudget.ceilingMicroUsd,
+      maximumLiabilityMicroUsd: liveBudget.maximumTrialLiabilityMicroUsd,
+      trialId,
+      role: `trial_worst_case:${arm.armId}`,
+      ordinal: repetition
+    });
+  }
+
   const server = await startServer({
     env: {
-      NODE_OPTIONS: `--require ${path.join(__dirname, 'fixtures', 'evaluation-preload.js')}`,
-      EVALUATION_FIXTURE_NAMESPACE: namespace.dir,
+      ...(preload ? { NODE_OPTIONS: `--require ${preload}` } : {}),
+      ...(isLive ? {} : { EVALUATION_FIXTURE_NAMESPACE: namespace.dir }),
       // ONE immutable descriptor, carried as a single serialized value. Every
       // observation the spawned server writes names this exact trial, so two
       // trials can never be averaged into one set of streams.
-      EVALUATION_OBSERVATION_DESCRIPTOR: JSON.stringify({
+      ...(isLive ? {
+        // THE FROZEN SAMPLING AUTHORITY, supplied only in live mode. Absent in
+        // fixture mode, so every completed fixture body stays byte-identical.
+        EVALUATION_LIVE_SAMPLING: JSON.stringify(liveSampling),
+        ...(liveTransportCapture ? {
+          LIVE_TRANSPORT_CAPTURE: liveTransportCapture,
+          LIVE_TRANSPORT_CAPTURE_TRIAL_ID: trialId
+        } : {})
+      } : {}),
+      ...(isLive ? {} : { EVALUATION_OBSERVATION_DESCRIPTOR: JSON.stringify({
         protocolVersion: PROTOCOL_VERSION,
         trialId,
         namespaceDir: namespace.dir,
@@ -818,15 +891,29 @@ async function runTrial({
         seed,
         fixtureTableHash: crypto.createHash('sha256')
           .update(fs.readFileSync(namespace.stagedPath)).digest('hex')
-      }),
+      }) }),
       // Scopes the real-read observer to THIS trial's workspace. Without it the
       // wrapper does not install at all.
       EVALUATION_OBSERVED_WORKSPACE_ROOT: trialWorkspace,
       ...(process.env.EVALUATION_CAPTURE_LEAF_ADMISSION === '1'
         ? { EVALUATION_CAPTURE_LEAF_ADMISSION: '1' } : {}),
-      HERMETIC_TRANSPORT_RESPONSE: governedResponsePath,
-      HERMETIC_TRANSPORT_CAPTURE: path.join(namespace.dir, 'governed-capture.jsonl'),
-      OPENAI_API_KEY: 'test-only-sentinel-not-a-real-credential',
+      // NO hermetic response staging in live mode.
+      ...(isLive ? {} : {
+        HERMETIC_TRANSPORT_RESPONSE: governedResponsePath,
+        HERMETIC_TRANSPORT_CAPTURE: path.join(namespace.dir, 'governed-capture.jsonl')
+      }),
+      // CREDENTIALS.
+      //
+      // Fixture mode uses a sentinel that is not a credential. A CAPTURED live
+      // run also uses a sentinel: the final network hop is replaced, so no
+      // request can leave the machine and a real key would be pointless risk —
+      // but the governed planner refuses to route without SOME credential
+      // present, so the sentinel is what lets the real dispatch path run at all.
+      // A genuine live run supplies neither, inheriting the real credential from
+      // normal secret configuration, and never writes it anywhere.
+      ...(isLive && !liveTransportCapture
+        ? {}
+        : { OPENAI_API_KEY: 'test-only-sentinel-not-a-real-credential' }),
       // NOT AGGRESSIVE. A 200 ms tick made a scheduler continuation race the
       // synchronous post-planning leaf admission for the same plan, and the
       // loser blocked the Ticket with `leaf_admission_conflict` before any leaf
@@ -987,7 +1074,9 @@ async function runTrial({
 
     const transcript = readTranscript(namespace);
     const warnings = [];
-    try { assertAllWorkerResponsesConsumed(namespace.dir); }
+    // Consumption is a FIXTURE contract: it asks whether every staged answer
+    // was used. A live run stages none, so there is nothing to consume.
+    try { if (mode !== 'live') assertAllWorkerResponsesConsumed(namespace.dir); }
     catch (error) { warnings.push(error.message); }
     if (quiescence.timedOut) warnings.push('trial timed out before quiescence');
 
@@ -1003,7 +1092,7 @@ async function runTrial({
       armId: arm.armId,
       repetition,
       seed,
-      mode: 'fixture',
+      mode,
       envelopeHash: envelope.envelopeHash,
       pathProof,
       ticketReport: { ...firstReport, secondReadIdentical: !drift },

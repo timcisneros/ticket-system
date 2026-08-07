@@ -27,6 +27,7 @@ const { hashCanonical } = require('./declared-work-contract');
 const {
   buildParentPolicyReference, readGovernedPolicySource
 } = require('./governed-policy-source');
+const { resolveProviderSampling } = require('./provider-sampling-authority');
 const {
   buildRoleRoutingDecision
 } = require('./role-routing-contract');
@@ -152,7 +153,10 @@ function capturePlannerGovernance({
       input: plannerInput,
       options: {
         governed: true,
-        maxOutputTokens: economicAuthority.maximumOutputTokensPerRequest
+        maxOutputTokens: economicAuthority.maximumOutputTokensPerRequest,
+        // ONE canonical authority, read by every role. Null in fixture and
+        // ordinary operation, so the body is unchanged.
+        sampling: resolveProviderSampling()
       }
     });
     preparedRequest = prepareGovernedProviderRequest({

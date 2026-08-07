@@ -1,5 +1,35 @@
 # Decision Log
 
+## Live dispatch path built and proved — READY FOR NEW AUTHORIZATION (2026-08-06)
+
+The halt before live trial 1 was correct, and the earlier **READY** verdict is
+formally retracted: it verified the manifest, contracts, cap and a dry run that
+"stopped before dispatch", while no dispatch path existed beyond that stop and
+the frozen sampling reached no request.
+
+Both defects are closed at the source. `runTrial({ mode: 'live' })` removes the
+hermetic response staging and keeps every other layer identical.
+`runtime/provider-sampling-authority.js` is the one sampling reader, consulted by
+the governed planner, the governed leaf and the ungoverned worker; the request
+body takes sampling as an explicit input with **no default**, so fixture bodies
+stay byte-identical and a malformed live value throws. The $20 000 000 micro-USD
+ceiling is enforced by a durable fsynced ledger that commits a trial's worst case
+*before* the process that could dispatch is spawned, and releases only on proof
+that nothing reached the provider — ambiguous delivery is never free.
+
+Proved without a network by replacing only the final hop: 29 dispatch assertions
+over both production transports and all three roles (exact dated model snapshot,
+temperature 0, top_p 1, no seed, max_output_tokens 2048, truncation disabled, no
+staged response table, no credential value recorded), plus 33 budget assertions
+covering restart reconstruction, retry, refusal and concurrency.
+
+**EXTERNAL PROVIDER CALLS MADE: 0. TOTAL SPENT: $0.00.** The authorization bound
+to commit `78e4158d…` **expired unused** and does not carry over.
+
+**TRANCHE 6 LIVE-MODEL EVALUATION READY FOR NEW AUTHORIZATION** against the
+corrected commit. READY is not authorization to spend. The fixture result is
+unchanged.
+
 ## Live-model evaluation protocol frozen — READY, not executed (2026-08-06)
 
 Eight live decisions were approved before any live result existed: matrix
@@ -22,7 +52,8 @@ Live manifest `config/structured-allocation-evaluation-live-v1.json`, hash
 dispatch with zero provider calls.
 
 **TRANCHE 6 LIVE-MODEL EVALUATION READY.** Execution requires explicit
-authorization and was not taken. The fixture result is unchanged.
+authorization and was not taken. *(Retracted 2026-08-06: this verdict was
+overstated — see the entry at the top of this log.)* The fixture result is unchanged.
 
 ## Scored fixture evaluation executed — FIXTURE EVIDENCE SUPPORTS STOP (2026-08-06)
 
