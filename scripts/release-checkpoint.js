@@ -41,6 +41,8 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'evaluation-scored-manifest-test.js',
   // Tranche 6 — live-model readiness. Deterministic: config only, no provider.
   'evaluation-live-readiness-test.js',
+  // Tranche 6 — the frozen live manifest and its guards. No provider call.
+  'evaluation-live-manifest-test.js',
   // Tranche 6 — the scored executor and pure scorer. Deterministic: config only.
   'structured-allocation-scored-evaluation-test.js',
   'governed-provider-transport-test.js',

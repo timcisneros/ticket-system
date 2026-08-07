@@ -1,0 +1,5315 @@
+{
+  "liveManifestVersion": 1,
+  "protocolId": "structured-allocation-controlled-evaluation",
+  "protocolVersion": 1,
+  "mode": "live",
+  "containsResults": false,
+  "source": {
+    "fixtureManifestHash": "044d37828f6f251eefaef66eccb2362ff6c6498c689baf54eb357870c4d9a07b",
+    "fixtureCorpusHash": "40efc9db8242dc616808f00465124ded313b2d1c1d7b61ac077f5acf0fdbfc8f",
+    "fixtureReportHash": "17a8dcf83580d259e9794fac345e827640115327ee1a75152aac6b1029bb8569",
+    "fixtureDecision": "FIXTURE EVIDENCE SUPPORTS STOP",
+    "derivation": "unique scenario/variant/arm cells of the frozen fixture manifest"
+  },
+  "repositoryBaselineRule": "every live artifact binds the repository commit it was produced from, and a corpus mixing commits is refused",
+  "provider": "openai",
+  "model": "gpt-4o-mini-2024-07-18",
+  "adapterId": "openai.responses.v1",
+  "plannerModel": "gpt-4o-mini-2024-07-18",
+  "workerModel": "gpt-4o-mini-2024-07-18",
+  "sameModelForPlannerAndWorkers": true,
+  "sampling": {
+    "temperature": 0,
+    "topP": 1,
+    "appliesTo": [
+      "structured_planner",
+      "structured_leaf_executor",
+      "ungoverned_worker"
+    ],
+    "note": "one sampling configuration for every role; no role may differ"
+  },
+  "providerSeedSupport": false,
+  "providerSeed": null,
+  "stochasticityDeclaration": "the production Responses request contract owns no seed field, so residual provider stochasticity is an experimental variable controlled by the exact model snapshot, exact request inputs, temperature/top_p, 3 repetitions and balanced ordering — determinism is not claimed",
+  "contextWindowTokens": 128000,
+  "maximumOutputTokensPerRequest": 2048,
+  "pricing": {
+    "inputMicroUsdPerMillionTokens": 150000,
+    "outputMicroUsdPerMillionTokens": 600000,
+    "boundMethod": "model_context_window_ceiling"
+  },
+  "uniqueCellCount": 40,
+  "cells": [
+    {
+      "cellKey": "family-3/none||A",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 1
+        },
+        {
+          "repetition": 2,
+          "slot": 33
+        },
+        {
+          "repetition": 3,
+          "slot": 25
+        },
+        {
+          "repetition": 4,
+          "slot": 21
+        },
+        {
+          "repetition": 5,
+          "slot": 9
+        }
+      ]
+    },
+    {
+      "cellKey": "family-3/none||A2a",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A2a",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 9
+        },
+        {
+          "repetition": 2,
+          "slot": 1
+        },
+        {
+          "repetition": 3,
+          "slot": 33
+        },
+        {
+          "repetition": 4,
+          "slot": 29
+        },
+        {
+          "repetition": 5,
+          "slot": 17
+        }
+      ]
+    },
+    {
+      "cellKey": "family-3/none||A2b",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A2b",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 17
+        },
+        {
+          "repetition": 2,
+          "slot": 9
+        },
+        {
+          "repetition": 3,
+          "slot": 1
+        },
+        {
+          "repetition": 4,
+          "slot": 37
+        },
+        {
+          "repetition": 5,
+          "slot": 25
+        }
+      ]
+    },
+    {
+      "cellKey": "family-3/none||B",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "B",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 21
+        },
+        {
+          "repetition": 2,
+          "slot": 13
+        },
+        {
+          "repetition": 3,
+          "slot": 5
+        },
+        {
+          "repetition": 4,
+          "slot": 1
+        },
+        {
+          "repetition": 5,
+          "slot": 29
+        }
+      ]
+    },
+    {
+      "cellKey": "family-3/none||C",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "C",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 33
+        },
+        {
+          "repetition": 2,
+          "slot": 25
+        },
+        {
+          "repetition": 3,
+          "slot": 17
+        },
+        {
+          "repetition": 4,
+          "slot": 13
+        },
+        {
+          "repetition": 5,
+          "slot": 1
+        }
+      ]
+    },
+    {
+      "cellKey": "family-4/none||A",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "A",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 2
+        },
+        {
+          "repetition": 2,
+          "slot": 34
+        },
+        {
+          "repetition": 3,
+          "slot": 26
+        },
+        {
+          "repetition": 4,
+          "slot": 22
+        },
+        {
+          "repetition": 5,
+          "slot": 10
+        }
+      ]
+    },
+    {
+      "cellKey": "family-4/none||A2a",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "A2a",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 10
+        },
+        {
+          "repetition": 2,
+          "slot": 2
+        },
+        {
+          "repetition": 3,
+          "slot": 34
+        },
+        {
+          "repetition": 4,
+          "slot": 30
+        },
+        {
+          "repetition": 5,
+          "slot": 18
+        }
+      ]
+    },
+    {
+      "cellKey": "family-4/none||A2b",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "A2b",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 18
+        },
+        {
+          "repetition": 2,
+          "slot": 10
+        },
+        {
+          "repetition": 3,
+          "slot": 2
+        },
+        {
+          "repetition": 4,
+          "slot": 38
+        },
+        {
+          "repetition": 5,
+          "slot": 26
+        }
+      ]
+    },
+    {
+      "cellKey": "family-4/none||B",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "B",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 22
+        },
+        {
+          "repetition": 2,
+          "slot": 14
+        },
+        {
+          "repetition": 3,
+          "slot": 6
+        },
+        {
+          "repetition": 4,
+          "slot": 2
+        },
+        {
+          "repetition": 5,
+          "slot": 30
+        }
+      ]
+    },
+    {
+      "cellKey": "family-4/none||C",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "C",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 34
+        },
+        {
+          "repetition": 2,
+          "slot": 26
+        },
+        {
+          "repetition": 3,
+          "slot": 18
+        },
+        {
+          "repetition": 4,
+          "slot": 14
+        },
+        {
+          "repetition": 5,
+          "slot": 2
+        }
+      ]
+    },
+    {
+      "cellKey": "family-7/7A|7A|B",
+      "cellId": "family-7/7A",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7A",
+      "armId": "B",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 23
+        },
+        {
+          "repetition": 2,
+          "slot": 15
+        },
+        {
+          "repetition": 3,
+          "slot": 7
+        },
+        {
+          "repetition": 4,
+          "slot": 3
+        },
+        {
+          "repetition": 5,
+          "slot": 31
+        }
+      ]
+    },
+    {
+      "cellKey": "family-7/7A|7A|C",
+      "cellId": "family-7/7A",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7A",
+      "armId": "C",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 35
+        },
+        {
+          "repetition": 2,
+          "slot": 27
+        },
+        {
+          "repetition": 3,
+          "slot": 19
+        },
+        {
+          "repetition": 4,
+          "slot": 15
+        },
+        {
+          "repetition": 5,
+          "slot": 3
+        }
+      ]
+    },
+    {
+      "cellKey": "family-7/7B|7B|B",
+      "cellId": "family-7/7B",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7B",
+      "armId": "B",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 24
+        },
+        {
+          "repetition": 2,
+          "slot": 16
+        },
+        {
+          "repetition": 3,
+          "slot": 8
+        },
+        {
+          "repetition": 4,
+          "slot": 4
+        },
+        {
+          "repetition": 5,
+          "slot": 32
+        }
+      ]
+    },
+    {
+      "cellKey": "family-7/7B|7B|C",
+      "cellId": "family-7/7B",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7B",
+      "armId": "C",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 36
+        },
+        {
+          "repetition": 2,
+          "slot": 28
+        },
+        {
+          "repetition": 3,
+          "slot": 20
+        },
+        {
+          "repetition": 4,
+          "slot": 16
+        },
+        {
+          "repetition": 5,
+          "slot": 4
+        }
+      ]
+    },
+    {
+      "cellKey": "family-7/7C|7C|B",
+      "cellId": "family-7/7C",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7C",
+      "armId": "B",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 25
+        },
+        {
+          "repetition": 2,
+          "slot": 17
+        },
+        {
+          "repetition": 3,
+          "slot": 9
+        },
+        {
+          "repetition": 4,
+          "slot": 5
+        },
+        {
+          "repetition": 5,
+          "slot": 33
+        }
+      ]
+    },
+    {
+      "cellKey": "family-7/7C|7C|C",
+      "cellId": "family-7/7C",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7C",
+      "armId": "C",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 37
+        },
+        {
+          "repetition": 2,
+          "slot": 29
+        },
+        {
+          "repetition": 3,
+          "slot": 21
+        },
+        {
+          "repetition": 4,
+          "slot": 17
+        },
+        {
+          "repetition": 5,
+          "slot": 5
+        }
+      ]
+    },
+    {
+      "cellKey": "family-7/7D|7D|B",
+      "cellId": "family-7/7D",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7D",
+      "armId": "B",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 26
+        },
+        {
+          "repetition": 2,
+          "slot": 18
+        },
+        {
+          "repetition": 3,
+          "slot": 10
+        },
+        {
+          "repetition": 4,
+          "slot": 6
+        },
+        {
+          "repetition": 5,
+          "slot": 34
+        }
+      ]
+    },
+    {
+      "cellKey": "family-7/7D|7D|C",
+      "cellId": "family-7/7D",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7D",
+      "armId": "C",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 38
+        },
+        {
+          "repetition": 2,
+          "slot": 30
+        },
+        {
+          "repetition": 3,
+          "slot": 22
+        },
+        {
+          "repetition": 4,
+          "slot": 18
+        },
+        {
+          "repetition": 5,
+          "slot": 6
+        }
+      ]
+    },
+    {
+      "cellKey": "family-8/8A|8A|A",
+      "cellId": "family-8/8A",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8A",
+      "armId": "A",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 3
+        },
+        {
+          "repetition": 2,
+          "slot": 35
+        },
+        {
+          "repetition": 3,
+          "slot": 27
+        },
+        {
+          "repetition": 4,
+          "slot": 23
+        },
+        {
+          "repetition": 5,
+          "slot": 11
+        }
+      ]
+    },
+    {
+      "cellKey": "family-8/8A|8A|A2a",
+      "cellId": "family-8/8A",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8A",
+      "armId": "A2a",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 11
+        },
+        {
+          "repetition": 2,
+          "slot": 3
+        },
+        {
+          "repetition": 3,
+          "slot": 35
+        },
+        {
+          "repetition": 4,
+          "slot": 31
+        },
+        {
+          "repetition": 5,
+          "slot": 19
+        }
+      ]
+    },
+    {
+      "cellKey": "family-8/8A|8A|B",
+      "cellId": "family-8/8A",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8A",
+      "armId": "B",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 27
+        },
+        {
+          "repetition": 2,
+          "slot": 19
+        },
+        {
+          "repetition": 3,
+          "slot": 11
+        },
+        {
+          "repetition": 4,
+          "slot": 7
+        },
+        {
+          "repetition": 5,
+          "slot": 35
+        }
+      ]
+    },
+    {
+      "cellKey": "family-8/8B|8B|A",
+      "cellId": "family-8/8B",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8B",
+      "armId": "A",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 4
+        },
+        {
+          "repetition": 2,
+          "slot": 36
+        },
+        {
+          "repetition": 3,
+          "slot": 28
+        },
+        {
+          "repetition": 4,
+          "slot": 24
+        },
+        {
+          "repetition": 5,
+          "slot": 12
+        }
+      ]
+    },
+    {
+      "cellKey": "family-8/8B|8B|A2a",
+      "cellId": "family-8/8B",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8B",
+      "armId": "A2a",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 12
+        },
+        {
+          "repetition": 2,
+          "slot": 4
+        },
+        {
+          "repetition": 3,
+          "slot": 36
+        },
+        {
+          "repetition": 4,
+          "slot": 32
+        },
+        {
+          "repetition": 5,
+          "slot": 20
+        }
+      ]
+    },
+    {
+      "cellKey": "family-8/8B|8B|B",
+      "cellId": "family-8/8B",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8B",
+      "armId": "B",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 28
+        },
+        {
+          "repetition": 2,
+          "slot": 20
+        },
+        {
+          "repetition": 3,
+          "slot": 12
+        },
+        {
+          "repetition": 4,
+          "slot": 8
+        },
+        {
+          "repetition": 5,
+          "slot": 36
+        }
+      ]
+    },
+    {
+      "cellKey": "family-8/8C|8C|A",
+      "cellId": "family-8/8C",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8C",
+      "armId": "A",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 5
+        },
+        {
+          "repetition": 2,
+          "slot": 37
+        },
+        {
+          "repetition": 3,
+          "slot": 29
+        },
+        {
+          "repetition": 4,
+          "slot": 25
+        },
+        {
+          "repetition": 5,
+          "slot": 13
+        }
+      ]
+    },
+    {
+      "cellKey": "family-8/8C|8C|A2a",
+      "cellId": "family-8/8C",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8C",
+      "armId": "A2a",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 13
+        },
+        {
+          "repetition": 2,
+          "slot": 5
+        },
+        {
+          "repetition": 3,
+          "slot": 37
+        },
+        {
+          "repetition": 4,
+          "slot": 33
+        },
+        {
+          "repetition": 5,
+          "slot": 21
+        }
+      ]
+    },
+    {
+      "cellKey": "family-8/8C|8C|B",
+      "cellId": "family-8/8C",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8C",
+      "armId": "B",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 29
+        },
+        {
+          "repetition": 2,
+          "slot": 21
+        },
+        {
+          "repetition": 3,
+          "slot": 13
+        },
+        {
+          "repetition": 4,
+          "slot": 9
+        },
+        {
+          "repetition": 5,
+          "slot": 37
+        }
+      ]
+    },
+    {
+      "cellKey": "family-8/8D|8D|A",
+      "cellId": "family-8/8D",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8D",
+      "armId": "A",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 6
+        },
+        {
+          "repetition": 2,
+          "slot": 38
+        },
+        {
+          "repetition": 3,
+          "slot": 30
+        },
+        {
+          "repetition": 4,
+          "slot": 26
+        },
+        {
+          "repetition": 5,
+          "slot": 14
+        }
+      ]
+    },
+    {
+      "cellKey": "family-8/8D|8D|A2a",
+      "cellId": "family-8/8D",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8D",
+      "armId": "A2a",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 14
+        },
+        {
+          "repetition": 2,
+          "slot": 6
+        },
+        {
+          "repetition": 3,
+          "slot": 38
+        },
+        {
+          "repetition": 4,
+          "slot": 34
+        },
+        {
+          "repetition": 5,
+          "slot": 22
+        }
+      ]
+    },
+    {
+      "cellKey": "family-8/8D|8D|B",
+      "cellId": "family-8/8D",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8D",
+      "armId": "B",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent_or_truthful_failure",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 30
+        },
+        {
+          "repetition": 2,
+          "slot": 22
+        },
+        {
+          "repetition": 3,
+          "slot": 14
+        },
+        {
+          "repetition": 4,
+          "slot": 10
+        },
+        {
+          "repetition": 5,
+          "slot": 38
+        }
+      ]
+    },
+    {
+      "cellKey": "family-9/9A||A",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "A",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 7
+        },
+        {
+          "repetition": 2,
+          "slot": 39
+        },
+        {
+          "repetition": 3,
+          "slot": 31
+        },
+        {
+          "repetition": 4,
+          "slot": 27
+        },
+        {
+          "repetition": 5,
+          "slot": 15
+        }
+      ]
+    },
+    {
+      "cellKey": "family-9/9A||A2a",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "A2a",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 15
+        },
+        {
+          "repetition": 2,
+          "slot": 7
+        },
+        {
+          "repetition": 3,
+          "slot": 39
+        },
+        {
+          "repetition": 4,
+          "slot": 35
+        },
+        {
+          "repetition": 5,
+          "slot": 23
+        }
+      ]
+    },
+    {
+      "cellKey": "family-9/9A||A2b",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "A2b",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 19
+        },
+        {
+          "repetition": 2,
+          "slot": 11
+        },
+        {
+          "repetition": 3,
+          "slot": 3
+        },
+        {
+          "repetition": 4,
+          "slot": 39
+        },
+        {
+          "repetition": 5,
+          "slot": 27
+        }
+      ]
+    },
+    {
+      "cellKey": "family-9/9A||B",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "B",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 31
+        },
+        {
+          "repetition": 2,
+          "slot": 23
+        },
+        {
+          "repetition": 3,
+          "slot": 15
+        },
+        {
+          "repetition": 4,
+          "slot": 11
+        },
+        {
+          "repetition": 5,
+          "slot": 39
+        }
+      ]
+    },
+    {
+      "cellKey": "family-9/9A||C",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "C",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 39
+        },
+        {
+          "repetition": 2,
+          "slot": 31
+        },
+        {
+          "repetition": 3,
+          "slot": 23
+        },
+        {
+          "repetition": 4,
+          "slot": 19
+        },
+        {
+          "repetition": 5,
+          "slot": 7
+        }
+      ]
+    },
+    {
+      "cellKey": "family-9/9C||A",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "A",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 8
+        },
+        {
+          "repetition": 2,
+          "slot": 40
+        },
+        {
+          "repetition": 3,
+          "slot": 32
+        },
+        {
+          "repetition": 4,
+          "slot": 28
+        },
+        {
+          "repetition": 5,
+          "slot": 16
+        }
+      ]
+    },
+    {
+      "cellKey": "family-9/9C||A2a",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "A2a",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 16
+        },
+        {
+          "repetition": 2,
+          "slot": 8
+        },
+        {
+          "repetition": 3,
+          "slot": 40
+        },
+        {
+          "repetition": 4,
+          "slot": 36
+        },
+        {
+          "repetition": 5,
+          "slot": 24
+        }
+      ]
+    },
+    {
+      "cellKey": "family-9/9C||A2b",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "A2b",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 20
+        },
+        {
+          "repetition": 2,
+          "slot": 12
+        },
+        {
+          "repetition": 3,
+          "slot": 4
+        },
+        {
+          "repetition": 4,
+          "slot": 40
+        },
+        {
+          "repetition": 5,
+          "slot": 28
+        }
+      ]
+    },
+    {
+      "cellKey": "family-9/9C||B",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "B",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 32
+        },
+        {
+          "repetition": 2,
+          "slot": 24
+        },
+        {
+          "repetition": 3,
+          "slot": 16
+        },
+        {
+          "repetition": 4,
+          "slot": 12
+        },
+        {
+          "repetition": 5,
+          "slot": 40
+        }
+      ]
+    },
+    {
+      "cellKey": "family-9/9C||C",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "C",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 40
+        },
+        {
+          "repetition": 2,
+          "slot": 32
+        },
+        {
+          "repetition": 3,
+          "slot": 24
+        },
+        {
+          "repetition": 4,
+          "slot": 20
+        },
+        {
+          "repetition": 5,
+          "slot": 8
+        }
+      ]
+    }
+  ],
+  "repetitions": 3,
+  "totalAssignedTrials": 120,
+  "ordering": {
+    "strategy": "deterministic_balanced_latin_square",
+    "generatedBeforeExecution": true,
+    "permutations": [
+      [
+        "A",
+        "A2a",
+        "A2b",
+        "B",
+        "C"
+      ],
+      [
+        "A2a",
+        "A2b",
+        "B",
+        "C",
+        "A"
+      ],
+      [
+        "A2b",
+        "B",
+        "C",
+        "A",
+        "A2a"
+      ]
+    ],
+    "balance": {
+      "repetitions": 3,
+      "arms": 5,
+      "completeLatinSquarePossible": false,
+      "achievedProperty": "every arm occupies a DIFFERENT ordinal position in each repetition; with 3 repetitions and 5 arms each arm reaches 3 of the 5 positions, which is the maximum achievable",
+      "residualImbalance": "each arm misses 2 of the 5 ordinal positions; no arm is first or last more than once",
+      "perArm": {
+        "A": {
+          "positionCounts": {
+            "0": 1,
+            "3": 1,
+            "4": 1
+          },
+          "distinctPositions": 3
+        },
+        "A2a": {
+          "positionCounts": {
+            "0": 1,
+            "1": 1,
+            "4": 1
+          },
+          "distinctPositions": 3
+        },
+        "A2b": {
+          "positionCounts": {
+            "0": 1,
+            "1": 1,
+            "2": 1
+          },
+          "distinctPositions": 3
+        },
+        "B": {
+          "positionCounts": {
+            "1": 1,
+            "2": 1,
+            "3": 1
+          },
+          "distinctPositions": 3
+        },
+        "C": {
+          "positionCounts": {
+            "2": 1,
+            "3": 1,
+            "4": 1
+          },
+          "distinctPositions": 3
+        }
+      }
+    }
+  },
+  "slots": [
+    {
+      "slot": 1,
+      "repetition": 1,
+      "cellKey": "family-3/none||A",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 1
+        },
+        {
+          "repetition": 2,
+          "slot": 33
+        },
+        {
+          "repetition": 3,
+          "slot": 25
+        },
+        {
+          "repetition": 4,
+          "slot": 21
+        },
+        {
+          "repetition": 5,
+          "slot": 9
+        }
+      ],
+      "stochasticIdentity": "832ae7e4a7d82866fa66a33dbf677cc3aee9ce77da1541fb9a7c857172c8a889"
+    },
+    {
+      "slot": 2,
+      "repetition": 1,
+      "cellKey": "family-4/none||A",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 2
+        },
+        {
+          "repetition": 2,
+          "slot": 34
+        },
+        {
+          "repetition": 3,
+          "slot": 26
+        },
+        {
+          "repetition": 4,
+          "slot": 22
+        },
+        {
+          "repetition": 5,
+          "slot": 10
+        }
+      ],
+      "stochasticIdentity": "a1895f3d402ab84f10a3291521bdbf859253ba2611b1603bd499b84e55e2af81"
+    },
+    {
+      "slot": 3,
+      "repetition": 1,
+      "cellKey": "family-8/8A|8A|A",
+      "cellId": "family-8/8A",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8A",
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 3
+        },
+        {
+          "repetition": 2,
+          "slot": 35
+        },
+        {
+          "repetition": 3,
+          "slot": 27
+        },
+        {
+          "repetition": 4,
+          "slot": 23
+        },
+        {
+          "repetition": 5,
+          "slot": 11
+        }
+      ],
+      "stochasticIdentity": "36754c94d93299e324099b44225ec828f3c15c9f4580c6429b51153cc6469260"
+    },
+    {
+      "slot": 4,
+      "repetition": 1,
+      "cellKey": "family-8/8B|8B|A",
+      "cellId": "family-8/8B",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8B",
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 4
+        },
+        {
+          "repetition": 2,
+          "slot": 36
+        },
+        {
+          "repetition": 3,
+          "slot": 28
+        },
+        {
+          "repetition": 4,
+          "slot": 24
+        },
+        {
+          "repetition": 5,
+          "slot": 12
+        }
+      ],
+      "stochasticIdentity": "285be48bf578b71cf67a57fbfca83849690a2d19d11363964d93dc62aef015a8"
+    },
+    {
+      "slot": 5,
+      "repetition": 1,
+      "cellKey": "family-8/8C|8C|A",
+      "cellId": "family-8/8C",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8C",
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 5
+        },
+        {
+          "repetition": 2,
+          "slot": 37
+        },
+        {
+          "repetition": 3,
+          "slot": 29
+        },
+        {
+          "repetition": 4,
+          "slot": 25
+        },
+        {
+          "repetition": 5,
+          "slot": 13
+        }
+      ],
+      "stochasticIdentity": "fc4faa99268a4c33ac4f10659b17ca6ab1f12b9dce940e5839175d060154a64e"
+    },
+    {
+      "slot": 6,
+      "repetition": 1,
+      "cellKey": "family-8/8D|8D|A",
+      "cellId": "family-8/8D",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8D",
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 6
+        },
+        {
+          "repetition": 2,
+          "slot": 38
+        },
+        {
+          "repetition": 3,
+          "slot": 30
+        },
+        {
+          "repetition": 4,
+          "slot": 26
+        },
+        {
+          "repetition": 5,
+          "slot": 14
+        }
+      ],
+      "stochasticIdentity": "4fa6aa2bfe0bfc8178d99cf4d7ff54492cf92b8f721934957b605570a8adb1b9"
+    },
+    {
+      "slot": 7,
+      "repetition": 1,
+      "cellKey": "family-9/9A||A",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 7
+        },
+        {
+          "repetition": 2,
+          "slot": 39
+        },
+        {
+          "repetition": 3,
+          "slot": 31
+        },
+        {
+          "repetition": 4,
+          "slot": 27
+        },
+        {
+          "repetition": 5,
+          "slot": 15
+        }
+      ],
+      "stochasticIdentity": "d53a404460dd4465597aeb5f06241d6030d5d916bf7c1256906cbb7cf73a1e9c"
+    },
+    {
+      "slot": 8,
+      "repetition": 1,
+      "cellKey": "family-9/9C||A",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 8
+        },
+        {
+          "repetition": 2,
+          "slot": 40
+        },
+        {
+          "repetition": 3,
+          "slot": 32
+        },
+        {
+          "repetition": 4,
+          "slot": 28
+        },
+        {
+          "repetition": 5,
+          "slot": 16
+        }
+      ],
+      "stochasticIdentity": "db550592aea27eab11cb86f96054bb431c52b6b0bc10a103977cf60138e0cabc"
+    },
+    {
+      "slot": 9,
+      "repetition": 1,
+      "cellKey": "family-3/none||A2a",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 9
+        },
+        {
+          "repetition": 2,
+          "slot": 1
+        },
+        {
+          "repetition": 3,
+          "slot": 33
+        },
+        {
+          "repetition": 4,
+          "slot": 29
+        },
+        {
+          "repetition": 5,
+          "slot": 17
+        }
+      ],
+      "stochasticIdentity": "80f65b5785fd1dae2d91d030052a2e807c39bab1ddd51dd404e647ead4cc652f"
+    },
+    {
+      "slot": 10,
+      "repetition": 1,
+      "cellKey": "family-4/none||A2a",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 10
+        },
+        {
+          "repetition": 2,
+          "slot": 2
+        },
+        {
+          "repetition": 3,
+          "slot": 34
+        },
+        {
+          "repetition": 4,
+          "slot": 30
+        },
+        {
+          "repetition": 5,
+          "slot": 18
+        }
+      ],
+      "stochasticIdentity": "8d5f06522776baa9c71f7a61f3494e04ebb1ecdee99364681cb9732cd2f9e752"
+    },
+    {
+      "slot": 11,
+      "repetition": 1,
+      "cellKey": "family-8/8A|8A|A2a",
+      "cellId": "family-8/8A",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8A",
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 11
+        },
+        {
+          "repetition": 2,
+          "slot": 3
+        },
+        {
+          "repetition": 3,
+          "slot": 35
+        },
+        {
+          "repetition": 4,
+          "slot": 31
+        },
+        {
+          "repetition": 5,
+          "slot": 19
+        }
+      ],
+      "stochasticIdentity": "177e0dc6ec6591c8be5cd693ee7395d77549e959c3eeae2df78d615ad71f42ce"
+    },
+    {
+      "slot": 12,
+      "repetition": 1,
+      "cellKey": "family-8/8B|8B|A2a",
+      "cellId": "family-8/8B",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8B",
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 12
+        },
+        {
+          "repetition": 2,
+          "slot": 4
+        },
+        {
+          "repetition": 3,
+          "slot": 36
+        },
+        {
+          "repetition": 4,
+          "slot": 32
+        },
+        {
+          "repetition": 5,
+          "slot": 20
+        }
+      ],
+      "stochasticIdentity": "a9cdbdd1577348596ff6b10180704221fdd2f82995981c5033e273a56d4481d5"
+    },
+    {
+      "slot": 13,
+      "repetition": 1,
+      "cellKey": "family-8/8C|8C|A2a",
+      "cellId": "family-8/8C",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8C",
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 13
+        },
+        {
+          "repetition": 2,
+          "slot": 5
+        },
+        {
+          "repetition": 3,
+          "slot": 37
+        },
+        {
+          "repetition": 4,
+          "slot": 33
+        },
+        {
+          "repetition": 5,
+          "slot": 21
+        }
+      ],
+      "stochasticIdentity": "de59141cc8787058eb107ad0c82445a623ae1068ac36a42ef07fe28a1b72e081"
+    },
+    {
+      "slot": 14,
+      "repetition": 1,
+      "cellKey": "family-8/8D|8D|A2a",
+      "cellId": "family-8/8D",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8D",
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 14
+        },
+        {
+          "repetition": 2,
+          "slot": 6
+        },
+        {
+          "repetition": 3,
+          "slot": 38
+        },
+        {
+          "repetition": 4,
+          "slot": 34
+        },
+        {
+          "repetition": 5,
+          "slot": 22
+        }
+      ],
+      "stochasticIdentity": "9da2b365377f7b197cbf2a42ad7f940a27220b3c4ef6c767dfebbbee5ea81d7a"
+    },
+    {
+      "slot": 15,
+      "repetition": 1,
+      "cellKey": "family-9/9A||A2a",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 15
+        },
+        {
+          "repetition": 2,
+          "slot": 7
+        },
+        {
+          "repetition": 3,
+          "slot": 39
+        },
+        {
+          "repetition": 4,
+          "slot": 35
+        },
+        {
+          "repetition": 5,
+          "slot": 23
+        }
+      ],
+      "stochasticIdentity": "1082810659e01bef63729ada7208b4a4db62b97eef30371217e6d4137b023638"
+    },
+    {
+      "slot": 16,
+      "repetition": 1,
+      "cellKey": "family-9/9C||A2a",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 16
+        },
+        {
+          "repetition": 2,
+          "slot": 8
+        },
+        {
+          "repetition": 3,
+          "slot": 40
+        },
+        {
+          "repetition": 4,
+          "slot": 36
+        },
+        {
+          "repetition": 5,
+          "slot": 24
+        }
+      ],
+      "stochasticIdentity": "86cdf5a1257765ba535b78e98e2c895561f44319de25faff8df9dccfc07e55c8"
+    },
+    {
+      "slot": 17,
+      "repetition": 1,
+      "cellKey": "family-3/none||A2b",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A2b",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 17
+        },
+        {
+          "repetition": 2,
+          "slot": 9
+        },
+        {
+          "repetition": 3,
+          "slot": 1
+        },
+        {
+          "repetition": 4,
+          "slot": 37
+        },
+        {
+          "repetition": 5,
+          "slot": 25
+        }
+      ],
+      "stochasticIdentity": "f63b0c1ee9b93fc7d15962830d1ed1125123baaecba5a9660729861a955bba93"
+    },
+    {
+      "slot": 18,
+      "repetition": 1,
+      "cellKey": "family-4/none||A2b",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "A2b",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 18
+        },
+        {
+          "repetition": 2,
+          "slot": 10
+        },
+        {
+          "repetition": 3,
+          "slot": 2
+        },
+        {
+          "repetition": 4,
+          "slot": 38
+        },
+        {
+          "repetition": 5,
+          "slot": 26
+        }
+      ],
+      "stochasticIdentity": "a0785b1ab0514cdb404fc04f6055088d5ce018f92c333b2b79702c2af4f01ff0"
+    },
+    {
+      "slot": 19,
+      "repetition": 1,
+      "cellKey": "family-9/9A||A2b",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "A2b",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 19
+        },
+        {
+          "repetition": 2,
+          "slot": 11
+        },
+        {
+          "repetition": 3,
+          "slot": 3
+        },
+        {
+          "repetition": 4,
+          "slot": 39
+        },
+        {
+          "repetition": 5,
+          "slot": 27
+        }
+      ],
+      "stochasticIdentity": "cfb083038231e7d1797db6e18463b6c89f17b4f00b8fe7dbd6103d9aa94e68b4"
+    },
+    {
+      "slot": 20,
+      "repetition": 1,
+      "cellKey": "family-9/9C||A2b",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "A2b",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 20
+        },
+        {
+          "repetition": 2,
+          "slot": 12
+        },
+        {
+          "repetition": 3,
+          "slot": 4
+        },
+        {
+          "repetition": 4,
+          "slot": 40
+        },
+        {
+          "repetition": 5,
+          "slot": 28
+        }
+      ],
+      "stochasticIdentity": "773630cd5d205957c31127012cbc068a95aec8e451335ceb43a4d2f94ab7afdf"
+    },
+    {
+      "slot": 21,
+      "repetition": 1,
+      "cellKey": "family-3/none||B",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 21
+        },
+        {
+          "repetition": 2,
+          "slot": 13
+        },
+        {
+          "repetition": 3,
+          "slot": 5
+        },
+        {
+          "repetition": 4,
+          "slot": 1
+        },
+        {
+          "repetition": 5,
+          "slot": 29
+        }
+      ],
+      "stochasticIdentity": "839660748602d342e7bb1bcf986de8a5fceeea8ea22ea971417568474d668d43"
+    },
+    {
+      "slot": 22,
+      "repetition": 1,
+      "cellKey": "family-4/none||B",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 22
+        },
+        {
+          "repetition": 2,
+          "slot": 14
+        },
+        {
+          "repetition": 3,
+          "slot": 6
+        },
+        {
+          "repetition": 4,
+          "slot": 2
+        },
+        {
+          "repetition": 5,
+          "slot": 30
+        }
+      ],
+      "stochasticIdentity": "b7c5be983ef7bd63324ac16bf7651678d3bd0ec5ec90212a55faf247bf9e1196"
+    },
+    {
+      "slot": 23,
+      "repetition": 1,
+      "cellKey": "family-7/7A|7A|B",
+      "cellId": "family-7/7A",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7A",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 23
+        },
+        {
+          "repetition": 2,
+          "slot": 15
+        },
+        {
+          "repetition": 3,
+          "slot": 7
+        },
+        {
+          "repetition": 4,
+          "slot": 3
+        },
+        {
+          "repetition": 5,
+          "slot": 31
+        }
+      ],
+      "stochasticIdentity": "d77f03fa312a5fcf793281971477d9a43c86fc83a5c6ee0b6f6a2a5a81954a27"
+    },
+    {
+      "slot": 24,
+      "repetition": 1,
+      "cellKey": "family-7/7B|7B|B",
+      "cellId": "family-7/7B",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7B",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 24
+        },
+        {
+          "repetition": 2,
+          "slot": 16
+        },
+        {
+          "repetition": 3,
+          "slot": 8
+        },
+        {
+          "repetition": 4,
+          "slot": 4
+        },
+        {
+          "repetition": 5,
+          "slot": 32
+        }
+      ],
+      "stochasticIdentity": "7dd76a151f6936e02b79d97473ea393b7823a1fb987fa870c3830fc7dda90c52"
+    },
+    {
+      "slot": 25,
+      "repetition": 1,
+      "cellKey": "family-7/7C|7C|B",
+      "cellId": "family-7/7C",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7C",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 25
+        },
+        {
+          "repetition": 2,
+          "slot": 17
+        },
+        {
+          "repetition": 3,
+          "slot": 9
+        },
+        {
+          "repetition": 4,
+          "slot": 5
+        },
+        {
+          "repetition": 5,
+          "slot": 33
+        }
+      ],
+      "stochasticIdentity": "1eaae0afd6816a0d39b3081f47962b58ed05a546cbadae5adb7d7c0cf2425a36"
+    },
+    {
+      "slot": 26,
+      "repetition": 1,
+      "cellKey": "family-7/7D|7D|B",
+      "cellId": "family-7/7D",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7D",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 26
+        },
+        {
+          "repetition": 2,
+          "slot": 18
+        },
+        {
+          "repetition": 3,
+          "slot": 10
+        },
+        {
+          "repetition": 4,
+          "slot": 6
+        },
+        {
+          "repetition": 5,
+          "slot": 34
+        }
+      ],
+      "stochasticIdentity": "117cf20a354c92ba4176f30b280cd6ad53e72c87dd327d322e2aea114d64ac12"
+    },
+    {
+      "slot": 27,
+      "repetition": 1,
+      "cellKey": "family-8/8A|8A|B",
+      "cellId": "family-8/8A",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8A",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 27
+        },
+        {
+          "repetition": 2,
+          "slot": 19
+        },
+        {
+          "repetition": 3,
+          "slot": 11
+        },
+        {
+          "repetition": 4,
+          "slot": 7
+        },
+        {
+          "repetition": 5,
+          "slot": 35
+        }
+      ],
+      "stochasticIdentity": "e12c314d92e2154541fc94d8e85b087bbd8d0c37cda427dbc2d1540d989f1698"
+    },
+    {
+      "slot": 28,
+      "repetition": 1,
+      "cellKey": "family-8/8B|8B|B",
+      "cellId": "family-8/8B",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8B",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 28
+        },
+        {
+          "repetition": 2,
+          "slot": 20
+        },
+        {
+          "repetition": 3,
+          "slot": 12
+        },
+        {
+          "repetition": 4,
+          "slot": 8
+        },
+        {
+          "repetition": 5,
+          "slot": 36
+        }
+      ],
+      "stochasticIdentity": "b5aece62202bffb49c82199cce6b69265b7c264f0bd6cbfb77425730cffcbe26"
+    },
+    {
+      "slot": 29,
+      "repetition": 1,
+      "cellKey": "family-8/8C|8C|B",
+      "cellId": "family-8/8C",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8C",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 29
+        },
+        {
+          "repetition": 2,
+          "slot": 21
+        },
+        {
+          "repetition": 3,
+          "slot": 13
+        },
+        {
+          "repetition": 4,
+          "slot": 9
+        },
+        {
+          "repetition": 5,
+          "slot": 37
+        }
+      ],
+      "stochasticIdentity": "d9ed3238eafb02349e3c9a9ddffeca91226af56c246850817a9615392b6cb7b2"
+    },
+    {
+      "slot": 30,
+      "repetition": 1,
+      "cellKey": "family-8/8D|8D|B",
+      "cellId": "family-8/8D",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8D",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 30
+        },
+        {
+          "repetition": 2,
+          "slot": 22
+        },
+        {
+          "repetition": 3,
+          "slot": 14
+        },
+        {
+          "repetition": 4,
+          "slot": 10
+        },
+        {
+          "repetition": 5,
+          "slot": 38
+        }
+      ],
+      "stochasticIdentity": "39c5adbb1ae8342576feba4a291eca19cb5eecf3af5e1184579fe23e89cdf741"
+    },
+    {
+      "slot": 31,
+      "repetition": 1,
+      "cellKey": "family-9/9A||B",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 31
+        },
+        {
+          "repetition": 2,
+          "slot": 23
+        },
+        {
+          "repetition": 3,
+          "slot": 15
+        },
+        {
+          "repetition": 4,
+          "slot": 11
+        },
+        {
+          "repetition": 5,
+          "slot": 39
+        }
+      ],
+      "stochasticIdentity": "c8a3b380c5cd532d09525f536ad9788e0bca72a7e55bf273529418ee3937c365"
+    },
+    {
+      "slot": 32,
+      "repetition": 1,
+      "cellKey": "family-9/9C||B",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 32
+        },
+        {
+          "repetition": 2,
+          "slot": 24
+        },
+        {
+          "repetition": 3,
+          "slot": 16
+        },
+        {
+          "repetition": 4,
+          "slot": 12
+        },
+        {
+          "repetition": 5,
+          "slot": 40
+        }
+      ],
+      "stochasticIdentity": "1c5da517839180cb9561937b2235b58da8d05659b67504b4542d1b8a4f02f688"
+    },
+    {
+      "slot": 33,
+      "repetition": 1,
+      "cellKey": "family-3/none||C",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 33
+        },
+        {
+          "repetition": 2,
+          "slot": 25
+        },
+        {
+          "repetition": 3,
+          "slot": 17
+        },
+        {
+          "repetition": 4,
+          "slot": 13
+        },
+        {
+          "repetition": 5,
+          "slot": 1
+        }
+      ],
+      "stochasticIdentity": "18c5a9d1274ee20d04a6a83517f3888a49b57a2d840372541981cd5540b06966"
+    },
+    {
+      "slot": 34,
+      "repetition": 1,
+      "cellKey": "family-4/none||C",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 34
+        },
+        {
+          "repetition": 2,
+          "slot": 26
+        },
+        {
+          "repetition": 3,
+          "slot": 18
+        },
+        {
+          "repetition": 4,
+          "slot": 14
+        },
+        {
+          "repetition": 5,
+          "slot": 2
+        }
+      ],
+      "stochasticIdentity": "f5d053c9f79424712f6760b2cf541811e065c07021fd22b1ea2a6bde6a86d299"
+    },
+    {
+      "slot": 35,
+      "repetition": 1,
+      "cellKey": "family-7/7A|7A|C",
+      "cellId": "family-7/7A",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7A",
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 35
+        },
+        {
+          "repetition": 2,
+          "slot": 27
+        },
+        {
+          "repetition": 3,
+          "slot": 19
+        },
+        {
+          "repetition": 4,
+          "slot": 15
+        },
+        {
+          "repetition": 5,
+          "slot": 3
+        }
+      ],
+      "stochasticIdentity": "e0d909c8c45aa422936baac86f68397860923f4253ce0d73e5f0f1f342b6e31d"
+    },
+    {
+      "slot": 36,
+      "repetition": 1,
+      "cellKey": "family-7/7B|7B|C",
+      "cellId": "family-7/7B",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7B",
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 36
+        },
+        {
+          "repetition": 2,
+          "slot": 28
+        },
+        {
+          "repetition": 3,
+          "slot": 20
+        },
+        {
+          "repetition": 4,
+          "slot": 16
+        },
+        {
+          "repetition": 5,
+          "slot": 4
+        }
+      ],
+      "stochasticIdentity": "a7ba087345051c7db0da12c3e23f4d3170b050301e56774138ad0aa7eb4d7c2e"
+    },
+    {
+      "slot": 37,
+      "repetition": 1,
+      "cellKey": "family-7/7C|7C|C",
+      "cellId": "family-7/7C",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7C",
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 37
+        },
+        {
+          "repetition": 2,
+          "slot": 29
+        },
+        {
+          "repetition": 3,
+          "slot": 21
+        },
+        {
+          "repetition": 4,
+          "slot": 17
+        },
+        {
+          "repetition": 5,
+          "slot": 5
+        }
+      ],
+      "stochasticIdentity": "f8185b826ef993f966b084f3d53b1a22ffc6bd68ab7842905cb8e89183f31b51"
+    },
+    {
+      "slot": 38,
+      "repetition": 1,
+      "cellKey": "family-7/7D|7D|C",
+      "cellId": "family-7/7D",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7D",
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 38
+        },
+        {
+          "repetition": 2,
+          "slot": 30
+        },
+        {
+          "repetition": 3,
+          "slot": 22
+        },
+        {
+          "repetition": 4,
+          "slot": 18
+        },
+        {
+          "repetition": 5,
+          "slot": 6
+        }
+      ],
+      "stochasticIdentity": "dae15a5d4e3d3cce93d02e21dd07c8147c5330a1f03665f12437d2d4147cce83"
+    },
+    {
+      "slot": 39,
+      "repetition": 1,
+      "cellKey": "family-9/9A||C",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 39
+        },
+        {
+          "repetition": 2,
+          "slot": 31
+        },
+        {
+          "repetition": 3,
+          "slot": 23
+        },
+        {
+          "repetition": 4,
+          "slot": 19
+        },
+        {
+          "repetition": 5,
+          "slot": 7
+        }
+      ],
+      "stochasticIdentity": "96463b0d1d2277e31340f4d8dfc4da4e455c8d270bb311678893a14c32ee5e48"
+    },
+    {
+      "slot": 40,
+      "repetition": 1,
+      "cellKey": "family-9/9C||C",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 40
+        },
+        {
+          "repetition": 2,
+          "slot": 32
+        },
+        {
+          "repetition": 3,
+          "slot": 24
+        },
+        {
+          "repetition": 4,
+          "slot": 20
+        },
+        {
+          "repetition": 5,
+          "slot": 8
+        }
+      ],
+      "stochasticIdentity": "d79c9f4852a97d93ca04a5a5d26b0015e1adb3c2da4cac20810273ed8625b3e6"
+    },
+    {
+      "slot": 1,
+      "repetition": 2,
+      "cellKey": "family-3/none||A2a",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 9
+        },
+        {
+          "repetition": 2,
+          "slot": 1
+        },
+        {
+          "repetition": 3,
+          "slot": 33
+        },
+        {
+          "repetition": 4,
+          "slot": 29
+        },
+        {
+          "repetition": 5,
+          "slot": 17
+        }
+      ],
+      "stochasticIdentity": "8114bbd657d786c70325a4b317689d5f4ab55af9c7caaeb66ce419356e6d5db8"
+    },
+    {
+      "slot": 2,
+      "repetition": 2,
+      "cellKey": "family-4/none||A2a",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 10
+        },
+        {
+          "repetition": 2,
+          "slot": 2
+        },
+        {
+          "repetition": 3,
+          "slot": 34
+        },
+        {
+          "repetition": 4,
+          "slot": 30
+        },
+        {
+          "repetition": 5,
+          "slot": 18
+        }
+      ],
+      "stochasticIdentity": "b15b7435388e4658451f99e0fbb6d3c89725b007d9048e6fade2a446f942c4be"
+    },
+    {
+      "slot": 3,
+      "repetition": 2,
+      "cellKey": "family-8/8A|8A|A2a",
+      "cellId": "family-8/8A",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8A",
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 11
+        },
+        {
+          "repetition": 2,
+          "slot": 3
+        },
+        {
+          "repetition": 3,
+          "slot": 35
+        },
+        {
+          "repetition": 4,
+          "slot": 31
+        },
+        {
+          "repetition": 5,
+          "slot": 19
+        }
+      ],
+      "stochasticIdentity": "a0b0cbd0c9cd51bca070fa760b10df3fb0206073e3939f27653c789973a9bc50"
+    },
+    {
+      "slot": 4,
+      "repetition": 2,
+      "cellKey": "family-8/8B|8B|A2a",
+      "cellId": "family-8/8B",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8B",
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 12
+        },
+        {
+          "repetition": 2,
+          "slot": 4
+        },
+        {
+          "repetition": 3,
+          "slot": 36
+        },
+        {
+          "repetition": 4,
+          "slot": 32
+        },
+        {
+          "repetition": 5,
+          "slot": 20
+        }
+      ],
+      "stochasticIdentity": "6db28980de0e0181c2ac079cfe1f94b63e6529bf8e1f6ede6186d2c70f9e1e82"
+    },
+    {
+      "slot": 5,
+      "repetition": 2,
+      "cellKey": "family-8/8C|8C|A2a",
+      "cellId": "family-8/8C",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8C",
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 13
+        },
+        {
+          "repetition": 2,
+          "slot": 5
+        },
+        {
+          "repetition": 3,
+          "slot": 37
+        },
+        {
+          "repetition": 4,
+          "slot": 33
+        },
+        {
+          "repetition": 5,
+          "slot": 21
+        }
+      ],
+      "stochasticIdentity": "a3d74bdeafa3050ab4897339d97b571ac950e8e127dadda7d7a9559727389aff"
+    },
+    {
+      "slot": 6,
+      "repetition": 2,
+      "cellKey": "family-8/8D|8D|A2a",
+      "cellId": "family-8/8D",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8D",
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 14
+        },
+        {
+          "repetition": 2,
+          "slot": 6
+        },
+        {
+          "repetition": 3,
+          "slot": 38
+        },
+        {
+          "repetition": 4,
+          "slot": 34
+        },
+        {
+          "repetition": 5,
+          "slot": 22
+        }
+      ],
+      "stochasticIdentity": "5b529ff3347ae0723991ea0a3c73595c57a07a142fa8bf503ce1faa145f392b8"
+    },
+    {
+      "slot": 7,
+      "repetition": 2,
+      "cellKey": "family-9/9A||A2a",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 15
+        },
+        {
+          "repetition": 2,
+          "slot": 7
+        },
+        {
+          "repetition": 3,
+          "slot": 39
+        },
+        {
+          "repetition": 4,
+          "slot": 35
+        },
+        {
+          "repetition": 5,
+          "slot": 23
+        }
+      ],
+      "stochasticIdentity": "381142f9bf113274ef004ba254c0e78a47bf547060b536e3788eb99fa6e4594b"
+    },
+    {
+      "slot": 8,
+      "repetition": 2,
+      "cellKey": "family-9/9C||A2a",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 16
+        },
+        {
+          "repetition": 2,
+          "slot": 8
+        },
+        {
+          "repetition": 3,
+          "slot": 40
+        },
+        {
+          "repetition": 4,
+          "slot": 36
+        },
+        {
+          "repetition": 5,
+          "slot": 24
+        }
+      ],
+      "stochasticIdentity": "f778b4de7065996348cba21cdf4d892eae8d0a17aa5b58f6b6787b955bc64fcd"
+    },
+    {
+      "slot": 9,
+      "repetition": 2,
+      "cellKey": "family-3/none||A2b",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A2b",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 17
+        },
+        {
+          "repetition": 2,
+          "slot": 9
+        },
+        {
+          "repetition": 3,
+          "slot": 1
+        },
+        {
+          "repetition": 4,
+          "slot": 37
+        },
+        {
+          "repetition": 5,
+          "slot": 25
+        }
+      ],
+      "stochasticIdentity": "87585016c775086aa3677c7da82054cfcbadcd664f114b3683b8f517c3213c53"
+    },
+    {
+      "slot": 10,
+      "repetition": 2,
+      "cellKey": "family-4/none||A2b",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "A2b",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 18
+        },
+        {
+          "repetition": 2,
+          "slot": 10
+        },
+        {
+          "repetition": 3,
+          "slot": 2
+        },
+        {
+          "repetition": 4,
+          "slot": 38
+        },
+        {
+          "repetition": 5,
+          "slot": 26
+        }
+      ],
+      "stochasticIdentity": "bf40927e92f4d327c62f931ed5beaab57d1db808b5ccb32fb1fbe7fb7cea1610"
+    },
+    {
+      "slot": 11,
+      "repetition": 2,
+      "cellKey": "family-9/9A||A2b",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "A2b",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 19
+        },
+        {
+          "repetition": 2,
+          "slot": 11
+        },
+        {
+          "repetition": 3,
+          "slot": 3
+        },
+        {
+          "repetition": 4,
+          "slot": 39
+        },
+        {
+          "repetition": 5,
+          "slot": 27
+        }
+      ],
+      "stochasticIdentity": "daf06785a024a707d23586d46bc31e4876ee679b470e430f663fb43f836a80d7"
+    },
+    {
+      "slot": 12,
+      "repetition": 2,
+      "cellKey": "family-9/9C||A2b",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "A2b",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 20
+        },
+        {
+          "repetition": 2,
+          "slot": 12
+        },
+        {
+          "repetition": 3,
+          "slot": 4
+        },
+        {
+          "repetition": 4,
+          "slot": 40
+        },
+        {
+          "repetition": 5,
+          "slot": 28
+        }
+      ],
+      "stochasticIdentity": "3eb9e58a1abb1168aebb5d80a8f97fa9fc41b3e16ddba2551d363e85f85793e1"
+    },
+    {
+      "slot": 13,
+      "repetition": 2,
+      "cellKey": "family-3/none||B",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 21
+        },
+        {
+          "repetition": 2,
+          "slot": 13
+        },
+        {
+          "repetition": 3,
+          "slot": 5
+        },
+        {
+          "repetition": 4,
+          "slot": 1
+        },
+        {
+          "repetition": 5,
+          "slot": 29
+        }
+      ],
+      "stochasticIdentity": "72c9f84b76b882882009de6e158174d4c5d719aa31ed791eb53c0d94ee905405"
+    },
+    {
+      "slot": 14,
+      "repetition": 2,
+      "cellKey": "family-4/none||B",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 22
+        },
+        {
+          "repetition": 2,
+          "slot": 14
+        },
+        {
+          "repetition": 3,
+          "slot": 6
+        },
+        {
+          "repetition": 4,
+          "slot": 2
+        },
+        {
+          "repetition": 5,
+          "slot": 30
+        }
+      ],
+      "stochasticIdentity": "aa48a2829735189e0066377c0dd8394562fab9b92fdebe438fe133c00b5a5330"
+    },
+    {
+      "slot": 15,
+      "repetition": 2,
+      "cellKey": "family-7/7A|7A|B",
+      "cellId": "family-7/7A",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7A",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 23
+        },
+        {
+          "repetition": 2,
+          "slot": 15
+        },
+        {
+          "repetition": 3,
+          "slot": 7
+        },
+        {
+          "repetition": 4,
+          "slot": 3
+        },
+        {
+          "repetition": 5,
+          "slot": 31
+        }
+      ],
+      "stochasticIdentity": "58456cd0884a494648ff2a9ab9ad019b351d6fabb468fb3a0036ad86bcf01192"
+    },
+    {
+      "slot": 16,
+      "repetition": 2,
+      "cellKey": "family-7/7B|7B|B",
+      "cellId": "family-7/7B",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7B",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 24
+        },
+        {
+          "repetition": 2,
+          "slot": 16
+        },
+        {
+          "repetition": 3,
+          "slot": 8
+        },
+        {
+          "repetition": 4,
+          "slot": 4
+        },
+        {
+          "repetition": 5,
+          "slot": 32
+        }
+      ],
+      "stochasticIdentity": "70d879bd50f4ff516d817c2f862b74c122b0498aea584e0bafa987fe212ed941"
+    },
+    {
+      "slot": 17,
+      "repetition": 2,
+      "cellKey": "family-7/7C|7C|B",
+      "cellId": "family-7/7C",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7C",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 25
+        },
+        {
+          "repetition": 2,
+          "slot": 17
+        },
+        {
+          "repetition": 3,
+          "slot": 9
+        },
+        {
+          "repetition": 4,
+          "slot": 5
+        },
+        {
+          "repetition": 5,
+          "slot": 33
+        }
+      ],
+      "stochasticIdentity": "f3d2a9a0ea57c21bbb9f6ce9ba6635d25bc5fcc57f4f96c87a7b29d9ee078ce5"
+    },
+    {
+      "slot": 18,
+      "repetition": 2,
+      "cellKey": "family-7/7D|7D|B",
+      "cellId": "family-7/7D",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7D",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 26
+        },
+        {
+          "repetition": 2,
+          "slot": 18
+        },
+        {
+          "repetition": 3,
+          "slot": 10
+        },
+        {
+          "repetition": 4,
+          "slot": 6
+        },
+        {
+          "repetition": 5,
+          "slot": 34
+        }
+      ],
+      "stochasticIdentity": "f34b75a06866ddebae5778181a99a4eec6d3e878a5963897a0327a3ab36f1cfe"
+    },
+    {
+      "slot": 19,
+      "repetition": 2,
+      "cellKey": "family-8/8A|8A|B",
+      "cellId": "family-8/8A",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8A",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 27
+        },
+        {
+          "repetition": 2,
+          "slot": 19
+        },
+        {
+          "repetition": 3,
+          "slot": 11
+        },
+        {
+          "repetition": 4,
+          "slot": 7
+        },
+        {
+          "repetition": 5,
+          "slot": 35
+        }
+      ],
+      "stochasticIdentity": "26ee95c42313b80992fc4ff5ec95418ac172724c91e33ae70329bfee52b9b247"
+    },
+    {
+      "slot": 20,
+      "repetition": 2,
+      "cellKey": "family-8/8B|8B|B",
+      "cellId": "family-8/8B",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8B",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 28
+        },
+        {
+          "repetition": 2,
+          "slot": 20
+        },
+        {
+          "repetition": 3,
+          "slot": 12
+        },
+        {
+          "repetition": 4,
+          "slot": 8
+        },
+        {
+          "repetition": 5,
+          "slot": 36
+        }
+      ],
+      "stochasticIdentity": "4522af4882ce8c20fdad19b3709795ae397706bc130f8a8bdf353c4986fc3c0d"
+    },
+    {
+      "slot": 21,
+      "repetition": 2,
+      "cellKey": "family-8/8C|8C|B",
+      "cellId": "family-8/8C",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8C",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 29
+        },
+        {
+          "repetition": 2,
+          "slot": 21
+        },
+        {
+          "repetition": 3,
+          "slot": 13
+        },
+        {
+          "repetition": 4,
+          "slot": 9
+        },
+        {
+          "repetition": 5,
+          "slot": 37
+        }
+      ],
+      "stochasticIdentity": "39feb4c81061c6aee738dd7ef12eff8e81f43de1631ac3b1ff89e586976d90a4"
+    },
+    {
+      "slot": 22,
+      "repetition": 2,
+      "cellKey": "family-8/8D|8D|B",
+      "cellId": "family-8/8D",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8D",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 30
+        },
+        {
+          "repetition": 2,
+          "slot": 22
+        },
+        {
+          "repetition": 3,
+          "slot": 14
+        },
+        {
+          "repetition": 4,
+          "slot": 10
+        },
+        {
+          "repetition": 5,
+          "slot": 38
+        }
+      ],
+      "stochasticIdentity": "b6de68c486a9b2a436a62897f6189b1880f99cc268a1ddc5d5f0d6639959aca8"
+    },
+    {
+      "slot": 23,
+      "repetition": 2,
+      "cellKey": "family-9/9A||B",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 31
+        },
+        {
+          "repetition": 2,
+          "slot": 23
+        },
+        {
+          "repetition": 3,
+          "slot": 15
+        },
+        {
+          "repetition": 4,
+          "slot": 11
+        },
+        {
+          "repetition": 5,
+          "slot": 39
+        }
+      ],
+      "stochasticIdentity": "f3564a1060dd1727b79b8bd2a1666e6f0cd029dd487e663a063141835a3d924e"
+    },
+    {
+      "slot": 24,
+      "repetition": 2,
+      "cellKey": "family-9/9C||B",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 32
+        },
+        {
+          "repetition": 2,
+          "slot": 24
+        },
+        {
+          "repetition": 3,
+          "slot": 16
+        },
+        {
+          "repetition": 4,
+          "slot": 12
+        },
+        {
+          "repetition": 5,
+          "slot": 40
+        }
+      ],
+      "stochasticIdentity": "a23c79fb5d623461a8ac6fb2b5e20c99c8d123538d447a1a384ac68013f34da9"
+    },
+    {
+      "slot": 25,
+      "repetition": 2,
+      "cellKey": "family-3/none||C",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 33
+        },
+        {
+          "repetition": 2,
+          "slot": 25
+        },
+        {
+          "repetition": 3,
+          "slot": 17
+        },
+        {
+          "repetition": 4,
+          "slot": 13
+        },
+        {
+          "repetition": 5,
+          "slot": 1
+        }
+      ],
+      "stochasticIdentity": "a97c19f676a146e60cd4ade71f066420d28f219ed7d50dd389b25eb931de0b97"
+    },
+    {
+      "slot": 26,
+      "repetition": 2,
+      "cellKey": "family-4/none||C",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 34
+        },
+        {
+          "repetition": 2,
+          "slot": 26
+        },
+        {
+          "repetition": 3,
+          "slot": 18
+        },
+        {
+          "repetition": 4,
+          "slot": 14
+        },
+        {
+          "repetition": 5,
+          "slot": 2
+        }
+      ],
+      "stochasticIdentity": "6c9d03e36d15f7ede4b09b8751e0b08cc65e01d5d66cc67fe425d153047f82bf"
+    },
+    {
+      "slot": 27,
+      "repetition": 2,
+      "cellKey": "family-7/7A|7A|C",
+      "cellId": "family-7/7A",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7A",
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 35
+        },
+        {
+          "repetition": 2,
+          "slot": 27
+        },
+        {
+          "repetition": 3,
+          "slot": 19
+        },
+        {
+          "repetition": 4,
+          "slot": 15
+        },
+        {
+          "repetition": 5,
+          "slot": 3
+        }
+      ],
+      "stochasticIdentity": "0537fbe399e2f098e1767ed865e6391dadda14e60e7b3461607417288f25e836"
+    },
+    {
+      "slot": 28,
+      "repetition": 2,
+      "cellKey": "family-7/7B|7B|C",
+      "cellId": "family-7/7B",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7B",
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 36
+        },
+        {
+          "repetition": 2,
+          "slot": 28
+        },
+        {
+          "repetition": 3,
+          "slot": 20
+        },
+        {
+          "repetition": 4,
+          "slot": 16
+        },
+        {
+          "repetition": 5,
+          "slot": 4
+        }
+      ],
+      "stochasticIdentity": "9e95096cb96ff4a6fca022ee73bf5aa10c316ccfb7d57e9d15fd353787d6a205"
+    },
+    {
+      "slot": 29,
+      "repetition": 2,
+      "cellKey": "family-7/7C|7C|C",
+      "cellId": "family-7/7C",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7C",
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 37
+        },
+        {
+          "repetition": 2,
+          "slot": 29
+        },
+        {
+          "repetition": 3,
+          "slot": 21
+        },
+        {
+          "repetition": 4,
+          "slot": 17
+        },
+        {
+          "repetition": 5,
+          "slot": 5
+        }
+      ],
+      "stochasticIdentity": "dd60b35305ab5b5c529cc9aa6b2458c96325cb23e175d1f80a539716fcf666f4"
+    },
+    {
+      "slot": 30,
+      "repetition": 2,
+      "cellKey": "family-7/7D|7D|C",
+      "cellId": "family-7/7D",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7D",
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 38
+        },
+        {
+          "repetition": 2,
+          "slot": 30
+        },
+        {
+          "repetition": 3,
+          "slot": 22
+        },
+        {
+          "repetition": 4,
+          "slot": 18
+        },
+        {
+          "repetition": 5,
+          "slot": 6
+        }
+      ],
+      "stochasticIdentity": "9cf5b9e8a4315d21bc9153af2104aab5c383ef9f1223943a2a44b23015e469c5"
+    },
+    {
+      "slot": 31,
+      "repetition": 2,
+      "cellKey": "family-9/9A||C",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 39
+        },
+        {
+          "repetition": 2,
+          "slot": 31
+        },
+        {
+          "repetition": 3,
+          "slot": 23
+        },
+        {
+          "repetition": 4,
+          "slot": 19
+        },
+        {
+          "repetition": 5,
+          "slot": 7
+        }
+      ],
+      "stochasticIdentity": "40e1a684543ccffa5538d2526b02dd2615e0563dda3c140eccca143ee5d2fc26"
+    },
+    {
+      "slot": 32,
+      "repetition": 2,
+      "cellKey": "family-9/9C||C",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 40
+        },
+        {
+          "repetition": 2,
+          "slot": 32
+        },
+        {
+          "repetition": 3,
+          "slot": 24
+        },
+        {
+          "repetition": 4,
+          "slot": 20
+        },
+        {
+          "repetition": 5,
+          "slot": 8
+        }
+      ],
+      "stochasticIdentity": "2cde3c1da873f07937a9c00192074c030f01f75efc1ffbf35c320b42100d5670"
+    },
+    {
+      "slot": 33,
+      "repetition": 2,
+      "cellKey": "family-3/none||A",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 1
+        },
+        {
+          "repetition": 2,
+          "slot": 33
+        },
+        {
+          "repetition": 3,
+          "slot": 25
+        },
+        {
+          "repetition": 4,
+          "slot": 21
+        },
+        {
+          "repetition": 5,
+          "slot": 9
+        }
+      ],
+      "stochasticIdentity": "f002b466036fec07d2c85da056c91d686c20683b25d7fbb5411715d1b121aca0"
+    },
+    {
+      "slot": 34,
+      "repetition": 2,
+      "cellKey": "family-4/none||A",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 2
+        },
+        {
+          "repetition": 2,
+          "slot": 34
+        },
+        {
+          "repetition": 3,
+          "slot": 26
+        },
+        {
+          "repetition": 4,
+          "slot": 22
+        },
+        {
+          "repetition": 5,
+          "slot": 10
+        }
+      ],
+      "stochasticIdentity": "f0588a645182487317d73e7a7e646ab22f7cd551023de346ef1935fb651ec502"
+    },
+    {
+      "slot": 35,
+      "repetition": 2,
+      "cellKey": "family-8/8A|8A|A",
+      "cellId": "family-8/8A",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8A",
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 3
+        },
+        {
+          "repetition": 2,
+          "slot": 35
+        },
+        {
+          "repetition": 3,
+          "slot": 27
+        },
+        {
+          "repetition": 4,
+          "slot": 23
+        },
+        {
+          "repetition": 5,
+          "slot": 11
+        }
+      ],
+      "stochasticIdentity": "09abf1a807c570749946a4fe0c8c0612a0bc7db40c8e3395595a7c26abd8c409"
+    },
+    {
+      "slot": 36,
+      "repetition": 2,
+      "cellKey": "family-8/8B|8B|A",
+      "cellId": "family-8/8B",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8B",
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 4
+        },
+        {
+          "repetition": 2,
+          "slot": 36
+        },
+        {
+          "repetition": 3,
+          "slot": 28
+        },
+        {
+          "repetition": 4,
+          "slot": 24
+        },
+        {
+          "repetition": 5,
+          "slot": 12
+        }
+      ],
+      "stochasticIdentity": "d0c971f41cb69d7842b67b4ecdb24c53bc3bd26cf821d39ca504c261111c20e0"
+    },
+    {
+      "slot": 37,
+      "repetition": 2,
+      "cellKey": "family-8/8C|8C|A",
+      "cellId": "family-8/8C",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8C",
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 5
+        },
+        {
+          "repetition": 2,
+          "slot": 37
+        },
+        {
+          "repetition": 3,
+          "slot": 29
+        },
+        {
+          "repetition": 4,
+          "slot": 25
+        },
+        {
+          "repetition": 5,
+          "slot": 13
+        }
+      ],
+      "stochasticIdentity": "6d21cec913b6b5e93b418c92138c47a325c435bf69b8711a83e0964d42d658f5"
+    },
+    {
+      "slot": 38,
+      "repetition": 2,
+      "cellKey": "family-8/8D|8D|A",
+      "cellId": "family-8/8D",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8D",
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 6
+        },
+        {
+          "repetition": 2,
+          "slot": 38
+        },
+        {
+          "repetition": 3,
+          "slot": 30
+        },
+        {
+          "repetition": 4,
+          "slot": 26
+        },
+        {
+          "repetition": 5,
+          "slot": 14
+        }
+      ],
+      "stochasticIdentity": "733e2490845117437ed708f753b37d10ca55e27817abca108c064e1d67518f2d"
+    },
+    {
+      "slot": 39,
+      "repetition": 2,
+      "cellKey": "family-9/9A||A",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 7
+        },
+        {
+          "repetition": 2,
+          "slot": 39
+        },
+        {
+          "repetition": 3,
+          "slot": 31
+        },
+        {
+          "repetition": 4,
+          "slot": 27
+        },
+        {
+          "repetition": 5,
+          "slot": 15
+        }
+      ],
+      "stochasticIdentity": "eb83dacccf2dc2595ff810612c1695fb1ca06d04326fa3b2eb57643b101782de"
+    },
+    {
+      "slot": 40,
+      "repetition": 2,
+      "cellKey": "family-9/9C||A",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 8
+        },
+        {
+          "repetition": 2,
+          "slot": 40
+        },
+        {
+          "repetition": 3,
+          "slot": 32
+        },
+        {
+          "repetition": 4,
+          "slot": 28
+        },
+        {
+          "repetition": 5,
+          "slot": 16
+        }
+      ],
+      "stochasticIdentity": "837405f4528f65e8dc809857088bcf2e5416b93737599a46039c084bdb231136"
+    },
+    {
+      "slot": 1,
+      "repetition": 3,
+      "cellKey": "family-3/none||A2b",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A2b",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 17
+        },
+        {
+          "repetition": 2,
+          "slot": 9
+        },
+        {
+          "repetition": 3,
+          "slot": 1
+        },
+        {
+          "repetition": 4,
+          "slot": 37
+        },
+        {
+          "repetition": 5,
+          "slot": 25
+        }
+      ],
+      "stochasticIdentity": "b92db6a339016100d01bd90a4d381eca5792237ab3204832f7e9ae9c9fb64417"
+    },
+    {
+      "slot": 2,
+      "repetition": 3,
+      "cellKey": "family-4/none||A2b",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "A2b",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 18
+        },
+        {
+          "repetition": 2,
+          "slot": 10
+        },
+        {
+          "repetition": 3,
+          "slot": 2
+        },
+        {
+          "repetition": 4,
+          "slot": 38
+        },
+        {
+          "repetition": 5,
+          "slot": 26
+        }
+      ],
+      "stochasticIdentity": "5617238aa1c8c50e35df0a3fadab40e5e08b746c18a6bcd90f5774d17498ffc4"
+    },
+    {
+      "slot": 3,
+      "repetition": 3,
+      "cellKey": "family-9/9A||A2b",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "A2b",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 19
+        },
+        {
+          "repetition": 2,
+          "slot": 11
+        },
+        {
+          "repetition": 3,
+          "slot": 3
+        },
+        {
+          "repetition": 4,
+          "slot": 39
+        },
+        {
+          "repetition": 5,
+          "slot": 27
+        }
+      ],
+      "stochasticIdentity": "5760fc7a15f9be341c8ede72e23c5e2eb28f54e4f144b213fb4ed9626cbf1358"
+    },
+    {
+      "slot": 4,
+      "repetition": 3,
+      "cellKey": "family-9/9C||A2b",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "A2b",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 20
+        },
+        {
+          "repetition": 2,
+          "slot": 12
+        },
+        {
+          "repetition": 3,
+          "slot": 4
+        },
+        {
+          "repetition": 4,
+          "slot": 40
+        },
+        {
+          "repetition": 5,
+          "slot": 28
+        }
+      ],
+      "stochasticIdentity": "ed9ad46813a152293b81d250d417269b569d8bd8a7552befaa90ca8292115213"
+    },
+    {
+      "slot": 5,
+      "repetition": 3,
+      "cellKey": "family-3/none||B",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 21
+        },
+        {
+          "repetition": 2,
+          "slot": 13
+        },
+        {
+          "repetition": 3,
+          "slot": 5
+        },
+        {
+          "repetition": 4,
+          "slot": 1
+        },
+        {
+          "repetition": 5,
+          "slot": 29
+        }
+      ],
+      "stochasticIdentity": "582b8ce3d65d4fa4313d8f0a45d6c9e0a0df96e7f7ead3a519faaf0b72255d3b"
+    },
+    {
+      "slot": 6,
+      "repetition": 3,
+      "cellKey": "family-4/none||B",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 22
+        },
+        {
+          "repetition": 2,
+          "slot": 14
+        },
+        {
+          "repetition": 3,
+          "slot": 6
+        },
+        {
+          "repetition": 4,
+          "slot": 2
+        },
+        {
+          "repetition": 5,
+          "slot": 30
+        }
+      ],
+      "stochasticIdentity": "08a0372d7b7e08b0ca9b08d6405fbe94b9cb1eb441deb0ad90e92ccc24a65a8a"
+    },
+    {
+      "slot": 7,
+      "repetition": 3,
+      "cellKey": "family-7/7A|7A|B",
+      "cellId": "family-7/7A",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7A",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 23
+        },
+        {
+          "repetition": 2,
+          "slot": 15
+        },
+        {
+          "repetition": 3,
+          "slot": 7
+        },
+        {
+          "repetition": 4,
+          "slot": 3
+        },
+        {
+          "repetition": 5,
+          "slot": 31
+        }
+      ],
+      "stochasticIdentity": "8434bda0eb5519ed7f5d5d1c4c2b72ae168e36d5472eed4ab474caa856eb82b4"
+    },
+    {
+      "slot": 8,
+      "repetition": 3,
+      "cellKey": "family-7/7B|7B|B",
+      "cellId": "family-7/7B",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7B",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 24
+        },
+        {
+          "repetition": 2,
+          "slot": 16
+        },
+        {
+          "repetition": 3,
+          "slot": 8
+        },
+        {
+          "repetition": 4,
+          "slot": 4
+        },
+        {
+          "repetition": 5,
+          "slot": 32
+        }
+      ],
+      "stochasticIdentity": "f6374226ec41297faf1f7ff21c4ab2d291fbf27977e7241dbe6354c5e3b2a6a5"
+    },
+    {
+      "slot": 9,
+      "repetition": 3,
+      "cellKey": "family-7/7C|7C|B",
+      "cellId": "family-7/7C",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7C",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 25
+        },
+        {
+          "repetition": 2,
+          "slot": 17
+        },
+        {
+          "repetition": 3,
+          "slot": 9
+        },
+        {
+          "repetition": 4,
+          "slot": 5
+        },
+        {
+          "repetition": 5,
+          "slot": 33
+        }
+      ],
+      "stochasticIdentity": "0c199cece5457b777428b4c5a02ad3f5060dd730ce8ab91544b282ee5b8cb412"
+    },
+    {
+      "slot": 10,
+      "repetition": 3,
+      "cellKey": "family-7/7D|7D|B",
+      "cellId": "family-7/7D",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7D",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 26
+        },
+        {
+          "repetition": 2,
+          "slot": 18
+        },
+        {
+          "repetition": 3,
+          "slot": 10
+        },
+        {
+          "repetition": 4,
+          "slot": 6
+        },
+        {
+          "repetition": 5,
+          "slot": 34
+        }
+      ],
+      "stochasticIdentity": "e79963d747166313880f754080a7855e62aaad9703f996f5c73ec87fb0b6d996"
+    },
+    {
+      "slot": 11,
+      "repetition": 3,
+      "cellKey": "family-8/8A|8A|B",
+      "cellId": "family-8/8A",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8A",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 27
+        },
+        {
+          "repetition": 2,
+          "slot": 19
+        },
+        {
+          "repetition": 3,
+          "slot": 11
+        },
+        {
+          "repetition": 4,
+          "slot": 7
+        },
+        {
+          "repetition": 5,
+          "slot": 35
+        }
+      ],
+      "stochasticIdentity": "174161519534d1fff128e2300520c77761f171d5d9d34a86f0bf197e1d5b8a50"
+    },
+    {
+      "slot": 12,
+      "repetition": 3,
+      "cellKey": "family-8/8B|8B|B",
+      "cellId": "family-8/8B",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8B",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 28
+        },
+        {
+          "repetition": 2,
+          "slot": 20
+        },
+        {
+          "repetition": 3,
+          "slot": 12
+        },
+        {
+          "repetition": 4,
+          "slot": 8
+        },
+        {
+          "repetition": 5,
+          "slot": 36
+        }
+      ],
+      "stochasticIdentity": "9e25b24cac354b18fed3ae27d4bc813bc1602c9608f2361baae233b7476a996a"
+    },
+    {
+      "slot": 13,
+      "repetition": 3,
+      "cellKey": "family-8/8C|8C|B",
+      "cellId": "family-8/8C",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8C",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 29
+        },
+        {
+          "repetition": 2,
+          "slot": 21
+        },
+        {
+          "repetition": 3,
+          "slot": 13
+        },
+        {
+          "repetition": 4,
+          "slot": 9
+        },
+        {
+          "repetition": 5,
+          "slot": 37
+        }
+      ],
+      "stochasticIdentity": "9c2b6eccf60aca3498a3077a6fa3b94790644f9013d12ad5e2399c9210f373a4"
+    },
+    {
+      "slot": 14,
+      "repetition": 3,
+      "cellKey": "family-8/8D|8D|B",
+      "cellId": "family-8/8D",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8D",
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 30
+        },
+        {
+          "repetition": 2,
+          "slot": 22
+        },
+        {
+          "repetition": 3,
+          "slot": 14
+        },
+        {
+          "repetition": 4,
+          "slot": 10
+        },
+        {
+          "repetition": 5,
+          "slot": 38
+        }
+      ],
+      "stochasticIdentity": "517efe58dbebbd6fc843071cd5291def9d12da9531c91b0c8853d50beed47ac4"
+    },
+    {
+      "slot": 15,
+      "repetition": 3,
+      "cellKey": "family-9/9A||B",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 31
+        },
+        {
+          "repetition": 2,
+          "slot": 23
+        },
+        {
+          "repetition": 3,
+          "slot": 15
+        },
+        {
+          "repetition": 4,
+          "slot": 11
+        },
+        {
+          "repetition": 5,
+          "slot": 39
+        }
+      ],
+      "stochasticIdentity": "2a452abadd6da5ead43d9d7819d690e4b86b2e1ee145896bed5658f24b20b55f"
+    },
+    {
+      "slot": 16,
+      "repetition": 3,
+      "cellKey": "family-9/9C||B",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "B",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 32
+        },
+        {
+          "repetition": 2,
+          "slot": 24
+        },
+        {
+          "repetition": 3,
+          "slot": 16
+        },
+        {
+          "repetition": 4,
+          "slot": 12
+        },
+        {
+          "repetition": 5,
+          "slot": 40
+        }
+      ],
+      "stochasticIdentity": "aa4c67813af232216058711d7f61a4f2049a02861b90f6e2f237fc5838c1291b"
+    },
+    {
+      "slot": 17,
+      "repetition": 3,
+      "cellKey": "family-3/none||C",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 33
+        },
+        {
+          "repetition": 2,
+          "slot": 25
+        },
+        {
+          "repetition": 3,
+          "slot": 17
+        },
+        {
+          "repetition": 4,
+          "slot": 13
+        },
+        {
+          "repetition": 5,
+          "slot": 1
+        }
+      ],
+      "stochasticIdentity": "edce9dbae98585ebc252188a5ed8d1ddd05aad49913a6d3bf91600dfd58a626e"
+    },
+    {
+      "slot": 18,
+      "repetition": 3,
+      "cellKey": "family-4/none||C",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 34
+        },
+        {
+          "repetition": 2,
+          "slot": 26
+        },
+        {
+          "repetition": 3,
+          "slot": 18
+        },
+        {
+          "repetition": 4,
+          "slot": 14
+        },
+        {
+          "repetition": 5,
+          "slot": 2
+        }
+      ],
+      "stochasticIdentity": "84239efa332f5fae0082379e241f1b864acaf7f7e53026f15e66be3ba2e26869"
+    },
+    {
+      "slot": 19,
+      "repetition": 3,
+      "cellKey": "family-7/7A|7A|C",
+      "cellId": "family-7/7A",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7A",
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 35
+        },
+        {
+          "repetition": 2,
+          "slot": 27
+        },
+        {
+          "repetition": 3,
+          "slot": 19
+        },
+        {
+          "repetition": 4,
+          "slot": 15
+        },
+        {
+          "repetition": 5,
+          "slot": 3
+        }
+      ],
+      "stochasticIdentity": "ccb1900d80b0ef8155fcc798e1708c8339403543f1a2d752da6a357b51809861"
+    },
+    {
+      "slot": 20,
+      "repetition": 3,
+      "cellKey": "family-7/7B|7B|C",
+      "cellId": "family-7/7B",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7B",
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 36
+        },
+        {
+          "repetition": 2,
+          "slot": 28
+        },
+        {
+          "repetition": 3,
+          "slot": 20
+        },
+        {
+          "repetition": 4,
+          "slot": 16
+        },
+        {
+          "repetition": 5,
+          "slot": 4
+        }
+      ],
+      "stochasticIdentity": "cf908d180da8ecd738ccd9100ba18c13fc688d59accaae4a0d0f81ab8ffba0e8"
+    },
+    {
+      "slot": 21,
+      "repetition": 3,
+      "cellKey": "family-7/7C|7C|C",
+      "cellId": "family-7/7C",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7C",
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 37
+        },
+        {
+          "repetition": 2,
+          "slot": 29
+        },
+        {
+          "repetition": 3,
+          "slot": 21
+        },
+        {
+          "repetition": 4,
+          "slot": 17
+        },
+        {
+          "repetition": 5,
+          "slot": 5
+        }
+      ],
+      "stochasticIdentity": "65482401a4ee2f47bfdee5f811a669911b3227d6045713525c167f896ca8910e"
+    },
+    {
+      "slot": 22,
+      "repetition": 3,
+      "cellKey": "family-7/7D|7D|C",
+      "cellId": "family-7/7D",
+      "scenarioId": "family-7-no-progress",
+      "variantId": "7D",
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 38
+        },
+        {
+          "repetition": 2,
+          "slot": 30
+        },
+        {
+          "repetition": 3,
+          "slot": 22
+        },
+        {
+          "repetition": 4,
+          "slot": 18
+        },
+        {
+          "repetition": 5,
+          "slot": 6
+        }
+      ],
+      "stochasticIdentity": "873ab8dd420dfc8f143b8ce3c17bed9f97a2d1adbb26ec9011148e5700353d14"
+    },
+    {
+      "slot": 23,
+      "repetition": 3,
+      "cellKey": "family-9/9A||C",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 39
+        },
+        {
+          "repetition": 2,
+          "slot": 31
+        },
+        {
+          "repetition": 3,
+          "slot": 23
+        },
+        {
+          "repetition": 4,
+          "slot": 19
+        },
+        {
+          "repetition": 5,
+          "slot": 7
+        }
+      ],
+      "stochasticIdentity": "fa542c371324ca22fa1f5023b69727a9afd9ddd799bbaea8406941f2a636be7c"
+    },
+    {
+      "slot": 24,
+      "repetition": 3,
+      "cellKey": "family-9/9C||C",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "C",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 40
+        },
+        {
+          "repetition": 2,
+          "slot": 32
+        },
+        {
+          "repetition": 3,
+          "slot": 24
+        },
+        {
+          "repetition": 4,
+          "slot": 20
+        },
+        {
+          "repetition": 5,
+          "slot": 8
+        }
+      ],
+      "stochasticIdentity": "e185712cdc4956b04591df8d43c66bc49fb72e84b5a1200857e13cb09a5813be"
+    },
+    {
+      "slot": 25,
+      "repetition": 3,
+      "cellKey": "family-3/none||A",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 1
+        },
+        {
+          "repetition": 2,
+          "slot": 33
+        },
+        {
+          "repetition": 3,
+          "slot": 25
+        },
+        {
+          "repetition": 4,
+          "slot": 21
+        },
+        {
+          "repetition": 5,
+          "slot": 9
+        }
+      ],
+      "stochasticIdentity": "0c5cf452744efc1b2f0485aee00026382d3eaad3954cf16d391c0a84cf07a025"
+    },
+    {
+      "slot": 26,
+      "repetition": 3,
+      "cellKey": "family-4/none||A",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 2
+        },
+        {
+          "repetition": 2,
+          "slot": 34
+        },
+        {
+          "repetition": 3,
+          "slot": 26
+        },
+        {
+          "repetition": 4,
+          "slot": 22
+        },
+        {
+          "repetition": 5,
+          "slot": 10
+        }
+      ],
+      "stochasticIdentity": "8601f81abe2472153b74f5e418d84653b132f5697744edf8b6c2d9aaa87e9532"
+    },
+    {
+      "slot": 27,
+      "repetition": 3,
+      "cellKey": "family-8/8A|8A|A",
+      "cellId": "family-8/8A",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8A",
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 3
+        },
+        {
+          "repetition": 2,
+          "slot": 35
+        },
+        {
+          "repetition": 3,
+          "slot": 27
+        },
+        {
+          "repetition": 4,
+          "slot": 23
+        },
+        {
+          "repetition": 5,
+          "slot": 11
+        }
+      ],
+      "stochasticIdentity": "7887dd1c3704fc67525ba6f6dd91bc3277861886ee660017028c1a9291430976"
+    },
+    {
+      "slot": 28,
+      "repetition": 3,
+      "cellKey": "family-8/8B|8B|A",
+      "cellId": "family-8/8B",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8B",
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 4
+        },
+        {
+          "repetition": 2,
+          "slot": 36
+        },
+        {
+          "repetition": 3,
+          "slot": 28
+        },
+        {
+          "repetition": 4,
+          "slot": 24
+        },
+        {
+          "repetition": 5,
+          "slot": 12
+        }
+      ],
+      "stochasticIdentity": "c3b63017151dbc2b75a7e7f3cc4345696b9311b33091cca4209077adfc2afc47"
+    },
+    {
+      "slot": 29,
+      "repetition": 3,
+      "cellKey": "family-8/8C|8C|A",
+      "cellId": "family-8/8C",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8C",
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 5
+        },
+        {
+          "repetition": 2,
+          "slot": 37
+        },
+        {
+          "repetition": 3,
+          "slot": 29
+        },
+        {
+          "repetition": 4,
+          "slot": 25
+        },
+        {
+          "repetition": 5,
+          "slot": 13
+        }
+      ],
+      "stochasticIdentity": "bdbeb551b511e5b6b3f3eb27b8baf34e63214c4544b5c65f15f7a73123fcb75e"
+    },
+    {
+      "slot": 30,
+      "repetition": 3,
+      "cellKey": "family-8/8D|8D|A",
+      "cellId": "family-8/8D",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8D",
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 6
+        },
+        {
+          "repetition": 2,
+          "slot": 38
+        },
+        {
+          "repetition": 3,
+          "slot": 30
+        },
+        {
+          "repetition": 4,
+          "slot": 26
+        },
+        {
+          "repetition": 5,
+          "slot": 14
+        }
+      ],
+      "stochasticIdentity": "314906bdc40fbda4d7a1f7bbfb0f64771195f755d3d126c74c0fe4b6b52890c8"
+    },
+    {
+      "slot": 31,
+      "repetition": 3,
+      "cellKey": "family-9/9A||A",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 7
+        },
+        {
+          "repetition": 2,
+          "slot": 39
+        },
+        {
+          "repetition": 3,
+          "slot": 31
+        },
+        {
+          "repetition": 4,
+          "slot": 27
+        },
+        {
+          "repetition": 5,
+          "slot": 15
+        }
+      ],
+      "stochasticIdentity": "c5da849b89a30d182c0ae6b9819ac440133f61738c3c2af1f3401cc549c4b081"
+    },
+    {
+      "slot": 32,
+      "repetition": 3,
+      "cellKey": "family-9/9C||A",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "A",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 8
+        },
+        {
+          "repetition": 2,
+          "slot": 40
+        },
+        {
+          "repetition": 3,
+          "slot": 32
+        },
+        {
+          "repetition": 4,
+          "slot": 28
+        },
+        {
+          "repetition": 5,
+          "slot": 16
+        }
+      ],
+      "stochasticIdentity": "6dcf3c0b72c3688161891bc09fd2fcd763b4b57247cad90a1758a49008bd75df"
+    },
+    {
+      "slot": 33,
+      "repetition": 3,
+      "cellKey": "family-3/none||A2a",
+      "cellId": "family-3/none",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 9
+        },
+        {
+          "repetition": 2,
+          "slot": 1
+        },
+        {
+          "repetition": 3,
+          "slot": 33
+        },
+        {
+          "repetition": 4,
+          "slot": 29
+        },
+        {
+          "repetition": 5,
+          "slot": 17
+        }
+      ],
+      "stochasticIdentity": "102c04e9ba26a302b68f4bc5d8b353f4705211d0b2ca42668937b390c24e20b0"
+    },
+    {
+      "slot": 34,
+      "repetition": 3,
+      "cellKey": "family-4/none||A2a",
+      "cellId": "family-4/none",
+      "scenarioId": "family-4-coupled",
+      "variantId": null,
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 10
+        },
+        {
+          "repetition": 2,
+          "slot": 2
+        },
+        {
+          "repetition": 3,
+          "slot": 34
+        },
+        {
+          "repetition": 4,
+          "slot": 30
+        },
+        {
+          "repetition": 5,
+          "slot": 18
+        }
+      ],
+      "stochasticIdentity": "9eb85ba9f7a6624cfacdf7b971d9682fa5264da8f774eefc6f34a5427be45786"
+    },
+    {
+      "slot": 35,
+      "repetition": 3,
+      "cellKey": "family-8/8A|8A|A2a",
+      "cellId": "family-8/8A",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8A",
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 11
+        },
+        {
+          "repetition": 2,
+          "slot": 3
+        },
+        {
+          "repetition": 3,
+          "slot": 35
+        },
+        {
+          "repetition": 4,
+          "slot": 31
+        },
+        {
+          "repetition": 5,
+          "slot": 19
+        }
+      ],
+      "stochasticIdentity": "fff309d3dd4fc1f87474e4d9340aa7f0da5643218594b7ed42e421de98c8ec50"
+    },
+    {
+      "slot": 36,
+      "repetition": 3,
+      "cellKey": "family-8/8B|8B|A2a",
+      "cellId": "family-8/8B",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8B",
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 12
+        },
+        {
+          "repetition": 2,
+          "slot": 4
+        },
+        {
+          "repetition": 3,
+          "slot": 36
+        },
+        {
+          "repetition": 4,
+          "slot": 32
+        },
+        {
+          "repetition": 5,
+          "slot": 20
+        }
+      ],
+      "stochasticIdentity": "10093ff1c1a42e74ec7d57a3f6790ad7af6df6137e633993ab683f692084fc51"
+    },
+    {
+      "slot": 37,
+      "repetition": 3,
+      "cellKey": "family-8/8C|8C|A2a",
+      "cellId": "family-8/8C",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8C",
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 13
+        },
+        {
+          "repetition": 2,
+          "slot": 5
+        },
+        {
+          "repetition": 3,
+          "slot": 37
+        },
+        {
+          "repetition": 4,
+          "slot": 33
+        },
+        {
+          "repetition": 5,
+          "slot": 21
+        }
+      ],
+      "stochasticIdentity": "44f8f75f551aeb2005d449766e7276b636dfb92130cab8a385a3605f23a10e6a"
+    },
+    {
+      "slot": 38,
+      "repetition": 3,
+      "cellKey": "family-8/8D|8D|A2a",
+      "cellId": "family-8/8D",
+      "scenarioId": "family-8-recovery",
+      "variantId": "8D",
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 14
+        },
+        {
+          "repetition": 2,
+          "slot": 6
+        },
+        {
+          "repetition": 3,
+          "slot": 38
+        },
+        {
+          "repetition": 4,
+          "slot": 34
+        },
+        {
+          "repetition": 5,
+          "slot": 22
+        }
+      ],
+      "stochasticIdentity": "b6439d5f08db0a094fdd2da1ded860b506b2e46531537aea947e068b3bf50d48"
+    },
+    {
+      "slot": 39,
+      "repetition": 3,
+      "cellKey": "family-9/9A||A2a",
+      "cellId": "family-9/9A",
+      "scenarioId": "family-9-false-claim",
+      "variantId": null,
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 15
+        },
+        {
+          "repetition": 2,
+          "slot": 7
+        },
+        {
+          "repetition": 3,
+          "slot": 39
+        },
+        {
+          "repetition": 4,
+          "slot": 35
+        },
+        {
+          "repetition": 5,
+          "slot": 23
+        }
+      ],
+      "stochasticIdentity": "e30836c89b27c5faff26e16932654233ae337ab176a94cbe249b2a6c825120dd"
+    },
+    {
+      "slot": 40,
+      "repetition": 3,
+      "cellKey": "family-9/9C||A2a",
+      "cellId": "family-9/9C",
+      "scenarioId": "family-9-oracle-refusal",
+      "variantId": null,
+      "armId": "A2a",
+      "sourceFixtureSlots": [
+        {
+          "repetition": 1,
+          "slot": 16
+        },
+        {
+          "repetition": 2,
+          "slot": 8
+        },
+        {
+          "repetition": 3,
+          "slot": 40
+        },
+        {
+          "repetition": 4,
+          "slot": 36
+        },
+        {
+          "repetition": 5,
+          "slot": 24
+        }
+      ],
+      "stochasticIdentity": "4a6e05c82b5e6b25b0efc90a4126778d036bf3f3222a5ec98220ef4bdd183dc4"
+    }
+  ],
+  "timeoutMs": 900000,
+  "productFailureRule": "a failed product trial remains data and is never discarded as a bad run",
+  "resultFreezing": "trial records are written once and never rewritten; a re-run produces a new trialId",
+  "economics": {
+    "maximumTotalLiveMicroUsd": 20000000,
+    "computedWorstCaseMicroUsd": 15934464.000000015,
+    "headroomMicroUsd": 4065535.999999985,
+    "liability": {
+      "boundMethod": "model_context_window_ceiling",
+      "perRequestMicroUsd": 20428.8,
+      "byArm": {
+        "A": {
+          "trials": 24,
+          "plannerRequestsPerTrial": 0,
+          "workerRequestsPerTrial": 3,
+          "basis": "worker economic ceiling (no governed planner on this path)",
+          "perTrialMicroUsd": 61286.399999999994,
+          "totalMicroUsd": 1470873.5999999996
+        },
+        "A2a": {
+          "trials": 24,
+          "plannerRequestsPerTrial": 0,
+          "workerRequestsPerTrial": 3,
+          "basis": "worker economic ceiling (no governed planner on this path)",
+          "perTrialMicroUsd": 61286.399999999994,
+          "totalMicroUsd": 1470873.5999999996
+        },
+        "A2b": {
+          "trials": 12,
+          "plannerRequestsPerTrial": 0,
+          "workerRequestsPerTrial": 3,
+          "basis": "worker economic ceiling (no governed planner on this path)",
+          "perTrialMicroUsd": 61286.399999999994,
+          "totalMicroUsd": 735436.8000000002
+        },
+        "B": {
+          "trials": 36,
+          "plannerRequestsPerTrial": 1,
+          "workerRequestsPerTrial": 9,
+          "basis": "planner ceiling 1 + 3 leaf Runs x worker ceiling 3",
+          "perTrialMicroUsd": 204288,
+          "totalMicroUsd": 7354368
+        },
+        "C": {
+          "trials": 24,
+          "plannerRequestsPerTrial": 1,
+          "workerRequestsPerTrial": 9,
+          "basis": "planner ceiling 1 + 3 leaf Runs x worker ceiling 3",
+          "perTrialMicroUsd": 204288,
+          "totalMicroUsd": 4902912
+        }
+      },
+      "byCellMicroUsd": {
+        "family-3/none||A": 183859.19999999998,
+        "family-4/none||A": 183859.19999999998,
+        "family-8/8A|8A|A": 183859.19999999998,
+        "family-8/8B|8B|A": 183859.19999999998,
+        "family-8/8C|8C|A": 183859.19999999998,
+        "family-8/8D|8D|A": 183859.19999999998,
+        "family-9/9A||A": 183859.19999999998,
+        "family-9/9C||A": 183859.19999999998,
+        "family-3/none||A2a": 183859.19999999998,
+        "family-4/none||A2a": 183859.19999999998,
+        "family-8/8A|8A|A2a": 183859.19999999998,
+        "family-8/8B|8B|A2a": 183859.19999999998,
+        "family-8/8C|8C|A2a": 183859.19999999998,
+        "family-8/8D|8D|A2a": 183859.19999999998,
+        "family-9/9A||A2a": 183859.19999999998,
+        "family-9/9C||A2a": 183859.19999999998,
+        "family-3/none||A2b": 183859.19999999998,
+        "family-4/none||A2b": 183859.19999999998,
+        "family-9/9A||A2b": 183859.19999999998,
+        "family-9/9C||A2b": 183859.19999999998,
+        "family-3/none||B": 612864,
+        "family-4/none||B": 612864,
+        "family-7/7A|7A|B": 612864,
+        "family-7/7B|7B|B": 612864,
+        "family-7/7C|7C|B": 612864,
+        "family-7/7D|7D|B": 612864,
+        "family-8/8A|8A|B": 612864,
+        "family-8/8B|8B|B": 612864,
+        "family-8/8C|8C|B": 612864,
+        "family-8/8D|8D|B": 612864,
+        "family-9/9A||B": 612864,
+        "family-9/9C||B": 612864,
+        "family-3/none||C": 612864,
+        "family-4/none||C": 612864,
+        "family-7/7A|7A|C": 612864,
+        "family-7/7B|7B|C": 612864,
+        "family-7/7C|7C|C": 612864,
+        "family-7/7D|7D|C": 612864,
+        "family-9/9A||C": 612864,
+        "family-9/9C||C": 612864
+      },
+      "totalMicroUsd": 15934464.000000015,
+      "totalUsd": 15.934464000000014
+    },
+    "note": "a HARD GLOBAL CAP. It may only tighten existing per-role and per-trial economic authority and may never widen a Run's limit. It is not spending authorization; execution requires explicit approval."
+  },
+  "authorizedDimensions": [
+    "allocation_quality",
+    "completion_truthfulness",
+    "latency",
+    "cost",
+    "churn"
+  ],
+  "hardDisqualifierVersion": 1,
+  "decisionRuleVersion": 1,
+  "artifactRootRecipe": "/tmp/ticket-system-structured-evaluation-live/<runHeaderHash>",
+  "livePhaseMandatory": true,
+  "manifestHash": "9cbb38e5d9e6f665b8025efb08fe135e25ee86810e4953e704e9451dd621c43a"
+}

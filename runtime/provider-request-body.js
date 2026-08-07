@@ -40,6 +40,29 @@ function buildOpenAiResponsesBody({ model, input, options = {} }) {
       }
     }
   };
+  // ── EXPLICIT SAMPLING, NEVER AN AMBIENT DEFAULT ─────────────────────────
+  //
+  // The Responses body carried no sampling controls, so every request inherited
+  // whatever the provider chose. That is invisible in the request evidence and
+  // unreproducible later — tolerable for a hermetic fixture, which never
+  // reaches a provider, and unacceptable for a live evaluation.
+  //
+  // Sampling is therefore an EXPLICIT input with NO default. Supplied, the exact
+  // values are serialized and become part of the canonical request evidence.
+  // Not supplied, nothing is added and the body is byte-identical to what it
+  // has always been — which is what keeps every already-captured request hash
+  // valid, including the executed fixture corpus.
+  if (options.sampling !== undefined && options.sampling !== null) {
+    const { temperature, topP } = options.sampling;
+    if (typeof temperature !== 'number' || !Number.isFinite(temperature)) {
+      throw new TypeError('sampling.temperature must be an exact number');
+    }
+    if (typeof topP !== 'number' || !Number.isFinite(topP)) {
+      throw new TypeError('sampling.topP must be an exact number');
+    }
+    body.temperature = temperature;
+    body.top_p = topP;
+  }
   const cap = governedOutputCap(options);
   if (cap !== null) {
     body.max_output_tokens = cap;

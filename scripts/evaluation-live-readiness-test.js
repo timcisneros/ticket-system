@@ -85,26 +85,32 @@ function main() {
   ok(repetitionItem.source === 'protocol.repetition.liveModelRepetitions',
     'naming the exact protocol field it read');
 
-  // ── What is NOT, and must block ───────────────────────────────────────
-  const unresolved = new Set(audit.unresolved);
+  // ── The eight decisions are now RESOLVED, and derived not declared ────
+  //
+  // Each was UNRESOLVED until the live manifest carried the approved value.
+  // The audit reads that manifest, so flipping a literal would not close one.
   for (const id of ['live_matrix_membership', 'sampling_parameters',
-    'live_economic_ceiling', 'provider_failure_classification',
+    'provider_seed_support', 'live_economic_ceiling',
+    'provider_failure_classification', 'rate_limit_and_outage_handling',
     'fixture_live_evidence_combination', 'live_phase_necessity']) {
-    ok(unresolved.has(id), `${id} is UNRESOLVED and is reported as such`);
+    ok(frozen.has(id), `${id} is FROZEN, derived from the live manifest`);
   }
-  ok(audit.verdict === 'TRANCHE 6 LIVE-MODEL EVALUATION BLOCKED',
-    'the verdict is BLOCKED while any live item is unresolved');
+  ok(audit.unresolved.length === 0 &&
+     audit.verdict === 'TRANCHE 6 LIVE-MODEL EVALUATION READY',
+  'the verdict is READY with no unresolved live decision');
 
-  // THE GATE. A live executor must not be able to proceed past this.
+  // THE GATE STILL REFUSES when anything is unresolved — it is a gate, not a
+  // formality that was satisfied once and removed.
   let blocked = null;
-  try { assertLiveExecutionPermitted(audit); } catch (error) { blocked = error; }
+  try {
+    assertLiveExecutionPermitted({ unresolved: ['live_economic_ceiling'] });
+  } catch (error) { blocked = error; }
   ok(blocked !== null && blocked.code === 'LIVE_EVALUATION_BLOCKED',
-    'live execution REFUSES while the protocol is unfrozen');
-  ok(blocked.detail.unresolved.length === audit.unresolved.length,
-    'and the refusal names every unresolved decision');
-  // A fully frozen audit would permit it — the gate is a gate, not a wall.
-  ok(assertLiveExecutionPermitted({ unresolved: [] }) === true,
-    'a fully frozen live protocol would permit execution');
+    'an unresolved decision still REFUSES live execution');
+  ok(blocked.detail.unresolved.includes('live_economic_ceiling'),
+    'and the refusal names it');
+  ok(assertLiveExecutionPermitted(audit) === true,
+    'the fully frozen protocol permits execution — subject to explicit authorization');
 
   // ── The economic liability is the WORST case, not an estimate ─────────
   const perRequest = worstCaseMicroUsdPerRequest();
@@ -119,15 +125,17 @@ function main() {
     'liability scales with the trial count exactly');
   ok(Object.values(MAX_REQUESTS_PER_TRIAL).every(caps => typeof caps.basis === 'string'),
     'every per-arm request ceiling states the frozen basis it came from');
-  // The number exists so an authorization can be judged; it authorizes nothing.
-  ok(unresolved.has('live_economic_ceiling'),
-    'computing a worst case does NOT authorize spending it');
-
-  // ── No live manifest may exist while blocked ──────────────────────────
+  // A CAP IS NOT AN AUTHORIZATION TO SPEND IT. The manifest says so in terms.
   const liveManifestPath = path.join(__dirname, '..', 'config',
     'structured-allocation-evaluation-live-v1.json');
-  ok(!fs.existsSync(liveManifestPath),
-    'no live manifest is written while the live protocol is BLOCKED');
+  ok(fs.existsSync(liveManifestPath),
+    'the live manifest exists now that every decision is frozen');
+  const liveManifest = JSON.parse(fs.readFileSync(liveManifestPath, 'utf8'));
+  ok(liveManifest.economics.note.includes('not spending authorization'),
+    'and records that the cap is not spending authorization');
+  ok(liveManifest.economics.computedWorstCaseMicroUsd <=
+     liveManifest.economics.maximumTotalLiveMicroUsd,
+  'the recomputed worst case is within the frozen cap');
 
   // ── Fixture and live corpora can never mix ───────────────────────────
   ok(protocol.repetition.poolingRule.includes('never combined'),

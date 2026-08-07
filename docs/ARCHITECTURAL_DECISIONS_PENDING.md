@@ -1,6 +1,21 @@
 ## LIVE-MODEL EVALUATION PHASE IS NOT FROZEN (2026-08-06)
 
-**Status: OPEN. Eight product decisions block any live run.**
+**Status: RESOLVED 2026-08-06.** All eight decisions were approved before any
+live result existed and are now encoded and derived from
+`config/structured-allocation-evaluation-live-v1.json` (hash `9cbb38e5d9e6f665b8025efb08fe135e25ee86810e4953e704e9451dd621c43a`): 40 derived
+cells x 3 repetitions = 120 slots; temperature 0 / top_p 1 for every role; no
+provider seed (source-proven absent from the production Responses body); a hard
+20 000 000 micro-USD cap against a recomputed 15 927 620 micro-USD worst case;
+the three-class failure predicate; outage/resume preservation; the fixture veto
+and reversal contract; and a MANDATORY live phase.
+
+Verdict: **TRANCHE 6 LIVE-MODEL EVALUATION READY**. No provider call was made.
+The original problem statement is retained below.
+
+---
+
+**Original status (now resolved): OPEN. Eight product decisions block any live
+run.**
 
 The fixture matrix executed and its evidence is immutable. The LIVE phase is
 not frozen, and eight values that shape it — or authorize money — are absent:

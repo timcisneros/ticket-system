@@ -51,7 +51,7 @@ class ScoredRunnerError extends Error {
 // `--threshold` or `--exclude`. An option that could change the experiment is
 // not an option, it is a second protocol.
 const OPERATIONAL_OPTIONS = Object.freeze([
-  'manifest', 'output-root', 'resume', 'verbose', 'limit'
+  'manifest', 'output-root', 'resume', 'verbose', 'limit', 'dry-run'
 ]);
 
 const FROZEN_EXPERIMENTAL_OPTIONS = Object.freeze([
@@ -77,7 +77,9 @@ function parseArguments(argv) {
     if (!OPERATIONAL_OPTIONS.includes(key)) {
       throw new ScoredRunnerError(`unknown option --${key}`);
     }
-    if (key === 'resume' || key === 'verbose') { parsed[key] = true; continue; }
+    if (key === 'resume' || key === 'verbose' || key === 'dry-run') {
+      parsed[key] = true; continue;
+    }
     const value = argv[index + 1];
     if (value === undefined || value.startsWith('--')) {
       throw new ScoredRunnerError(`--${key} requires a value`);
@@ -116,8 +118,12 @@ function buildRunHeader({ manifest, manifestPath, outputRoot }) {
     evaluationProtocolVersion: PROTOCOL_VERSION,
     mode: manifest.mode,
     startedAt: new Date().toISOString(),
-    expectedTrialCount: manifest.trials.length,
-    trialIds: manifest.trials.map(trialIdFor),
+    // A fixture manifest enumerates `trials`; a live manifest enumerates
+    // `slots`. Both are the assigned set, and the header names which it read
+    // rather than assuming one shape.
+    assignedSetField: Array.isArray(manifest.trials) ? 'trials' : 'slots',
+    expectedTrialCount: assignedSetOf(manifest).length,
+    trialIds: assignedSetOf(manifest).map(trialIdFor),
     environment: {
       nodeVersion: process.version,
       platform: `${os.platform()}-${os.arch()}`
@@ -126,6 +132,12 @@ function buildRunHeader({ manifest, manifestPath, outputRoot }) {
   };
   header.runHeaderHash = hashCanonical(header);
   return Object.freeze(header);
+}
+
+function assignedSetOf(manifest) {
+  if (Array.isArray(manifest.trials)) return manifest.trials;
+  if (Array.isArray(manifest.slots)) return manifest.slots;
+  throw new ScoredRunnerError('the manifest enumerates neither trials nor slots');
 }
 
 // Stable per-trial identity, derived only from frozen manifest values.
@@ -171,8 +183,79 @@ function classifyExistingArtifact(target, header) {
 
 // ── Execution ───────────────────────────────────────────────────────────────
 
+// ── LIVE PRE-FLIGHT, WITH NO DISPATCH ───────────────────────────────────────
+//
+// A live manifest reaches the provider only through an explicitly authorized
+// run. This path proves everything a live run needs — manifest validity, run
+// header, credential PRESENCE without persisting it, remaining economic
+// authority, the first slot and its request envelope — and then STOPS.
+//
+// It performs zero provider transport. That is asserted by construction: it
+// never constructs a transport, and the dry run returns before any executor
+// loop begins.
+async function preflightLiveRun({ manifestPath, outputRoot }) {
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  if (manifest.mode !== 'live') {
+    throw new ScoredRunnerError(
+      'live pre-flight requires a live manifest; this one declares mode ' +
+      `${manifest.mode}`, { mode: manifest.mode });
+  }
+  if (manifest.containsResults !== false) {
+    throw new ScoredRunnerError('a manifest that carries results may not drive a run');
+  }
+  // CREDENTIAL PRESENCE ONLY. The value is never read into a variable that is
+  // returned, logged, hashed or written.
+  const credentialPresent = typeof process.env.OPENAI_API_KEY === 'string' &&
+    process.env.OPENAI_API_KEY.length > 0;
+
+  fs.mkdirSync(path.join(outputRoot, 'trials'), { recursive: true });
+  // The header is frozen by its builder, so presence is recorded beside it
+  // rather than mutated into it — and it is a BOOLEAN, never the value.
+  const baseHeader = buildRunHeader({ manifest, manifestPath, outputRoot });
+  const header = Object.freeze({ ...baseHeader, credentialPresent });
+  fs.writeFileSync(path.join(outputRoot, 'scored-run-header.json'),
+    JSON.stringify(header, null, 2));
+
+  const firstSlot = manifest.slots[0];
+  const envelope = {
+    model: manifest.model,
+    adapterId: manifest.adapterId,
+    provider: manifest.provider,
+    temperature: manifest.sampling.temperature,
+    topP: manifest.sampling.topP,
+    maxOutputTokens: manifest.maximumOutputTokensPerRequest,
+    contextWindowTokens: manifest.contextWindowTokens,
+    providerSeed: manifest.providerSeed,
+    role: firstSlot.armId === 'B' || firstSlot.armId === 'C'
+      ? 'structured_planner' : 'ungoverned_worker',
+    cellKey: firstSlot.cellKey,
+    repetition: firstSlot.repetition,
+    slot: firstSlot.slot
+  };
+  return Object.freeze({
+    dryRun: true,
+    providerCallsMade: 0,
+    credentialPresent,
+    header,
+    assignedTrials: manifest.slots.length,
+    remainingEconomicAuthorityMicroUsd: manifest.economics.maximumTotalLiveMicroUsd,
+    worstCaseMicroUsd: manifest.economics.computedWorstCaseMicroUsd,
+    firstTrialEnvelope: Object.freeze(envelope),
+    stoppedBefore: 'provider_dispatch'
+  });
+}
+
 async function executeScoredRun({ manifestPath, outputRoot, resume = false, limit = null }) {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+  // A LIVE manifest may never reach the fixture execution loop, and the fixture
+  // executor may never dispatch a live trial. The two corpora are separate
+  // evidence classes and their executors do not share a run path.
+  if (manifest.mode === 'live') {
+    throw new ScoredRunnerError(
+      'this executor runs fixture trials; a live manifest requires the ' +
+      'authorized live run and is refused here', { mode: manifest.mode });
+  }
 
   // THE GATE. Runtime inputs that differ from the frozen manifest refuse before
   // a single trial runs.
@@ -299,6 +382,8 @@ async function executeScoredRun({ manifestPath, outputRoot, resume = false, limi
 }
 
 module.exports = {
+  assignedSetOf,
+  preflightLiveRun,
   FROZEN_EXPERIMENTAL_OPTIONS,
   OPERATIONAL_OPTIONS,
   SCORED_ARTIFACT_LABEL,
@@ -315,6 +400,18 @@ module.exports = {
 if (require.main === module) {
   const options = parseArguments(process.argv.slice(2));
   if (options.verbose) process.env.SCORED_RUNNER_VERBOSE = '1';
+  if (options['dry-run']) {
+    preflightLiveRun({
+      manifestPath: options.manifest, outputRoot: options['output-root']
+    }).then(result => {
+      console.log(`LIVE DRY RUN — provider calls made: ${result.providerCallsMade}`);
+      console.log(`credential present: ${result.credentialPresent}`);
+      console.log(`assigned trials: ${result.assignedTrials}`);
+      console.log(`stopped before: ${result.stoppedBefore}`);
+      console.log(`run header: ${result.header.runHeaderHash}`);
+    }).catch(error => { console.error(error); process.exit(1); });
+    return;
+  }
   executeScoredRun({
     manifestPath: options.manifest,
     outputRoot: options['output-root'],

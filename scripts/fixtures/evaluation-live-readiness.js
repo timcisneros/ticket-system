@@ -135,61 +135,94 @@ function auditLiveReadiness() {
   record('decision_thresholds', protocol.decisionThresholds ? 'FROZEN' : 'UNRESOLVED',
     'retain/revise/stop and 5 hard disqualifiers', 'protocol.decisionThresholds');
 
-  // ── The genuinely missing pieces ──────────────────────────────────────
+  // ── The eight approved decisions, DERIVED from the live manifest ──────
   //
-  // Each of these shapes the experiment or authorizes spending. None has a
-  // safe default, and choosing one here would be inventing product authority.
+  // Not a literal flipped from UNRESOLVED to FROZEN: each reads the frozen live
+  // manifest and is CLOSED only when the manifest actually carries the approved
+  // value. A missing manifest leaves every one of them unresolved, which is the
+  // state the repository was in before the decisions were approved.
+  let live = null;
+  try {
+    // eslint-disable-next-line global-require
+    live = require('../../config/structured-allocation-evaluation-live-v1.json');
+  } catch (_) { live = null; }
 
-  record('live_matrix_membership', 'UNRESOLVED',
-    'no scenario/variant/arm membership is defined for the live phase; the ' +
-    'fixture matrix is a fixture decision and does not carry over by itself',
-    'absent from protocol and both manifests');
+  const derived = (id, condition, detail, source) =>
+    record(id, live && condition ? 'FROZEN' : 'UNRESOLVED', detail, source);
 
-  record('sampling_parameters', 'UNRESOLVED',
-    'temperature, top-p or the equivalent randomness controls are not recorded ' +
-    'anywhere; a live result is not reproducible without them',
-    'absent from protocol.fixedModel');
+  derived('live_matrix_membership',
+    live && live.uniqueCellCount === 40 && live.totalAssignedTrials === 120 &&
+      live.cells.every(cell => Array.isArray(cell.sourceFixtureSlots) &&
+        cell.sourceFixtureSlots.length > 0),
+    live && `${live.uniqueCellCount} cells x ${live.repetitions} repetitions = ` +
+      `${live.totalAssignedTrials} slots, each derived from frozen fixture slots`,
+    'live manifest cells[].sourceFixtureSlots');
 
-  record('provider_seed_support', 'UNRESOLVED',
-    'whether the provider seed is used, and its values, is not declared; ' +
-    'determinism may not be assumed and may not be fabricated',
-    'absent from protocol');
+  derived('sampling_parameters',
+    live && live.sampling && live.sampling.temperature === 0 && live.sampling.topP === 1 &&
+      live.sampling.appliesTo.length >= 2,
+    live && `temperature ${live.sampling.temperature}, top_p ${live.sampling.topP} ` +
+      'for every role',
+    'live manifest sampling');
 
-  record('live_economic_ceiling', 'UNRESOLVED',
-    'no monetary ceiling authorizes live spending. The fixture protocol ' +
-    'authorizes no expenditure, and inheriting silence as permission would be ' +
-    'spending money nobody approved',
-    'absent from protocol and manifests');
+  derived('provider_seed_support',
+    live && live.providerSeedSupport === false && live.providerSeed === null &&
+      typeof live.stochasticityDeclaration === 'string',
+    live && 'no provider seed; residual stochasticity declared as an experimental variable',
+    'live manifest providerSeedSupport');
 
-  record('provider_failure_classification', 'UNRESOLVED',
-    'HTTP 429, provider 5xx, network interruption, provider timeout, malformed ' +
-    'response, model refusal, context-length rejection and authentication ' +
-    'failure are not classified as product data or infrastructure exclusion. ' +
-    'The frozen infrastructure list names only local conditions',
-    'protocol.failureHandling.infrastructureExclusions covers local failures only');
+  derived('live_economic_ceiling',
+    live && live.economics &&
+      live.economics.maximumTotalLiveMicroUsd === 20_000_000 &&
+      live.economics.computedWorstCaseMicroUsd <= live.economics.maximumTotalLiveMicroUsd,
+    live && `cap ${live.economics.maximumTotalLiveMicroUsd} micro-USD, worst case ` +
+      `${live.economics.computedWorstCaseMicroUsd}, headroom ${live.economics.headroomMicroUsd}`,
+    'live manifest economics');
 
-  record('rate_limit_and_outage_handling', 'UNRESOLVED',
-    'no backoff, retry-budget or outage-resume rule exists for a live run',
-    'absent from protocol');
+  derived('provider_failure_classification',
+    (() => {
+      try {
+        // eslint-disable-next-line global-require
+        const { classifyLiveFailure } = require('./evaluation-live-failure-classifier');
+        return classifyLiveFailure({ httpStatus: 429, modelResultObserved: false })
+            .classification === 'infrastructure_exclusion' &&
+          classifyLiveFailure({ requestDelivered: null, modelResultObserved: false })
+            .classification === 'product_data' &&
+          classifyLiveFailure({ httpStatus: 401 }).classification === 'run_fatal_configuration';
+      } catch (_) { return false; }
+    })(),
+    'three classes, proved by the frozen classifier contract',
+    'evaluation-live-failure-classifier');
 
-  record('fixture_live_evidence_combination', 'UNRESOLVED',
-    'the protocol forbids POOLING fixture and live results into one score but ' +
-    'never states how a final RETAIN/REVISE/STOP is derived from both, nor ' +
-    'whether a fixture hard disqualifier can independently stop the product, ' +
-    'nor the exact condition under which live evidence could reverse a fixture ' +
-    'STOP', 'protocol.repetition.poolingRule states separation only');
+  derived('rate_limit_and_outage_handling',
+    live && live.resultFreezing && live.productFailureRule,
+    live && 'excluded slots keep their assignment; resume preserves manifest, ' +
+      'slot order, arm, repetition and stochastic contract',
+    'live manifest resultFreezing / productFailureRule');
 
-  // A CONTRADICTION, recorded as its own item rather than silently resolved.
-  //
-  // The authoritative protocol calls live confirmation OPTIONAL (§10 step 7 of
-  // the evaluation document). The scorer this repository now ships emits
-  // `REQUIRES LIVE-MODEL MATRIX` for every fixture-mode report. Those cannot
-  // both be authoritative, and which one governs is a product decision.
-  record('live_phase_necessity', 'UNRESOLVED',
-    'the evaluation document calls live confirmation OPTIONAL while the scorer ' +
-    'emits REQUIRES LIVE-MODEL MATRIX for fixture-mode reports; whether a live ' +
-    'matrix is mandatory before the final product decision is undecided',
-    'docs §10.7 versus scorer finalProductDecision');
+  derived('fixture_live_evidence_combination',
+    (() => {
+      try {
+        // eslint-disable-next-line global-require
+        const { combineEvidence } = require('./evaluation-evidence-combination');
+        return combineEvidence({
+          fixture: { hardDisqualifierTriggered: true, ordinaryDecision: 'STOP' },
+          live: { ordinaryDecision: 'RETAIN', corpusComplete: true }
+        }).finalProductDecision === 'STOP' &&
+          combineEvidence({
+            fixture: { hardDisqualifierTriggered: false, ordinaryDecision: 'STOP' },
+            live: { ordinaryDecision: 'RETAIN', corpusComplete: true }
+          }).finalProductDecision === 'RETAIN';
+      } catch (_) { return false; }
+    })(),
+    'fixture disqualifier vetoes; fixture ordinary STOP reverses only through ' +
+    'the frozen live RETAIN rule; denominators are never pooled',
+    'evaluation-evidence-combination');
+
+  derived('live_phase_necessity',
+    live && live.livePhaseMandatory === true,
+    live && 'live evaluation is MANDATORY before the final product decision',
+    'live manifest livePhaseMandatory');
 
   const unresolved = items.filter(item => item.state === 'UNRESOLVED');
   return Object.freeze({

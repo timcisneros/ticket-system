@@ -1,5 +1,29 @@
 # Decision Log
 
+## Live-model evaluation protocol frozen — READY, not executed (2026-08-06)
+
+Eight live decisions were approved before any live result existed: matrix
+membership derived from the frozen fixture manifest (40 cells x 3 repetitions =
+120 slots); temperature 0 and top_p 1 for every role; no provider seed, because
+the production Responses request contract owns no seed field; a hard global cap
+of 20 000 000 micro-USD against a recomputed worst case of 15 927 620; a
+three-class failure predicate that keeps a bad model answer as product data; no
+hidden retry, with excluded slots keeping their assignment and resume preserving
+ordering; a fixture-veto and reversal contract that never pools denominators;
+and a MANDATORY live phase.
+
+**Supersession:** the evaluation document called live confirmation optional
+(§10.7). It is now mandatory, because the fixture corpus gives every arm 0% true
+completion and cannot answer the product question. The historical text is
+retained; the new entry governs.
+
+Live manifest `config/structured-allocation-evaluation-live-v1.json`, hash
+`9cbb38e5d9e6f665b8025efb08fe135e25ee86810e4953e704e9451dd621c43a`. A dry run built the run header for all 120 slots and stopped before
+dispatch with zero provider calls.
+
+**TRANCHE 6 LIVE-MODEL EVALUATION READY.** Execution requires explicit
+authorization and was not taken. The fixture result is unchanged.
+
 ## Scored fixture evaluation executed — FIXTURE EVIDENCE SUPPORTS STOP (2026-08-06)
 
 The frozen 200-trial fixture manifest was executed exactly as frozen: 200

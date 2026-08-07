@@ -1622,6 +1622,85 @@ No live manifest was written and no provider call was made. The audit is
 enforced by `assertLiveExecutionPermitted`, which refuses while any item is
 unresolved and names every one.
 
+## 3m. Live-model protocol frozen — READY (session 17)
+
+**The eight live decisions were approved BEFORE any live result exists, and are
+now encoded, derived and machine-checked. No provider call was made.**
+
+### Supersession, recorded rather than rewritten
+
+§10 step 7 of this document called live confirmation **optional**. That is
+**superseded**: live-model evaluation is **MANDATORY** before the final Tranche 6
+product decision. The reason is the completed fixture corpus itself — 0% true
+completion on every arm — which cannot answer whether structured allocation
+improves useful real-model work. The historical text is left in place; this
+entry governs.
+
+### The eight approved decisions
+
+| # | Decision | Value |
+|---|---|---|
+| 1 | matrix membership | the 40 unique scenario/variant/arm cells **derived** from the frozen fixture manifest × 3 repetitions = **120 slots** |
+| 2 | sampling | `temperature 0`, `top_p 1`, one configuration for every role |
+| 3 | provider seed | `providerSeedSupport false`, `providerSeed null` — source-proven: the production Responses body owns no seed field |
+| 4 | economic ceiling | hard global cap **20 000 000 micro-USD ($20.00)** |
+| 5 | failure classification | three classes: product data / infrastructure exclusion / run-fatal configuration |
+| 6 | rate limits & outages | no hidden retry; excluded slots keep their assignment; resume never regenerates ordering |
+| 7 | evidence relationship | fixture disqualifier vetoes; fixture ordinary STOP reverses only through the frozen live RETAIN rule; denominators never pooled |
+| 8 | live phase necessity | **MANDATORY** |
+
+### Frozen live manifest
+
+`config/structured-allocation-evaluation-live-v1.json` — hash `9cbb38e5d9e6f665b8025efb08fe135e25ee86810e4953e704e9451dd621c43a`.
+Contains no results. Derived from fixture manifest
+`044d3782…`, corpus `40efc9db…`, report `17a8dcf8…`, decision
+FIXTURE EVIDENCE SUPPORTS STOP.
+
+Model `gpt-4o-mini-2024-07-18` (dated snapshot), adapter `openai.responses.v1`,
+same identity for planner and every worker; context 128 000; output cap 2 048.
+
+### Ordering balance, claimed honestly
+
+Three repetitions cannot complete a five-arm Latin square, and the manifest says
+so rather than claiming perfect balance. Each arm reaches 3 of the 5 ordinal
+positions — the maximum achievable — and **no arm is first or last more than
+once**. Permutations: `A,A2a,A2b,B,C` · `A2a,A2b,B,C,A` · `A2b,B,C,A,A2a`.
+
+### Economic proof, recomputed from the final manifest
+
+Per request **0.0204 USD** under `model_context_window_ceiling`.
+
+| Arm | Trials | Requests/trial | Worst case |
+|---|---|---|---|
+| A | 24 | 0 + 3 | 1.471 USD |
+| A2a | 24 | 0 + 3 | 1.471 USD |
+| A2b | 12 | 0 + 3 | 0.735 USD |
+| B | 36 | 1 + 9 | 7.354 USD |
+| C | 24 | 1 + 9 | 4.903 USD |
+
+**Total worst case 15.93 USD · cap 20.00 USD · headroom 4.07 USD.** The cap may
+only tighten existing per-role and per-trial authority, never widen a Run's
+limit. It is not spending authorization.
+
+### Sampling reaches the wire without disturbing the fixture corpus
+
+The production Responses body carried no sampling controls, so every request
+inherited a provider default — invisible in the evidence and unreproducible.
+Sampling is now an **explicit input with no default**: supplied, the exact values
+serialize into the canonical body; omitted, the body is byte-identical to what
+it has always been, so every already-captured fixture hash stays valid.
+
+### Dry run
+
+`--dry-run` loaded the manifest, built the immutable run header for all 120
+slots, recorded credential **presence** as a boolean, computed remaining
+authority, constructed the first request envelope and stopped before dispatch:
+**provider calls made: 0**. No secret material appears in the manifest, header,
+artifacts or logs.
+
+**TRANCHE 6 LIVE-MODEL EVALUATION READY.** Execution still requires explicit
+authorization; none was taken in this session.
+
 ## 13. Status
 
 **Tranche 6: IN PROGRESS — harness built and executing; evaluation NOT run.**
