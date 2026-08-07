@@ -383,6 +383,18 @@ async function main() {
 
         // ── A2a AND A2b, PROVED INDEPENDENTLY ─────────────────────────────
         for (const armId of ['A2a', 'A2b']) {
+          // INDEPENDENCE FIRST, and from the frozen arm definitions rather than
+          // from whatever this loop happens to be handed. Arm A is a different
+          // production path with a different Run cardinality, so substituting it
+          // here must fail immediately and for the stated reason — not later, on
+          // whichever downstream assertion happens to notice.
+          assertThat(ARMS[armId].expectedPath === 'legacy_v1' &&
+            ARMS[armId].expectedRunCardinality === 'per_agent' &&
+            ARMS[armId].expectedGoverned === false,
+          `${armId}: this proof runs the legacy v1 per-agent ungoverned path — ` +
+          `arm A (${ARMS.A.expectedPath}, ${ARMS.A.expectedRunCardinality}) ` +
+          'cannot stand in for it');
+
           const trial = await runOne({
             label: `${armId}-one-action`, armId, responseSpec: oneActionSpec });
 
