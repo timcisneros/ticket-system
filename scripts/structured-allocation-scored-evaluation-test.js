@@ -226,9 +226,36 @@ function main() {
     ok(!scorerSource.includes(`require('${forbidden}`) && !scorerSource.includes(forbidden === 'fetch(' ? 'fetch(' : `${forbidden}'`),
       `14 the scorer never reaches ${forbidden}`);
   }
-  ok(scorerSource.includes("require('node:crypto')") &&
-     (scorerSource.match(/require\(/g) || []).length === 1,
-  '14 the scorer requires exactly one module — crypto — and no state source');
+  // AN ALLOW-LIST, AND ITS TRANSITIVE CLOSURE.
+  //
+  // This used to demand exactly one `require`, which was a good guard for as
+  // long as the scorer needed exactly one module. It is the wrong shape now
+  // that the scorer must refuse a run marked ABORTED — NOT DECISION EVIDENCE:
+  // the alternative to importing that predicate is copying the aborted run's
+  // identity into the scorer, which would give one rule two authorities and is
+  // exactly the failure the corpus gate exists to prevent.
+  //
+  // So the check names what may be required, and then proves the added module
+  // is itself inert — no requires of its own, no filesystem, no database, no
+  // network. That is a STRONGER guarantee than a count: a count would have
+  // permitted swapping crypto for a state source, and it says nothing about
+  // what a dependency drags in behind it.
+  const ALLOWED_SCORER_REQUIRES = ['node:crypto', './fixtures/evaluation-aborted-runs'];
+  const scorerRequires = [...scorerSource.matchAll(/require\('([^']+)'\)/g)]
+    .map(match => match[1]);
+  ok(scorerRequires.length === ALLOWED_SCORER_REQUIRES.length &&
+     scorerRequires.every(name => ALLOWED_SCORER_REQUIRES.includes(name)),
+  `14 the scorer requires only ${ALLOWED_SCORER_REQUIRES.join(' and ')} — ` +
+  `no state source (found: ${scorerRequires.join(', ') || 'none'})`);
+
+  const abortedSource = fs.readFileSync(
+    path.join(__dirname, 'fixtures', 'evaluation-aborted-runs.js'), 'utf8');
+  ok((abortedSource.match(/require\(/g) || []).length === 0,
+    '14 and the one module it imports requires nothing itself');
+  for (const forbidden of ['node:fs', 'node:http', 'pg', 'fetch(', 'process.env']) {
+    ok(!abortedSource.includes(forbidden),
+      `14 that module reaches no ${forbidden}`);
+  }
 
   // ── 15, 17. Disqualifiers first, and a false completion is not averaged ─
   const withFalsePositive = fullCorpus((trial, index) => (index === 0
