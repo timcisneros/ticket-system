@@ -1823,6 +1823,94 @@ DISPATCH BOUNDARY — 0 CALLS MADE**.
 authorization to spend, and the previous authorization does not carry over: a
 new one must name this corrected commit.
 
+## 3p. Three roles, a capped wire, a whole-trial reservation (session 20)
+
+The §3o audit correctly BLOCKED. Three defects, all closed at source. **Zero
+provider calls; $0.00 spent; no authorization was active.**
+
+### 1. The governed leaf executor had no outbound proof
+
+The capture answered every request with one generic worker payload. A planner
+that receives a worker answer emits no valid proposal, so no plan was admitted,
+no leaf Run was created, and the leaf path was never reached — two captured
+requests reported as three roles.
+
+The capture now answers in the shape the request itself asks for, detected from
+the planner contract's own system prompt and the candidate list carried in the
+request. It never branches on an arm label, because branching on the arm would
+force the path the test exists to observe. A planner receives a minimum valid v2
+proposal built from its own candidates, each objective naming a folder inside
+that agent's allocated path, so the real chain runs to its end.
+
+Role classification moved out of the suite into
+`scripts/fixtures/evaluation-live-capture-roles.js` with its own proof: the
+recorded label is checked against the request body, and a planner-only capture
+refuses by naming the missing role. A classification that lives inside the suite
+making the claim is one nothing else can contradict.
+
+**Captured: ungoverned worker 1, structured planner 1, governed leaf worker 3.**
+
+### 2. The ungoverned worker sent no output cap
+
+The liability model priced every request as if output were bounded to 2,048
+tokens while the ungoverned body carried no cap at all. Sampling and the output
+cap are now one authority — `runtime/live-request-controls.js` — read by all
+three roles. For governed roles the authorization still wins: the live control
+must AGREE with it, never enlarge it, and a disagreement refuses. The ungoverned
+path, which has no economic authority of its own, takes its cap from there.
+
+Absent live controls nothing is added, so the executed fixture corpus keeps
+byte-identical bodies. The historical hash
+`559a044d666a2e59410cf434b121443f92150a941bd81dcee57da4796d5eeb88` is asserted.
+
+### 3. The ledger reserved one request for a whole trial
+
+`perRequestMicroUsd` (20,428.8) was reserved for trials that may issue three or
+ten requests. The bound is now derived in
+`scripts/fixtures/evaluation-live-trial-liability.js` from Run topology and both
+enforced per-Run ceilings — the economic `maximumProviderRequests` and the
+runtime `maxModelRequestsPerRun`, whichever binds first.
+
+Retries are priced, not assumed away. A retry creates a NEW Run with its own
+budget, so it is liability outside any single Run's ceiling. `attemptsPerRun` is
+1 only because `normalizeExecutionPolicy` makes `autoRetry` a strict opt-in the
+trial construction never sets, and a group ticket is refused for retry outright.
+An enabled retry with no proven attempt ceiling REFUSES to be priced.
+
+The runtime per-Run ceiling is pinned for live trials through the existing
+production configuration knob, because a bound nobody pinned is a bound nobody
+proved.
+
+| arm | Runs | planner | worker/Run | attempts | per trial (micro-USD) |
+|---|---|---|---|---|---|
+| A | 1 | 0 | 3 | 3 | 61,286.4 |
+| A2a | 2 | 0 | 3 | 6 | 122,572.8 |
+| A2b | 2 | 0 | 3 | 6 | 122,572.8 |
+| B | 3 + planner | 1 | 3 | 10 | 204,288 |
+| C | 3 + planner | 1 | 3 | 10 | 204,288 |
+
+**Recomputed worst case: 18,140,774.4 of 20,000,000 micro-USD** (headroom
+1,859,225.6). Manifest hash
+`2bb886c3fa28935a1c09b98357aaa4acc7db1f953f295ede069e6017263227df`. The frozen
+decisions are untouched: 40 cells, 3 repetitions, 120 slots, the dated model
+snapshot, temperature 0, top_p 1, no seed, the 2,048-token cap, the ceiling, the
+five metrics, the hard disqualifiers and the evidence-combination rule.
+
+### Readiness now has eighteen facts, and each one can fail
+
+`liveDispatchPathImplemented`, `ungovernedWorkerDispatchProved`,
+`structuredPlannerDispatchProved`, `governedLeafDispatchProved`, the three
+`liveSampling*Proved`, the three `liveOutputCap*Proved`,
+`fixtureBodyCompatibilityProved`, `liveGlobalEconomicGateImplemented`,
+`liveTrialWorstCaseReservationProved`, `liveRetryLiabilityBoundProved`,
+`liveGlobalEconomicGateRecoveryProved`,
+`liveGlobalEconomicGateConcurrencyProved`,
+`liveDryRunReachedProviderBoundary`, `externalProviderCallsZero`.
+
+No boolean stands in for several unexercised roles. The audit takes injectable
+sources so each fact is shown going UNRESOLVED when its evidence is removed — a
+fact only ever observed saying FROZEN is not a gate.
+
 ## 13. Status
 
 **Tranche 6: IN PROGRESS — harness built and executing; evaluation NOT run.**

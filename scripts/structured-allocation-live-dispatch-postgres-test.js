@@ -35,6 +35,9 @@ const {
   LiveBudgetError, reconstructCommittedLiability
 } = require('./fixtures/evaluation-live-budget-ledger');
 const { trialWorstCaseMicroUsd } = require('./fixtures/evaluation-live-trial-liability');
+const {
+  ROLES, assertEveryRoleDispatched, classifyCapturedRole, countCapturedRoles
+} = require('./fixtures/evaluation-live-capture-roles');
 const { ROLE_ECONOMICS } = require('./fixtures/governed-role-policy-container');
 const liveManifest = require('../config/structured-allocation-evaluation-live-v1.json');
 
@@ -49,14 +52,6 @@ function capturedRequests(capturePath) {
   if (!fs.existsSync(capturePath)) return [];
   return fs.readFileSync(capturePath, 'utf8').split('\n').filter(Boolean)
     .map(line => JSON.parse(line));
-}
-
-// A captured request's ROLE is read from the request itself, never from the arm
-// that produced it: the planner contract's own system prompt identifies a
-// planning request, and the transport separates governed from ungoverned.
-function roleOf(entry) {
-  if (entry.transport === 'ungoverned') return 'ungoverned_worker';
-  return entry.role === 'planner' ? 'structured_planner' : 'governed_leaf_worker';
 }
 
 async function main() {
@@ -131,26 +126,27 @@ async function main() {
       }
 
       // ── THREE ROLES, EACH WITH ITS OWN CAPTURED REQUEST ──────────────────
-      const byRole = {
-        ungoverned_worker: allCaptured.filter(e => roleOf(e) === 'ungoverned_worker'),
-        structured_planner: allCaptured.filter(e => roleOf(e) === 'structured_planner'),
-        governed_leaf_worker: allCaptured.filter(e => roleOf(e) === 'governed_leaf_worker')
-      };
-      for (const [role, entries] of Object.entries(byRole)) {
-        assertThat(entries.length >= 1,
+      // Classification is shared, behavioural code with its own proof — not a
+      // predicate restated inside the suite that makes the claim.
+      const byRole = countCapturedRoles(allCaptured);
+      for (const role of ROLES) {
+        assertThat(byRole[role] >= 1,
           `${role}: at least one ACTUAL outbound request instance was captured ` +
-          `(${entries.length})`);
+          `(${byRole[role]})`);
       }
+      let everyRole = null;
+      try { everyRole = assertEveryRoleDispatched(allCaptured); } catch (_) { everyRole = null; }
+      assertThat(everyRole !== null,
+        'the three-role gate passes on actual captured instances, not on transports');
       // The leaf request exists only because the planner's answer was a valid
       // proposal that produced an admitted plan and a real leaf Run. That chain
       // is what makes this a role proof rather than a transport proof.
-      assertThat(byRole.governed_leaf_worker.length >= 1 &&
-        byRole.structured_planner.length >= 1,
+      assertThat(byRole.governed_leaf_worker >= 1 && byRole.structured_planner >= 1,
       'the governed leaf request followed a real admitted plan, not a forced path');
 
       // ── THE OUTBOUND BYTES, PER ROLE ────────────────────────────────────
       for (const entry of allCaptured) {
-        const role = roleOf(entry);
+        const role = classifyCapturedRole(entry);
         const body = JSON.parse(entry.body);
         assertThat(body.model === liveManifest.model,
           `${role}: outbound model is the exact dated snapshot (${body.model})`);
@@ -311,8 +307,8 @@ async function main() {
 
       console.log(`\n  (${assertThat.count()} live dispatch assertions)`);
       console.log('  captured outbound requests by role:');
-      for (const [role, entries] of Object.entries(byRole)) {
-        console.log(`    ${role.padEnd(22)} ${entries.length}`);
+      for (const role of ROLES) {
+        console.log(`    ${role.padEnd(22)} ${byRole[role]}`);
       }
       console.log('  by transport:' +
         `  fetch ${allCaptured.filter(e => e.transport === 'ungoverned').length}` +

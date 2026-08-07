@@ -30,6 +30,10 @@ const {
   TrialLiabilityError, ARM_IDS, assertRetryLiabilityBounded, trialWorstCaseMicroUsd
 } = require('./fixtures/evaluation-live-trial-liability');
 const { ROLE_ECONOMICS } = require('./fixtures/governed-role-policy-container');
+const {
+  CaptureRoleError, ROLES, assertEveryRoleDispatched, classifyCapturedRole,
+  countCapturedRoles
+} = require('./fixtures/evaluation-live-capture-roles');
 const { buildOpenAiResponsesBody } = require('../runtime/provider-request-body');
 const liveManifest = require('../config/structured-allocation-evaluation-live-v1.json');
 
@@ -306,6 +310,56 @@ function main() {
      liveManifest.repetitions === 3,
   'and the frozen 40 cells x 3 repetitions = 120 slots are unchanged');
 
+  // ── Role classification, from the request itself ──────────────────────
+  //
+  // "Both transports covered" is two mechanisms, not three role paths. This is
+  // the check that would have caught a verdict claiming three roles on two
+  // captured requests, so it is behavioural code with its own proof.
+  const plannerBody = JSON.stringify({
+    model: 'm',
+    input: [{ role: 'system', content: 'You are an allocation planner. You decompose…' }]
+  });
+  const workerBody = JSON.stringify({
+    model: 'm', input: [{ role: 'system', content: 'You are an agent working inside…' }]
+  });
+  ok(classifyCapturedRole({ transport: 'ungoverned', body: workerBody }) ===
+     'ungoverned_worker', 'a fetch request is the ungoverned worker');
+  ok(classifyCapturedRole({ transport: 'governed', role: 'planner', body: plannerBody }) ===
+     'structured_planner', 'a governed request carrying the planner contract is the planner');
+  ok(classifyCapturedRole({ transport: 'governed', role: 'worker', body: workerBody }) ===
+     'governed_leaf_worker', 'a governed request without it is the leaf worker');
+  // THE BODY IS THE EVIDENCE, not the capture's own label.
+  const mislabelled = refuses(() => classifyCapturedRole({
+    transport: 'governed', role: 'planner', body: workerBody }));
+  ok(mislabelled instanceof CaptureRoleError &&
+     mislabelled.code === 'CAPTURE_ROLE_DISAGREEMENT',
+  'a request mislabelled as the planner refuses rather than being counted');
+  ok(refuses(() => classifyCapturedRole({ transport: 'carrier-pigeon' })) !== null,
+    'an unknown transport refuses rather than defaulting to a role');
+
+  const complete = [
+    { transport: 'ungoverned', body: workerBody },
+    { transport: 'governed', role: 'planner', body: plannerBody },
+    { transport: 'governed', role: 'worker', body: workerBody }
+  ];
+  ok(ROLES.length === 3 &&
+     Object.values(countCapturedRoles(complete)).every(count => count === 1),
+  'three roles, one actual captured request each');
+  ok(assertEveryRoleDispatched(complete).governed_leaf_worker === 1,
+    'and the three-role gate passes on that');
+  // A PLANNER REQUEST ALONE IS NOT THE PROOF.
+  const plannerOnly = refuses(() => assertEveryRoleDispatched([
+    { transport: 'ungoverned', body: workerBody },
+    { transport: 'governed', role: 'planner', body: plannerBody },
+    { transport: 'governed', role: 'planner', body: plannerBody }
+  ]));
+  ok(plannerOnly instanceof CaptureRoleError &&
+     plannerOnly.code === 'CAPTURE_ROLE_NOT_DISPATCHED' &&
+     plannerOnly.detail.missing.includes('governed_leaf_worker'),
+  'planner requests alone NEVER satisfy the three-role proof — the gate names the gap');
+  ok(refuses(() => assertEveryRoleDispatched(complete.slice(0, 2))) !== null,
+    'and two roles out of three still refuses');
+
   // ── The corrected readiness facts ─────────────────────────────────────
   const audit = auditLiveReadiness();
   const byId = Object.fromEntries(audit.items.map(item => [item.id, item.state]));
@@ -328,6 +382,47 @@ function main() {
   ok(audit.unresolved.length === 0 &&
      audit.verdict === 'TRANCHE 6 LIVE-MODEL EVALUATION READY',
   'the corrected readiness verdict is READY');
+
+  // ── AND EVERY FACT CAN FAIL ─────────────────────────────────────────
+  //
+  // A fact only ever observed saying FROZEN is not a gate. Each one is shown
+  // going UNRESOLVED when the evidence it names is removed, so READY cannot
+  // survive a missing role, a missing cap or an under-reserved trial.
+  const withoutSuite = auditLiveReadiness({ sources: { suiteSource: '' } });
+  for (const id of ['ungovernedWorkerDispatchProved', 'structuredPlannerDispatchProved',
+    'governedLeafDispatchProved', 'externalProviderCallsZero']) {
+    ok(withoutSuite.unresolved.includes(id),
+      `${id} goes UNRESOLVED when the acceptance proof is absent`);
+  }
+  ok(withoutSuite.verdict === 'TRANCHE 6 LIVE-MODEL EVALUATION BLOCKED',
+    'and READY is impossible with zero governed-leaf captures');
+  ok(auditLiveReadiness({ sources: { roleModule: null } }).unresolved
+    .includes('governedLeafDispatchProved'),
+  'a missing role classifier also blocks, rather than being assumed');
+
+  const withoutRunner = auditLiveReadiness({ sources: { runnerSource: '' } });
+  ok(withoutRunner.unresolved.includes('liveTrialWorstCaseReservationProved') &&
+     withoutRunner.verdict === 'TRANCHE 6 LIVE-MODEL EVALUATION BLOCKED',
+  'READY is impossible with under-reserved trials');
+  ok(auditLiveReadiness({ sources: { ledger: null } }).unresolved
+    .includes('liveGlobalEconomicGateConcurrencyProved'),
+  'and impossible without the concurrency-safe ledger');
+  // THE PRECISE UNDER-RESERVATION. A runner that computes the trial bound but
+  // still reserves one request's worth must not read as proved: computing the
+  // right number and then not using it is exactly the defect being closed.
+  ok(auditLiveReadiness({ sources: { runnerSource:
+    'assertMode(mode) const isLive = mode === \'live\' ' +
+    'live-transport-capture-preload.js trialWorstCaseMicroUsd({ ' +
+    'maximumLiabilityMicroUsd: liveBudget.perRequestMicroUsd,' } })
+    .unresolved.includes('liveTrialWorstCaseReservationProved'),
+  'computing the trial bound but reserving one request is NOT proved');
+  for (const [override, id] of [
+    [{ serverSource: '' }, 'liveOutputCapUngovernedWorkerProved'],
+    [{ plannerSource: '' }, 'liveOutputCapPlannerProved'],
+    [{ bodySource: '' }, 'fixtureBodyCompatibilityProved']]) {
+    ok(auditLiveReadiness({ sources: override }).unresolved.includes(id),
+      `${id} goes UNRESOLVED when its source evidence is absent`);
+  }
   ok(assertLiveExecutionPermitted(audit) === true,
     'and live execution would be permitted — READY does not authorize spending');
 

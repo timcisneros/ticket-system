@@ -1,5 +1,23 @@
 # Decision Log
 
+## Three roles proved, wire capped, whole trial reserved (2026-08-06)
+
+The blocking audit was right on all three counts. The governed leaf executor now
+has its own captured outbound request, reached through a real admitted plan
+rather than a forced path; role classification is shared, behavioural code that
+refuses a planner-only capture by naming the missing role. Every live request
+carries the frozen 2,048-token output cap, including the ungoverned path that
+carried none while being priced as though it did — the authorization still wins
+for governed roles, and a live control that disagreed refuses. The ledger
+reserves the whole trial, derived from Run topology and both enforced per-Run
+ceilings, with retries priced rather than assumed away.
+
+Recomputed worst case **18,140,774.4 of 20,000,000 micro-USD**. Manifest
+`2bb886c3…`. Every frozen decision unchanged.
+
+Captured: ungoverned 1, planner 1, governed leaf 3. **External provider calls: 0.
+Total spent: $0.00.**
+
 ## Live dispatch path built and proved — READY FOR NEW AUTHORIZATION (2026-08-06)
 
 The halt before live trial 1 was correct, and the earlier **READY** verdict is

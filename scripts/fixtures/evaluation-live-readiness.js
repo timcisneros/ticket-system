@@ -88,7 +88,11 @@ function worstCaseLiability({ trialsPerArm }) {
 // `liveManifest` is injectable so the audit's dependence on it can be proved:
 // with no manifest every derived decision must fall back to UNRESOLVED, which
 // is the state the repository was in before the decisions were approved.
-function auditLiveReadiness({ liveManifest } = {}) {
+// `sources` exists so the NEGATIVE case is provable. An audit that can only be
+// observed saying FROZEN is not a gate — it has to be shown going UNRESOLVED
+// when the evidence it names is absent, which is what these overrides allow a
+// test to do without editing the repository.
+function auditLiveReadiness({ liveManifest, sources = {} } = {}) {
   const items = [];
   const record = (id, state, detail, source) =>
     items.push({ id, state, detail, source });
@@ -236,27 +240,27 @@ function auditLiveReadiness({ liveManifest } = {}) {
   // stop and the frozen sampling reached no request. Documentation and config
   // could satisfy every item it checked. These eight cannot be satisfied that
   // way: each reads the implementation.
-  const runnerSource = (() => {
+  const runnerSource = sources.runnerSource !== undefined ? sources.runnerSource : (() => {
     try {
       return require('node:fs').readFileSync(
         require('node:path').join(__dirname, '..',
           'structured-allocation-evaluation-runner.js'), 'utf8');
     } catch (_) { return ''; }
   })();
-  const bodySource = (() => {
+  const bodySource = sources.bodySource !== undefined ? sources.bodySource : (() => {
     try {
       return require('node:fs').readFileSync(
         require('node:path').join(__dirname, '..', '..', 'runtime',
           'provider-request-body.js'), 'utf8');
     } catch (_) { return ''; }
   })();
-  const serverSource = (() => {
+  const serverSource = sources.serverSource !== undefined ? sources.serverSource : (() => {
     try {
       return require('node:fs').readFileSync(
         require('node:path').join(__dirname, '..', '..', 'server.js'), 'utf8');
     } catch (_) { return ''; }
   })();
-  const plannerSource = (() => {
+  const plannerSource = sources.plannerSource !== undefined ? sources.plannerSource : (() => {
     try {
       return require('node:fs').readFileSync(
         require('node:path').join(__dirname, '..', '..', 'runtime',
@@ -264,14 +268,14 @@ function auditLiveReadiness({ liveManifest } = {}) {
     } catch (_) { return ''; }
   })();
 
-  const suiteSource = (() => {
+  const suiteSource = sources.suiteSource !== undefined ? sources.suiteSource : (() => {
     try {
       return require('node:fs').readFileSync(
         require('node:path').join(__dirname, '..',
           'structured-allocation-live-dispatch-postgres-test.js'), 'utf8');
     } catch (_) { return ''; }
   })();
-  const registered = (() => {
+  const registered = sources.registered !== undefined ? sources.registered : (() => {
     try {
       return require('node:fs').readFileSync(
         require('node:path').join(__dirname, '..', 'test-manifest.js'), 'utf8')
@@ -287,8 +291,16 @@ function auditLiveReadiness({ liveManifest } = {}) {
   // governed leaf executor was never reached. Each role therefore has its own
   // item, and each requires the acceptance suite to be registered AND to carry
   // the assertion that fails when that role produces no outbound request.
-  const roleProved = role => registered &&
-    suiteSource.includes(`${role}: allCaptured.filter`) &&
+  const roleModule = sources.roleModule !== undefined ? sources.roleModule : (() => {
+    try {
+      // eslint-disable-next-line global-require
+      return require('./evaluation-live-capture-roles');
+    } catch (_) { return null; }
+  })();
+  const roleProved = role => registered && roleModule !== null &&
+    roleModule.ROLES.includes(role) &&
+    typeof roleModule.assertEveryRoleDispatched === 'function' &&
+    suiteSource.includes('assertEveryRoleDispatched(allCaptured)') &&
     suiteSource.includes('at least one ACTUAL outbound request instance was captured');
 
   // A live trial must be able to run WITHOUT the hermetic response fixture.
@@ -360,7 +372,7 @@ function auditLiveReadiness({ liveManifest } = {}) {
     'provider-request-body explicit sampling with no default');
 
   // ── THE GLOBAL ECONOMIC GATE ────────────────────────────────────────────
-  const ledger = (() => {
+  const ledger = sources.ledger !== undefined ? sources.ledger : (() => {
     try {
       // eslint-disable-next-line global-require
       return require('./evaluation-live-budget-ledger');

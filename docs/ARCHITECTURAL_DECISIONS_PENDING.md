@@ -1,3 +1,14 @@
+## LIVE READINESS AUDIT FINDINGS — CLOSED (2026-08-06)
+
+The eight-audit repeat blocked live readiness on three proven defects: the
+governed leaf executor had no captured outbound request; ungoverned requests
+carried no output cap while being priced as if they did; and the ledger reserved
+one request's liability for a whole trial. All three are closed and proved
+without a network — see `docs/STRUCTURED_ALLOCATION_CONTROLLED_EVALUATION.md`
+§3p. Recomputed worst case 18,140,774.4 of 20,000,000 micro-USD. $0.00 spent.
+
+---
+
 ## LIVE RUN HALTED BEFORE TRIAL 1 — NO DISPATCH PATH, SAMPLING NOT WIRED (2026-08-06)
 
 **Status: CLOSED 2026-08-06 by the corrections below. $0.00 was ever spent.**
