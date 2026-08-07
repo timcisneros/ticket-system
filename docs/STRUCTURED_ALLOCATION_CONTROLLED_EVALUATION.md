@@ -1533,6 +1533,95 @@ durable state, which is broader than the frozen rule text. Correcting an
 implementation to match a frozen rule is not changing the rule, and the decision
 is STOP under both the original and the corrected predicate.
 
+## 3l. Live-model readiness — BLOCKED (session 16)
+
+### The fixture evidence, reproduced read-only
+
+| | |
+|---|---|
+| Fixture manifest hash | `044d37828f6f251eefaef66eccb2362ff6c6498c689baf54eb357870c4d9a07b` |
+| Scored-run header | `a8c70fa049f3fd45c77b73d161cf094ae961e2953886ec9fd9d0b19a07855cb1` |
+| Corpus hash | `40efc9db8242dc616808f00465124ded313b2d1c1d7b61ac077f5acf0fdbfc8f` |
+| Report hash (internal) | `17a8dcf83580d259e9794fac345e827640115327ee1a75152aac6b1029bb8569` |
+| Report file sha256 | `07d3c7ba15eeb510a7d2c6c347b4c2a2ff6e65b60b214be905725594fd7d695e` |
+| Corpus | 200 assigned / 200 executed / 0 exclusions / 0 duplicates |
+| Decision | FIXTURE EVIDENCE SUPPORTS STOP |
+
+**FIXTURE RESULT REPRODUCED FROM IMMUTABLE CORPUS** — rescored twice, byte
+identical, all five disqualifier states and the STOP decision reproduce. Nothing
+was recalculated from changed code.
+
+*(The previous handoff quoted `07d3c7ba…` as "the report hash". That is the
+report FILE sha256; the report's own internal `reportHash` is `17a8dcf8…`. Both
+are recorded above so neither is mistaken for the other.)*
+
+### Why fixture evidence alone is non-final
+
+Hermetic staging removes model variance by design. That makes truthfulness and
+cost comparable across arms, and makes *allocation quality under real model
+variance* unmeasurable — the evaluation document has said so since §9.6. The
+fixture corpus also produced 0.0% true completion on every arm, so it cannot
+discriminate the arms on the metric the decision rule turns on.
+
+### Live requirement audit
+
+**FROZEN (14):** provider `openai`; dated model snapshot
+`gpt-4o-mini-2024-07-18`; adapter `openai.responses.v1`; one model identity for
+planner and every worker; pricing snapshot and cost method; context window
+128 000 and output cap 2 048; live repetitions **3**; the never-pool rule;
+balanced Latin-square ordering; timeout 900 000 ms; product-failure retention;
+result freezing; five authorized metrics; thresholds and five hard
+disqualifiers.
+
+**UNRESOLVED (8) — each blocks the live run:**
+
+1. **live matrix membership** — no scenario/variant/arm set is defined for live;
+   the fixture matrix is a fixture decision and does not carry over by itself;
+2. **sampling parameters** — temperature, top-p or equivalents are recorded
+   nowhere, and a live result is not reproducible without them;
+3. **provider seed support** — whether a provider seed is used, and its values;
+   determinism may neither be assumed nor fabricated;
+4. **live economic ceiling** — no monetary ceiling authorizes live spending;
+5. **provider failure classification** — 429, 5xx, network interruption,
+   provider timeout, malformed response, model refusal, context-length rejection
+   and authentication failure are unclassified; the frozen infrastructure list
+   names only local conditions;
+6. **rate-limit and outage handling** — no backoff, retry budget or resume rule;
+7. **fixture/live evidence combination** — the protocol forbids pooling but never
+   says how a final RETAIN/REVISE/STOP is derived from both classes, whether a
+   fixture disqualifier can independently STOP, or the exact condition under
+   which live evidence could reverse a fixture STOP;
+8. **live phase necessity** — the evaluation document calls live confirmation
+   **optional** (§10.7) while the scorer emits `REQUIRES LIVE-MODEL MATRIX`.
+   Those cannot both be authoritative.
+
+### Maximum live liability, calculated not authorized
+
+Under the frozen `model_context_window_ceiling` bound method a single request
+may cost at most a full context window of input plus the capped output:
+
+**0.0204 USD per request.**
+
+| Arm | Max requests / trial | Basis | Worst case / trial |
+|---|---|---|---|
+| A, A2a, A2b | 3 | worker economic ceiling | 0.061 USD |
+| B, C | 10 | planner 1 + 3 leaf Runs × worker 3 | 0.204 USD |
+
+**Illustrative worst case if the live matrix mirrored the fixture cells at the
+frozen 3 repetitions: 15.93 USD.** This is illustrative only — the live matrix
+membership is itself unresolved, and computing a worst case authorizes nothing.
+
+### Verdict
+
+**TRANCHE 6 LIVE-MODEL EVALUATION BLOCKED BY:** live matrix membership,
+sampling parameters, provider seed support, live economic ceiling, provider
+failure classification, rate-limit and outage handling, fixture/live evidence
+combination, live phase necessity.
+
+No live manifest was written and no provider call was made. The audit is
+enforced by `assertLiveExecutionPermitted`, which refuses while any item is
+unresolved and names every one.
+
 ## 13. Status
 
 **Tranche 6: IN PROGRESS — harness built and executing; evaluation NOT run.**

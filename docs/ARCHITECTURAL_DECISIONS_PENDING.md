@@ -1,3 +1,41 @@
+## LIVE-MODEL EVALUATION PHASE IS NOT FROZEN (2026-08-06)
+
+**Status: OPEN. Eight product decisions block any live run.**
+
+The fixture matrix executed and its evidence is immutable. The LIVE phase is
+not frozen, and eight values that shape it — or authorize money — are absent:
+
+1. live matrix membership (scenarios / variants / arms);
+2. sampling parameters (temperature, top-p or equivalent);
+3. provider seed support and values;
+4. **live economic ceiling** — no monetary authorization exists;
+5. provider failure classification (429, 5xx, network, timeout, malformed
+   response, model refusal, context-length rejection, auth failure) as PRODUCT
+   DATA versus INFRASTRUCTURE-ONLY EXCLUSION;
+6. rate-limit, outage and resume handling;
+7. how fixture and live evidence combine into a final decision, whether a
+   fixture disqualifier can independently STOP, and the exact condition under
+   which live evidence could reverse a fixture STOP;
+8. **whether the live phase is mandatory at all** — the evaluation document
+   calls live confirmation optional (§10.7) while the scorer emits
+   `REQUIRES LIVE-MODEL MATRIX` for fixture-mode reports. Both cannot be
+   authoritative.
+
+None was chosen during the audit. Choosing a sampling parameter or a spend
+ceiling to let execution proceed would be inventing product authority, and
+inheriting silence as permission would be spending money nobody approved.
+
+Worst-case liability, calculated from the frozen bound method so an
+authorization can be judged: 0.0204 USD per request; 0.061 USD per direct or
+legacy trial; 0.204 USD per structured trial; 15.93 USD if the live matrix
+mirrored the fixture cells at the frozen 3 repetitions. This authorizes nothing.
+
+Enforced by `scripts/fixtures/evaluation-live-readiness.js`
+(`assertLiveExecutionPermitted`) and proved by
+`scripts/evaluation-live-readiness-test.js`.
+
+---
+
 ## TIMELINE DETERMINISM ASSERTION IS LOAD-SENSITIVE (2026-08-06)
 
 **Status: OPEN. Pre-existing; not caused by the evaluation work.**
