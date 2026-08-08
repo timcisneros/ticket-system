@@ -2319,6 +2319,47 @@ The seam did not exist when it executed, and writing the fact now would be
 manufacturing evidence rather than recording it. Its transport history stays
 UNKNOWN, permanently and by design.
 
+### Verification actually run, and what was not
+
+Stated exactly, because a verdict is only as good as the runs behind it.
+
+**Ran and passed.** The full 120-slot frozen matrix against the exact committed
+source — 120 assigned, 120 accounted for, restart at the predeclared ordinal 60,
+60 slots reused and never re-executed, 0 duplicates, 0 replacements, committed
+liability 18,140,952 micro-USD reconstructed equal to the canonical matrix
+maximum, corpus integrity COMPLETE AND INTERNALLY CONSISTENT, the scorer
+refusing it as synthetic, and **0 external provider calls**. All 120 written
+artifacts carry the durable-observation projection; all 120 record that
+production crossed into external transport; 60 hold ZERO economic reservations
+while transport was invoked, which is what makes the prohibited inference
+demonstrably unavailable rather than merely forbidden in prose.
+
+Also: 20 focused mutations, each dying at its own owner; the repository mutation
+suite at its own authoritative count, **54/54 killed, 0 survived**; and every
+readiness audit green with the six new facts individually falsifiable.
+
+**Did NOT pass: a complete release checkpoint.** Two runs, both recorded:
+
+1. The first run refused the scorer for importing a second module. That was a
+   real contract violation and it was right to fail — see the allow-list change
+   above. It is why "passed on the first properly configured run" is **false**
+   for this session.
+2. The second run, against the exact final source, reached the native suites and
+   failed there because **this machine has no Rust toolchain**. `cargo` and
+   `rustc` are absent, so `process-launcher-foundation-native-test`,
+   `process-materializer-native-test` and `third-party-notices-test` (which
+   shells out to `cargo metadata`) cannot execute here at all. That gap predates
+   this work — the same suites were already registered at `c1eaee1e` — and none
+   of the three files is touched by it.
+
+Every other checkpoint-registered suite was then executed individually against
+the final source: **213 ran, 212 passed, 1 failed, 2 skipped**, where the single
+failure and both skips are exactly the three Rust-dependent entries.
+
+**So the checkpoint criterion is NOT met**, and no amount of the surrounding
+evidence substitutes for it. A complete checkpoint must be run on a machine with
+the Rust toolchain installed before this work can be called release-verified.
+
 ### Readiness now has six more facts
 
 `realProviderEnvelopeShapeProved`, `ungovernedOneActionResponsePipelineProved`,
