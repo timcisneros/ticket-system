@@ -170,6 +170,16 @@ ok(/pg_advisory_xact_lock/.test(storeSource) &&
   /run_budget_charges/.test(storeSource) &&
   /runtime_capacity_slots/.test(storeSource),
 'budget and capacity authority is PostgreSQL-coordinated');
+ok(/appendRunEvidenceWithRunBudgetCharge/.test(serverSource) &&
+  /heartbeatRunLeaseWithRunBudgetCharge/.test(serverSource) &&
+  /prepareTargetOperationWithRunBudgetReservation/.test(serverSource) &&
+  /completeTargetOperationWithRunBudgetCommit/.test(serverSource),
+'budget lifecycles share only their corresponding durable product boundaries');
+ok(/error\.code\.startsWith\('RUN_BUDGET_'\)/.test(serverSource),
+'a durable budget refusal is not retried by generic workspace error accounting');
+ok(/budgetCompletionBoundaryAttempted/.test(serverSource) &&
+  /!operationContext\.budgetCompletionBoundaryAttempted/.test(serverSource),
+'failed atomic workspace completion remains reserved for truthful recovery');
 
 const repository = Object.fromEntries([
   'reserveRunBudget',

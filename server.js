@@ -892,6 +892,34 @@ async function recordNonTerminalRunEvidence(run, options) {
   return { ...recorded, evidenceKey: input.evidenceKey };
 }
 
+async function recordNonTerminalRunEvidenceWithBudgetCharge(run, options, {
+  dimension,
+  sourceIdentity,
+  amount = 1
+}) {
+  if (!getRunRuntimeBudgetSnapshot(run)) {
+    return recordNonTerminalRunEvidence(run, options);
+  }
+  const input = buildNonTerminalRunEvidenceInput(run, options);
+  let boundary;
+  try {
+    boundary = await getNonTerminalEvidenceRepository()
+      .appendRunEvidenceWithRunBudgetCharge({
+        budget: {
+          runId: run.id,
+          dimension,
+          sourceIdentity,
+          amount
+        },
+        evidence: input
+      });
+  } catch (error) {
+    error.nonTerminalEvidencePersistenceFailure = true;
+    throw error;
+  }
+  return { ...boundary.recorded, evidenceKey: input.evidenceKey };
+}
+
 // ── The durable provider-transport observation writers ─────────────────────
 //
 // Two writers, because there are two canonical request identities — and NOT
@@ -6710,6 +6738,33 @@ async function heartbeatRunLease(runId, payload = {}) {
   return heartbeat.run;
 }
 
+async function heartbeatRunLeaseWithBudgetCharge(run, {
+  dimension,
+  sourceIdentity,
+  amount = 1
+}, payload = {}) {
+  if (!getRunRuntimeBudgetSnapshot(run)) {
+    await runtimeBudgetController.charge(run, dimension, sourceIdentity, amount);
+    return heartbeatRunLease(run.id, payload);
+  }
+  const boundary = await postgresRuntimeStore.heartbeatRunLeaseWithRunBudgetCharge({
+    budget: {
+      runId: run.id,
+      dimension,
+      sourceIdentity,
+      amount
+    },
+    heartbeat: {
+      runId: run.id,
+      leaseOwner: RUN_LEASE_OWNER,
+      leaseDurationMs: getRunLeaseDurationMs(),
+      payload
+    }
+  });
+  if (!boundary.heartbeat) throw new RunLeaseLostError(run.id, RUN_LEASE_OWNER);
+  return boundary.heartbeat.run;
+}
+
 async function assertLiveRunLease(runId) {
   const run = await getRunLeaseRepository().verifyRunLease({
     runId,
@@ -12516,7 +12571,6 @@ async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, 
     });
   }
 
-  await runtimeBudgetController.reserve(run, 'model_request', budgetSourceIdentity, 1);
   const requestStartedAt = Date.now();
   const startedAt = new Date(requestStartedAt).toISOString();
   const metadata = sanitizeSnapshotValue(options.metadata || {});
@@ -12536,7 +12590,7 @@ async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, 
     if (requestPersisted) return;
     const safeRequest = sanitizeSnapshotValue(sanitizeRequest(requestPayload));
     try {
-      await recordNonTerminalRunEvidence(run, {
+      await recordNonTerminalRunEvidenceWithBudgetCharge(run, {
         category: 'provider-request',
         slot,
         replayKey: 'providerRequests',
@@ -12557,12 +12611,15 @@ async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, 
           startedAt
         },
         capturedAt: startedAt
+      }, {
+        dimension: 'model_request',
+        sourceIdentity: budgetSourceIdentity,
+        amount: 1
       });
     } catch (error) {
       error.providerEvidencePersistenceFailure = true;
       throw error;
     }
-    await runtimeBudgetController.commit(run, 'model_request', budgetSourceIdentity, 1);
     requestPersisted = true;
   };
 
@@ -12625,12 +12682,24 @@ async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, 
       }
     }
     if (!requestPersisted && !error.providerRequestPayload) {
-      await runtimeBudgetController.release(
-        run,
-        'model_request',
-        budgetSourceIdentity,
-        'provider_request_not_accepted'
-      );
+      if (getRunRuntimeBudgetSnapshot(run)) {
+        await postgresRuntimeStore.reserveAndReleaseRunBudget({
+          budget: {
+            runId: run.id,
+            dimension: 'model_request',
+            sourceIdentity: budgetSourceIdentity,
+            amount: 1
+          },
+          reason: 'provider_request_not_accepted'
+        });
+      } else {
+        await runtimeBudgetController.release(
+          run,
+          'model_request',
+          budgetSourceIdentity,
+          'provider_request_not_accepted'
+        );
+      }
     }
     error.providerEvidencePersisted = true;
     throw error;
@@ -18669,9 +18738,7 @@ async function completeWorkspaceMutationEvidence({
     ['WORKSPACE_PROTECTED_PATH', 'WORKSPACE_OWNERSHIP_VIOLATION'].includes(error.code)
   ));
   const operationDescriptor = operationContext.operationDescriptor || { operation, args };
-  let completion;
-  try {
-    completion = await getNonTerminalEvidenceRepository().completeTargetOperation({
+  const operationCompletion = {
     runId: run.id,
     ticketId: run.ticketId,
     operationKey,
@@ -18722,7 +18789,27 @@ async function completeWorkspaceMutationEvidence({
         ...target
       }
     }
-    });
+  };
+  let completion;
+  try {
+    if (getRunRuntimeBudgetSnapshot(run)) {
+      operationContext.budgetCompletionBoundaryAttempted = true;
+      const boundary = await getNonTerminalEvidenceRepository()
+        .completeTargetOperationWithRunBudgetCommit({
+          budget: {
+            runId: run.id,
+            dimension: 'workspace_operation',
+            sourceIdentity: operationKey,
+            amount: 1
+          },
+          operation: operationCompletion
+        });
+      completion = boundary.completion;
+      operationContext.budgetCommitted = true;
+    } else {
+      completion = await getNonTerminalEvidenceRepository()
+        .completeTargetOperation(operationCompletion);
+    }
   } catch (persistenceError) {
     // The target may already have changed. The next attempt must reconcile or
     // repair evidence; it must not classify repository failure as target failure.
@@ -18760,6 +18847,15 @@ async function beginWorkspaceMutation(run, step, operation, args, authorityDecis
 
   let intent = state.intent;
   if (intent) {
+    if (getRunRuntimeBudgetSnapshot(run)) {
+      await runtimeBudgetController.reserve(
+        run,
+        'workspace_operation',
+        operationKey,
+        1
+      );
+      operationContext.budgetReserved = true;
+    }
     operationContext.receiptTimestamp = intent.attemptStartedAt || operationContext.receiptTimestamp;
     const reconciliation = classifyPreparedWorkspaceMutation(provider, intent);
     if (reconciliation.status === 'uncertain') {
@@ -18798,7 +18894,7 @@ async function beginWorkspaceMutation(run, step, operation, args, authorityDecis
   // contract requires prepared mutations to name their turn, plan, and action
   // position (recovery-state.js "prepared mutations must have full identity").
   const replayIdentity = operationContext.replayMetadata || {};
-  const prepared = await getNonTerminalEvidenceRepository().prepareTargetOperation({
+  const preparationInput = {
     runId: run.id,
     ticketId: run.ticketId,
     operationKey,
@@ -18821,7 +18917,25 @@ async function beginWorkspaceMutation(run, step, operation, args, authorityDecis
       attemptStartedAt: new Date(operationContext.startedAt || Date.now()).toISOString(),
       target: buildTargetEvidenceMetadata(run, operation, args)
     }
-  });
+  };
+  let prepared;
+  if (getRunRuntimeBudgetSnapshot(run)) {
+    const boundary = await getNonTerminalEvidenceRepository()
+      .prepareTargetOperationWithRunBudgetReservation({
+        budget: {
+          runId: run.id,
+          dimension: 'workspace_operation',
+          sourceIdentity: operationKey,
+          amount: 1
+        },
+        operation: preparationInput
+      });
+    prepared = boundary.preparation;
+    operationContext.budgetReserved = true;
+  } else {
+    prepared = await getNonTerminalEvidenceRepository()
+      .prepareTargetOperation(preparationInput);
+  }
   return { preState: prepared.intent.preState };
 }
 
@@ -19925,12 +20039,15 @@ async function executeWorkspaceOperation(run, action, step = 0, options = {}) {
     options.slot || `step:${step}`
   );
   const executeBudgeted = async operation => {
-    await runtimeBudgetController.reserve(
-      run,
-      'workspace_operation',
-      operationContext.operationKey,
-      1
-    );
+    if (!AGENT_MUTATING_OPERATIONS.includes(parsed.operation)) {
+      await runtimeBudgetController.reserve(
+        run,
+        'workspace_operation',
+        operationContext.operationKey,
+        1
+      );
+      operationContext.budgetReserved = true;
+    }
     try {
       const result = await operation();
       await runtimeBudgetController.observedSideEffect(
@@ -19938,22 +20055,45 @@ async function executeWorkspaceOperation(run, action, step = 0, options = {}) {
         'workspace_operation',
         operationContext.operationKey
       );
-      await runtimeBudgetController.commit(
-        run,
-        'workspace_operation',
-        operationContext.operationKey,
-        1
-      );
+      if (!operationContext.budgetCommitted) {
+        await runtimeBudgetController.commit(
+          run,
+          'workspace_operation',
+          operationContext.operationKey,
+          1
+        );
+      }
       return result;
     } catch (error) {
       // A parsed and admitted workspace primitive counts as an attempted
       // operation under the existing workspace-operation limit semantics.
-      await runtimeBudgetController.commit(
-        run,
-        'workspace_operation',
-        operationContext.operationKey,
-        1
-      );
+      // A budget refusal is not an admitted primitive, and its durable
+      // exhaustion event was already committed by the reservation boundary.
+      // Retrying here would emit the same refusal twice.
+      if (typeof error.code === 'string' && error.code.startsWith('RUN_BUDGET_')) {
+        throw error;
+      }
+      if (!operationContext.budgetReserved) {
+        await runtimeBudgetController.reserve(
+          run,
+          'workspace_operation',
+          operationContext.operationKey,
+          1
+        );
+        operationContext.budgetReserved = true;
+      }
+      // When receipt/evidence+charge commit was attempted atomically, its
+      // rollback intentionally leaves the prepared reservation for recovery.
+      // A standalone commit here would split that all-or-none boundary.
+      if (!operationContext.budgetCommitted &&
+          !operationContext.budgetCompletionBoundaryAttempted) {
+        await runtimeBudgetController.commit(
+          run,
+          'workspace_operation',
+          operationContext.operationKey,
+          1
+        );
+      }
       throw error;
     }
   };
@@ -22773,13 +22913,11 @@ async function runAgentTicket(runId) {
     let governedBaselineRecorded = false;
     for (let step = initialExecutionTurn; !completed; step += 1) {
       runtimeBudgetController.assertDuration(run);
-      await runtimeBudgetController.charge(
-        run,
-        'execution_step',
-        `execution-step:${step}`,
-        1
-      );
-      await heartbeatRunLease(run.id, { phase: 'agent_step_started', step });
+      await heartbeatRunLeaseWithBudgetCharge(run, {
+        dimension: 'execution_step',
+        sourceIdentity: `execution-step:${step}`,
+        amount: 1
+      }, { phase: 'agent_step_started', step });
       assertRunNotTimedOut(run, runStartedAtMs, limits);
       assertRunStepAllowed(run, step, limits);
       // Fail closed if required diagnostic evidence could not be persisted: no

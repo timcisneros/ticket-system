@@ -9,6 +9,7 @@ const {
   RuntimeBudgetError,
   buildRuntimeBudgetSnapshot
 } = require('../runtime/runtime-budget-contract');
+const { verifyCurrentRunEventChain } = require('../runtime/event-integrity');
 const {
   withHarness,
   createAsserter,
@@ -305,6 +306,283 @@ async function main() {
         error => error && error.code === 'P0001'
       );
       check(true, 'database trigger rejects deletion of durable budget authority');
+
+      // The optimized boundaries below deliberately keep all of the original
+      // durable facts. Their contract is stronger than lower transaction count:
+      // an internal failure must expose either the whole authority bundle or
+      // none of it, and replay must not manufacture another charge or effect.
+      const boundaryTicket = await createTicket(store, agent, 'Atomic budget boundaries');
+      const boundaryRun = await createRun(store, boundaryTicket, agent, budget({
+        runtimeLimits: {
+          maxExecutionSteps: 8,
+          maxModelRequestsPerRun: 8,
+          maxWorkspaceOperationsPerRun: 8
+        }
+      }));
+      const boundaryOwner = 'atomic-budget-worker';
+      const boundaryClaim = await claim(store, boundaryRun, boundaryOwner);
+      await store.transitionRun({
+        runId: boundaryRun.id,
+        expectedRevision: boundaryClaim.revision,
+        fromStatuses: ['pending'],
+        toStatus: 'running',
+        leaseOwner: boundaryOwner,
+        eventType: 'run.started'
+      });
+      await store.writeReplaySnapshot({
+        runId: boundaryRun.id,
+        snapshot: {
+          version: 1,
+          providerRequests: [],
+          workspaceOperations: []
+        }
+      });
+
+      const requestEvidence = {
+        runId: boundaryRun.id,
+        ticketId: boundaryTicket.id,
+        evidenceKey: 'provider-request:atomic-boundary',
+        replayKey: 'providerRequests',
+        replayItem: {
+          evidenceKey: 'provider-request:atomic-boundary',
+          requestIdentity: 'atomic-boundary'
+        },
+        event: {
+          type: 'provider.request.persisted',
+          payload: { requestIdentity: 'atomic-boundary' }
+        }
+      };
+      const rollbackRequestBudget = {
+        runId: boundaryRun.id,
+        dimension: 'model_request',
+        sourceIdentity: 'model-request:rollback-boundary',
+        amount: 1
+      };
+      const originalAppendRunEvidence = store.appendRunEvidence;
+      store.appendRunEvidence = async () => {
+        throw new Error('injected provider-request evidence failure');
+      };
+      try {
+        await assert.rejects(
+          store.appendRunEvidenceWithRunBudgetCharge({
+            budget: rollbackRequestBudget,
+            evidence: requestEvidence
+          }),
+          /injected provider-request evidence failure/
+        );
+      } finally {
+        store.appendRunEvidence = originalAppendRunEvidence;
+      }
+      check(!(await store.listRunBudgetCharges(boundaryRun.id)).some(charge =>
+        charge.sourceIdentity === rollbackRequestBudget.sourceIdentity) &&
+        !(await store.readRunReplay(boundaryRun.id)).snapshot.providerRequests.length,
+      'request-evidence failure rolls back its reservation and replay projection');
+
+      const requestBudget = {
+        ...rollbackRequestBudget,
+        sourceIdentity: 'model-request:atomic-boundary'
+      };
+      await store.appendRunEvidenceWithRunBudgetCharge({
+        budget: requestBudget,
+        evidence: requestEvidence
+      });
+      await store.appendRunEvidenceWithRunBudgetCharge({
+        budget: requestBudget,
+        evidence: requestEvidence
+      });
+      let boundaryCharges = await store.listRunBudgetCharges(boundaryRun.id);
+      let boundaryEvents = await store.listRunEvents(boundaryRun.id);
+      check(boundaryCharges.filter(charge =>
+        charge.sourceIdentity === requestBudget.sourceIdentity &&
+        charge.state === 'committed').length === 1 &&
+        boundaryEvents.filter(event =>
+          event.type === 'provider.request.persisted' &&
+          event.payload.evidenceKey === requestEvidence.evidenceKey).length === 1,
+      'request authority replay preserves one committed charge and one durable request');
+
+      const rollbackStepBudget = {
+        runId: boundaryRun.id,
+        dimension: 'execution_step',
+        sourceIdentity: 'execution-step:rollback-boundary',
+        amount: 1
+      };
+      const originalHeartbeatRunLease = store.heartbeatRunLease;
+      store.heartbeatRunLease = async () => {
+        throw new Error('injected heartbeat failure after charge');
+      };
+      try {
+        await assert.rejects(
+          store.heartbeatRunLeaseWithRunBudgetCharge({
+            budget: rollbackStepBudget,
+            heartbeat: {
+              runId: boundaryRun.id,
+              leaseOwner: boundaryOwner,
+              leaseDurationMs: 30_000,
+              payload: { phase: 'injected' }
+            }
+          }),
+          /injected heartbeat failure after charge/
+        );
+      } finally {
+        store.heartbeatRunLease = originalHeartbeatRunLease;
+      }
+      check(!(await store.listRunBudgetCharges(boundaryRun.id)).some(charge =>
+        charge.sourceIdentity === rollbackStepBudget.sourceIdentity),
+      'heartbeat failure rolls back the execution charge before product action');
+
+      const stepBudget = {
+        ...rollbackStepBudget,
+        sourceIdentity: 'execution-step:atomic-boundary'
+      };
+      await store.heartbeatRunLeaseWithRunBudgetCharge({
+        budget: stepBudget,
+        heartbeat: {
+          runId: boundaryRun.id,
+          leaseOwner: boundaryOwner,
+          leaseDurationMs: 30_000,
+          payload: { phase: 'before-action' }
+        }
+      });
+      boundaryCharges = await store.listRunBudgetCharges(boundaryRun.id);
+      check(boundaryCharges.filter(charge =>
+        charge.sourceIdentity === stepBudget.sourceIdentity &&
+        charge.state === 'committed').length === 1,
+      'execution charge and renewed lease are durable before the next product action');
+
+      const operationKey = `run:${boundaryRun.id}:atomic-workspace-boundary`;
+      const workspaceBudget = {
+        runId: boundaryRun.id,
+        dimension: 'workspace_operation',
+        sourceIdentity: operationKey,
+        amount: 1
+      };
+      const operationIntent = {
+        runId: boundaryRun.id,
+        ticketId: boundaryTicket.id,
+        operationKey,
+        stepId: '0',
+        leaseOwner: boundaryOwner,
+        identity: { executionTurn: 0, planKey: 'atomic-plan', actionIndex: 0 },
+        intent: {
+          operation: 'writeFile',
+          args: { path: 'atomic/report.txt', content: 'ready' },
+          preState: { existed: false },
+          authorityDecision: { status: 'allowed' },
+          target: {
+            targetId: 'local-workspace',
+            targetKind: 'localWorkspace',
+            targetPath: 'atomic/report.txt',
+            targetResourceId: 'atomic/report.txt'
+          }
+        }
+      };
+      const originalPrepareTargetOperation = store.prepareTargetOperation;
+      store.prepareTargetOperation = async () => {
+        throw new Error('injected prepared-intent failure');
+      };
+      try {
+        await assert.rejects(
+          store.prepareTargetOperationWithRunBudgetReservation({
+            budget: workspaceBudget,
+            operation: operationIntent
+          }),
+          /injected prepared-intent failure/
+        );
+      } finally {
+        store.prepareTargetOperation = originalPrepareTargetOperation;
+      }
+      check(!(await store.listRunBudgetCharges(boundaryRun.id)).some(charge =>
+        charge.sourceIdentity === workspaceBudget.sourceIdentity) &&
+        !(await store.getTargetOperation(boundaryRun.id, operationKey)).intent,
+      'prepared-intent failure leaves neither workspace authority nor intent');
+
+      await store.prepareTargetOperationWithRunBudgetReservation({
+        budget: workspaceBudget,
+        operation: operationIntent
+      });
+      let workspaceState = await store.getTargetOperation(boundaryRun.id, operationKey);
+      boundaryCharges = await store.listRunBudgetCharges(boundaryRun.id);
+      check(Boolean(workspaceState.intent) && !workspaceState.receipt &&
+        boundaryCharges.some(charge =>
+          charge.sourceIdentity === workspaceBudget.sourceIdentity &&
+          charge.state === 'reserved'),
+      'crash after target effect retains its prepared intent and reserved charge for recovery');
+
+      const operationCompletion = {
+        runId: boundaryRun.id,
+        ticketId: boundaryTicket.id,
+        operationKey,
+        historyRecord: {
+          operation: 'writeFile',
+          args: operationIntent.intent.args,
+          outcome: 'succeeded'
+        },
+        receipt: {
+          operation: 'writeFile',
+          targetId: 'local-workspace',
+          targetKind: 'localWorkspace',
+          targetPath: 'atomic/report.txt',
+          targetResourceId: 'atomic/report.txt',
+          providerResponse: { path: 'atomic/report.txt', size: 5 }
+        },
+        replayItem: {
+          operation: { operation: 'writeFile', args: operationIntent.intent.args },
+          result: { path: 'atomic/report.txt', size: 5 }
+        },
+        event: {
+          type: 'workspace.operation',
+          stepId: '0',
+          payload: { operation: 'writeFile', path: 'atomic/report.txt', mutating: true }
+        }
+      };
+      const originalCommitRunBudget = store.commitRunBudget;
+      store.commitRunBudget = async () => {
+        throw new Error('injected charge-commit failure after receipt');
+      };
+      try {
+        await assert.rejects(
+          store.completeTargetOperationWithRunBudgetCommit({
+            budget: workspaceBudget,
+            operation: operationCompletion
+          }),
+          /injected charge-commit failure after receipt/
+        );
+      } finally {
+        store.commitRunBudget = originalCommitRunBudget;
+      }
+      workspaceState = await store.getTargetOperation(boundaryRun.id, operationKey);
+      boundaryCharges = await store.listRunBudgetCharges(boundaryRun.id);
+      check(!workspaceState.receipt && boundaryCharges.some(charge =>
+        charge.sourceIdentity === workspaceBudget.sourceIdentity &&
+        charge.state === 'reserved'),
+      'receipt/evidence rolls back if its required workspace charge cannot commit');
+
+      await store.completeTargetOperationWithRunBudgetCommit({
+        budget: workspaceBudget,
+        operation: operationCompletion
+      });
+      await store.completeTargetOperationWithRunBudgetCommit({
+        budget: workspaceBudget,
+        operation: operationCompletion
+      });
+      workspaceState = await store.getTargetOperation(boundaryRun.id, operationKey);
+      boundaryCharges = await store.listRunBudgetCharges(boundaryRun.id);
+      boundaryEvents = await store.listRunEvents(boundaryRun.id);
+      check(Boolean(workspaceState.receipt) &&
+        boundaryCharges.filter(charge =>
+          charge.sourceIdentity === workspaceBudget.sourceIdentity &&
+          charge.state === 'committed').length === 1 &&
+        boundaryEvents.filter(event =>
+          event.type === 'workspace.operation' &&
+          event.payload.operationKey === operationKey).length === 1,
+      'workspace recovery records one receipt, one charge, and no duplicate operation');
+      check(verifyCurrentRunEventChain(boundaryEvents).chainValid,
+        'co-transactional budget and product facts preserve the Run event chain');
+      await store.releaseRunLease({
+        runId: boundaryRun.id,
+        leaseOwner: boundaryOwner,
+        payload: { reason: 'atomic boundary test complete' }
+      });
 
       await setSchedulerLimits(store, {
         maxActiveRuns: 1,

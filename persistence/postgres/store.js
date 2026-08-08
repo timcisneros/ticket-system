@@ -1104,6 +1104,12 @@ class PostgresRuntimeStore {
     this.defaultMaxActiveRuns = positiveSafeInteger(defaultMaxActiveRuns, 'defaultMaxActiveRuns');
     this.defaultLocalModelConcurrency = positiveSafeInteger(defaultLocalModelConcurrency, 'defaultLocalModelConcurrency');
     this.targetOperationClientStorage = new AsyncLocalStorage();
+    // A transaction that appends several ordered facts for one Run already
+    // owns the chain-tip lock after its first append. Re-reading and re-locking
+    // that same tip for every fact adds round trips but no authority. The map
+    // exists only for the lifetime of one database transaction and is discarded
+    // on both commit and rollback.
+    this.transactionEventChains = new WeakMap();
     this.ownsPool = !pool;
     if (!pool && (typeof connectionString !== 'string' || !connectionString.trim())) {
       throw new TypeError('connectionString is required when pool is not provided');
@@ -1952,6 +1958,8 @@ class PostgresRuntimeStore {
   }
 
   async _withClientTransaction(client, operation) {
+    const priorEventChains = this.transactionEventChains.get(client);
+    this.transactionEventChains.set(client, new Map());
     try {
       await client.query('BEGIN');
       await client.query(`SET LOCAL search_path TO ${this.schemaSql}, public`);
@@ -1961,6 +1969,9 @@ class PostgresRuntimeStore {
     } catch (error) {
       try { await client.query('ROLLBACK'); } catch (_) {}
       throw error;
+    } finally {
+      if (priorEventChains) this.transactionEventChains.set(client, priorEventChains);
+      else this.transactionEventChains.delete(client);
     }
   }
 
@@ -9245,6 +9256,8 @@ class PostgresRuntimeStore {
     const runId = nullablePositiveSafeInteger(event && event.runId, 'event.runId');
     let chain = null;
     if (runId !== null) {
+      const transactionChains = this.transactionEventChains.get(client) || null;
+      const cachedChain = transactionChains ? transactionChains.get(runId) : null;
       // Take the run row BEFORE the chain tip, in the same mode the events foreign key
       // will need anyway. Without this the two evidence paths acquire the same pair of
       // locks in opposite orders and deadlock:
@@ -9259,25 +9272,29 @@ class PostgresRuntimeStore {
       // deadlocking. FOR KEY SHARE is deliberately the weakest lock that serves: it does
       // not serialize concurrent appends against each other, which continue to order
       // themselves on the chain tip exactly as before.
-      await client.query(
-        `SELECT 1 FROM ${this.table('runs')} WHERE id = $1 FOR KEY SHARE`,
-        [runId]
-      );
-      await client.query(
-        `INSERT INTO ${this.table('run_event_chain_tips')} (run_id, next_seq, previous_hash)
-         VALUES ($1, 0, NULL) ON CONFLICT (run_id) DO NOTHING`,
-        [runId]
-      );
-      const tip = await client.query(
-        `SELECT next_seq, previous_hash FROM ${this.table('run_event_chain_tips')}
-         WHERE run_id = $1 FOR UPDATE`,
-        [runId]
-      );
-      if (tip.rowCount !== 1) throw new Error(`Run ${runId} has no event-chain tip`);
-      chain = {
-        nextSeq: nonNegativeSafeInteger(tip.rows[0].next_seq, 'chain.nextSeq'),
-        previousHash: tip.rows[0].previous_hash
-      };
+      if (cachedChain) {
+        chain = cachedChain;
+      } else {
+        await client.query(
+          `SELECT 1 FROM ${this.table('runs')} WHERE id = $1 FOR KEY SHARE`,
+          [runId]
+        );
+        await client.query(
+          `INSERT INTO ${this.table('run_event_chain_tips')} (run_id, next_seq, previous_hash)
+           VALUES ($1, 0, NULL) ON CONFLICT (run_id) DO NOTHING`,
+          [runId]
+        );
+        const tip = await client.query(
+          `SELECT next_seq, previous_hash FROM ${this.table('run_event_chain_tips')}
+           WHERE run_id = $1 FOR UPDATE`,
+          [runId]
+        );
+        if (tip.rowCount !== 1) throw new Error(`Run ${runId} has no event-chain tip`);
+        chain = {
+          nextSeq: nonNegativeSafeInteger(tip.rows[0].next_seq, 'chain.nextSeq'),
+          previousHash: tip.rows[0].previous_hash
+        };
+      }
     }
 
     const clock = await client.query('SELECT clock_timestamp() AS ts');
@@ -9315,6 +9332,13 @@ class PostgresRuntimeStore {
          WHERE run_id = $1`,
         [runId, normalized.seq + 1, normalized.hash]
       );
+      const transactionChains = this.transactionEventChains.get(client);
+      if (transactionChains) {
+        transactionChains.set(runId, {
+          nextSeq: normalized.seq + 1,
+          previousHash: normalized.hash
+        });
+      }
     }
     return eventFromRow(result.rows[0]);
   }
@@ -10927,7 +10951,7 @@ class PostgresRuntimeStore {
     receipt,
     replayItem,
     event
-  }) {
+  }, { client: suppliedClient = null } = {}) {
     const id = positiveSafeInteger(runId, 'runId');
     const ownerTicketId = positiveSafeInteger(ticketId, 'ticketId');
     const key = requiredString(operationKey, 'operationKey', 512);
@@ -10936,7 +10960,7 @@ class PostgresRuntimeStore {
     const proposedReplayItem = this.assertJsonRecord(replayItem, 'replayItem');
     const proposedEvent = this.assertJsonRecord(event, 'event');
 
-    return this.withTransaction(async client => {
+    const execute = async client => {
       const current = await this.getTargetOperation(id, key, { client, forUpdate: true });
       if (!current.intent) throw new TypeError(`Target operation ${key} was not prepared`);
       if (current.intent.ticketId !== ownerTicketId) throw new IdempotencyConflictError(id, key);
@@ -10986,7 +11010,8 @@ class PostgresRuntimeStore {
         }
       }, { client });
       return { record: recorded.record, evidence, inserted: recorded.inserted };
-    });
+    };
+    return suppliedClient ? execute(suppliedClient) : this.withTransaction(execute);
   }
 
   async getProcessOperation(operationIdentity, { client = null, forUpdate = false } = {}) {
@@ -11794,13 +11819,15 @@ class PostgresRuntimeStore {
     });
   }
 
-  async heartbeatRunLease({ runId, leaseOwner, leaseDurationMs, payload = {} }) {
+  async heartbeatRunLease({ runId, leaseOwner, leaseDurationMs, payload = {} }, {
+    client: suppliedClient = null
+  } = {}) {
     const id = positiveSafeInteger(runId, 'runId');
     const owner = String(leaseOwner || '').trim();
     if (!owner) throw new TypeError('leaseOwner is required');
     const duration = positiveSafeInteger(leaseDurationMs, 'leaseDurationMs');
 
-    return this.withTransaction(async client => {
+    const execute = async client => {
       const result = await client.query(
         `UPDATE ${this.table('runs')}
          SET lease_expires_at = clock_timestamp() + ($3::bigint * interval '1 millisecond'),
@@ -11828,7 +11855,8 @@ class PostgresRuntimeStore {
         }
       });
       return { run, event };
-    });
+    };
+    return suppliedClient ? execute(suppliedClient) : this.withTransaction(execute);
   }
 
   async releaseRunLease({ runId, leaseOwner, payload = {} }) {

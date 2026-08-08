@@ -118,12 +118,12 @@ function methods() {
       dimension: requestedDimension,
       sourceIdentity,
       amount = 1
-    } = {}) {
+    } = {}, { client: suppliedClient = null, deferExhaustion = false } = {}) {
       const id = positiveInteger(runId, 'runId');
       const normalizedDimension = dimension(requestedDimension);
       const source = boundedString(sourceIdentity, 'sourceIdentity', 512);
       const reservation = positiveInteger(amount, 'amount');
-      const result = await this.withTransaction(async client => {
+      const execute = async client => {
         await client.query(
           `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
           [`ticket-system:run-budget:${id}:${normalizedDimension}`]
@@ -226,8 +226,11 @@ function methods() {
           }
         });
         return { charge, inserted: true, exhausted: null };
-      });
-      if (result.exhausted) throw exhaustionError(result.exhausted);
+      };
+      const result = suppliedClient
+        ? await execute(suppliedClient)
+        : await this.withTransaction(execute);
+      if (result.exhausted && !deferExhaustion) throw exhaustionError(result.exhausted);
       return result;
     },
 
@@ -236,14 +239,14 @@ function methods() {
       dimension: requestedDimension,
       sourceIdentity,
       amount
-    } = {}) {
+    } = {}, { client: suppliedClient = null } = {}) {
       const id = positiveInteger(runId, 'runId');
       const normalizedDimension = dimension(requestedDimension);
       const source = boundedString(sourceIdentity, 'sourceIdentity', 512);
       const actual = normalizedDimension === 'output_artifact_bytes'
         ? nonnegativeInteger(amount, 'amount')
         : positiveInteger(amount, 'amount');
-      return this.withTransaction(async client => {
+      const execute = async client => {
         const selected = await client.query(
           `SELECT charge.*, run.body
            FROM ${this.table('run_budget_charges')} AS charge
@@ -337,7 +340,80 @@ function methods() {
           });
         }
         return { charge, committed: true };
+      };
+      return suppliedClient ? execute(suppliedClient) : this.withTransaction(execute);
+    },
+
+    // These three boundaries do not cross an external effect. Keeping the
+    // budget lifecycle and the durable fact it authorizes in one transaction
+    // removes partial internal states while preserving every charge and event.
+    async appendRunEvidenceWithRunBudgetCharge({ budget, evidence } = {}) {
+      const result = await this.withTransaction(async client => {
+        const reservation = await this.reserveRunBudget(budget, {
+          client,
+          deferExhaustion: true
+        });
+        if (reservation.exhausted) return { exhausted: reservation.exhausted };
+        const recorded = await this.appendRunEvidence(evidence, { client });
+        const committed = await this.commitRunBudget(budget, { client });
+        return { reservation, recorded, committed, exhausted: null };
       });
+      if (result.exhausted) throw exhaustionError(result.exhausted);
+      return result;
+    },
+
+    async heartbeatRunLeaseWithRunBudgetCharge({ budget, heartbeat } = {}) {
+      const result = await this.withTransaction(async client => {
+        const reservation = await this.reserveRunBudget(budget, {
+          client,
+          deferExhaustion: true
+        });
+        if (reservation.exhausted) return { exhausted: reservation.exhausted };
+        const committed = await this.commitRunBudget(budget, { client });
+        const recordedHeartbeat = await this.heartbeatRunLease(heartbeat, { client });
+        return { reservation, committed, heartbeat: recordedHeartbeat, exhausted: null };
+      });
+      if (result.exhausted) throw exhaustionError(result.exhausted);
+      return result;
+    },
+
+    async completeTargetOperationWithRunBudgetCommit({ budget, operation } = {}) {
+      return this.withTransaction(async client => {
+        const completion = await this.completeTargetOperation(operation, { client });
+        const committed = await this.commitRunBudget(budget, { client });
+        return { completion, committed };
+      });
+    },
+
+    async prepareTargetOperationWithRunBudgetReservation({ budget, operation } = {}) {
+      const result = await this.withTransaction(async client => {
+        const reservation = await this.reserveRunBudget(budget, {
+          client,
+          deferExhaustion: true
+        });
+        if (reservation.exhausted) return { exhausted: reservation.exhausted };
+        const preparation = await this.prepareTargetOperation(operation, { client });
+        return { reservation, preparation, exhausted: null };
+      });
+      if (result.exhausted) throw exhaustionError(result.exhausted);
+      return result;
+    },
+
+    async reserveAndReleaseRunBudget({ budget, reason } = {}) {
+      const result = await this.withTransaction(async client => {
+        const reservation = await this.reserveRunBudget(budget, {
+          client,
+          deferExhaustion: true
+        });
+        if (reservation.exhausted) return { exhausted: reservation.exhausted };
+        const released = await this.releaseRunBudget({
+          ...budget,
+          reason
+        }, { client });
+        return { reservation, released, exhausted: null };
+      });
+      if (result.exhausted) throw exhaustionError(result.exhausted);
+      return result;
     },
 
     async releaseRunBudget({
@@ -345,12 +421,12 @@ function methods() {
       dimension: requestedDimension,
       sourceIdentity,
       reason = 'side_effect_not_observed'
-    } = {}) {
+    } = {}, { client: suppliedClient = null } = {}) {
       const id = positiveInteger(runId, 'runId');
       const normalizedDimension = dimension(requestedDimension);
       const source = boundedString(sourceIdentity, 'sourceIdentity', 512);
       const stableReason = boundedString(reason, 'reason', 1024);
-      return this.withTransaction(async client => {
+      const execute = async client => {
         const selected = await client.query(
           `SELECT charge.*, run.body
            FROM ${this.table('run_budget_charges')} AS charge
@@ -396,7 +472,8 @@ function methods() {
           }
         });
         return { charge, released: true };
-      });
+      };
+      return suppliedClient ? execute(suppliedClient) : this.withTransaction(execute);
     },
 
     async listRunBudgetCharges(runId) {

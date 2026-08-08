@@ -7187,6 +7187,53 @@ that can be missing, so the window is placed where it can only lose a true fact.
 decided by the economic reservation state, not by this observation. A missing
 transport event does not make a possibly-dispatched request look undispatched.
 
+## Tight-Budget Postcondition Liveness Regression (recorded and closed 2026-08-08)
+
+**Status:** closed by sharing PostgreSQL transactions across facts that already
+form one durability boundary. The supported, intentional
+`AGENT_MAX_RUNTIME_DURATION_MS=2000` contract in
+`postcondition-repeated-write timeout-avoided` is unchanged.
+
+The first properly configured release checkpoint against
+`f22e55dacdeb2a04f8012c1ca5fb25fa32b4ca6d` remains a historical failure:
+167/216 checks passed and check 168 failed with
+`RUN_RUNTIME_DURATION_EXCEEDED` at approximately 2,271 ms. That result is not
+rewritten by this correction.
+
+Same-machine attribution found two material contributors. Durable runtime-budget
+accounting introduced the intrinsic critical-path cost: the scenario grew from
+30 to 44 PostgreSQL transactions at its introduction, then transport observation
+added three more. Ambient WAL/host contention amplified that intrinsic work; the
+checkpoint prefix itself leaked no server, Node process, PostgreSQL transaction,
+or lock holder.
+
+The correction removes transaction boundaries, not facts:
+
+* a model-request reservation, `provider.request.persisted`, and its charge
+  commit are one pre-transport transaction on the ungoverned path;
+* an execution-step reservation/commit and lease heartbeat are one transaction
+  before the next product action;
+* a workspace-operation reservation and prepared intent are one transaction
+  before the target effect;
+* its receipt/evidence and charge commit are one transaction after the effect;
+* multiple events appended inside one transaction reuse the chain tip already
+  locked by that transaction.
+
+No transaction crosses an external provider or workspace effect. A failed
+post-effect receipt/charge transaction leaves the prepared intent and reserved
+charge for reconciliation. A budget refusal is not retried by generic operation
+error accounting. `provider.transport_invoked` remains evidence-only, remains
+after the actual platform call, and is neither dropped nor moved.
+
+Against the corrected executable source, the unchanged tight-budget scenario
+completed 10/10 in isolation (min 1,026, median 1,059, p90 1,125, max 1,241 ms)
+and 10/10 after the exact first two suite scenarios (min 1,065, median 1,158.5,
+p90 1,299, max 1,451 ms). The path performs the same three hermetic model
+responses, two parsed plans, two workspace receipts, seven charges, three each
+of provider request/transport/response evidence, and the same postcondition and
+terminal result, while using 33 rather than 47 PostgreSQL transactions. External
+provider calls in all attribution and regression work: zero.
+
 
 ---
 
