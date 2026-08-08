@@ -369,17 +369,19 @@ const MUTATIONS = Object.freeze([
     expect: 'a recoverable refusal gives the caller no retry signal'
   },
   {
-    // Restores the lock-order inversion: the chain tip is taken before the run row, so a
-    // concurrent evidence writer holding the run row deadlocks instead of waiting.
+    // Restores the lock-order inversion at the cache-miss owner: the chain tip is
+    // taken before the run row, so a concurrent evidence writer holding the run row
+    // deadlocks instead of waiting. The transaction-local chain cache never changes
+    // this first-append ordering requirement.
     name: 'event-append-restores-lock-inversion',
     suite: 'event-append-lock-order-test.js',
     file: 'persistence/postgres/store.js',
     contract: 'every evidence writer takes the run row before the event chain tip',
-    find: `      await client.query(
-        \`SELECT 1 FROM \${this.table('runs')} WHERE id = $1 FOR KEY SHARE\`,
-        [runId]
-      );`,
-    replace: '      // lock-order guard removed',
+    find: `        await client.query(
+          \`SELECT 1 FROM \${this.table('runs')} WHERE id = $1 FOR KEY SHARE\`,
+          [runId]
+        );`,
+    replace: '        // lock-order guard removed',
     expect: 'a concurrent append deadlocks instead of waiting for the run row'
   },
   {
