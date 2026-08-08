@@ -24,6 +24,7 @@ const {
   ProviderTransportObservationError,
   TRANSPORT_INVOCATION_ROLES,
   TRANSPORT_OWNERS,
+  OBSERVATION_RESULTS,
   buildProviderTransportInvocationPayload,
   observeProviderTransportInvocation
 } = require('../runtime/provider-transport-observation');
@@ -224,46 +225,114 @@ async function main() {
       'and the invocation is still observed — the request WAS made, it failed after');
   }
 
-  // ── AN EVIDENCE FAILURE IS A FAILURE, AND IS NOT A PROVIDER FAULT ─────
+  // ── AN EVIDENCE FAILURE CHANGES NOTHING IT OBSERVES ──────────────────
   //
-  // Evidence that disappears quietly is how ABSENCE stops meaning UNKNOWN and
-  // starts meaning nothing at all. The request is already in flight by then, so
-  // the caller must settle it as possibly dispatched rather than release it.
+  // THE INVARIANT. The seam is invoked with the request already in flight, so
+  // anything it did on failure other than nothing would be a decision about a
+  // provider interaction taken by an evidence writer:
+  //
+  //   transport invoked -> observation write fails -> provider result discarded,
+  //   Run failed, reservation settled at the authorized maximum
+  //
+  // That is a control point wearing an observer's name. The proof below is an
+  // EQUIVALENCE: the same request, once with a working writer and once with a
+  // writer that throws, must produce byte-identical results.
   {
-    const order = [];
-    const transport = createOpenAiGovernedTransport({
-      httpsRequest: recordingHttpsRequest(order) });
-    const failure = await refuses(() => transport({
+    const succeedingOrder = [];
+    const failingOrder = [];
+    const run = async (order, observe) => createOpenAiGovernedTransport({
+      httpsRequest: recordingHttpsRequest(order)
+    })({
       endpointIdentity: GOVERNED_OPENAI_ENDPOINT,
       serializedRequest: '{"model":"m"}',
       credentials: { apiKey: 'test-only-not-a-real-key' },
       timeoutMs: 1000, maxResponseBytes: 65_536,
-      observeTransportInvocation: () => { throw new Error('database unavailable'); },
+      observeTransportInvocation: observe,
       transportInvocationIdentity: {
         role: 'governed_leaf_worker', evidenceKey: 'probe' }
-    }));
-    ok(failure !== null &&
-       failure.code === 'PROVIDER_TRANSPORT_OBSERVATION_NOT_PERSISTED',
-    'an observation that cannot be persisted FAILS under its own code — it is ' +
-    'never swallowed');
-    ok(failure.providerTransportObservationFailure === true,
-      'and is marked as an evidence failure, so it is not reclassified as a ' +
-      'provider fault');
-
-    const outcome = await dispatchGovernedRequest({
-      startResult: startResultFor(),
-      transport,
-      resolveCredentials: async () => ({ apiKey: 'test-only-not-a-real-key' }),
-      observeTransportInvocation: () => { throw new Error('database unavailable'); },
-      transportInvocationIdentity: { role: 'governed_leaf_worker', evidenceKey: 'k' }
     });
-    ok(/observation could not be persisted/.test(String(outcome.detail)),
-      'and the outcome detail names the evidence failure, not a provider fault');
-    ok(outcome.status === 'transport_refused' && outcome.possiblyDispatched === true,
-      'the dispatch seam settles it as POSSIBLY DISPATCHED — by then the bytes ' +
-      'were already handed to the platform');
-    ok(POSSIBLY_DISPATCHED_OUTCOMES.includes(outcome.status),
-      'which is the outcome class that settles rather than releases');
+
+    const withWriter = await run(succeedingOrder, () => {});
+    const withoutWriter = await run(failingOrder, () => {
+      throw new Error('database unavailable');
+    });
+
+    ok(JSON.stringify(withWriter) === JSON.stringify(withoutWriter),
+      'GOVERNED: a throwing observation writer produces the IDENTICAL provider ' +
+      `result (${JSON.stringify(withoutWriter.text)})`);
+    ok(withoutWriter.text === 'answer' && withoutWriter.identity === 'resp_probe' &&
+       withoutWriter.usage !== undefined,
+    'the provider response is still consumed, parsed and returned in full');
+
+    // NO RETRY, NO SECOND REQUEST. One platform invocation either way.
+    const invocations = list => list.filter(entry => entry === 'https.request:invoked').length;
+    ok(invocations(succeedingOrder) === 1 && invocations(failingOrder) === 1,
+      'exactly ONE platform invocation in both cases — the failed write triggers ' +
+      'no retry and no duplicate provider request');
+    ok(JSON.stringify(succeedingOrder) === JSON.stringify(failingOrder),
+      'and the transport performs the same steps in the same order');
+
+    // THE SEAM ITSELF NEVER THROWS, whatever it is handed.
+    const failed = await observeProviderTransportInvocation(
+      () => { throw new Error('database unavailable'); },
+      { role: 'ungoverned_worker', evidenceKey: 'k',
+        endpointIdentity: GOVERNED_OPENAI_ENDPOINT });
+    ok(failed.recorded === false && failed.result === 'not_persisted',
+      'the seam REPORTS a failed write rather than throwing it');
+    const malformed = await observeProviderTransportInvocation(
+      () => {}, { role: 'not-a-role', evidenceKey: 'k', endpointIdentity: 'e' });
+    ok(malformed.recorded === false && malformed.result === 'payload_refused',
+      'and reports a caller defect the same way — a caller defect must never ' +
+      'become a provider failure either');
+    ok(OBSERVATION_RESULTS.includes(failed.result) &&
+       OBSERVATION_RESULTS.includes(malformed.result),
+    'every result comes from the closed vocabulary');
+
+    // THE FAILURE IS STILL NOTICED, through a bounded diagnostic that cannot
+    // itself break anything.
+    const reported = [];
+    await observeProviderTransportInvocation(
+      () => { throw new Error('database unavailable'); },
+      { role: 'ungoverned_worker', evidenceKey: 'k',
+        endpointIdentity: GOVERNED_OPENAI_ENDPOINT },
+      { reportObservationFailure: entry => reported.push(entry) });
+    ok(reported.length === 1 && reported[0].result === 'not_persisted' &&
+       reported[0].detail === 'database unavailable',
+    'a failed write is reported once through the bounded diagnostic channel');
+    const stillInert = await observeProviderTransportInvocation(
+      () => { throw new Error('database unavailable'); },
+      { role: 'ungoverned_worker', evidenceKey: 'k',
+        endpointIdentity: GOVERNED_OPENAI_ENDPOINT },
+      { reportObservationFailure: () => { throw new Error('the reporter is down too'); } });
+    ok(stillInert.recorded === false && stillInert.result === 'not_persisted',
+      'and a reporter that fails too is swallowed — recording a failure to write ' +
+      'evidence must not become another way for evidence to break a request');
+  }
+
+  // ── AND THE DISPATCH SEAM SEES A RECEIVED RESPONSE EITHER WAY ─────────
+  //
+  // The economic consequence is the whole point: `transport_refused` settles at
+  // the authorized maximum, `received` settles from reported usage. A failed
+  // evidence write must not move a request between those.
+  {
+    const outcomes = [];
+    for (const observe of [() => {}, () => { throw new Error('database unavailable'); }]) {
+      outcomes.push(await dispatchGovernedRequest({
+        startResult: startResultFor(),
+        transport: createOpenAiGovernedTransport({
+          httpsRequest: recordingHttpsRequest([]) }),
+        resolveCredentials: async () => ({ apiKey: 'test-only-not-a-real-key' }),
+        observeTransportInvocation: observe,
+        transportInvocationIdentity: { role: 'governed_leaf_worker', evidenceKey: 'k' }
+      }));
+    }
+    ok(outcomes[0].status === 'received' && outcomes[1].status === 'received',
+      'a failed observation write still yields a RECEIVED governed outcome');
+    ok(JSON.stringify(outcomes[0]) === JSON.stringify(outcomes[1]),
+      'byte-identical outcomes — same text, same usage, same identity, same ' +
+      'possiblyDispatched, so settlement cannot differ');
+    ok(!POSSIBLY_DISPATCHED_OUTCOMES.includes('transport_refused_by_observation'),
+      'and there is no observation-shaped transport outcome at all');
   }
 
   // ── NOTHING IS OBSERVED WHEN THE TRANSPORT IS NEVER REACHED ───────────
@@ -311,7 +380,7 @@ async function main() {
   }
 
   // ── AN ABSENT OBSERVER IS TOLERATED; A BROKEN ONE IS NOT ──────────────
-  ok(await observeProviderTransportInvocation(null, {}) === null,
+  ok((await observeProviderTransportInvocation(null, {})).result === 'no_observer',
     'no observer is a no-op — non-Run callers own no durable evidence');
 
   console.log(`\nprovider transport observation test passed — ${passed} assertions`);

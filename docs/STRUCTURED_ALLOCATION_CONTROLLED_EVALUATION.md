@@ -2189,6 +2189,64 @@ An evidence-write failure is reported as a failure, never swallowed, and is
 classified `possiblyDispatched` — which is the truth, because by then the bytes
 had already been handed to the platform.
 
+### The observation was a control point, and is not any more
+
+The seam shipped with a defect that contradicted its own purpose. It was invoked
+with the request already in flight, and on a failed evidence write it **threw**:
+
+```
+external transport invoked
+  → observation database write fails
+    → provider result never consumed
+      → Run failed, reservation settled at the authorized maximum
+```
+
+That is a control point wearing an observer's name. Traced from source, an
+observation write failure altered all five things it must not:
+
+| | before |
+|---|---|
+| provider response awaited/consumed | never — the throw skipped `await pending` / `return await settled` |
+| error returned to the Run | the evidence error, or `transport_refused` |
+| retry/recovery classification | `possiblyDispatched` → settle rather than release |
+| economic settlement | `authorized_maximum_assumed` instead of usage-derived |
+| terminal Run outcome | a successful model interaction became a failed Run |
+
+**The correction is structural, not a caught exception at each call site.**
+`observeProviderTransportInvocation` now cannot throw — not for a missing
+observer, not for a malformed payload, not for a failed write. It returns a
+closed result (`recorded` / `no_observer` / `payload_refused` / `not_persisted`)
+which every transport owner discards. There is no value it can return that a
+caller branches on.
+
+**Why that is still honest.** The frozen rule already says absence means
+UNKNOWN, because a crash between the platform call and the commit loses the
+fact. A failed write lands in exactly the same epistemic place: transport may
+have been invoked, the record cannot prove it, the projection says UNKNOWN.
+Nothing is claimed that is not known, and — this is the point — no product
+outcome is invented to preserve the appearance of completeness.
+
+The failure is still noticed, through `appendSystemLog` under
+`provider:transport_observation_unrecorded`. That channel is the ordinary
+operational log, not run evidence and not the observation itself, so noticing a
+failed evidence write cannot recurse into writing more evidence. It is invoked
+at most once, never awaited on the provider path, and its own failure is
+swallowed.
+
+**Proved by equivalence, not by inspection.** The same request runs twice — once
+with a working writer, once with one that throws — and the results must be
+identical. At the unit level for the governed owner (byte-identical transport
+result and dispatch outcome, one platform invocation either way), and at the
+real pipeline for both transports: the ungoverned trial still consumes and
+persists the same response body, parses identically, commits the same single
+receipt and completes; the governed arm still admits its plan, creates the same
+three leaf Runs, makes the same four outbound requests and leaves identical
+reservation states. Only the observation itself is missing, and the artifact
+projects transport UNKNOWN — never NOT_INVOKED, a state the projection cannot
+produce at all.
+
+The readiness fact now requires **both** halves and blocks if either is removed.
+
 ### Durable observation inventory — final form
 
 | # | fact | state | canonical authority |

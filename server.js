@@ -907,6 +907,29 @@ function buildRunTransportObservationKey(run, slot) {
   return buildRunEvidenceKey(run, 'provider-transport', slot);
 }
 
+// ── The bounded diagnostic for an observation that did not land ─────────────
+//
+// AN EXISTING CHANNEL, DELIBERATELY. `appendSystemLog` is the system's ordinary
+// operational log: it is not run evidence, not replay, and not the transport
+// observation itself, so noticing a failed evidence write cannot recurse into
+// another attempt to write the same kind of evidence.
+//
+// It is invoked at most once per request, never awaited on the provider path,
+// and its own failure is swallowed by the seam that calls it. The likely cause
+// of a failed observation is an unavailable database, which would take this
+// write down too — and that is acceptable, because the fact is already
+// recoverable in the only way that matters: the projection says UNKNOWN.
+function reportProviderTransportObservationFailure({ result, detail }) {
+  return appendSystemLog(
+    'provider:transport_observation_unrecorded',
+    `A provider transport invocation could not be recorded (${result}). The ` +
+    'provider request was NOT affected; the durable record simply cannot prove ' +
+    'invocation, so it projects as UNKNOWN.',
+    null,
+    { result, detail: detail === undefined ? null : detail }
+  );
+}
+
 // Run-scoped: the ungoverned worker and the governed leaf executor.
 function createRunTransportInvocationObserver(run, slot, executionTurn = null) {
   const evidenceKey = buildRunTransportObservationKey(run, slot);
@@ -926,7 +949,8 @@ function createRunTransportInvocationObserver(run, slot, executionTurn = null) {
         eventType: PROVIDER_TRANSPORT_INVOKED_EVENT,
         payload: sanitizeSnapshotValue(payload)
       });
-    }
+    },
+    reportFailure: reportProviderTransportObservationFailure
   };
 }
 
@@ -944,7 +968,8 @@ function createPlannerTransportInvocationObserver(ticketId, attemptId) {
         eventType: PROVIDER_TRANSPORT_INVOKED_EVENT,
         payload: sanitizeSnapshotValue(payload)
       });
-    }
+    },
+    reportFailure: reportProviderTransportObservationFailure
   };
 }
 
@@ -12106,7 +12131,8 @@ async function callModelProviderWithRunTimeout(run, agent, input, startedAtMs, l
       // Passed through untouched. This seam bounds the request's DURATION; it
       // is not the transport owner and records nothing itself.
       observeTransportInvocation: options.observeTransportInvocation,
-      transportInvocationIdentity: options.transportInvocationIdentity
+      transportInvocationIdentity: options.transportInvocationIdentity,
+      reportObservationFailure: options.reportObservationFailure
     });
   } catch (error) {
     if (error && error.name === 'AbortError') {
@@ -12300,6 +12326,7 @@ async function dispatchGovernedLeafModelRequest({
       : null,
     observeTransportInvocation: governedTransportObserver.observe,
     transportInvocationIdentity: governedTransportObserver.identity,
+    reportObservationFailure: governedTransportObserver.reportFailure,
     // Invoked after admission and after this caller wins dispatch authority,
     // and before any byte leaves. Both the runtime-budget charge and the
     // provider-request replay item live here because both assert "a request is
@@ -12550,7 +12577,8 @@ async function callModelProviderWithRunEvidence(run, agent, input, startedAtMs, 
       callModelProviderWithRunTimeout(run, agent, input, startedAtMs, limits, {
         onRequest: persistRequest,
         observeTransportInvocation: transportObserver.observe,
-        transportInvocationIdentity: transportObserver.identity
+        transportInvocationIdentity: transportObserver.identity,
+        reportObservationFailure: transportObserver.reportFailure
       }));
   } catch (error) {
     if (error.providerRequestPayload && !requestPersisted) {
@@ -16896,7 +16924,8 @@ async function runStructuredAllocationPlanning(ticket) {
         ticket.id, attempt.attemptId);
       return {
         observeTransportInvocation: observer.observe,
-        transportInvocationIdentity: observer.identity
+        transportInvocationIdentity: observer.identity,
+        reportObservationFailure: observer.reportFailure
       };
     })(),
     // The attempt carries the reservation identity, which does not exist until
@@ -17905,21 +17934,23 @@ async function callOpenAI(agent, input, options = {}) {
     // handled so an early failure during the observation write cannot surface
     // as an unhandled rejection.
     pending.catch(() => {});
+    // ITS RESULT IS DELIBERATELY DISCARDED, and the seam cannot throw. The
+    // request is already in flight, so an evidence write that does not land is
+    // a fact about the record, not about this request: `await pending` below
+    // still runs, the provider's answer is still consumed and parsed, and the
+    // Run's outcome is whatever the provider actually produced. A failed write
+    // leaves the durable record unable to prove invocation, which projects as
+    // UNKNOWN — the same place a crash in this gap would leave it.
     await observeProviderTransportInvocation(options.observeTransportInvocation, {
       ...(options.transportInvocationIdentity || {}),
       role: 'ungoverned_worker',
       endpointIdentity: 'https://api.openai.com/v1/responses',
       method: 'POST',
       requestByteCount: Buffer.byteLength(serializedBody, 'utf8')
-    });
+    }, { reportObservationFailure: options.reportObservationFailure });
     response = await pending;
   } catch (fetchError) {
     if (fetchError && fetchError.name === 'AbortError') {
-      throw fetchError;
-    }
-    // An evidence failure is not a provider fault. Reclassifying it as one
-    // would attribute a database outage to the model.
-    if (fetchError && fetchError.providerTransportObservationFailure === true) {
       throw fetchError;
     }
     if (fetchError && fetchError.responseTooLarge === true) throw fetchError;

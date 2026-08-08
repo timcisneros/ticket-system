@@ -64,14 +64,38 @@
 // non-invocation. The economic reservation — not this event — remains the
 // authority on whether a request may be repeated.
 //
-// ── WHAT IT IS NOT ALLOWED TO DO ────────────────────────────────────────────
+// ── IT IS EVIDENCE, NOT EXECUTION AUTHORITY ─────────────────────────────────
 //
-// This is append-only evidence. It changes no retry decision, no timeout, no
-// request body, no credential and no economic authority, and it never converts
-// a transport failure into a success. It is written while the request is
-// already in flight, which is also why a failure to write it is reported as a
-// possibly-dispatched outcome rather than as an undispatched one: by then the
-// bytes have already been handed to the platform.
+// THE INVARIANT: an observation must not change the outcome it observes.
+//
+// This seam therefore CANNOT FAIL A PROVIDER REQUEST. It is invoked with the
+// request already in flight, so anything it did on failure other than nothing
+// would be a decision about a provider interaction taken by an evidence writer:
+//
+//   external transport invoked  →  observation write fails  →  provider result
+//   discarded, Run failed, reservation settled at the authorized maximum
+//
+// That is a control point wearing an observer's name. It is refused here
+// structurally: `observeProviderTransportInvocation` NEVER throws and NEVER
+// returns anything a caller can branch on for control flow. It reports whether
+// the fact was recorded, and that is all.
+//
+// WHY THAT IS STILL HONEST. The frozen rule already says absence means UNKNOWN,
+// because a crash between the platform call and the commit can lose the fact.
+// A failed write lands in exactly the same epistemic place: transport may have
+// been invoked, the durable record cannot prove it, so the projection says
+// UNKNOWN. Nothing is claimed that is not known, and no product outcome is
+// invented to preserve the appearance of completeness.
+//
+// The write failure is worth NOTICING, so an optional reporter may be supplied.
+// It is a bounded diagnostic, invoked at most once, never retried, and its own
+// failure is swallowed — recording a failure to write evidence must not become
+// another way for evidence writing to break a request.
+//
+// Everything else it must not do follows from the same rule: it changes no
+// retry decision, no timeout, no request body, no credential, no economic
+// authority, and it never converts a transport failure into a success or a
+// success into a failure.
 
 const PROVIDER_TRANSPORT_INVOKED_EVENT = 'provider.transport_invoked';
 
@@ -101,7 +125,13 @@ const PROVIDER_TRANSPORT_INVOKED_STRENGTH = Object.freeze({
   recordedRelativeToInvocation: 'after',
   presenceMeans: 'the transport function was invoked',
   absenceMeans: 'UNKNOWN — a crash between the platform call and this commit ' +
-    'loses the fact; absence is never proof of non-invocation'
+    'loses the fact, and so does a failed evidence write, which is deliberately ' +
+    'not escalated into a provider failure; absence is never proof of non-invocation',
+  // Stated as data because it is the property that makes this an observation
+  // rather than a control point.
+  cannotAlterObservedOutcome: 'a failure to record this fact never cancels a ' +
+    'provider result, never triggers a retry, never changes parsing or ' +
+    'settlement, and never turns a success into a failure or the reverse'
 });
 
 // Keys that may never appear in a transport observation payload, checked by
@@ -202,27 +232,81 @@ function buildCheckedPayload({
   return Object.freeze(assertNoCredentialMaterial(payload));
 }
 
-// The seam a transport owner calls. It is deliberately tolerant of an ABSENT
-// observer — the transport owners are also driven by contract tests and by
-// non-Run callers that own no durable evidence — and deliberately intolerant of
-// a failing one: evidence that silently disappears is how absence stops meaning
-// UNKNOWN and starts meaning nothing at all.
-async function observeProviderTransportInvocation(observe, input) {
-  if (typeof observe !== 'function') return null;
-  const payload = buildProviderTransportInvocationPayload(input);
+// The reasons an observation may not have been recorded. Each is a statement
+// about the EVIDENCE, never about the provider request, which by this point has
+// already been handed to the platform and is unaffected either way.
+const OBSERVATION_RESULTS = Object.freeze([
+  'recorded',
+  // No observer was supplied. The transport owners are also driven by contract
+  // tests and by non-Run callers that own no durable evidence.
+  'no_observer',
+  // The payload could not be built — a caller defect, caught here so that a
+  // caller defect cannot become a provider failure. `buildProviderTransport
+  // InvocationPayload` still throws when called directly, which is where that
+  // defect is meant to be found.
+  'payload_refused',
+  // The write itself failed. This is the case the invariant exists for.
+  'not_persisted'
+]);
+
+// ── THE SEAM A TRANSPORT OWNER CALLS ────────────────────────────────────────
+//
+// IT NEVER THROWS. Not for a missing observer, not for a bad payload, not for a
+// failed write. The request it is observing is already in flight, so throwing
+// would hand an evidence writer the power to discard a provider result — which
+// is the one thing an observer must not be able to do.
+//
+// It returns a RESULT, and the result is deliberately not an outcome a caller
+// can act on: every transport owner ignores it. It exists so that a test can
+// assert what happened to the evidence without the product ever branching on it.
+async function observeProviderTransportInvocation(observe, input, {
+  // Optional, bounded, at-most-once diagnostic. Its own failure is swallowed:
+  // recording a failure to write evidence must never become another way for
+  // evidence writing to break a request, and it must never write more evidence.
+  reportObservationFailure = null
+} = {}) {
+  const report = (result, detail) => {
+    if (typeof reportObservationFailure !== 'function') return;
+    try {
+      const reported = reportObservationFailure({ result, detail });
+      // A reporter that returns a promise must not be awaited — awaiting it
+      // would put a second write back on the provider path — and its rejection
+      // must not surface as an unhandled one.
+      if (reported && typeof reported.catch === 'function') reported.catch(() => {});
+    } catch (_) { /* a diagnostic of last resort reports nothing further */ }
+  };
+
+  if (typeof observe !== 'function') {
+    return Object.freeze({ result: 'no_observer', recorded: false, detail: null });
+  }
+
+  let payload;
   try {
-    return await observe(payload);
+    payload = buildProviderTransportInvocationPayload(input);
   } catch (error) {
-    if (error && error.providerTransportObservationFailure === true) throw error;
-    const wrapped = new ProviderTransportObservationError(
-      `the provider transport invocation observation could not be persisted: ${error.message}`,
-      'PROVIDER_TRANSPORT_OBSERVATION_NOT_PERSISTED', { cause: error.message });
-    throw wrapped;
+    report('payload_refused', error.message);
+    return Object.freeze({
+      result: 'payload_refused', recorded: false, detail: error.message
+    });
+  }
+
+  try {
+    await observe(payload);
+    return Object.freeze({ result: 'recorded', recorded: true, detail: null });
+  } catch (error) {
+    // THE INVARIANT, ENFORCED HERE AND NOWHERE ELSE. The write failed, so the
+    // durable record cannot prove invocation and the projection will say
+    // UNKNOWN — which is the truth, and which the frozen rule already permits.
+    // The provider request is untouched.
+    const detail = error && error.message ? error.message : String(error);
+    report('not_persisted', detail);
+    return Object.freeze({ result: 'not_persisted', recorded: false, detail });
   }
 }
 
 module.exports = {
   FORBIDDEN_PAYLOAD_KEYS,
+  OBSERVATION_RESULTS,
   PROVIDER_TRANSPORT_INVOKED_EVENT,
   PROVIDER_TRANSPORT_INVOKED_STRENGTH,
   ProviderTransportObservationError,

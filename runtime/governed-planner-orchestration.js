@@ -110,6 +110,7 @@ async function runGovernedPlannerRequest({
   // call. The planner dispatches against a planning attempt rather than a Run,
   // so the observation this produces binds the Ticket and the reservation.
   observeTransportInvocation = null,
+  reportObservationFailure = null,
   transportInvocationIdentity = null,
   attachGovernedExecution,
   // The hash of the attempt state this start replaces — the `created` state,
@@ -215,6 +216,7 @@ async function runGovernedPlannerRequest({
     timeoutMs,
     maxResponseBytes,
     observeTransportInvocation,
+    reportObservationFailure,
     transportInvocationIdentity: {
       ...(transportInvocationIdentity || {}), role: 'structured_planner'
     }

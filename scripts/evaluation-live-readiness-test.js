@@ -220,6 +220,67 @@ function main() {
      unwired.verdict === 'TRANCHE 6 LIVE-MODEL EVALUATION BLOCKED',
   'unwiring the governed transport owner BLOCKS the transport-invocation fact');
 
+  // ── THE TRANSPORT FACT HAS TWO HALVES, AND BOTH ARE REQUIRED ─────────
+  //
+  // Recording the fact when the write succeeds is only half of "this is an
+  // observation". The other half is that failing to record it cannot change the
+  // outcome being observed — which was once FALSE: an evidence write that threw
+  // discarded the provider result, settled the reservation at its authorized
+  // maximum and failed a Run that had succeeded.
+  //
+  // Each proof of the second half is removed in turn. Removing any one must
+  // block the fact, or the fact is resting on the others.
+  const transportUnitSource = fs.readFileSync(path.join(__dirname,
+    'provider-transport-observation-test.js'), 'utf8');
+  const transportSuiteSource = fs.readFileSync(path.join(__dirname,
+    'provider-transport-invocation-postgres-test.js'), 'utf8');
+  const envelopeSource = fs.readFileSync(path.join(__dirname,
+    'ungoverned-real-envelope-pipeline-postgres-test.js'), 'utf8');
+
+  const inertnessProofs = [
+    ['the unit equivalence proof', {
+      transportUnitSource: transportUnitSource.replace(
+        'GOVERNED: a throwing observation writer produces the IDENTICAL provider ',
+        'REMOVED ') }],
+    ['the seam-does-not-throw proof', {
+      transportUnitSource: transportUnitSource.replace(
+        'the seam REPORTS a failed write rather than throwing it', 'REMOVED') }],
+    ['the no-retry proof', {
+      transportUnitSource: transportUnitSource.replace(
+        'no retry and no duplicate provider request', 'REMOVED') }],
+    ['the governed pipeline proof', {
+      transportSuiteSource: transportSuiteSource.replace(
+        'governed observation fault: NO transport-invocation event is durable',
+        'REMOVED') }],
+    ['the governed settlement proof', {
+      transportSuiteSource: transportSuiteSource.replace(
+        'governed observation fault: identical reservation states', 'REMOVED') }],
+    ['the ungoverned pipeline proof', {
+      envelopeSuiteSource: envelopeSource.replace(
+        'observation fault: the Run still truthfully completes', 'REMOVED') }],
+    ['the UNKNOWN-projection proof', {
+      envelopeSuiteSource: envelopeSource.replace(
+        'the artifact projects transport UNKNOWN', 'REMOVED') }]
+  ];
+  for (const [label, overrides] of inertnessProofs) {
+    const without = auditLiveReadiness({ sources: overrides });
+    ok(without.unresolved.includes('providerTransportInvocationObservationProved') &&
+       without.verdict === 'TRANCHE 6 LIVE-MODEL EVALUATION BLOCKED',
+    `removing ${label} BLOCKS the transport-invocation fact — the seam may not ` +
+    'be called observation-only unless both halves are proved');
+  }
+
+  // AND THE CONTRACT ITSELF MUST CARRY THE INVARIANT AS DATA.
+  const {
+    OBSERVATION_RESULTS, PROVIDER_TRANSPORT_INVOKED_STRENGTH
+  } = require('../runtime/provider-transport-observation');
+  ok(OBSERVATION_RESULTS.includes('not_persisted') &&
+     OBSERVATION_RESULTS.includes('payload_refused'),
+  'a failed write and a refused payload are REPORTED outcomes, not exceptions');
+  ok(/never cancels a provider result/
+    .test(PROVIDER_TRANSPORT_INVOKED_STRENGTH.cannotAlterObservedOutcome),
+  'and the contract states, as data, that it cannot alter the outcome it observes');
+
   // And the projection fact reads whether the READER actually projects it.
   const unprojected = auditLiveReadiness({
     sources: { reportSource: '// the reader never projects the observation' }

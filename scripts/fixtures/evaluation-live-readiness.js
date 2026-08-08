@@ -760,10 +760,64 @@ function auditLiveReadiness({ liveManifest, sources = {} } = {}) {
         // higher-level dispatch site as though it were the wire.
         ownerDerived: built.transportOwner === contract.TRANSPORT_OWNERS.ungoverned_worker,
         refusedCredential,
-        roles: contract.TRANSPORT_INVOCATION_ROLES.length
+        roles: contract.TRANSPORT_INVOCATION_ROLES.length,
+        contract
       };
     } catch (_) { return null; }
   })();
+
+  // ── THE SEAM IS INERT ───────────────────────────────────────────────────
+  //
+  // The second half of the fact, and the half that was once FALSE. An
+  // observation is invoked with the request already in flight, so a seam that
+  // could throw would let an evidence writer discard a provider result, settle
+  // a reservation at its authorized maximum, and fail a Run that succeeded.
+  //
+  // Proved two ways, because neither alone is enough. The contract must CARRY
+  // the closed result vocabulary and the stated invariant — a seam that reports
+  // outcomes instead of throwing them has to have somewhere to report them —
+  // and the registered suite must CALL it with a writer that throws, a payload
+  // it must refuse, and a reporter that throws too. This audit is synchronous,
+  // so the behavioural half is owned by the suite, exactly as the envelope facts
+  // are; removing either half leaves the fact unresolved.
+  const transportContractInert = transportContract !== null && (() => {
+    try {
+      const contract = transportContract.contract;
+      return Array.isArray(contract.OBSERVATION_RESULTS) &&
+        contract.OBSERVATION_RESULTS.includes('not_persisted') &&
+        contract.OBSERVATION_RESULTS.includes('payload_refused') &&
+        typeof contract.PROVIDER_TRANSPORT_INVOKED_STRENGTH
+          .cannotAlterObservedOutcome === 'string' &&
+        /never cancels a provider result/.test(
+          contract.PROVIDER_TRANSPORT_INVOKED_STRENGTH.cannotAlterObservedOutcome);
+    } catch (_) { return false; }
+  })();
+
+  // The unit proof lives with the contract it tests, not with the integration
+  // suite, so it is read from its own file.
+  const transportUnitSuite = 'provider-transport-observation-test.js';
+  const transportUnitSource = sources.transportUnitSource !== undefined
+    ? sources.transportUnitSource : suiteText(transportUnitSuite);
+  const transportSeamProvedInert = transportContractInert &&
+    registeredSuite(transportUnitSuite) &&
+    transportUnitSource.includes(
+      'GOVERNED: a throwing observation writer produces the IDENTICAL provider ') &&
+    transportUnitSource.includes(
+      'the seam REPORTS a failed write rather than throwing it') &&
+    transportUnitSource.includes('no retry and no duplicate provider request');
+
+  // AND AT THE REAL PIPELINE, on both transports. A unit proof of the seam does
+  // not show that production above it survives a failed write.
+  const envelopeProvesInert =
+    envelopeProves('observation fault: the Run still truthfully completes') &&
+    envelopeProves('no retry, no duplicate') &&
+    envelopeProves('the artifact projects transport UNKNOWN');
+  const governedProvesInert = transportRegistered &&
+    transportSuiteSource.includes(
+      'governed observation fault: NO transport-invocation event is durable') &&
+    transportSuiteSource.includes(
+      'governed observation fault: identical reservation states');
+
   const governedTransportSource = sources.governedTransportSource !== undefined
     ? sources.governedTransportSource : (() => {
       try {
@@ -783,10 +837,16 @@ function auditLiveReadiness({ liveManifest, sources = {} } = {}) {
       serverSource.includes('observeProviderTransportInvocation(options.observeTransportInvocation') &&
       transportRegistered &&
       transportSuiteSource.includes('THE OBSERVATION IS RECORDED AFTER THE PLATFORM CALL') &&
-      transportSuiteSource.includes('a reservation count can never stand in for a ')
+      transportSuiteSource.includes('a reservation count can never stand in for a ') &&
+      // AND THE SEAM IS AN OBSERVATION, NOT A CONTROL POINT. Both halves are
+      // required: recording the fact when the write succeeds, and being unable
+      // to change the outcome when it fails.
+      transportSeamProvedInert && envelopeProvesInert && governedProvesInert
       ? 'FROZEN' : 'UNRESOLVED',
     'production crossing into external transport is durably observed at both ' +
-    'transport owners, recorded AFTER the platform call, with absence meaning UNKNOWN',
+    'transport owners, recorded AFTER the platform call, with absence meaning ' +
+    'UNKNOWN — and a failed observation write cannot alter the provider outcome ' +
+    'it observes, on either transport',
     'runtime/provider-transport-observation + provider-transport-invocation-postgres-test');
 
   // ── THE LIVE FAILURE OBSERVATION PROJECTION ─────────────────────────────

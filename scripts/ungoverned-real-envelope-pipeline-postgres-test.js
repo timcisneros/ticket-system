@@ -199,7 +199,7 @@ async function main() {
 
         // Runs one trial on the REAL uncaptured live branch, with the boundary
         // answering in the real provider envelope. Returns the durable facts.
-        const runOne = async ({ label, armId, responseSpec }) => {
+        const runOne = async ({ label, armId, responseSpec, observationFault = null }) => {
           const observation = path.join(root, `boundary-${label}.jsonl`);
           const before = (await store.pool.query(
             `SELECT COALESCE(max(id), 0) AS id FROM ${store.table('tickets')}`)).rows[0].id;
@@ -218,6 +218,9 @@ async function main() {
               liveTransportCapture: null,
               liveProviderBoundaryObservation: observation,
               liveProviderBoundaryResponse: responseSpec,
+              // TEST-ONLY. Arms a failure at the store method that writes the
+              // durable transport observation.
+              liveProviderTransportObservationFault: observationFault,
               liveBudget
             });
           } catch (error) { harnessError = error; }
@@ -430,6 +433,85 @@ async function main() {
             `${armId}: the legacy v1 group path produced per-agent Runs, not one ` +
             `(${trial.facts.runs.length})`);
         }
+
+        // ── AN OBSERVATION THAT DOES NOT PERSIST CHANGES NOTHING ──────────
+        //
+        // THE INVARIANT, PROVED AGAINST THE REAL PIPELINE. The fault is armed at
+        // the store method that writes the transport observation, so everything
+        // above it is production: the seam, callOpenAI, the worker loop, parsing,
+        // the action authority, workspace execution, settlement, terminalization.
+        //
+        // The proof is an EQUIVALENCE against the identical trial run above. If
+        // an evidence write could cancel a provider result — as it once could —
+        // the two would differ in the Run status, in the receipt, or in whether
+        // the response was consumed at all.
+        const faultMarker = path.join(root, 'observation-fault.log');
+        const faulted = await runOne({
+          label: 'A-observation-write-fails', armId: 'A',
+          responseSpec: oneActionSpec, observationFault: faultMarker });
+
+        assertThat(fs.existsSync(faultMarker) &&
+          fs.readFileSync(faultMarker, 'utf8').includes('observation_write_refused'),
+        'observation fault: the durable transport-observation write really did fail');
+        assertThat(eventsOfType(faulted.facts, PROVIDER_TRANSPORT_INVOKED_EVENT)
+          .length === 0,
+        'observation fault: and NO transport-invocation event is durable');
+
+        // Everything the provider interaction produced is unchanged.
+        const faultedBodies = persistedResponseBodies(faulted.facts);
+        assertThat(faultedBodies.length === oneBodies.length &&
+          JSON.stringify(faultedBodies) === JSON.stringify(oneBodies),
+        'observation fault: the provider response was still consumed and persisted, ' +
+        'byte-identically to the run whose observation succeeded');
+        assertThat(eventsOfType(faulted.facts, 'model.plan.parsed').length ===
+          eventsOfType(oneAction.facts, 'model.plan.parsed').length,
+        'observation fault: response parsing is unchanged');
+        const faultedReceipts = faulted.facts.receipts.filter(row =>
+          row.operation === 'createFolder' && row.outcome === 'succeeded');
+        assertThat(faultedReceipts.length === 1 &&
+          faultedReceipts[0].workspace_path === created[0].workspace_path,
+        'observation fault: the same single createFolder receipt was committed');
+        assertThat(faulted.facts.runs.length === oneAction.facts.runs.length &&
+          faulted.facts.runs.every(row => row.status === 'completed'),
+        `observation fault: the Run still truthfully completes ` +
+        `(${faulted.facts.runs.map(row => row.status).join(',')})`);
+        assertThat(faulted.harnessError === null,
+          'observation fault: the trial still produced its artifact');
+
+        // NO RETRY, NO DUPLICATE REQUEST, NO ECONOMIC DIFFERENCE.
+        assertThat(faulted.observations.length === oneAction.observations.length,
+          `observation fault: exactly the same number of provider requests ` +
+          `(${faulted.observations.length}) — no retry, no duplicate`);
+        const reservationsFor = async ticketId => (await store.pool.query(
+          `SELECT count(*)::int AS n FROM ${store.table('economic_request_reservations')}
+            WHERE ticket_id = $1`, [ticketId])).rows[0].n;
+        assertThat(await reservationsFor(faulted.ticketId) ===
+          await reservationsFor(oneAction.ticketId),
+        'observation fault: identical economic reservation count — settlement ' +
+        'cannot have differed');
+
+        // AND THE FAILURE WAS NOTICED, without touching the product path.
+        const noticed = (await store.pool.query(
+          `SELECT count(*)::int AS n FROM ${store.table('diagnostic_logs')}
+            WHERE type = 'provider:transport_observation_unrecorded'`)).rows[0].n;
+        assertThat(noticed >= 1,
+          `observation fault: the unrecorded observation was reported through the ` +
+          `bounded diagnostic channel (${noticed})`);
+
+        // THE PROJECTION SAYS UNKNOWN — never NOT INVOKED.
+        const faultedArtifact = JSON.parse(fs.readFileSync(
+          path.join(root, 'fixture', 'A-observation-write-fails.json'), 'utf8'));
+        const projected = faultedArtifact.ticketReport.durableObservation;
+        assertThat(projected.transport.state === 'UNKNOWN',
+          'observation fault: the artifact projects transport UNKNOWN');
+        assertThat(!/NOT_INVOKED/i.test(JSON.stringify(projected)),
+          'and never NOT_INVOKED — the record cannot prove invocation, which is ' +
+          'a different statement from proving non-invocation');
+        assertThat(projected.response.state === 'PERSISTED' &&
+          projected.operationReceipts.count === 1 &&
+          projected.terminal.statuses.completed === 1,
+        'while the rest of the projection is complete and truthful — one field ' +
+        'degraded, the record intact');
 
         console.log(`\n  (${assertThat.count()} ungoverned real-envelope assertions)`);
         console.log('  EXTERNAL PROVIDER CALLS MADE: 0');

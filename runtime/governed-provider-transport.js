@@ -124,7 +124,8 @@ async function dispatchGovernedRequest({
   // function that performs the platform call, and a fact recorded here would
   // describe reaching a dispatch helper rather than crossing into transport.
   observeTransportInvocation = null,
-  transportInvocationIdentity = null
+  transportInvocationIdentity = null,
+  reportObservationFailure = null
 }) {
   // A caller with bytes of its own has no business here. Refusing the parameter
   // outright is what makes byte substitution unrepresentable rather than merely
@@ -213,6 +214,7 @@ async function dispatchGovernedRequest({
       timeoutMs,
       maxResponseBytes,
       observeTransportInvocation,
+      reportObservationFailure,
       // The canonical governed request identity, taken from the reservation
       // this dispatch is authorized by rather than from the caller.
       transportInvocationIdentity: transportInvocationIdentity === null

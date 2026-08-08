@@ -42,10 +42,13 @@ function createOpenAiGovernedTransport({ httpsRequest = https.request } = {}) {
     // APPEND-ONLY EVIDENCE, supplied per request. It is invoked AFTER the
     // platform call below, never before it, so the fact it records is one that
     // already happened. It cannot influence the endpoint, the bytes, the
-    // credential, the timeout or the outcome: it receives none of them and its
-    // return value is discarded.
+    // credential, the timeout or the outcome: it receives none of them, it
+    // cannot throw, and its return value is discarded.
     observeTransportInvocation = null,
-    transportInvocationIdentity = null
+    transportInvocationIdentity = null,
+    // Bounded diagnostic for an evidence write that did not land. Never awaited
+    // on the provider path and never able to fail it.
+    reportObservationFailure = null
   }) {
     // The endpoint is verified rather than trusted: a captured request whose
     // endpoint is not the official one is refused instead of being sent
@@ -159,16 +162,22 @@ function createOpenAiGovernedTransport({ httpsRequest = https.request } = {}) {
 
     // THE OBSERVATION, WITH THE REQUEST ALREADY IN FLIGHT.
     //
-    // A failure here is reported as a failure — evidence that vanishes quietly
-    // is worse than none — and the caller classifies it as possibly dispatched,
-    // which is the truth: the bytes were handed to the platform before this
-    // line was reached.
+    // ITS RESULT IS DELIBERATELY DISCARDED. The bytes were handed to the
+    // platform above; whether the fact of that reached the database is a
+    // question about evidence, not about this request. The seam cannot throw,
+    // so there is no path by which a failed evidence write discards the
+    // provider's answer, settles the reservation at its authorized maximum, or
+    // turns a successful model interaction into a failed Run.
+    //
+    // If the write failed the durable record simply cannot prove invocation,
+    // and the projection says UNKNOWN — which the frozen rule already permits,
+    // and which is true.
     await observeProviderTransportInvocation(observeTransportInvocation, {
       ...(transportInvocationIdentity || {}),
       endpointIdentity,
       method: 'POST',
       requestByteCount: payload.byteLength
-    });
+    }, { reportObservationFailure });
 
     return await settled;
   };

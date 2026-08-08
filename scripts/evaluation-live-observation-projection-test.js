@@ -89,6 +89,28 @@ function main() {
   ok(/UNKNOWN/.test(noAnswer.transport.absenceMeans),
     'and the field carries its own rule: ABSENCE of the observation means UNKNOWN');
 
+  // ── ABSENCE IS UNKNOWN, NEVER NOT_INVOKED ─────────────────────────────
+  //
+  // There is no state the projection can reach that asserts a provider was NOT
+  // called. It cannot know that, and a failed evidence write — which the seam
+  // deliberately does not escalate into a provider failure — lands in exactly
+  // the same place a crash would.
+  const noObservation = projectLiveDurableObservation({
+    events: [REQUEST, RESPONSE({ outcome: 'succeeded', requestId: 'req_x' }),
+      { type: 'model.plan.parsed', payload: { actionCount: 1 } }],
+    receipts: [{ operation: 'createFolder', outcome: 'succeeded', receipt: {} }]
+  });
+  ok(noObservation.transport.state === UNKNOWN,
+    'a Run that answered, parsed and committed work — with NO transport ' +
+    'observation — still reports transport UNKNOWN');
+  ok(!/NOT_INVOKED|not_invoked|NOT INVOKED/.test(JSON.stringify(noObservation)),
+    'and the projection contains no NOT_INVOKED state anywhere — it is not a ' +
+    'value this projection can ever produce');
+  ok(noObservation.response.state === 'PERSISTED' &&
+     noObservation.operationReceipts.count === 1,
+  'while everything actually known about that Run is still reported in full — ' +
+  'a missing observation degrades one field, not the record');
+
   // 4. Zero receipts does NOT mean no provider was called, and a failed Run
   //    does NOT mean the model response was malformed.
   const failedNoReceipts = projectLiveDurableObservation({

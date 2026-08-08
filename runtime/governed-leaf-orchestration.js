@@ -205,6 +205,7 @@ async function runGovernedLeafRequest({
   // runs before any byte leaves and proves a request was AUTHORIZED; this one
   // runs with the request already in flight and proves transport was ENTERED.
   observeTransportInvocation = null,
+  reportObservationFailure = null,
   // The canonical evidence identity of THIS request, supplied by the caller
   // that owns the Run's evidence keys. The role is set here rather than by the
   // caller, so a leaf dispatch cannot be recorded under another role's name.
@@ -416,6 +417,7 @@ async function runGovernedLeafRequest({
     timeoutMs,
     maxResponseBytes,
     observeTransportInvocation,
+    reportObservationFailure,
     transportInvocationIdentity: {
       ...(transportInvocationIdentity || {}), role: 'governed_leaf_worker'
     }

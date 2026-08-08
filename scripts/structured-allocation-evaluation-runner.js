@@ -601,7 +601,11 @@ async function runTrial({
   liveProviderBoundaryObservation = null,
   // TEST-ONLY. A file holding the worker JSON the boundary should answer with,
   // wrapped in the ACTUAL provider envelope.
-  liveProviderBoundaryResponse = null
+  liveProviderBoundaryResponse = null,
+  // TEST-ONLY. Arms a fault at the store method that writes the durable
+  // transport observation, so a suite can prove that an observation which does
+  // not persist changes nothing about the provider request it observes.
+  liveProviderTransportObservationFault = null
 }) {
   assertMode(mode);
   // ONE RESOLUTION POINT. The variant is resolved into a complete scenario here
@@ -940,6 +944,11 @@ async function runTrial({
         } : {}),
         ...(liveProviderBoundaryResponse ? {
           LIVE_PROVIDER_BOUNDARY_RESPONSE: liveProviderBoundaryResponse
+        } : {}),
+        ...(liveProviderTransportObservationFault ? {
+          LIVE_PROVIDER_TRANSPORT_OBSERVATION_FAULT: '1',
+          LIVE_PROVIDER_TRANSPORT_OBSERVATION_FAULT_MARKER:
+            liveProviderTransportObservationFault
         } : {})
       } : {}),
       ...(isLive ? {} : { EVALUATION_OBSERVATION_DESCRIPTOR: JSON.stringify({

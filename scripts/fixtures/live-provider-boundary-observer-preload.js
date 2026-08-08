@@ -113,6 +113,12 @@ function realShapedResponse(body) {
     usage: { input_tokens: 1737, output_tokens: 77, total_tokens: 1814 }
   });
 }
+// TEST-ONLY: a failure at the exact point the durable transport observation is
+// written, so a suite can prove that an observation which does not land changes
+// nothing about the provider request it was observing. One owner, shared with
+// the final-hop capture preload.
+require('./transport-observation-fault').armTransportObservationFaultIfRequested();
+
 const TRIAL_ID = process.env.LIVE_PROVIDER_BOUNDARY_TRIAL_ID || null;
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0']);
 

@@ -224,27 +224,31 @@ async function durablePart(assertThat, { store, workspaceRoot, startServer }) {
   };
 
   const ticketsByArm = {};
-  for (const armId of ['A', 'B']) {
+  const runArm = async (label, armId, { observationFault = null } = {}) => {
     const before = Number((await store.pool.query(
       `SELECT COALESCE(max(id), 0) AS id FROM ${store.table('tickets')}`)).rows[0].id);
     try {
       await runTrial({
         store, startServer, workspaceRoot,
         scenario: getScenario('family-1-simple'), arm: ARMS[armId],
-        repetition: 1, seed: `transport-observation-${armId}`,
-        outputPath: path.join(root, 'fixture', `${armId}.json`),
+        repetition: 1, seed: `transport-observation-${label}`,
+        outputPath: path.join(root, 'fixture', `${label}.json`),
         commit: 'transport-observation-proof', smokeRoot: root,
-        namespaceRoot: path.join(root, `ns-${armId}`),
+        namespaceRoot: path.join(root, `ns-${label}`),
         mode: 'live',
         liveRequestControls: CONTROLS,
-        liveTransportCapture: path.join(root, `capture-${armId}.jsonl`),
+        liveTransportCapture: path.join(root, `capture-${label}.jsonl`),
+        liveProviderTransportObservationFault: observationFault,
         liveBudget
       });
     } catch (_) { /* the product outcome is not what this suite measures */ }
-    ticketsByArm[armId] = (await store.pool.query(
+    ticketsByArm[label] = (await store.pool.query(
       `SELECT id FROM ${store.table('tickets')} WHERE id > $1 ORDER BY id`,
       [before])).rows.map(row => Number(row.id));
-  }
+    return ticketsByArm[label];
+  };
+
+  for (const armId of ['A', 'B']) await runArm(armId, armId);
 
   const allTicketIds = [...ticketsByArm.A, ...ticketsByArm.B];
   const events = (await store.pool.query(
@@ -351,6 +355,68 @@ async function durablePart(assertThat, { store, workspaceRoot, startServer }) {
   assertThat(invocations.every(event =>
     event.payload.recordedRelativeToInvocation === 'after'),
   'each carries its own strength — recorded AFTER the platform call');
+
+  // ── AN OBSERVATION THAT DOES NOT PERSIST CHANGES NOTHING ────────────────
+  //
+  // THE GOVERNED TRANSPORT, UNDER A FAILED EVIDENCE WRITE. Arm B is the only
+  // configuration that drives `https.request` through a real planner, a real
+  // admitted plan and real governed leaf Runs, so it is where the governed half
+  // of the invariant has to be proved.
+  //
+  // The fault is armed at the store method that writes the observation, so the
+  // seam, the transport owner, the dispatch contract and both orchestrations all
+  // run as production. If a failed write could still cancel a provider result,
+  // arm B would lose its plan, its leaf Runs, or its settlement.
+  await runArm('B-observation-write-fails', 'B',
+    { observationFault: path.join(root, 'governed-observation-fault.log') });
+
+  const faultedTickets = ticketsByArm['B-observation-write-fails'];
+  const faultedEvents = (await store.pool.query(
+    `SELECT type, run_id, payload FROM ${store.table('events')}
+      WHERE ticket_id = ANY($1::bigint[]) ORDER BY seq`, [faultedTickets])).rows;
+  const countOf = (rows, type) => rows.filter(event => event.type === type).length;
+
+  assertThat(fs.existsSync(path.join(root, 'governed-observation-fault.log')),
+    'governed observation fault: the durable observation write really did fail');
+  assertThat(countOf(faultedEvents, PROVIDER_TRANSPORT_INVOKED_EVENT) === 0,
+    'governed observation fault: NO transport-invocation event is durable');
+
+  // The governed chain still happened, in full.
+  const baseline = events.filter(event => ticketsByArm.B.includes(Number(event.ticket_id)));
+  for (const type of ['provider.request.persisted', 'provider.response.persisted',
+    'ticket.economic_request_started']) {
+    assertThat(countOf(faultedEvents, type) === countOf(baseline, type) &&
+      countOf(faultedEvents, type) > 0,
+    `governed observation fault: ${type} count is unchanged ` +
+    `(${countOf(faultedEvents, type)})`);
+  }
+  const leafRuns = async ticketIds => Number((await store.pool.query(
+    `SELECT count(*)::int AS n FROM ${store.table('runs')}
+      WHERE ticket_id = ANY($1::bigint[]) AND body ? 'leafRunBinding'`,
+    [ticketIds])).rows[0].n);
+  assertThat(await leafRuns(faultedTickets) === await leafRuns(ticketsByArm.B) &&
+    await leafRuns(faultedTickets) > 0,
+  `governed observation fault: the planner's answer still produced the same ` +
+  `number of real leaf Runs (${await leafRuns(faultedTickets)})`);
+
+  // NO RETRY, NO DUPLICATE REQUEST, NO ECONOMIC DIFFERENCE.
+  const capturedFor = label => {
+    const file = path.join(root, `capture-${label}.jsonl`);
+    return fs.existsSync(file)
+      ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).length : 0;
+  };
+  assertThat(capturedFor('B-observation-write-fails') === capturedFor('B'),
+    `governed observation fault: exactly the same number of outbound provider ` +
+    `requests (${capturedFor('B-observation-write-fails')}) — no retry, no duplicate`);
+  const settlementFor = async ticketIds => (await store.pool.query(
+    `SELECT state, count(*)::int AS n FROM ${store.table('economic_request_reservations')}
+      WHERE ticket_id = ANY($1::bigint[]) GROUP BY state ORDER BY state`,
+    [ticketIds])).rows;
+  assertThat(JSON.stringify(await settlementFor(faultedTickets)) ===
+    JSON.stringify(await settlementFor(ticketsByArm.B)),
+  'governed observation fault: identical reservation states — settlement is ' +
+  'unchanged, so nothing was closed at the authorized maximum that would not ' +
+  'have been');
 
   console.log('  observations by role:');
   for (const role of TRANSPORT_INVOCATION_ROLES) {

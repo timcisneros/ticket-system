@@ -36,6 +36,11 @@ const fs = require('node:fs');
 const http = require('node:http');
 const https = require('node:https');
 
+// TEST-ONLY: the same transport-observation fault the boundary preload arms, so
+// the GOVERNED transports — which only this preload exercises end to end — can
+// be proved under a failed evidence write too.
+require('./transport-observation-fault').armTransportObservationFaultIfRequested();
+
 const CAPTURE_PATH = process.env.LIVE_TRANSPORT_CAPTURE || null;
 // Attribution. A recorded request that names no trial cannot be reconciled
 // against the ledger entry that authorized it.
