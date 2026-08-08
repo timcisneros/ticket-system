@@ -2469,3 +2469,48 @@ they must drive is identified — the form POST to `/tickets` accepting
 `objective`, `assignmentTargetType`, `assignmentTargetId`, `assignmentMode`,
 `declaredWork` and `ownedOutputPaths`, which is the single route through which
 all five paths are reachable without bypassing any branch condition.
+
+## 14. Authorized real-live attempt: permanently aborted (2026-08-08)
+
+The first authorized real-live attempt against final executable source
+`e5dcbcad89728f5281efda0851ccfd29a9c7fdfa` and canonical live-manifest hash
+`792d228f939d597891da25bd4d779d76999940c2040e7e846afaf81fc35530b6`
+is permanently:
+
+> **ABORTED — NOT DECISION EVIDENCE**
+
+Its run-header hash is
+`986249cebdf2239c93b37ed7340aedbebbb85df5e134f4f848264dd5c1916359`.
+After 86 accepted artifacts, trial `03-007-family-7_7A-B` was the 87th trial
+started. The product reached its terminal-or-stable boundary, but the runner's
+two nominally read-only report collections differed. The zero-drift guard
+refused to write a trial artifact, and the executor refused to classify that
+no-artifact outcome as product data or an infrastructure exclusion. Because the
+defect was discovered after real provider dispatch, the frozen source contract
+forbids patch-and-resume.
+
+Canonical corpus integrity refused the prefix: 120 assigned, 86 accounted for,
+86 artifacts, 0 exclusions, and 34 missing slots. The scorer was not invoked.
+There is no complete live corpus hash; no A/A2a/A2b/B/C metric result; no live
+hard-disqualifier result; and no final RETAIN/REVISE/STOP decision. The partial
+prefix must not be scored, imported, pooled with fixture evidence, or resumed.
+The immutable fixture conclusion remains **FIXTURE EVIDENCE SUPPORTS STOP**.
+
+The ledger committed 13,197,134 micro-USD of maximum liability, below the
+20,000,000 micro-USD ceiling by 6,802,866 micro-USD. Actual matrix provider
+spend is **UNKNOWN**; normalized scoring cost and durable governed settlement
+are not actual-spend measurements. The separate authenticated preflight cost 9
+micro-USD.
+
+The evidence is preserved read-only at
+`/tmp/ticket-system-structured-evaluation-live/real-e5dcbca-8csZai5w`.
+The 91-file aborted bundle hash is
+`741f11356b8e2b490af3398e97e232f4bbc8df921a213b4296d104da9779a74d`;
+the abort-record hash is
+`cabd732b3227219cd5e61eb9bb09aed57e0e3d33a6786bac9bac8cb5daeae056`.
+The detailed open defect and required next authority are recorded in
+`docs/ARCHITECTURAL_DECISIONS_PENDING.md`.
+
+**Tranche 6 live-model evaluation status: BLOCKED.** A separately authorized
+diagnosis and new exact-source live run are required. This aborted run can never
+become decision evidence.

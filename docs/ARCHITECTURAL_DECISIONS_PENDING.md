@@ -1,3 +1,59 @@
+## TRANCHE 6 REAL-LIVE CORPUS ABORTED BY REPORT ZERO-DRIFT VIOLATION (2026-08-08)
+
+**Status: OPEN — exact causal owner not yet diagnosed. The run is permanently
+`ABORTED — NOT DECISION EVIDENCE`; do not resume, score, or import it.**
+
+The newly authorized real-live evaluation started from exact source
+`e5dcbcad89728f5281efda0851ccfd29a9c7fdfa`, live-manifest hash
+`792d228f939d597891da25bd4d779d76999940c2040e7e846afaf81fc35530b6`,
+and immutable run-header hash
+`986249cebdf2239c93b37ed7340aedbebbb85df5e134f4f848264dd5c1916359`.
+The minimum authenticated preflight succeeded against the exact pinned model and
+frozen Responses controls. It used 17 input and 9 output tokens and cost 9
+micro-USD; it is recorded separately from experiment evidence.
+
+After 86 accepted live artifacts, the 87th started trial,
+`03-007-family-7_7A-B`, reached the product-terminal-or-stable boundary but
+produced no artifact. Two nominally read-only report collections were unequal,
+so the zero-drift guard in
+`scripts/structured-allocation-evaluation-runner.js` refused the trial with
+`the read-only report changed durable state`. The live executor then correctly
+refused a no-artifact outcome that was not classified as an infrastructure
+exclusion. This is a harness/executor integrity defect discovered after provider
+dispatch, so the source-freeze contract required an immediate permanent abort.
+No source correction and no resume occurred.
+
+The canonical corpus audit reports `LIVE CORPUS INCONSISTENT`: 120 assigned, 86
+accounted for, 86 artifacts, 0 exclusions, and 34
+`SLOT_NOT_ACCOUNTED_FOR` failures. The scorer door returns
+`LIVE_CORPUS_INCONSISTENT`; no five-metric arm scores, hard-disqualifier result,
+live corpus hash, or final RETAIN/REVISE/STOP decision exists.
+
+The append-only economic ledger contains 87 committed reservations totaling
+13,197,134 micro-USD, leaving 6,802,866 micro-USD below the absolute 20,000,000
+micro-USD ceiling. Actual matrix provider spend is **UNKNOWN** because the
+failed trial retained no token usage and the accepted artifacts mark provider
+requests unmetered. The 629,111 micro-USD normalized cost and the 67,638
+micro-USD governed durable-settlement lower bound are not substitutes for
+actual spend.
+
+Preserved evidence root:
+`/tmp/ticket-system-structured-evaluation-live/real-e5dcbca-8csZai5w`.
+Its read-only aborted-bundle manifest covers 91 files and has bundle hash
+`741f11356b8e2b490af3398e97e232f4bbc8df921a213b4296d104da9779a74d`.
+The abort record hash is
+`cabd732b3227219cd5e61eb9bb09aed57e0e3d33a6786bac9bac8cb5daeae056`.
+
+The unresolved question is why the second report collection changed durable
+state after the canonical stable/quiescent boundary. That owner must be
+diagnosed and corrected under a separate authorization, followed by a new
+exact-source proof and an entirely new live run. The 86-artifact prefix must
+never be used as product evidence. The earlier historical aborted run
+`b2b59ad2b9d9fafc8ac860838b0530cb8f90bc02907b36a3a230b560bece2eef`
+is unchanged and remains independently unscorable.
+
+---
+
 ## LOAD-SENSITIVE CONCURRENCY LIVENESS OBSERVATION (2026-08-07)
 
 **Status: OPEN — not attributed to the Tranche-6 live-evaluation diff, and not
