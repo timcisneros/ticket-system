@@ -65,7 +65,7 @@ function number(value, digits = 0) {
 
 function renderLiveMarkdown(report) {
   const lines = [];
-  lines.push('# Structured Allocation — REAL Live Evaluation, Protocol v1');
+  lines.push(`# Structured Allocation — REAL Live Evaluation, Protocol v${report.protocolVersion}`);
   lines.push('');
   lines.push('**REAL LIVE PRODUCT EVIDENCE.** Fixture and live denominators were');
   lines.push('scored separately and were never pooled.');
@@ -73,7 +73,7 @@ function renderLiveMarkdown(report) {
   lines.push('| | |');
   lines.push('|---|---|');
   lines.push(`| Trial source | \`${report.trialSourceCommit}\` |`);
-  lines.push(`| Live manifest | \`${report.liveManifestHash}\` |`);
+  lines.push(`| Live manifest | v${report.liveManifestVersion} \`${report.liveManifestHash}\` |`);
   lines.push(`| Real run header | \`${report.realRunHeaderHash}\` |`);
   lines.push(`| Live corpus | \`${report.liveCorpusHash}\` |`);
   lines.push(`| Credential authority | configured agent ${report.credentialAuthority.configuredAgentId}, revision ${report.credentialAuthority.configuredAgentRevision}, ${report.credentialAuthority.provider} |`);
@@ -178,7 +178,7 @@ function interruptionResumeHistory(journal) {
 
 function buildLiveReportFromRoot({ outputRoot, fixtureReportPath,
   manifestPath = path.join(__dirname, '..', 'config',
-    'structured-allocation-evaluation-live-v1.json'),
+    'structured-allocation-evaluation-live-v2.json'),
   protocolPath = path.join(__dirname, '..', 'config',
     'structured-allocation-evaluation-v1.json') }) {
   const manifest = readJson(manifestPath);
@@ -231,11 +231,11 @@ function main() {
   const jsonBytes = `${JSON.stringify(built.report, null, 2)}\n`;
   const markdownBytes = built.markdown;
   const jsonPath = path.join(options.outputRoot,
-    'structured-allocation-real-live-report-v1.json');
+    'structured-allocation-real-live-report-v2.json');
   const markdownPath = path.join(options.outputRoot,
-    'structured-allocation-real-live-report-v1.md');
+    'structured-allocation-real-live-report-v2.md');
   const hashesPath = path.join(options.outputRoot,
-    'structured-allocation-real-live-report-hashes-v1.json');
+    'structured-allocation-real-live-report-hashes-v2.json');
   writeImmutable(jsonPath, jsonBytes);
   writeImmutable(markdownPath, markdownBytes);
   const hashes = {

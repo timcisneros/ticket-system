@@ -73,6 +73,7 @@ const {
 const { buildPricingCatalog } = require('../runtime/model-pricing-catalog');
 
 const SUPPORTED_MODES = Object.freeze(['fixture', 'live']);
+const NO_STAGED_RESPONSES = Object.freeze([]);
 const QUIESCENCE_TIMEOUT_MS = 180_000;
 
 class EvaluationRunnerError extends Error {
@@ -317,6 +318,19 @@ function sameParentPolicyRevisionOf(plannerReference, workerReferences) {
     distinct.length === 1 &&
     distinct[0] !== null &&
     distinct[0] === canonical(plannerReference));
+}
+
+function stageResponsesForMode(mode, scenario, seed, options = {}) {
+  if (mode === 'live') return NO_STAGED_RESPONSES;
+  return materializeResponses(scenario, seed, options);
+}
+
+function fixtureResponseHashForMode(mode, staged) {
+  return crypto.createHash('sha256')
+    .update(mode === 'live'
+      ? 'REAL_LIVE_NO_FIXTURE_RESPONSE_STAGED'
+      : JSON.stringify(staged))
+    .digest('hex');
 }
 
 // ── Durable path proof ──────────────────────────────────────────────────────
@@ -783,7 +797,12 @@ async function runTrial({
   // them, and the planner is not a candidate for its own plan.
   // EVERY group member is a captured candidate, planner included, and lowering
   // refuses a proposal that omits one.
-  const staged = materializeResponses(scenario, seed, {
+  // REAL live mode has no fixture response table. In addition to avoiding a
+  // needless materialization, this keeps the comparison envelope truthful:
+  // live repetitions bind the stable fact "no staged response" rather than a
+  // hash of temporary candidate-agent ids that can never repeat. Fixture and
+  // captured modes retain the strict sentinel/staging path unchanged.
+  const staged = stageResponsesForMode(mode, scenario, seed, {
     candidateAgentIds: [workerOne.id, workerTwo.id,
       ...(planner ? [planner.id] : [])]
   });
@@ -871,8 +890,7 @@ async function runTrial({
     allowParallelRuns: false,
     toolCatalogHash: 'default',
     scenarioSeed: seed,
-    fixtureResponseHash: crypto.createHash('sha256')
-      .update(JSON.stringify(staged)).digest('hex'),
+    fixtureResponseHash: fixtureResponseHashForMode(mode, staged),
     verificationPolicy: 'when_declared'
   });
 
@@ -1242,6 +1260,8 @@ async function runTrial({
 
 module.exports = {
   sameParentPolicyRevisionOf,
+  stageResponsesForMode,
+  fixtureResponseHashForMode,
   trialIdFor,
   SUPPORTED_MODES,
   QUIESCENCE_TIMEOUT_MS,

@@ -2575,3 +2575,50 @@ must be corrected under separate authorization, then re-proved against a new
 exact source and exercised only through an entirely new live authorization.
 This completed-but-aborted corpus may never be resumed, adapted, scored, or
 imported as decision evidence.
+
+## Versioned live-v2 decision topology (2026-08-09)
+
+Live-v1 is permanently preserved at
+`config/structured-allocation-evaluation-live-v1.json`, canonical manifest hash
+`792d228f939d597891da25bd4d779d76999940c2040e7e846afaf81fc35530b6`.
+It remains the only manifest authority for historical headers that name it.
+Those aborted runs remain `ABORTED — NOT DECISION EVIDENCE`; v2 cannot import or
+rescore them.
+
+The defect was source-proven before v2 was authored. The frozen RETAIN contract
+requires families `[2, 3, 5, 6]`; v1 contained `[3, 4, 7, 8, 9]`. Families 2,
+5 and 6 could never be evaluated, and family 7 had B/C without the A baseline
+required by the family-level false-positive rule. The 40-cell count was the
+result of copying fixture cells, not a separate decision threshold. Fixture
+membership had been chosen to close execution prerequisites and never consulted
+`gainRequiredOnFamilies`.
+
+V2 derives its 40 cells without outcome evidence:
+
+| Family | Scenario cells | Arms per cell | Live cells |
+|---|---:|---|---:|
+| 2 cleanly separable | 2 | A, A2a, A2b, B, C | 10 |
+| 3 sibling dependency | 2 | A, A2a, A2b, B, C | 10 |
+| 5 ownership known | 2 | A, A2a, A2b, B, C | 10 |
+| 6 ownership unknown | 2 | A, A2a, A2b, B, C | 10 |
+
+Every cell is matched across all five arms. Two cells per family are necessary,
+not padding: repetition agreement makes one A cell either 0% or 100%; the former
+cannot supply cost per truthful completion and the latter cannot leave room for
+a positive structured gain. Controlled provider-free assignments over the
+actual manifest slots mechanically reach RETAIN, REVISE and STOP, both before
+and after fixture/live evidence combination.
+
+Specialized family-7 churn and family-8 failure-boundary cases stay in the
+readiness surface. Live hard-disqualifier evidence remains evaluable from v2:
+every structured family has A, every artifact carries authority/cost/churn
+evidence, and every exact cell repeats one stable comparison envelope three
+times. Provider seed remains `none`; `stochasticIdentity -> trial.seed` is only
+the legacy scorer identity alias.
+
+The v2 manifest hash is
+`634963b5581a57449e0c45ffb7973f86a3ff0b6bd6b708d4fc06b9969c8c76b6`.
+Its canonical maximum is 17,160,360 micro-USD (840 attempts x 20,429), within the
+unchanged 20,000,000 micro-USD ceiling. Fixture identities, fixture result,
+decision thresholds, metrics, provider/model/request controls and v1 bytes are
+unchanged.

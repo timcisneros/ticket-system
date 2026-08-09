@@ -1116,6 +1116,23 @@ const ok = (condition, message) => {
   ok(!JSON.stringify(family1).includes('"A2a"') || family1.allowedArms.includes('A2a'),
     '12 catalog: arm identifiers appear only in allowedArms, never in response selection');
 
+  const {
+    stageResponsesForMode, fixtureResponseHashForMode
+  } = require('./structured-allocation-evaluation-runner');
+  const fixtureStaged = stageResponsesForMode('fixture', family1, 'seed-x',
+    { candidateAgentIds: [11, 22] });
+  const otherTemporaryIds = materializeResponses(family1, 'seed-x',
+    { candidateAgentIds: [33, 44] });
+  ok(fixtureStaged.length > 0 &&
+    stageResponsesForMode('live', family1, 'seed-x',
+      { candidateAgentIds: [11, 22] }).length === 0,
+  '12 live staging: real live mode stages no fixture responses');
+  ok(fixtureResponseHashForMode('live', fixtureStaged) ===
+     fixtureResponseHashForMode('live', otherTemporaryIds) &&
+     fixtureResponseHashForMode('fixture', fixtureStaged) !==
+       fixtureResponseHashForMode('fixture', otherTemporaryIds),
+  '12 live staging: live comparison identity is stable across temporary agents');
+
   // Oracle contracts build from raw declarations.
   const rawOracle = buildOracleFor(family1);
   ok(rawOracle.expectations.length === 2 && /^[0-9a-f]{64}$/.test(rawOracle.expectationHash),

@@ -18,11 +18,18 @@ const {
   REAL_LIVE_ARTIFACT_LABEL, SYNTHETIC_ACCEPTANCE_LABEL,
   abortedRunDetail, isAbortedRunHeader
 } = require('./evaluation-live-corpus-integrity');
-const { LIVE_MANIFEST_VERSION } = require('./evaluation-live-manifest');
+const { LIVE_MANIFEST_VERSION: LIVE_MANIFEST_V1 } =
+  require('./evaluation-live-manifest');
+const { LIVE_MANIFEST_VERSION: LIVE_MANIFEST_V2 } =
+  require('./evaluation-live-manifest-v2');
+const { validateLiveV2Topology } = require('./evaluation-live-v2-matrix');
 
 const LIVE_SCORING_PROJECTION_VERSION = 1;
 const LIVE_REPORT_VERSION = 1;
 const EXPECTED_ARMS = Object.freeze(['A', 'A2a', 'A2b', 'B', 'C']);
+const SUPPORTED_LIVE_MANIFEST_VERSIONS = Object.freeze([
+  LIVE_MANIFEST_V1, LIVE_MANIFEST_V2
+]);
 
 class LiveScoringError extends Error {
   constructor(message, detail = {}) {
@@ -61,7 +68,7 @@ function projectLiveManifestToScoring({ manifest, protocol }) {
       'the live scoring projection accepts only a canonical slots-based live manifest',
       { code: 'LIVE_SCORING_LIVE_MANIFEST_REQUIRED' });
   }
-  if (manifest.liveManifestVersion !== LIVE_MANIFEST_VERSION) {
+  if (!SUPPORTED_LIVE_MANIFEST_VERSIONS.includes(manifest.liveManifestVersion)) {
     throw new LiveScoringError(
       `unsupported live manifest version ${String(manifest.liveManifestVersion)}`,
       { code: 'LIVE_SCORING_MANIFEST_VERSION_UNSUPPORTED' });
@@ -94,6 +101,15 @@ function projectLiveManifestToScoring({ manifest, protocol }) {
     throw new LiveScoringError(
       'the live matrix is not the frozen 40-cell x 3-repetition x 120-slot authority',
       { code: 'LIVE_SCORING_MATRIX_SHAPE_MISMATCH' });
+  }
+  if (manifest.liveManifestVersion === LIVE_MANIFEST_V2) {
+    try {
+      validateLiveV2Topology(manifest.cells);
+    } catch (error) {
+      throw new LiveScoringError(
+        `live-v2 decision topology is invalid: ${error.message}`,
+        { code: 'LIVE_SCORING_DECISION_TOPOLOGY_INVALID' });
+    }
   }
 
   const cells = new Map();
@@ -176,7 +192,7 @@ function projectLiveManifestToScoring({ manifest, protocol }) {
   }
   return Object.freeze({
     projectionVersion: LIVE_SCORING_PROJECTION_VERSION,
-    sourceShape: 'canonical-live-manifest-v1/slots',
+    sourceShape: `canonical-live-manifest-v${manifest.liveManifestVersion}/slots`,
     protocolId: manifest.protocolId,
     protocolVersion: manifest.protocolVersion,
     mode: 'live',
@@ -575,6 +591,7 @@ function scoreLiveCorpus({ manifest, protocol, header, artifacts, exclusions = [
   }
   const report = {
     reportVersion: LIVE_REPORT_VERSION,
+    liveManifestVersion: manifest.liveManifestVersion,
     scoringProjectionVersion: LIVE_SCORING_PROJECTION_VERSION,
     scorerVersion: SCORER_VERSION,
     evidenceClass: 'REAL LIVE PRODUCT EVIDENCE',

@@ -1,5 +1,24 @@
 # Decision Log
 
+## Version live evaluation topology; preserve live-v1 (2026-08-09)
+
+The frozen RETAIN rule requires families 2, 3, 5 and 6, while historical
+live-v1 contains families 3, 4, 7, 8 and 9. RETAIN was therefore unreachable,
+and family 7's B/C rows had no A baseline for the frozen family-level
+false-positive comparison. The cause was the v1 rule that copied fixture cells:
+fixture membership closed execution prerequisites but never consulted decision
+evaluability.
+
+Live-v1 remains immutable historical authority (hash
+`792d228f939d597891da25bd4d779d76999940c2040e7e846afaf81fc35530b6`).
+Live-v2 uses two outcome-independent scenarios in each required family, every
+scenario matched on A/A2a/A2b/B/C: 40 cells x 3 = 120. Two cells per family are
+necessary for gain and cost-per-truthful-completion to be jointly reachable
+under repetition agreement. Its canonical hash is
+`634963b5581a57449e0c45ffb7973f86a3ff0b6bd6b708d4fc06b9969c8c76b6` and the
+matrix maximum is 17,160,360 micro-USD under the unchanged $20 ceiling. No
+aborted-corpus outcome informed the selection.
+
 ## Frozen-matrix executor built; live run had halted at the gate (2026-08-07)
 
 The authorized 120-slot live run passed every opening and preflight check and

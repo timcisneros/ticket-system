@@ -15,13 +15,18 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const live = require('../config/structured-allocation-evaluation-live-v1.json');
+const liveV1 = require('../config/structured-allocation-evaluation-live-v1.json');
+const live = require('../config/structured-allocation-evaluation-live-v2.json');
 const fixture = require('../config/structured-allocation-evaluation-scored-v1.json');
 const protocol = require('../config/structured-allocation-evaluation-v1.json');
 const {
   APPROVED, LiveManifestError, assertWithinCap, buildLiveManifest, computeLiability,
   deriveLiveCells
 } = require('./fixtures/evaluation-live-manifest');
+const { buildLiveManifestV2 } = require('./fixtures/evaluation-live-manifest-v2');
+const {
+  REQUIRED_FAMILIES, validateLiveV2Topology
+} = require('./fixtures/evaluation-live-v2-matrix');
 const { classifyLiveFailure, CLASSES } = require('./fixtures/evaluation-live-failure-classifier');
 const { combineEvidence } = require('./fixtures/evaluation-evidence-combination');
 const { auditLiveReadiness, assertLiveExecutionPermitted } =
@@ -57,18 +62,27 @@ async function main() {
   // the BUILDER as well as the file. Without this, a builder that hand-picked
   // cells or dropped planner cost would be invisible: the committed JSON would
   // still read correctly.
-  const rebuilt = buildLiveManifest({
+  const rebuiltV1 = buildLiveManifest({
+    fixtureCorpusHash: liveV1.source.fixtureCorpusHash,
+    fixtureReportHash: liveV1.source.fixtureReportHash,
+    artifactRootRecipe: liveV1.artifactRootRecipe
+  });
+  ok(rebuiltV1.manifestHash === liveV1.manifestHash &&
+     liveV1.manifestHash ===
+       '792d228f939d597891da25bd4d779d76999940c2040e7e846afaf81fc35530b6',
+  'historical live-v1 reproduces byte-identically from source');
+  const rebuilt = buildLiveManifestV2({
     fixtureCorpusHash: live.source.fixtureCorpusHash,
     fixtureReportHash: live.source.fixtureReportHash,
     artifactRootRecipe: live.artifactRootRecipe
   });
   ok(rebuilt.manifestHash === live.manifestHash,
-    'the committed live manifest reproduces byte-identically from source');
+    'the committed live-v2 manifest reproduces byte-identically from source');
   ok(rebuilt.economics.computedWorstCaseMicroUsd ===
      live.economics.computedWorstCaseMicroUsd,
   'including its recomputed worst-case liability');
 
-  // ── 1-5. Membership is DERIVED from the immutable fixture manifest ────
+  // ── 1-5. V1 is fixture-derived; v2 is decision-topology-derived ───────
   ok(live.uniqueCellCount === 40, '1 the live matrix has exactly 40 unique cells');
   ok(live.repetitions === 3 && live.repetitions === protocol.repetition.liveModelRepetitions,
     '2 exactly 3 repetitions, read from the frozen protocol');
@@ -76,14 +90,16 @@ async function main() {
     '3 exactly 120 assigned slots');
   const fixtureCells = new Set(fixture.trials.map(t =>
     `${t.cellId}|${t.variantId === null ? '' : t.variantId}|${t.armId}`));
-  ok(live.cells.every(cell => fixtureCells.has(cell.cellKey)),
-    '4 every live cell derives from a frozen fixture cell');
-  ok(live.cells.length === fixtureCells.size,
-    '5 no cell was removed for performing badly and none was added');
-  ok(live.cells.every(cell => cell.sourceFixtureSlots.length > 0),
-    '4 and each records the fixture slots it came from');
+  ok(liveV1.cells.every(cell => fixtureCells.has(cell.cellKey)) &&
+     liveV1.cells.length === fixtureCells.size &&
+     liveV1.cells.every(cell => cell.sourceFixtureSlots.length > 0),
+  '4 historical v1 remains exactly derived from frozen fixture cells');
+  ok(validateLiveV2Topology(live.cells) &&
+     JSON.stringify([...new Set(live.cells.map(cell => cell.family))]) ===
+       JSON.stringify(REQUIRED_FAMILIES),
+  '5 v2 is derived from the exact frozen decision-required family topology');
   ok(live.source.fixtureManifestHash === fixture.manifestHash,
-    'the live manifest names the exact fixture manifest it derived from');
+    'the v2 manifest keeps the exact immutable fixture evidence identity');
 
   // ── 6-10. Sampling is explicit, identical, and seedless ───────────────
   ok(live.sampling.temperature === 0 && live.sampling.topP === 1,
@@ -248,7 +264,7 @@ async function main() {
   });
   const result = await preflightLiveRun({
     manifestPath: path.join(__dirname, '..', 'config',
-      'structured-allocation-evaluation-live-v1.json'),
+      'structured-allocation-evaluation-live-v2.json'),
     outputRoot: dryRoot,
     resolvedLiveCredentialAuthority: dryAuthority
   });
@@ -283,7 +299,7 @@ async function main() {
   // 1-2 of the brief's list: the two executors refuse each other's manifest.
   ok(await refusesBecause(() => executeScoredRun({
     manifestPath: path.join(__dirname, '..', 'config',
-      'structured-allocation-evaluation-live-v1.json'),
+      'structured-allocation-evaluation-live-v2.json'),
     outputRoot: fs.mkdtempSync(path.join(os.tmpdir(), 'x-'))
   }), /requires the authorized live run and is refused here/),
   '1 the fixture executor REFUSES a live manifest, naming that as the reason');

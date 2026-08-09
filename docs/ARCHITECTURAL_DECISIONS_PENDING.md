@@ -7365,6 +7365,40 @@ of provider request/transport/response evidence, and the same postcondition and
 terminal result, while using 33 rather than 47 PostgreSQL transactions. External
 provider calls in all attribution and regression work: zero.
 
+## Tranche 6 Live-v1 Decision Topology (recorded and closed 2026-08-09)
+
+**Status:** closed by a versioned live-v2 manifest. Historical live-v1 remains
+byte-for-byte execution authority for the runs already bound to it and is never
+rewritten or paired with v2.
+
+The frozen RETAIN rule requires families 2, 3, 5 and 6. Live-v1 instead copied
+the fixture membership for families 3, 4, 7, 8 and 9. It also gave family 7
+structured evidence with no A evidence. RETAIN and one family-level hard
+comparison were therefore structurally impossible regardless of model outcome.
+This was a matrix-selection defect: the fixture-derived selection rule never
+consulted terminal-decision evaluability.
+
+Live-v2 contains two outcome-independent executable scenarios for each required
+family, with every scenario run on A, A2a, A2b, B and C: 8 matched scenario
+cells x 5 arms = 40 cells, repeated 3 times = 120 slots. Two cells per family
+are load-bearing. With one A cell, repetition agreement forces its completion
+rate to zero or one: zero makes cost-per-truthful-completion unevaluable, while
+one makes a positive structured gain impossible. The second matched cell makes
+both frozen criteria jointly reachable without unbalanced arm denominators.
+
+Specialized families 7 and 8 remain deterministic readiness/failure-boundary
+proofs; they are not unmatched scored cells in v2. Recovery determinism remains
+evaluable because every exact v2 cell repeats one comparison envelope three
+times. The `stochasticIdentity` field remains a legacy scoring identity alias,
+not a provider seed; real live mode records the stable fact that no fixture
+response is staged instead of hashing temporary agent ids.
+
+The v2 canonical manifest hash is
+`634963b5581a57449e0c45ffb7973f86a3ff0b6bd6b708d4fc06b9969c8c76b6`.
+Its maximum is 17,160,360 micro-USD (840 canonical attempts at 20,429), below
+the unchanged 20,000,000 micro-USD ceiling. No observed result from an aborted
+real corpus participated in membership, topology, economics or tests.
+
 
 ---
 

@@ -46,7 +46,7 @@ const {
 } = require('./fixtures/evaluation-server-env');
 const { pricedCatalogValue } = require('./governed-structured-fixture');
 const { buildOpenAiResponsesBody } = require('../runtime/provider-request-body');
-const liveManifest = require('../config/structured-allocation-evaluation-live-v1.json');
+const liveManifest = require('../config/structured-allocation-evaluation-live-v2.json');
 
 const CAP = liveManifest.economics.maximumTotalLiveMicroUsd;
 const PER_REQUEST = liveManifest.economics.liability.perRequestMicroUsd;
@@ -447,8 +447,8 @@ async function main() {
   // AND THE WHOLE MATRIX, from the manifest's own per-arm figures.
   const matrixAttempts = Object.entries(liveManifest.economics.liability.byArm)
     .reduce((sum, [, arm]) => sum + arm.totalProviderAttempts * arm.trials, 0);
-  ok(matrixAttempts === 888 &&
-     liveManifest.economics.computedWorstCaseMicroUsd === PER_REQUEST * 888,
+  ok(matrixAttempts === 840 &&
+     liveManifest.economics.computedWorstCaseMicroUsd === PER_REQUEST * 840,
   `the matrix is ${matrixAttempts} chargeable attempts x ${PER_REQUEST} = ` +
   `${liveManifest.economics.computedWorstCaseMicroUsd} micro-USD`);
 

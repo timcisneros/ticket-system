@@ -149,7 +149,7 @@ function main() {
     'every per-arm request ceiling states the frozen basis it came from');
   // A CAP IS NOT AN AUTHORIZATION TO SPEND IT. The manifest says so in terms.
   const liveManifestPath = path.join(__dirname, '..', 'config',
-    'structured-allocation-evaluation-live-v1.json');
+    'structured-allocation-evaluation-live-v2.json');
   ok(fs.existsSync(liveManifestPath),
     'the live manifest exists now that every decision is frozen');
   const liveManifest = JSON.parse(fs.readFileSync(liveManifestPath, 'utf8'));

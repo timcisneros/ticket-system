@@ -50,7 +50,7 @@ const {
 const {
   PROVIDER_TRANSPORT_INVOKED_EVENT
 } = require('../runtime/provider-transport-observation');
-const liveManifest = require('../config/structured-allocation-evaluation-live-v1.json');
+const liveManifest = require('../config/structured-allocation-evaluation-live-v2.json');
 
 // Never the developer's key. This suite takes the real uncaptured live branch
 // precisely so that branch is exercised, and that branch forwards whatever

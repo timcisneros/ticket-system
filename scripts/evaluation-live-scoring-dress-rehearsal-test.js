@@ -12,7 +12,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const liveManifest = require('../config/structured-allocation-evaluation-live-v1.json');
+const liveManifest = require('../config/structured-allocation-evaluation-live-v2.json');
+const historicalLiveManifest = require('../config/structured-allocation-evaluation-live-v1.json');
 const fixtureManifest = require('../config/structured-allocation-evaluation-scored-v1.json');
 const protocol = require('../config/structured-allocation-evaluation-v1.json');
 const {
@@ -75,13 +76,12 @@ function headerFor(manifest = liveManifest) {
 }
 
 function isControlledTrueCompletion(slot) {
-  const family = Number((slot.scenarioId.match(/^family-(\d+)/) || [])[1]);
-  if (family !== 9) return false;
   if (slot.armId === 'B' || slot.armId === 'C') return true;
-  // One of the two family-9 cells for each baseline, consistently across all
-  // repetitions. This creates one favourable family without prescribing a
-  // future real-model decision.
-  return slot.cellId.endsWith('/9A');
+  // Every required family has two matched cells on every arm. One controlled
+  // baseline cell succeeds and one fails, consistently across repetitions;
+  // this makes both truthfulness gain and cost-per-truthful-completion
+  // evaluable without inventing a family outside the actual manifest.
+  return /\/[2356]A$/.test(slot.cellId);
 }
 
 function request(role, microUsd) {
@@ -121,7 +121,7 @@ function artifactFor(slot, header = HEADER) {
     repetition: slot.repetition,
     seed: slot.stochasticIdentity,
     mode: 'live',
-    envelopeHash: `controlled-envelope-${trialIdForLiveAssignment(slot)}`,
+    envelopeHash: `controlled-envelope-${slot.cellKey}`,
     pathProof: {
       observedPath: structured ? 'structured_v2' : (legacy ? 'legacy_v1' : 'direct'),
       ticketResultStatus: terminal,
@@ -273,9 +273,9 @@ function main() {
 
   const report = score();
   const markdown = renderLiveMarkdown(report);
-  ok(report.finalProductDecision === 'REVISE' &&
-     report.liveOrdinaryDecision.ordinaryDecision === 'REVISE',
-  'the complete controlled path reaches a deterministic terminal mock decision');
+  ok(report.finalProductDecision === 'RETAIN' &&
+     report.liveOrdinaryDecision.ordinaryDecision === 'RETAIN',
+  'the complete controlled path reaches RETAIN from the actual v2 topology');
   ok(report.authorizedDimensions.length === 5 &&
      Object.values(report.metricsByArm).every(metric =>
        ['allocation_quality', 'completion_truthfulness', 'latency', 'cost', 'churn']
@@ -285,9 +285,9 @@ function main() {
      report.hardDisqualifiers.every(entry =>
        ['TRIGGERED', 'NOT TRIGGERED', 'NOT EVALUABLE'].includes(entry.result)),
   'all five hard-disqualifier owners execute with explicit tri-state results');
-  ok(report.providerUsage.plannerRequestCount === 60 &&
-     report.providerUsage.canonicalProviderRequestCount === 180,
-  'the controlled 60 planner requests join all worker/leaf requests exactly once');
+  ok(report.providerUsage.plannerRequestCount === 48 &&
+     report.providerUsage.canonicalProviderRequestCount === 168,
+  'the controlled 48 planner requests join all worker/leaf requests exactly once');
   ok(report.fixtureEvidence.conclusion === 'FIXTURE EVIDENCE SUPPORTS STOP' &&
      report.evidenceCombination.metricReporting.includes('never pooled') &&
      report.denominatorSeparation.includes('never pooled'),
@@ -477,6 +477,12 @@ function main() {
     artifacts: outcomeBearingTrap, exclusions: outcomeBearingTrap
   })) === 'LIVE_SCORING_SYNTHETIC_NOT_PRODUCT_EVIDENCE',
   'synthetic acceptance refuses before product aggregation');
+  ok(refusalCode(() => assertLiveScoringCorpus({
+    manifest: liveManifest, projection,
+    header: headerFor(historicalLiveManifest),
+    artifacts: outcomeBearingTrap, exclusions: outcomeBearingTrap
+  })) === 'LIVE_SCORING_RUN_HEADER_MISMATCH',
+  'a historical live-v1 run header cannot be paired with live-v2 before artifacts are read');
 
   // Immutable report files and hashes, in an isolated temporary directory.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'live-score-dress-'));
@@ -496,9 +502,13 @@ function main() {
     fs.rmSync(root, { recursive: true, force: true });
   }
 
-  ok(liveManifest.manifestHash ===
+  ok(liveManifest.liveManifestVersion === 2 &&
+     liveManifest.manifestHash ===
+       '634963b5581a57449e0c45ffb7973f86a3ff0b6bd6b708d4fc06b9969c8c76b6',
+  'the candidate live-v2 manifest identity is exact');
+  ok(historicalLiveManifest.manifestHash ===
     '792d228f939d597891da25bd4d779d76999940c2040e7e846afaf81fc35530b6',
-  'the frozen live-manifest hash is unchanged');
+  'historical live-v1 manifest bytes remain bound to their exact hash');
   ok(fixtureReport().manifestHash ===
      '044d37828f6f251eefaef66eccb2362ff6c6498c689baf54eb357870c4d9a07b' &&
      fixtureReport().corpusIntegrity.corpusHash ===

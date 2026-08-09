@@ -32,7 +32,7 @@ const { assertCorpusIntegrity } = require('./structured-allocation-evaluation-sc
 const { trialIdFor } = require('./structured-allocation-evaluation-scored-runner');
 
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config',
-  'structured-allocation-evaluation-live-v1.json'), 'utf8'));
+  'structured-allocation-evaluation-live-v2.json'), 'utf8'));
 
 let passed = 0;
 function ok(condition, message) {

@@ -44,7 +44,7 @@ const {
 const { ROLE_ECONOMICS } = require('./fixtures/governed-role-policy-container');
 
 const MANIFEST_PATH = path.join(__dirname, '..', 'config',
-  'structured-allocation-evaluation-live-v1.json');
+  'structured-allocation-evaluation-live-v2.json');
 const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8'));
 
 // FIXED BEFORE EXECUTION, not chosen from what the run happened to do.
@@ -189,6 +189,21 @@ async function main() {
     `every one of the ${artifacts.length} written artifacts carries its durable ` +
     'observation projection');
 
+    // RECOVERY DETERMINISM MUST BE EVALUABLE, not merely carry a field. Each
+    // exact scenario/arm cell repeats three times under one stable comparison
+    // envelope; temporary agent ids and repetition ordinals are not allowed to
+    // make every envelope unique.
+    const byComparisonCell = new Map();
+    for (const artifact of artifacts) {
+      const key = `${artifact.scenarioId}|${artifact.variantId || ''}|${artifact.armId}`;
+      if (!byComparisonCell.has(key)) byComparisonCell.set(key, []);
+      byComparisonCell.get(key).push(artifact);
+    }
+    assertThat(byComparisonCell.size === 40 &&
+      [...byComparisonCell.values()].every(rows => rows.length === 3 &&
+        new Set(rows.map(row => row.envelopeHash)).size === 1),
+    'all 40 exact cells expose three repeated identical comparison envelopes');
+
     const observed = artifacts.map(artifact => artifact.ticketReport.durableObservation);
     assertThat(observed.every(projection =>
       typeof projection.transport.state === 'string' &&
@@ -253,6 +268,7 @@ async function main() {
     console.log(`  committed micro-USD : ${committed} of ` +
       `${manifest.economics.maximumTotalLiveMicroUsd}`);
     console.log(`  captured outbound   : ${outbound}`);
+    console.log(`  run header hash     : ${second.header.runHeaderHash}`);
     console.log(`  corpus hash         : ${audit.corpusHash}`);
     console.log(`  LABEL               : ${SYNTHETIC_ACCEPTANCE_LABEL}`);
     console.log('  EXTERNAL PROVIDER CALLS MADE: 0');

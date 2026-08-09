@@ -161,7 +161,7 @@ function auditLiveReadiness({ liveManifest, sources = {} } = {}) {
   if (liveManifest === undefined) {
     try {
       // eslint-disable-next-line global-require
-      live = require('../../config/structured-allocation-evaluation-live-v1.json');
+      live = require('../../config/structured-allocation-evaluation-live-v2.json');
     } catch (_) { live = null; }
   }
 
@@ -170,11 +170,20 @@ function auditLiveReadiness({ liveManifest, sources = {} } = {}) {
 
   derived('live_matrix_membership',
     live && live.uniqueCellCount === 40 && live.totalAssignedTrials === 120 &&
-      live.cells.every(cell => Array.isArray(cell.sourceFixtureSlots) &&
-        cell.sourceFixtureSlots.length > 0),
+      (live.liveManifestVersion === 1
+        ? live.cells.every(cell => Array.isArray(cell.sourceFixtureSlots) &&
+            cell.sourceFixtureSlots.length > 0)
+        : live.liveManifestVersion === 2 && live.decisionTopology &&
+          live.decisionTopology.everyRequiredFamilyHasAllComparisonArms === true &&
+          live.decisionTopology.everyRequiredCellIsFiveArmMatched === true &&
+          live.decisionTopology.matchedCellsPerRequiredFamily >= 2 &&
+          live.decisionTopology.everyStructuredFamilyHasArmABaseline === true &&
+          live.cells.every(cell =>
+            cell.selectionAuthority === 'frozen_decision_topology_v2')),
     live && `${live.uniqueCellCount} cells x ${live.repetitions} repetitions = ` +
-      `${live.totalAssignedTrials} slots, each derived from frozen fixture slots`,
-    'live manifest cells[].sourceFixtureSlots');
+      `${live.totalAssignedTrials} slots, derived from live manifest version ` +
+      `${live.liveManifestVersion} membership authority`,
+    'live manifest cells / decisionTopology');
 
   derived('sampling_parameters',
     live && live.sampling && live.sampling.temperature === 0 && live.sampling.topP === 1 &&

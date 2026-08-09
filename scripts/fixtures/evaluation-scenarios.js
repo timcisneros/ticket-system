@@ -101,6 +101,82 @@ function proposalItem({ assignedAgentId, objective, output, criterion }) {
   };
 }
 
+// Families 2, 5 and 6 are the three decision-required separability/ownership
+// cases. They share the same bounded, arm-independent filesystem contract; the
+// objective is the experimental variable that says whether ownership is
+// obvious, known, or must be discovered. Keeping the mechanics identical makes
+// the family comparison about allocation behaviour rather than fixture shape.
+function separableRequiredFamilyScenario({ family, scenarioId, objective,
+  alphaPath, betaPath, plannerObjectives }) {
+  return Object.freeze({
+    protocolVersion: PROTOCOL_VERSION,
+    scenarioId,
+    version: 1,
+    family,
+    objective,
+    initialState: Object.freeze({
+      folders: Object.freeze(['reports', 'reports-b', 'reports-c'])
+    }),
+    declaredWork: Object.freeze({
+      objective,
+      expectedOutputs: Object.freeze([
+        Object.freeze({ kind: 'text', declaration: 'One folder per declared path' })
+      ]),
+      successCriteria: Object.freeze([
+        Object.freeze({ kind: 'text', declaration: 'Both declared folders exist' })
+      ]),
+      evidenceRequirements: Object.freeze([])
+    }),
+    ownedOutputPaths: Object.freeze({
+      alpha: `${alphaPath.replace(/\/[^/]+$/, '')}/`,
+      beta: `${betaPath.replace(/\/[^/]+$/, '')}/`
+    }),
+    logicalTasks: Object.freeze(['alpha', 'beta']),
+    plannerResponseTemplate: Object.freeze({
+      role: 'planner', logicalTaskId: 'plan', ordinal: 1,
+      inputTokens: 400, outputTokens: 120,
+      itemObjectives: Object.freeze([...plannerObjectives])
+    }),
+    workerResponses: Object.freeze([
+      Object.freeze({
+        role: 'worker', logicalTaskId: 'alpha', ordinal: 1,
+        match: alphaPath, inputTokens: 300, outputTokens: 60,
+        body: workerPlan({
+          message: 'Creating the first declared folder.',
+          actions: [createFolder(alphaPath)], complete: true
+        })
+      }),
+      Object.freeze({
+        role: 'worker', logicalTaskId: 'beta', ordinal: 1,
+        match: betaPath, inputTokens: 300, outputTokens: 60,
+        body: workerPlan({
+          message: 'Creating the second declared folder.',
+          actions: [createFolder(betaPath)], complete: true
+        })
+      }),
+      Object.freeze({
+        role: 'worker', logicalTaskId: 'extra', ordinal: 1,
+        match: 'reports/agent-', inputTokens: 260, outputTokens: 50,
+        body: workerPlan({
+          message: 'Creating the allocated folder.',
+          actions: [createFolder('reports/agent-2/output')], complete: true
+        })
+      })
+    ]),
+    externalEffects: Object.freeze([]),
+    allowedArms: ALL_ARMS,
+    oracle: Object.freeze({
+      kind: 'raw_state',
+      expectations: Object.freeze([
+        Object.freeze({ kind: 'folder_exists', path: alphaPath }),
+        Object.freeze({ kind: 'folder_exists', path: betaPath })
+      ])
+    }),
+    expectedQuiescence: 'quiescent',
+    isolation: 'fresh workspace, fresh fixture namespace, fresh Ticket per trial'
+  });
+}
+
 const SCENARIOS = Object.freeze({
 
   // ── FAMILY 1 — the five-arm smoke control ────────────────────────────────
@@ -183,6 +259,35 @@ const SCENARIOS = Object.freeze({
     }),
     expectedQuiescence: 'quiescent',
     isolation: 'fresh workspace, fresh fixture namespace, fresh Ticket per trial'
+  }),
+
+  // ── FAMILY 2 — cleanly separable work ───────────────────────────────────
+  // The structured best case: two independent outputs with no coupling and no
+  // ownership ambiguity. This family is decision-required by the frozen
+  // protocol and therefore has executable cells on all five arms.
+  'family-2-cleanly-separable': separableRequiredFamilyScenario({
+    family: 2,
+    scenarioId: 'family-2-cleanly-separable',
+    objective: 'Create independent folders reports/separable-alpha/done and ' +
+      'reports-b/separable-beta/done',
+    alphaPath: 'reports/separable-alpha/done',
+    betaPath: 'reports-b/separable-beta/done',
+    plannerObjectives: Object.freeze([
+      'Create reports/separable-alpha/done inside your allocated path',
+      'Create reports-b/separable-beta/done inside your allocated path'
+    ])
+  }),
+  'family-2-cleanly-separable-alt': separableRequiredFamilyScenario({
+    family: 2,
+    scenarioId: 'family-2-cleanly-separable-alt',
+    objective: 'Create independent folders reports/separable-gamma/done and ' +
+      'reports-b/separable-delta/done',
+    alphaPath: 'reports/separable-gamma/done',
+    betaPath: 'reports-b/separable-delta/done',
+    plannerObjectives: Object.freeze([
+      'Create reports/separable-gamma/done inside your allocated path',
+      'Create reports-b/separable-delta/done inside your allocated path'
+    ])
   }),
 
   // ── FAMILY 3 — legitimate sibling dependency ─────────────────────────────
@@ -270,6 +375,69 @@ const SCENARIOS = Object.freeze({
     isolation: 'fresh workspace, fresh fixture namespace, fresh Ticket per trial'
   }),
 
+  // A second outcome-independent cell is required so the family-level rate and
+  // cost-per-truthful-completion baseline can both be evaluable without
+  // breaking repetition agreement. It exercises the same sibling-dependency
+  // contract with distinct declared paths, on every arm.
+  'family-3-sibling-dependency-alt': Object.freeze({
+    protocolVersion: PROTOCOL_VERSION,
+    scenarioId: 'family-3-sibling-dependency-alt',
+    version: 1,
+    family: 3,
+    objective: 'Create folders reports/source/out and reports-b/dependent/out',
+    initialState: Object.freeze({
+      folders: Object.freeze(['reports', 'reports-b', 'reports-c'])
+    }),
+    declaredWork: Object.freeze({
+      objective: 'Create folders reports/source/out and reports-b/dependent/out',
+      expectedOutputs: Object.freeze([
+        Object.freeze({ kind: 'text', declaration: 'A source artifact and a bound dependent summary' })
+      ]),
+      successCriteria: Object.freeze([
+        Object.freeze({ kind: 'text', declaration: 'The dependent summary binds the source artifact' })
+      ]),
+      evidenceRequirements: Object.freeze([])
+    }),
+    ownedOutputPaths: Object.freeze({
+      source: 'reports/source/', dependent: 'reports-b/dependent/'
+    }),
+    logicalTasks: Object.freeze(['source', 'dependent']),
+    plannerResponseTemplate: Object.freeze({
+      role: 'planner', logicalTaskId: 'plan', ordinal: 1,
+      inputTokens: 400, outputTokens: 120,
+      itemObjectives: Object.freeze([
+        'Produce reports/source/out and its artifact inside your allocated path',
+        'Read the source artifact and create reports-b/dependent/out inside your allocated path'
+      ])
+    }),
+    workerResponses: Object.freeze([
+      Object.freeze({
+        role: 'worker', logicalTaskId: 'extra', ordinal: 1,
+        match: 'reports/agent-', inputTokens: 260, outputTokens: 50,
+        body: workerPlan({
+          message: 'Creating the allocated folder.',
+          actions: [createFolder('reports/agent-2/output')], complete: true
+        })
+      })
+    ]),
+    workerResponseTemplates: Object.freeze([
+      Object.freeze({ role: 'worker', logicalTaskId: 'source', ordinal: 1,
+        match: 'reports/source', kind: 'produce_seeded_artifact' }),
+      Object.freeze({ role: 'worker', logicalTaskId: 'dependent', ordinal: 1,
+        match: 'reports-b/dependent', kind: 'consume_and_bind' })
+    ]),
+    externalEffects: Object.freeze(['dependent reads the source artifact']),
+    allowedArms: ALL_ARMS,
+    oracle: Object.freeze({
+      kind: 'coupling',
+      producerPath: 'reports/source/artifact.txt',
+      consumerPath: 'reports-b/dependent/summary.md',
+      consumerReaderId: 'dependent'
+    }),
+    expectedQuiescence: 'quiescent',
+    isolation: 'fresh workspace, fresh fixture namespace, fresh Ticket per trial'
+  }),
+
   // ── FAMILY 4 — apparently separable, actually coupled ────────────────────
   //
   // Same mechanism as family 3, but the objective deliberately *looks*
@@ -348,6 +516,64 @@ const SCENARIOS = Object.freeze({
     }),
     expectedQuiescence: 'quiescent',
     isolation: 'fresh workspace, fresh fixture namespace, fresh Ticket per trial'
+  }),
+
+  // ── FAMILY 5 — ownership known in advance ───────────────────────────────
+  // The objective names both independent ownership domains explicitly. The
+  // frozen contract expects this family to distinguish allocated B from
+  // dynamic C, but every baseline arm is retained for the actual comparison.
+  'family-5-ownership-known': separableRequiredFamilyScenario({
+    family: 5,
+    scenarioId: 'family-5-ownership-known',
+    objective: 'Ownership is known: create reports/known-alpha/done in the ' +
+      'reports owner and reports-b/known-beta/done in the reports-b owner',
+    alphaPath: 'reports/known-alpha/done',
+    betaPath: 'reports-b/known-beta/done',
+    plannerObjectives: Object.freeze([
+      'As the reports owner, create reports/known-alpha/done',
+      'As the reports-b owner, create reports-b/known-beta/done'
+    ])
+  }),
+  'family-5-ownership-known-alt': separableRequiredFamilyScenario({
+    family: 5,
+    scenarioId: 'family-5-ownership-known-alt',
+    objective: 'Ownership is known: create reports/known-gamma/done in the ' +
+      'reports owner and reports-b/known-delta/done in the reports-b owner',
+    alphaPath: 'reports/known-gamma/done',
+    betaPath: 'reports-b/known-delta/done',
+    plannerObjectives: Object.freeze([
+      'As the reports owner, create reports/known-gamma/done',
+      'As the reports-b owner, create reports-b/known-delta/done'
+    ])
+  }),
+
+  // ── FAMILY 6 — ownership unknown in advance ─────────────────────────────
+  // The output paths are fixed (so the oracle is independent), while the
+  // objective deliberately requires the runtime to discover/assign ownership
+  // rather than prescribing which candidate owns which output.
+  'family-6-ownership-unknown': separableRequiredFamilyScenario({
+    family: 6,
+    scenarioId: 'family-6-ownership-unknown',
+    objective: 'Determine the suitable owners, then create ' +
+      'reports/discovered-alpha/done and reports-b/discovered-beta/done',
+    alphaPath: 'reports/discovered-alpha/done',
+    betaPath: 'reports-b/discovered-beta/done',
+    plannerObjectives: Object.freeze([
+      'Determine ownership and create reports/discovered-alpha/done',
+      'Determine ownership and create reports-b/discovered-beta/done'
+    ])
+  }),
+  'family-6-ownership-unknown-alt': separableRequiredFamilyScenario({
+    family: 6,
+    scenarioId: 'family-6-ownership-unknown-alt',
+    objective: 'Determine the suitable owners, then create ' +
+      'reports/discovered-gamma/done and reports-b/discovered-delta/done',
+    alphaPath: 'reports/discovered-gamma/done',
+    betaPath: 'reports-b/discovered-delta/done',
+    plannerObjectives: Object.freeze([
+      'Determine ownership and create reports/discovered-gamma/done',
+      'Determine ownership and create reports-b/discovered-delta/done'
+    ])
   }),
 
   // ── FAMILY 7 — genuine churn and its neighbouring controls ───────────────

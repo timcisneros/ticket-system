@@ -39,7 +39,7 @@ const {
   ROLES, assertEveryRoleDispatched, classifyCapturedRole, countCapturedRoles
 } = require('./fixtures/evaluation-live-capture-roles');
 const { ROLE_ECONOMICS } = require('./fixtures/governed-role-policy-container');
-const liveManifest = require('../config/structured-allocation-evaluation-live-v1.json');
+const liveManifest = require('../config/structured-allocation-evaluation-live-v2.json');
 
 // The frozen request controls, exactly as the live runner would supply them.
 const CONTROLS = Object.freeze({

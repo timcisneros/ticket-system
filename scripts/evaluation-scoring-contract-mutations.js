@@ -123,6 +123,74 @@ const MUTATIONS = Object.freeze([
     find: 'value.repetitionConsistency.evaluable && value.repetitionConsistency.consistent),',
     replace: 'true),',
     failure: 'disagreeing repeated completion verdicts are INCONCLUSIVE'
+  }),
+  Object.freeze({
+    name: 'live-v2-required-family-check-disabled',
+    file: 'scripts/fixtures/evaluation-live-v2-matrix.js',
+    suite: 'evaluation-live-decision-topology-test.js',
+    find: 'for (const family of REQUIRED_FAMILIES) {',
+    replace: 'for (const family of REQUIRED_FAMILIES.slice(1)) {',
+    failure: 'removing a required family fails the release topology gate'
+  }),
+  Object.freeze({
+    name: 'live-v2-arm-a-baseline-check-disabled',
+    file: 'scripts/fixtures/evaluation-live-v2-matrix.js',
+    suite: 'evaluation-live-decision-topology-test.js',
+    edits: Object.freeze([
+      Object.freeze({
+        find: 'const missing = ALL_ARMS.filter(arm => !arms.has(arm));',
+        replace: "const missing = ALL_ARMS.filter(arm => arm !== 'A' && !arms.has(arm));"
+      }),
+      Object.freeze({
+        find: 'const unmatched = ALL_ARMS.filter(arm => !matched.has(arm));',
+        replace: "const unmatched = ALL_ARMS.filter(arm => arm !== 'A' && !matched.has(arm));"
+      }),
+      Object.freeze({
+        find: "if ((arms.has('B') || arms.has('C')) && !arms.has('A')) {",
+        replace: 'if (false) {'
+      })
+    ]),
+    failure: 'a structured family cannot lose its arm A comparison baseline'
+  }),
+  Object.freeze({
+    name: 'live-v2-second-cell-check-disabled',
+    file: 'scripts/fixtures/evaluation-live-v2-matrix.js',
+    suite: 'evaluation-live-decision-topology-test.js',
+    find: 'if (familyCellIds.length < 2) {',
+    replace: 'if (false) {',
+    failure: 'a required family cannot lose the second cell needed for cost/gain evaluability'
+  }),
+  Object.freeze({
+    name: 'live-v2-matched-cell-check-disabled',
+    file: 'scripts/fixtures/evaluation-live-v2-matrix.js',
+    suite: 'evaluation-live-decision-topology-test.js',
+    find: 'if (unmatched.length > 0) {\n        throw new LiveV2MatrixError(\n          `${cellId} is not a matched five-arm comparison; missing ${unmatched.join(\', \')}`',
+    replace: 'if (false) {\n        throw new LiveV2MatrixError(\n          `${cellId} is not a matched five-arm comparison; missing ${unmatched.join(\', \')}`',
+    failure: 'each selected scenario must remain matched across all five arms'
+  }),
+  Object.freeze({
+    name: 'live-v2-stochastic-identity-varies-by-repetition',
+    file: 'scripts/fixtures/evaluation-live-manifest-v2.js',
+    suite: 'evaluation-live-manifest-test.js',
+    find: 'cellKey: cell.cellKey\n          })',
+    replace: 'cellKey: `${cell.cellKey}|repetition-${repetition}`\n          })',
+    failure: 'the committed live-v2 manifest reproduces byte-identically from source'
+  }),
+  Object.freeze({
+    name: 'real-live-fixture-staging-restored',
+    file: 'scripts/structured-allocation-evaluation-runner.js',
+    suite: 'structured-allocation-evaluation-test.js',
+    find: "if (mode === 'live') return NO_STAGED_RESPONSES;",
+    replace: "if (false) return NO_STAGED_RESPONSES;",
+    failure: 'real live mode stages no fixture responses'
+  }),
+  Object.freeze({
+    name: 'real-live-envelope-hashes-temporary-agents',
+    file: 'scripts/structured-allocation-evaluation-runner.js',
+    suite: 'structured-allocation-evaluation-test.js',
+    find: "? 'REAL_LIVE_NO_FIXTURE_RESPONSE_STAGED'\n      : JSON.stringify(staged)",
+    replace: '? JSON.stringify(staged)\n      : JSON.stringify(staged)',
+    failure: 'live comparison identity is stable across temporary agents'
   })
 ]);
 
@@ -138,16 +206,24 @@ function scrubProviderEnvironment(environment) {
   return result;
 }
 
+function editsOf(mutation) {
+  return mutation.edits || [{ find: mutation.find, replace: mutation.replace }];
+}
+
 function installMutant(mutation) {
   const target = path.join(ROOT, mutation.file);
   const originalLoader = Module._extensions['.js'];
   Module._extensions['.js'] = function loadMutated(module, filename) {
     if (path.resolve(filename) !== target) return originalLoader(module, filename);
     const source = fs.readFileSync(filename, 'utf8');
-    const occurrences = source.split(mutation.find).length - 1;
-    assert.equal(occurrences, 1,
-      `${mutation.name} must match exactly one source anchor, found ${occurrences}`);
-    module._compile(source.replace(mutation.find, mutation.replace), filename);
+    let mutated = source;
+    for (const edit of editsOf(mutation)) {
+      const occurrences = mutated.split(edit.find).length - 1;
+      assert.equal(occurrences, 1,
+        `${mutation.name} must match exactly one source anchor, found ${occurrences}`);
+      mutated = mutated.replace(edit.find, edit.replace);
+    }
+    module._compile(mutated, filename);
   };
 }
 
@@ -163,9 +239,11 @@ function main() {
   for (const mutation of MUTATIONS) {
     const target = path.join(ROOT, mutation.file);
     const before = fs.readFileSync(target);
-    const occurrences = before.toString('utf8').split(mutation.find).length - 1;
-    assert.equal(occurrences, 1,
-      `${mutation.name} must match exactly one source anchor, found ${occurrences}`);
+    for (const edit of editsOf(mutation)) {
+      const occurrences = before.toString('utf8').split(edit.find).length - 1;
+      assert.equal(occurrences, 1,
+        `${mutation.name} must match exactly one source anchor, found ${occurrences}`);
+    }
     const child = spawnSync(process.execPath, [__filename, '--mutant', mutation.name], {
       cwd: ROOT,
       env: scrubProviderEnvironment(process.env),
