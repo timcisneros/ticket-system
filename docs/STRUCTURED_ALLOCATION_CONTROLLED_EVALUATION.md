@@ -2633,3 +2633,61 @@ ownership/unknown-ownership context remains in declared-work evidence. A
 provider-free source test requires two typed folder facts for all eight v2
 scenario cells, and focused B/C production-path diagnostics cover all required
 families before a fresh acceptance is permitted.
+
+## 16. Authorized REAL LIVE-V2 attempt: complete execution, fixture-input abort (2026-08-09)
+
+The authorized REAL LIVE-V2 evaluation ran against exact executable source
+`bf7a932f8ea9b61087a189c51be1f383b8dc5960`, manifest v2 hash
+`634963b5581a57449e0c45ffb7973f86a3ff0b6bd6b708d4fc06b9969c8c76b6`,
+and configured-agent credential authority ID 1 / revision 2 / provider
+`openai`. The authenticated preflight used
+`gpt-4o-mini-2024-07-18` and the frozen Responses controls. It made one call,
+used 20 input and 9 output tokens, and cost 9 micro-USD separately from the
+experiment.
+
+All 120 assigned slots executed once in frozen order and were accepted: 120
+artifacts, 0 exclusions, 0 replacements, 0 interruptions, and 0 resumes. The
+canonical corpus gate returned
+`LIVE CORPUS COMPLETE AND INTERNALLY CONSISTENT`. Its run-header hash is
+`ad677632d187a791f885869f69dbd7232caab1d170ceb9fee7357f515871aed6`;
+its pre-abort corpus hash is
+`191e4aea91be4c825e27385f21bb6462c59b3b6570fe184bd7a81eb495138a68`.
+
+The run nevertheless is permanently:
+
+> **ABORTED — NOT DECISION EVIDENCE**
+
+Before metric aggregation, the canonical live report command required the
+original immutable fixture report JSON through `--fixture-report`. That report
+artifact is neither committed nor retained at its canonical fixture output
+root. Only its documented identities and conclusion remain. Creating a new
+JSON object that merely repeats those identifiers would bypass immutable input
+provenance, while repairing the live report boundary after provider dispatch
+would violate source freeze. The corpus was therefore quarantined without
+invoking the scorer.
+
+No A/A2a/A2b/B/C metric result, family result, hard-disqualifier state, live
+ordinary decision, final decision, or live report hash exists. Fixture/live
+denominators were never pooled. The immutable fixture conclusion remains
+**FIXTURE EVIDENCE SUPPORTS STOP**, but it was not combined with this aborted
+corpus.
+
+The ledger committed 17,160,360 micro-USD, exactly the v2 matrix maximum and
+2,839,640 below the 20,000,000 micro-USD ceiling. Durable artifacts record 500
+production transport invocations and 500 canonical metered requests: 48
+planner and 452 worker/leaf. Their observable metered experiment cost is
+156,585 micro-USD. The 156,585 micro-USD normalized cost is separately named
+and is not used as decision evidence after the abort. Including preflight, the
+observable provider cost under this authorization was 156,594 micro-USD.
+
+The evidence is preserved at
+`/tmp/ticket-system-structured-evaluation-live-v2/real-bf7a932-06c13773d86978fa`.
+The 125-file aborted-bundle hash is
+`293cd76a5f77fb9a63356b646e3555664b951e560db45364408ce8baca13881b`;
+the abort-record hash is
+`1293528292ca56275316b6ad53891a2630b2b7748cb04f58db716ebac60d384e`.
+The missing fixture-input owner is recorded in
+`docs/ARCHITECTURAL_DECISIONS_PENDING.md`.
+
+**Tranche 6 live-model evaluation status: BLOCKED.** This corpus may never be
+resumed, scored, imported, pooled, or used to tune a future experiment.

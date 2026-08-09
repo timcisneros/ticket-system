@@ -1,3 +1,56 @@
+## TRANCHE 6 LIVE-V2 CORPUS ABORTED BY MISSING IMMUTABLE FIXTURE INPUT (2026-08-09)
+
+**Status: OPEN — the run is permanently `ABORTED — NOT DECISION EVIDENCE`;
+do not resume, score, import, adapt, or use it to tune a later experiment.**
+
+The authorized REAL LIVE-V2 evaluation ran against exact executable source
+`bf7a932f8ea9b61087a189c51be1f383b8dc5960`, live-manifest v2 hash
+`634963b5581a57449e0c45ffb7973f86a3ff0b6bd6b708d4fc06b9969c8c76b6`,
+and configured-agent credential authority ID 1 / revision 2 / provider
+`openai`. The minimum authenticated preflight used the exact frozen model and
+request controls, made one provider call, used 20 input and 9 output tokens,
+and cost 9 micro-USD. Its evidence remains separate from the experiment.
+
+All 120 assigned slots executed once and were accepted with zero exclusions,
+replacements, interruptions, or resumes. The canonical pre-abort corpus gate
+returned `LIVE CORPUS COMPLETE AND INTERNALLY CONSISTENT`; its immutable
+run-header hash is
+`ad677632d187a791f885869f69dbd7232caab1d170ceb9fee7357f515871aed6`
+and its pre-abort corpus hash is
+`191e4aea91be4c825e27385f21bb6462c59b3b6570fe184bd7a81eb495138a68`.
+
+Before aggregation, the repository-owned live report path exposed a missing
+input authority. `scripts/structured-allocation-evaluation-report-live.js`
+requires `--fixture-report <immutable-fixture-report.json>` and loads that
+file at its scoring boundary. The original immutable fixture report artifact
+is neither committed nor retained at the canonical fixture artifact root;
+only its documented identities and conclusion remain. Constructing a new JSON
+capsule that merely asserts those hashes would not be the original immutable
+fixture evidence and would bypass the input-provenance contract. This is a
+post-dispatch scoring-integration defect, so source freeze forbids patching the
+path and scoring this corpus afterward.
+
+The run was stopped before metric aggregation. No five-arm metrics, hard-
+disqualifier states, live ordinary decision, final decision, or live report
+hash was produced. The durable ledger committed the canonical 17,160,360
+micro-USD matrix maximum, below the 20,000,000 micro-USD global ceiling by
+2,839,640 micro-USD. The preserved structural cost record contains 500
+production transport invocations and 500 canonical metered requests, including
+48 planner and 452 worker/leaf requests. Observable metered experiment cost is
+156,585 micro-USD; normalized cost has the same value because all canonical
+requests were metered, but the abort keeps it out of product-decision evidence.
+
+Preserved evidence root:
+`/tmp/ticket-system-structured-evaluation-live-v2/real-bf7a932-06c13773d86978fa`.
+The abort-record hash is
+`1293528292ca56275316b6ad53891a2630b2b7748cb04f58db716ebac60d384e`;
+the 125-file aborted-bundle hash is
+`293cd76a5f77fb9a63356b646e3555664b951e560db45364408ce8baca13881b`.
+Historical live-v1 manifests and every earlier aborted real corpus remain
+unchanged.
+
+---
+
 ## TRANCHE 6 REAL-LIVE CORPUS ABORTED BY MISSING LIVE SCORER ADAPTER (2026-08-08)
 
 **Status: RESOLVED IN SOURCE 2026-08-08 — the run remains permanently
