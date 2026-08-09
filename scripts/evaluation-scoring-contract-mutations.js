@@ -191,6 +191,14 @@ const MUTATIONS = Object.freeze([
     find: "? 'REAL_LIVE_NO_FIXTURE_RESPONSE_STAGED'\n      : JSON.stringify(staged)",
     replace: '? JSON.stringify(staged)\n      : JSON.stringify(staged)',
     failure: 'live comparison identity is stable across temporary agents'
+  }),
+  Object.freeze({
+    name: 'live-v2-objective-loses-evaluable-facts',
+    file: 'scripts/fixtures/evaluation-scenarios.js',
+    suite: 'structured-allocation-evaluation-test.js',
+    find: "objective: 'Create folders reports/separable-alpha/done and ' +",
+    replace: "objective: 'Create independent folders reports/separable-alpha/done and ' +",
+    failure: 'family-2-cleanly-separable admits two execution-evaluable folder facts'
   })
 ]);
 

@@ -7399,6 +7399,16 @@ Its maximum is 17,160,360 micro-USD (840 canonical attempts at 20,429), below
 the unchanged 20,000,000 micro-USD ceiling. No observed result from an aborted
 real corpus participated in membership, topology, economics or tests.
 
+The first post-commit synthetic attempt was intentionally not credited: its
+local wrapper stopped before slot 60, and its partial artifacts exposed that the
+new family 2/5/6 ticket objectives fell outside the deterministic create-folder
+grammar. Governed leaf admission correctly refused them with
+`GOVERNED_LEAF_NO_EVALUABLE_FACT`. The objectives now use the existing canonical
+`Create folders X and Y` grammar, while their family context remains explicit in
+declared-work evidence. A source-level gate requires two typed folder facts for
+every v2 scenario, and focused PostgreSQL diagnostics prove both B and C admit
+and execute leaf Runs in all four required families.
+
 
 ---
 

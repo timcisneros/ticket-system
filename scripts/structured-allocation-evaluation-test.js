@@ -1024,6 +1024,7 @@ const ok = (condition, message) => {
   } = require('./fixtures/evaluation-scenarios');
   const crypto = require('node:crypto');
   const { expectedProducerBytes } = require('./fixtures/evaluation-coupling-oracle');
+  const { buildObjectiveContract } = require('../objective-contract');
 
   // Every catalog entry is structurally valid.
   for (const scenarioId of SCENARIO_IDS) {
@@ -1041,6 +1042,18 @@ const ok = (condition, message) => {
   for (const arm of ALL_ARMS) {
     ok(assertArmAllowed(family1, arm) === true,
       `12 catalog: family 1 accepts arm ${arm}`);
+  }
+
+  for (const scenarioId of [
+    'family-2-cleanly-separable', 'family-2-cleanly-separable-alt',
+    'family-3-sibling-dependency', 'family-3-sibling-dependency-alt',
+    'family-5-ownership-known', 'family-5-ownership-known-alt',
+    'family-6-ownership-unknown', 'family-6-ownership-unknown-alt'
+  ]) {
+    const contract = buildObjectiveContract(getScenario(scenarioId).objective);
+    ok(contract.recognized === true && contract.intent === 'create_folder' &&
+      contract.postconditions.length === 2,
+    `12 live-v2: ${scenarioId} admits two execution-evaluable folder facts`);
   }
 
   // A restricted scenario must SAY WHY, not merely restrict.

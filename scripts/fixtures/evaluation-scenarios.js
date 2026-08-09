@@ -107,7 +107,7 @@ function proposalItem({ assignedAgentId, objective, output, criterion }) {
 // obvious, known, or must be discovered. Keeping the mechanics identical makes
 // the family comparison about allocation behaviour rather than fixture shape.
 function separableRequiredFamilyScenario({ family, scenarioId, objective,
-  alphaPath, betaPath, plannerObjectives }) {
+  alphaPath, betaPath, plannerObjectives, contextDeclaration }) {
   return Object.freeze({
     protocolVersion: PROTOCOL_VERSION,
     scenarioId,
@@ -120,7 +120,8 @@ function separableRequiredFamilyScenario({ family, scenarioId, objective,
     declaredWork: Object.freeze({
       objective,
       expectedOutputs: Object.freeze([
-        Object.freeze({ kind: 'text', declaration: 'One folder per declared path' })
+        Object.freeze({ kind: 'text', declaration: 'One folder per declared path' }),
+        Object.freeze({ kind: 'text', declaration: contextDeclaration })
       ]),
       successCriteria: Object.freeze([
         Object.freeze({ kind: 'text', declaration: 'Both declared folders exist' })
@@ -268,26 +269,28 @@ const SCENARIOS = Object.freeze({
   'family-2-cleanly-separable': separableRequiredFamilyScenario({
     family: 2,
     scenarioId: 'family-2-cleanly-separable',
-    objective: 'Create independent folders reports/separable-alpha/done and ' +
+    objective: 'Create folders reports/separable-alpha/done and ' +
       'reports-b/separable-beta/done',
     alphaPath: 'reports/separable-alpha/done',
     betaPath: 'reports-b/separable-beta/done',
     plannerObjectives: Object.freeze([
       'Create reports/separable-alpha/done inside your allocated path',
       'Create reports-b/separable-beta/done inside your allocated path'
-    ])
+    ]),
+    contextDeclaration: 'The two outputs are independent and cleanly separable'
   }),
   'family-2-cleanly-separable-alt': separableRequiredFamilyScenario({
     family: 2,
     scenarioId: 'family-2-cleanly-separable-alt',
-    objective: 'Create independent folders reports/separable-gamma/done and ' +
+    objective: 'Create folders reports/separable-gamma/done and ' +
       'reports-b/separable-delta/done',
     alphaPath: 'reports/separable-gamma/done',
     betaPath: 'reports-b/separable-delta/done',
     plannerObjectives: Object.freeze([
       'Create reports/separable-gamma/done inside your allocated path',
       'Create reports-b/separable-delta/done inside your allocated path'
-    ])
+    ]),
+    contextDeclaration: 'The two outputs are independent and cleanly separable'
   }),
 
   // ── FAMILY 3 — legitimate sibling dependency ─────────────────────────────
@@ -525,26 +528,28 @@ const SCENARIOS = Object.freeze({
   'family-5-ownership-known': separableRequiredFamilyScenario({
     family: 5,
     scenarioId: 'family-5-ownership-known',
-    objective: 'Ownership is known: create reports/known-alpha/done in the ' +
-      'reports owner and reports-b/known-beta/done in the reports-b owner',
+    objective: 'Create folders reports/known-alpha/done and ' +
+      'reports-b/known-beta/done',
     alphaPath: 'reports/known-alpha/done',
     betaPath: 'reports-b/known-beta/done',
     plannerObjectives: Object.freeze([
       'As the reports owner, create reports/known-alpha/done',
       'As the reports-b owner, create reports-b/known-beta/done'
-    ])
+    ]),
+    contextDeclaration: 'Output ownership is known in advance from the declared paths'
   }),
   'family-5-ownership-known-alt': separableRequiredFamilyScenario({
     family: 5,
     scenarioId: 'family-5-ownership-known-alt',
-    objective: 'Ownership is known: create reports/known-gamma/done in the ' +
-      'reports owner and reports-b/known-delta/done in the reports-b owner',
+    objective: 'Create folders reports/known-gamma/done and ' +
+      'reports-b/known-delta/done',
     alphaPath: 'reports/known-gamma/done',
     betaPath: 'reports-b/known-delta/done',
     plannerObjectives: Object.freeze([
       'As the reports owner, create reports/known-gamma/done',
       'As the reports-b owner, create reports-b/known-delta/done'
-    ])
+    ]),
+    contextDeclaration: 'Output ownership is known in advance from the declared paths'
   }),
 
   // ── FAMILY 6 — ownership unknown in advance ─────────────────────────────
@@ -554,26 +559,28 @@ const SCENARIOS = Object.freeze({
   'family-6-ownership-unknown': separableRequiredFamilyScenario({
     family: 6,
     scenarioId: 'family-6-ownership-unknown',
-    objective: 'Determine the suitable owners, then create ' +
-      'reports/discovered-alpha/done and reports-b/discovered-beta/done',
+    objective: 'Create folders reports/discovered-alpha/done and ' +
+      'reports-b/discovered-beta/done',
     alphaPath: 'reports/discovered-alpha/done',
     betaPath: 'reports-b/discovered-beta/done',
     plannerObjectives: Object.freeze([
       'Determine ownership and create reports/discovered-alpha/done',
       'Determine ownership and create reports-b/discovered-beta/done'
-    ])
+    ]),
+    contextDeclaration: 'Output ownership must be determined at allocation time'
   }),
   'family-6-ownership-unknown-alt': separableRequiredFamilyScenario({
     family: 6,
     scenarioId: 'family-6-ownership-unknown-alt',
-    objective: 'Determine the suitable owners, then create ' +
-      'reports/discovered-gamma/done and reports-b/discovered-delta/done',
+    objective: 'Create folders reports/discovered-gamma/done and ' +
+      'reports-b/discovered-delta/done',
     alphaPath: 'reports/discovered-gamma/done',
     betaPath: 'reports-b/discovered-delta/done',
     plannerObjectives: Object.freeze([
       'Determine ownership and create reports/discovered-gamma/done',
       'Determine ownership and create reports-b/discovered-delta/done'
-    ])
+    ]),
+    contextDeclaration: 'Output ownership must be determined at allocation time'
   }),
 
   // ── FAMILY 7 — genuine churn and its neighbouring controls ───────────────

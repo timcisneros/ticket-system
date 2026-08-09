@@ -2622,3 +2622,14 @@ Its canonical maximum is 17,160,360 micro-USD (840 attempts x 20,429), within th
 unchanged 20,000,000 micro-USD ceiling. Fixture identities, fixture result,
 decision thresholds, metrics, provider/model/request controls and v1 bytes are
 unchanged.
+
+The first source-bound synthetic attempt after introducing v2 was not accepted:
+its local wrapper ended before slot 60, and its partial synthetic artifacts
+revealed `GOVERNED_LEAF_NO_EVALUABLE_FACT` on the new family 2/5/6 objectives.
+Those objectives had descriptive prefixes outside the repository's canonical
+create-folder grammar. The target paths and family meanings are unchanged;
+ticket objectives now use `Create folders X and Y`, and the separability/known-
+ownership/unknown-ownership context remains in declared-work evidence. A
+provider-free source test requires two typed folder facts for all eight v2
+scenario cells, and focused B/C production-path diagnostics cover all required
+families before a fresh acceptance is permitted.

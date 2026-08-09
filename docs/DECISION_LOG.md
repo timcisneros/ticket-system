@@ -19,6 +19,14 @@ under repetition agreement. Its canonical hash is
 matrix maximum is 17,160,360 micro-USD under the unchanged $20 ceiling. No
 aborted-corpus outcome informed the selection.
 
+The first post-commit synthetic attempt was not an acceptance: a local wrapper
+ceiling stopped before the fixed restart point, and the partial synthetic state
+revealed that the newly worded family 2/5/6 objectives admitted no deterministic
+folder facts. The bounded follow-up expresses those same targets through the
+existing `Create folders X and Y` grammar. Family context stays in declared
+work, and production-path B/C diagnostics now admit governed leaves without a
+leaf-admission refusal.
+
 ## Frozen-matrix executor built; live run had halted at the gate (2026-08-07)
 
 The authorized 120-slot live run passed every opening and preflight check and
