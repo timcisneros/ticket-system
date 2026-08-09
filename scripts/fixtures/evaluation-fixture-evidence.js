@@ -210,7 +210,7 @@ function validateFixtureEvidence({ root, registry, registryBytes = null,
       report.manifestHash !== manifestHash || report.scoredRunHash !== runHeaderHash ||
       report.repositoryCommit !== header.repositoryCommit ||
       report.fixtureEvidenceVersion !== SUPPORTED_FIXTURE_EVIDENCE_VERSION ||
-      report.frozenDecision?.decision !== 'STOP') {
+      report.frozenDecision?.decision !== FIXTURE_CONCLUSION) {
     throw new FixtureEvidenceError('fixture scored report provenance does not close',
       { code: 'FIXTURE_EVIDENCE_REPORT_PROVENANCE_DRIFT' });
   }
@@ -238,9 +238,12 @@ function validateFixtureEvidence({ root, registry, registryBytes = null,
     registryHash,
     fixtureSourceCommit: header.repositoryCommit,
     fixtureManifestHash: manifestHash,
+    fixtureManifestRawFileSha256: manifestFile.rawFileSha256,
     fixtureRunHeaderHash: runHeaderHash,
+    fixtureRunHeaderRawFileSha256: headerFile.rawFileSha256,
     fixtureCorpusHash: corpusHash,
     fixtureCorpusIndexHash: indexHash,
+    fixtureCorpusIndexRawFileSha256: indexFile.rawFileSha256,
     fixtureReportHash: reportHash,
     fixtureReportRawFileSha256: reportFile.rawFileSha256,
     fixtureMarkdownRawFileSha256: markdownFile.rawFileSha256,
@@ -278,9 +281,14 @@ function resolveFixtureEvidenceForLiveManifest({
   });
   const expected = {
     registryHash: binding.registryHash,
+    fixtureSourceCommit: binding.fixtureSourceCommit,
     fixtureManifestHash: manifest.source.fixtureManifestHash,
+    fixtureManifestRawFileSha256: binding.manifestRawFileSha256,
     fixtureRunHeaderHash: binding.runHeaderHash,
+    fixtureRunHeaderRawFileSha256: binding.runHeaderRawFileSha256,
     fixtureCorpusHash: manifest.source.fixtureCorpusHash,
+    fixtureCorpusIndexHash: binding.corpusIndexHash,
+    fixtureCorpusIndexRawFileSha256: binding.corpusIndexRawFileSha256,
     fixtureReportHash: manifest.source.fixtureReportHash,
     fixtureReportRawFileSha256: binding.reportRawFileSha256,
     fixtureMarkdownRawFileSha256: binding.markdownRawFileSha256,

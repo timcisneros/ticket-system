@@ -53,7 +53,7 @@ const {
 const {
   dispatchGovernedRequest
 } = require('../runtime/governed-provider-transport');
-const liveManifest = require('../config/structured-allocation-evaluation-live-v2.json');
+const liveManifest = require('../config/structured-allocation-evaluation-live-v3.json');
 
 const CONTROLS = Object.freeze({
   temperature: liveManifest.sampling.temperature,

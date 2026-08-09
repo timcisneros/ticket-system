@@ -1,0 +1,41 @@
+{
+  "fixtureEvidenceRegistryVersion": 1,
+  "fixtureEvidenceVersion": 2,
+  "evidenceClass": "SCORED FIXTURE EVIDENCE",
+  "fixtureSourceCommit": "ca2cd188a6e10a41eb4bd36ee7eb10504b41978c",
+  "fixtureManifestHash": "3521079e6924abd2d546bad2a6a5bfda342b9d64f1578675af6a52a35a43d490",
+  "fixtureRunHeaderHash": "0529783aac957828ec6f012d3131d681f7f5a986d67e2cf113bae324d6be4a2e",
+  "fixtureCorpusHash": "be18c7e405efabedf135b5d88c46cbca207446093fc1fbbf60c25852b6769324",
+  "fixtureCorpusIndexHash": "7b51e6b90c8bff461debcb525c61c78680e924cc856d112e466792c7911980cb",
+  "fixtureReportHash": "24b672e6946aab780eb0662bbaacbe698e66b36f9ec0dbe07c38b5448dd5df22",
+  "conclusion": "FIXTURE EVIDENCE SUPPORTS STOP",
+  "trialCount": 200,
+  "exclusionCount": 0,
+  "files": {
+    "manifest": {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/fixture-manifest-v2.json",
+      "rawFileSha256": "5d30b785190d6576459607521f9bdee3a634961c336e253540eb77c179f2f0b8"
+    },
+    "runHeader": {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/scored-run-header.json",
+      "rawFileSha256": "d0fb4239e199a3f0bd9391ab9f9cb2c575710bd2c035bdf930c4db28f606494b"
+    },
+    "journal": {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/scored-run-journal.jsonl",
+      "rawFileSha256": "3d4624b7ed3d7bfa92b5b8b67d23e3ca6c2c3e97d1fb367508b367a62f9c2a21"
+    },
+    "corpusIndex": {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/fixture-corpus-index-v2.json",
+      "rawFileSha256": "9690971c6de67f887a3be4f75c6e0bfccac24d703131a7d9be1b77874bf819ff"
+    },
+    "reportJson": {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/structured-allocation-scored-fixture-report-v2.json",
+      "rawFileSha256": "a636cd055124ce845823a3e5949f3d344d05dfc657873e0abddc43910fe9d5d6"
+    },
+    "reportMarkdown": {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/structured-allocation-scored-fixture-report-v2.md",
+      "rawFileSha256": "af91f515a7fc908c0d30ce1a5fe9247ce37bd98fc3c54b2c56f666a2fbad98b5"
+    }
+  },
+  "registryHash": "9a3884d53918046e8afbf96e9ff39d0bb96ed82bc22a4b03241e1f953634f75f"
+}

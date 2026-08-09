@@ -16,14 +16,19 @@ const os = require('node:os');
 const path = require('node:path');
 
 const liveV1 = require('../config/structured-allocation-evaluation-live-v1.json');
-const live = require('../config/structured-allocation-evaluation-live-v2.json');
-const fixture = require('../config/structured-allocation-evaluation-scored-v1.json');
+const liveV2 = require('../config/structured-allocation-evaluation-live-v2.json');
+const live = require('../config/structured-allocation-evaluation-live-v3.json');
+const fixtureV1 = require('../config/structured-allocation-evaluation-scored-v1.json');
+const fixture = require('../config/structured-allocation-evaluation-scored-v2.json');
+const fixtureEvidence = require('../config/structured-allocation-evaluation-fixture-evidence-v2.json');
 const protocol = require('../config/structured-allocation-evaluation-v1.json');
 const {
   APPROVED, LiveManifestError, assertWithinCap, buildLiveManifest, computeLiability,
   deriveLiveCells
 } = require('./fixtures/evaluation-live-manifest');
 const { buildLiveManifestV2 } = require('./fixtures/evaluation-live-manifest-v2');
+const { buildLiveManifestV3 } = require('./fixtures/evaluation-live-manifest-v3');
+const { sha256 } = require('./fixtures/evaluation-fixture-evidence');
 const {
   REQUIRED_FAMILIES, validateLiveV2Topology
 } = require('./fixtures/evaluation-live-v2-matrix');
@@ -71,13 +76,22 @@ async function main() {
      liveV1.manifestHash ===
        '792d228f939d597891da25bd4d779d76999940c2040e7e846afaf81fc35530b6',
   'historical live-v1 reproduces byte-identically from source');
-  const rebuilt = buildLiveManifestV2({
-    fixtureCorpusHash: live.source.fixtureCorpusHash,
-    fixtureReportHash: live.source.fixtureReportHash,
+  const rebuiltV2 = buildLiveManifestV2({
+    fixtureCorpusHash: liveV2.source.fixtureCorpusHash,
+    fixtureReportHash: liveV2.source.fixtureReportHash,
+    artifactRootRecipe: liveV2.artifactRootRecipe
+  });
+  ok(rebuiltV2.manifestHash === liveV2.manifestHash,
+    'the committed live-v2 manifest reproduces byte-identically from source');
+  const registryPath = path.join(__dirname, '..', 'config',
+    'structured-allocation-evaluation-fixture-evidence-v2.json');
+  const rebuilt = buildLiveManifestV3({
+    fixtureEvidenceRegistry: fixtureEvidence,
+    registryRawFileSha256: sha256(fs.readFileSync(registryPath)),
     artifactRootRecipe: live.artifactRootRecipe
   });
   ok(rebuilt.manifestHash === live.manifestHash,
-    'the committed live-v2 manifest reproduces byte-identically from source');
+    'the committed live-v3 manifest reproduces byte-identically from source');
   ok(rebuilt.economics.computedWorstCaseMicroUsd ===
      live.economics.computedWorstCaseMicroUsd,
   'including its recomputed worst-case liability');
@@ -88,7 +102,7 @@ async function main() {
     '2 exactly 3 repetitions, read from the frozen protocol');
   ok(live.totalAssignedTrials === 120 && live.slots.length === 120,
     '3 exactly 120 assigned slots');
-  const fixtureCells = new Set(fixture.trials.map(t =>
+  const fixtureCells = new Set(fixtureV1.trials.map(t =>
     `${t.cellId}|${t.variantId === null ? '' : t.variantId}|${t.armId}`));
   ok(liveV1.cells.every(cell => fixtureCells.has(cell.cellKey)) &&
      liveV1.cells.length === fixtureCells.size &&
@@ -97,9 +111,13 @@ async function main() {
   ok(validateLiveV2Topology(live.cells) &&
      JSON.stringify([...new Set(live.cells.map(cell => cell.family))]) ===
        JSON.stringify(REQUIRED_FAMILIES),
-  '5 v2 is derived from the exact frozen decision-required family topology');
+  '5 v3 preserves the exact frozen decision-required live-v2 topology');
   ok(live.source.fixtureManifestHash === fixture.manifestHash,
-    'the v2 manifest keeps the exact immutable fixture evidence identity');
+    'the v3 manifest binds the repository-owned fixture-v2 manifest identity');
+  ok(live.source.fixtureEvidence.version === 2 &&
+     live.source.fixtureEvidence.runHeaderHash ===
+       fixtureEvidence.fixtureRunHeaderHash,
+  'the v3 manifest binds the complete non-secret fixture-v2 authority');
 
   // ── 6-10. Sampling is explicit, identical, and seedless ───────────────
   ok(live.sampling.temperature === 0 && live.sampling.topP === 1,
@@ -264,7 +282,7 @@ async function main() {
   });
   const result = await preflightLiveRun({
     manifestPath: path.join(__dirname, '..', 'config',
-      'structured-allocation-evaluation-live-v2.json'),
+      'structured-allocation-evaluation-live-v3.json'),
     outputRoot: dryRoot,
     resolvedLiveCredentialAuthority: dryAuthority
   });
@@ -299,7 +317,7 @@ async function main() {
   // 1-2 of the brief's list: the two executors refuse each other's manifest.
   ok(await refusesBecause(() => executeScoredRun({
     manifestPath: path.join(__dirname, '..', 'config',
-      'structured-allocation-evaluation-live-v2.json'),
+      'structured-allocation-evaluation-live-v3.json'),
     outputRoot: fs.mkdtempSync(path.join(os.tmpdir(), 'x-'))
   }), /requires the authorized live run and is refused here/),
   '1 the fixture executor REFUSES a live manifest, naming that as the reason');
@@ -344,9 +362,9 @@ async function main() {
     '23 the live phase is MANDATORY, superseding the optional-confirmation text');
 
   // The fixture evidence is untouched.
-  ok(fixture.manifestHash ===
+  ok(fixtureV1.manifestHash ===
      '044d37828f6f251eefaef66eccb2362ff6c6498c689baf54eb357870c4d9a07b' &&
-     fixture.trials.length === 200,
+     fixtureV1.trials.length === 200,
   'the frozen fixture manifest is unchanged');
   ok(live.containsResults === false, 'the live manifest carries no results');
 

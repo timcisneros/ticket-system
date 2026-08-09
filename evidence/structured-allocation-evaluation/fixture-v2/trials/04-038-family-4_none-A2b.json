@@ -1,0 +1,468 @@
+{
+  "schemaVersion": 1,
+  "protocolVersion": 1,
+  "repositoryCommit": "ca2cd188a6e10a41eb4bd36ee7eb10504b41978c",
+  "label": "SCORED FIXTURE TRIAL — FROZEN PROTOCOL V1",
+  "scoredRunHash": "0529783aac957828ec6f012d3131d681f7f5a986d67e2cf113bae324d6be4a2e",
+  "manifestHash": "3521079e6924abd2d546bad2a6a5bfda342b9d64f1578675af6a52a35a43d490",
+  "trialSlot": 38,
+  "trialId": "04-038-family-4_none-A2b",
+  "sourceCommit": "ca2cd188a6e10a41eb4bd36ee7eb10504b41978c",
+  "scenarioId": "family-4-coupled",
+  "family": 4,
+  "variantId": null,
+  "variantLabel": null,
+  "armId": "A2b",
+  "repetition": 4,
+  "seed": "755acebe16010609b2121dc79f184ce6",
+  "mode": "fixture",
+  "envelopeHash": "0e578b39ba88524c8322d3e112ed33673977799e60840a23cbc8b7a13fd00dee",
+  "pathProof": {
+    "observedPath": "legacy_v1",
+    "planVersion": 1,
+    "planningAttempts": 0,
+    "planningAttempted": false,
+    "planAdmitted": true,
+    "leafRunsAdmitted": false,
+    "governedLeafExecutionObserved": false,
+    "planningFailureReason": null,
+    "plannerRequestCount": 0,
+    "leafExecutorRequestCount": 0,
+    "claimedLeafRunCount": 0,
+    "executableItemCount": 2,
+    "plannerParentPolicyReference": null,
+    "workerParentPolicyReference": null,
+    "economicPolicySetVersion": null,
+    "economicPolicySetHash": null,
+    "plannerEconomicPolicyHash": null,
+    "workerEconomicPolicyHash": null,
+    "sameParentPolicyRevision": false,
+    "roleAccounts": [],
+    "aggregateReconciliationObserved": false,
+    "aggregateReconciliationAuthority": null,
+    "aggregateSettled": true,
+    "ticketResultStatus": "failed",
+    "ticketStatus": "failed",
+    "runCount": 2,
+    "governedLeafRunCount": 0,
+    "allocationPlanIds": [
+      "126"
+    ],
+    "authority": "durable_state",
+    "pathStage": "legacy_v1_dynamic_executed",
+    "expectedPathStage": "legacy_v1_dynamic_executed"
+  },
+  "ticketReport": {
+    "armId": "A2b",
+    "ticketId": "158",
+    "observedProductionPath": "legacy_v1",
+    "runIds": [
+      "363",
+      "364"
+    ],
+    "allocationPlanId": "126",
+    "allocationItemIds": [
+      "331",
+      "332"
+    ],
+    "plannerRequestCount": 0,
+    "workerRequestCount": 0,
+    "operationReceiptCount": 0,
+    "durableObservation": {
+      "version": 1,
+      "dispatchAuthorized": {
+        "state": "YES",
+        "requestAdmissions": 3,
+        "economicStarts": 0,
+        "source": "provider.request.persisted + ticket.economic_request_started"
+      },
+      "requestEvidence": {
+        "count": 3,
+        "meaning": "a provider request became durable after admission and BEFORE any byte left; it is not evidence that transport was reached",
+        "source": "provider.request.persisted"
+      },
+      "transport": {
+        "state": "INVOKED",
+        "count": 3,
+        "byRole": {
+          "ungoverned_worker": 3,
+          "structured_planner": 0,
+          "governed_leaf_worker": 0
+        },
+        "proves": "the production transport owner executed its platform transport call for this canonical provider request",
+        "doesNotProve": [
+          "that bytes were written to a socket",
+          "that the request reached the network",
+          "that the provider received the request",
+          "that the provider accepted or processed the request"
+        ],
+        "absenceMeans": "UNKNOWN — a crash between the platform call and this commit loses the fact, and so does a failed evidence write, which is deliberately not escalated into a provider failure; absence is never proof of non-invocation",
+        "source": "provider.transport_invoked"
+      },
+      "response": {
+        "state": "PERSISTED",
+        "count": 2,
+        "succeeded": 2,
+        "failed": 0,
+        "failureCodes": {},
+        "httpStatuses": {
+          "200": 2
+        },
+        "providerRequestIds": [
+          "fixture-d3b9b6d7bfe3bd84",
+          "fixture-f68f57a4113d2ce6"
+        ],
+        "source": "provider.response.persisted"
+      },
+      "extraction": {
+        "state": "SUCCEEDED",
+        "succeeded": 2,
+        "failed": 0,
+        "failureCodes": [
+          "OPENAI_NO_OUTPUT"
+        ],
+        "meaning": "a persisted successful provider response is reached only after a non-empty extraction; an empty one is refused as OPENAI_NO_OUTPUT",
+        "source": "provider.response.persisted outcome + code"
+      },
+      "parser": {
+        "accepted": 2,
+        "acceptedActionCounts": {
+          "3": 1,
+          "4": 1
+        },
+        "refused": 0,
+        "refusalCode": null,
+        "state": "ACCEPTED",
+        "source": "model.plan.parsed + run.execution_completed failure.code"
+      },
+      "actionLimit": {
+        "state": "REFUSED",
+        "refusals": 2,
+        "mutatingRefusals": 2,
+        "reasons": {
+          "mutating_action_limit": 2
+        },
+        "limits": {
+          "2": 2
+        },
+        "mutatingCounts": {
+          "3": 2
+        },
+        "proposedCounts": {
+          "3": 1,
+          "4": 1
+        },
+        "classification": "product_model_response_authority",
+        "meaning": "the response was STRUCTURALLY VALID and exceeded the per-response action authority; this is model/product data, not a parser or runtime defect",
+        "source": "action.suppressed / action.truncated reason + limit"
+      },
+      "workspace": {
+        "operationEvents": 0,
+        "accepted": 0,
+        "refused": 0,
+        "refusalCodes": {},
+        "refusalKinds": {},
+        "authorityDenials": 0,
+        "authorityDenialRules": {},
+        "state": "UNKNOWN",
+        "source": "workspace.operation + operation_receipts + authority.denied"
+      },
+      "operationReceipts": {
+        "count": 0,
+        "operations": {},
+        "meaning": "a receipt count of zero says nothing about whether a provider was called; it says only that no workspace operation was committed",
+        "source": "operation_receipts"
+      },
+      "delivered": {
+        "state": "COMPLETED",
+        "count": 2,
+        "source": "run.execution_completed"
+      },
+      "terminal": {
+        "state": "TERMINALIZED",
+        "statuses": {
+          "failed": 2
+        },
+        "failureCodes": {
+          "OPENAI_TRANSPORT_ERROR": 1,
+          "MODEL_RESPONSE_CONTRACT_VIOLATION": 1
+        },
+        "failureKinds": {
+          "provider_error": 1,
+          "no_progress": 1
+        },
+        "source": "run.terminalized + run.execution_completed failure"
+      },
+      "economics": {
+        "reservations": 0,
+        "reservationStates": {},
+        "meaning": "reservations bound spend; they are not transport attempts, and the ungoverned arms hold none while still invoking transport",
+        "source": "economic_request_reservations"
+      },
+      "nonImplications": [
+        "workerRequestCount = 0 does not imply transport was not invoked",
+        "no provider.response.persisted does not imply transport was not invoked",
+        "operationReceiptCount = 0 does not imply no provider was called",
+        "a failed Run does not imply the model response was malformed",
+        "an economic reservation is not a transport attempt"
+      ],
+      "projection": "derived entirely from durable events and records; this object is not an authority and decides nothing"
+    },
+    "terminalRunStatuses": [
+      "failed",
+      "failed"
+    ],
+    "terminalTicketStatus": "failed",
+    "productClaimsCompleted": false,
+    "authority": {
+      "ticketStatus": "failed",
+      "anyRunCompleted": false,
+      "completionDecisionCount": 2,
+      "completionDecidedEvents": 2
+    },
+    "latency": {
+      "planningMs": null,
+      "timeToFirstExecutionMs": null,
+      "endToEndMs": 2374,
+      "recoveryMs": null,
+      "withheldMs": null
+    },
+    "churn": null,
+    "canonicalRequests": [
+      {
+        "role": "worker",
+        "provider": "openai",
+        "model": "gpt-4o-mini-2024-07-18",
+        "inputTokens": 320,
+        "outputTokens": 90
+      },
+      {
+        "role": "worker",
+        "provider": "openai",
+        "model": "gpt-4o-mini-2024-07-18",
+        "inputTokens": 320,
+        "outputTokens": 90
+      },
+      {
+        "role": "worker",
+        "provider": "openai",
+        "model": "gpt-4o-mini-2024-07-18",
+        "authorizedOutputTokens": 2048,
+        "boundInputTokens": 128000
+      }
+    ],
+    "durableGovernedMicroUsd": null,
+    "releasedReservations": 0,
+    "ownershipAssignments": [
+      {
+        "runId": "363",
+        "allocationItemId": "331"
+      },
+      {
+        "runId": "364",
+        "allocationItemId": "332"
+      }
+    ],
+    "secondReadIdentical": true
+  },
+  "oracleResult": {
+    "verdict": "fail",
+    "observations": [
+      {
+        "fact": "producer_artifact",
+        "verdict": "fail",
+        "detail": "absent"
+      }
+    ],
+    "authority": "independent_raw_state_and_fixture_access_log"
+  },
+  "couplingResult": null,
+  "normalizedCost": {
+    "pricingSnapshotHash": "e4b92167ee1ab92c5cd99347e5e3fa92233cf474f1df0d598a4723ceead5b188",
+    "measurement": "derived",
+    "plannerRequestCount": 0,
+    "plannerMicroUsd": 0,
+    "workerRequestCount": 3,
+    "workerMicroUsd": 20633,
+    "retries": 0,
+    "releasedReservations": 0,
+    "totalNormalizedMicroUsd": 20633,
+    "truthfulCompletions": 0,
+    "normalizedMicroUsdPerTruthfulCompletion": null,
+    "unmeteredRequestCount": 1,
+    "capturedEconomicCeilingMicroUsd": 1000000,
+    "ceilingAuthority": "captured_trial_economic_ceiling",
+    "normalizedExceedsCeiling": false,
+    "durableGovernedExceedsCeiling": null,
+    "exceededCeiling": false,
+    "durableGovernedMicroUsd": null,
+    "durableVersusNormalizedDeltaMicroUsd": null,
+    "requests": [
+      {
+        "role": "worker",
+        "provider": "openai",
+        "model": "gpt-4o-mini-2024-07-18",
+        "tokenSource": "metered_usage",
+        "inputTokens": 320,
+        "outputTokens": 90,
+        "microUsd": 102,
+        "measurement": "derived"
+      },
+      {
+        "role": "worker",
+        "provider": "openai",
+        "model": "gpt-4o-mini-2024-07-18",
+        "tokenSource": "metered_usage",
+        "inputTokens": 320,
+        "outputTokens": 90,
+        "microUsd": 102,
+        "measurement": "derived"
+      },
+      {
+        "role": "worker",
+        "provider": "openai",
+        "model": "gpt-4o-mini-2024-07-18",
+        "tokenSource": "authorized_maximum_assumed",
+        "inputTokens": null,
+        "outputTokens": null,
+        "microUsd": 20429,
+        "measurement": "derived"
+      }
+    ]
+  },
+  "durableGovernedCost": null,
+  "latency": {
+    "planningMs": null,
+    "timeToFirstExecutionMs": null,
+    "endToEndMs": 2374,
+    "recoveryMs": null,
+    "withheldMs": null
+  },
+  "churn": null,
+  "observationSinkVersion": 1,
+  "observationCompleteness": "complete",
+  "observationStreamIdentities": {
+    "provider_transport": "17fc02ef8d53b910f17d035d1b28a4e37aad332cc4c88ae621af34bc4f1de8f7",
+    "consumer_artifact_read": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "external_effect": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "churnFacts": {
+    "observationCompleteness": "complete",
+    "planner": {
+      "durableResponses": 0,
+      "attemptedTransports": 0,
+      "refusedTransports": 0,
+      "duplicateServedCalls": 0,
+      "responseIdentities": [],
+      "boundaries": [],
+      "boundaryCounts": {},
+      "injectedBoundaryCounts": {}
+    },
+    "worker": {
+      "durableResponses": 2,
+      "attemptedTransports": 2,
+      "refusedTransports": 0,
+      "duplicateServedCalls": 0,
+      "responseIdentities": [
+        "fixture-d3b9b6d7bfe3bd84",
+        "fixture-f68f57a4113d2ce6"
+      ],
+      "boundaries": [
+        "response_durable"
+      ],
+      "boundaryCounts": {
+        "response_durable": 2
+      },
+      "injectedBoundaryCounts": {}
+    },
+    "durableResponses": 2,
+    "refusedTransports": 1,
+    "refusalReasons": [
+      "refused_before_transport"
+    ],
+    "noProgressStreak": null,
+    "progressBlocks": null,
+    "verifiedProgressCredits": null,
+    "providerRequests": 3
+  },
+  "recoveryFacts": {
+    "observationCompleteness": "complete",
+    "planner": {
+      "durableResponses": 0,
+      "attemptedTransports": 0,
+      "refusedTransports": 0,
+      "duplicateServedCalls": 0,
+      "responseIdentities": [],
+      "boundaries": [],
+      "boundaryCounts": {},
+      "injectedBoundaryCounts": {}
+    },
+    "worker": {
+      "durableResponses": 2,
+      "attemptedTransports": 2,
+      "refusedTransports": 0,
+      "duplicateServedCalls": 0,
+      "responseIdentities": [
+        "fixture-d3b9b6d7bfe3bd84",
+        "fixture-f68f57a4113d2ce6"
+      ],
+      "boundaries": [
+        "response_durable"
+      ],
+      "boundaryCounts": {
+        "response_durable": 2
+      },
+      "injectedBoundaryCounts": {}
+    },
+    "servedCalls": 2,
+    "attemptedTransports": 2,
+    "duplicateServedCalls": 0,
+    "responseIdentities": [
+      "fixture-d3b9b6d7bfe3bd84",
+      "fixture-f68f57a4113d2ce6"
+    ],
+    "durableResponse": true,
+    "refusedBefore": 1,
+    "committedEffects": 0,
+    "duplicateEffects": 0,
+    "failureBoundary": "none"
+  },
+  "variantExpectation": null,
+  "truthfulness": "true_negative_completion",
+  "quiescence": {
+    "ticketId": "158",
+    "quiescent": true,
+    "blockingConditions": [],
+    "outstanding": {
+      "pending_or_running_runs": 0,
+      "active_leases": 0,
+      "in_flight_governed_requests": 0,
+      "unresolved_delivery_uncertainty": 0,
+      "unsettled_reconstructible_reservations": 0,
+      "recoverable_terminalization": 0,
+      "scheduler_visible_retries": 0,
+      "pending_aggregate_reconciliation": 0,
+      "admitted_plan_without_leaf_runs": 0,
+      "active_fixture_requests": 0
+    },
+    "ticketStatus": "failed",
+    "authority": "read_only_observation",
+    "timedOut": false
+  },
+  "fixtureTranscriptHash": "835b95f944ad37c0a29225d38e404786b79d294827b7375fe3264f649315d5eb",
+  "externalStateHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "exclusions": [
+    {
+      "included": true,
+      "exclusionReason": null
+    }
+  ],
+  "warnings": [
+    "the trial staged 1 worker response(s) production never requested: 1|family-4-coupled|extra|755acebe16010609b2121dc79f184ce6|worker|1",
+    "truthfulness=true_negative_completion",
+    "transport={\"requestsObserved\":3,\"transportsServed\":2,\"refusals\":1,\"duplicateTransports\":0,\"distinctKeys\":2}",
+    "initialWorkspaceHash=6572f20b4f803c98dbe92dadcc412b9d2afbde1d44b075ac267c347770f712e1",
+    "zeroDriftFingerprint={\"runs\":2,\"run_revisions\":\"13\",\"events\":67,\"receipts\":0,\"reservations\":0,\"consequences\":2,\"logs\":20}"
+  ],
+  "artifactHash": "4a5c5ea8a769560b13ed578469b6dcc966899fcfb6a17fca47d0758d94473784"
+}

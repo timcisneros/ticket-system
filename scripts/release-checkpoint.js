@@ -47,6 +47,8 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'evaluation-live-readiness-test.js',
   // Tranche 6 — complete provider-free post-corpus scoring/report rehearsal.
   'evaluation-live-scoring-dress-rehearsal-test.js',
+  // Tranche 6 — actual production report CLI + retained fixture-v2 closure.
+  'evaluation-live-production-closure-test.js',
   // Tranche 6 — actual live topology reaches RETAIN/REVISE/STOP without a provider.
   'evaluation-live-decision-topology-test.js',
   // Tranche 6 — the frozen live manifest and its guards. No provider call.

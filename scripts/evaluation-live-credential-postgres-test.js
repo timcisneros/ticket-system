@@ -31,12 +31,12 @@ const {
   resolveRealLiveCredentialAuthority
 } = require('./fixtures/evaluation-server-env');
 const { ROLE_ECONOMICS } = require('./fixtures/governed-role-policy-container');
-const liveManifest = require('../config/structured-allocation-evaluation-live-v2.json');
+const liveManifest = require('../config/structured-allocation-evaluation-live-v3.json');
 
 const DUMMY_LIVE_CREDENTIAL = 'fake-configured-agent-authority-credential';
 const DUMMY_OTHER_CREDENTIAL = 'fake-second-configured-agent-authority-credential';
 const LIVE_MANIFEST_PATH = path.join(__dirname, '..', 'config',
-  'structured-allocation-evaluation-live-v2.json');
+  'structured-allocation-evaluation-live-v3.json');
 const CONTROLS = Object.freeze({
   temperature: liveManifest.sampling.temperature,
   topP: liveManifest.sampling.topP,

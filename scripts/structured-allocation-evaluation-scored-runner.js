@@ -55,6 +55,9 @@ const {
   resolveRealLiveCredentialAuthority,
   sameCredentialAuthority
 } = require('./fixtures/evaluation-server-env');
+const {
+  assertLiveScoringClosureReady
+} = require('./fixtures/evaluation-live-scoring-closure');
 
 const SCORED_RUNNER_VERSION = 1;
 const SCORED_ARTIFACT_LABEL = 'SCORED FIXTURE TRIAL — FROZEN PROTOCOL V1';
@@ -232,6 +235,9 @@ async function preflightLiveRun({
   if (manifest.containsResults !== false) {
     throw new ScoredRunnerError('a manifest that carries results may not drive a run');
   }
+  // BEFORE any provider-capable preflight. A live corpus is unauthorized when
+  // its immutable fixture input or production report owner is unavailable.
+  assertLiveScoringClosureReady({ manifest });
   // CREDENTIAL AUTHORITY ONLY. Ambient OPENAI_API_KEY is deliberately ignored:
   // the explicitly selected configured-agent row is the durable authority.
   // Only its non-secret identity is written; the resolver's credential stays
@@ -693,6 +699,10 @@ async function executeAuthorizedLiveRun({
       'authorized live execution requires a live manifest',
       { code: 'REAL_LIVE_MANIFEST_REQUIRED' });
   }
+  // This precedes credential resolution and authenticated provider preflight.
+  // The repository must already be able to close the post-corpus scoring path
+  // before it may spend even the preflight request.
+  assertLiveScoringClosureReady({ manifest });
   const resolvedLiveCredentialAuthority =
     await resolveRealLiveCredentialAuthority({
       store: authorityStore,

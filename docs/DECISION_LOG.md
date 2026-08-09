@@ -1,5 +1,30 @@
 # Decision Log
 
+## Retain fixture-v2 evidence and bind live-v3 to its bytes (2026-08-09)
+
+Historical fixture-v1 retains distinct recorded canonical and serialized-file
+hashes, but its original report bytes are not repository-owned and cannot be
+reproduced byte-for-byte. A report-shaped object repeating those identities is
+not evidence. Fixture-v1 and every live-v1/live-v2 run remain historical and
+unchanged; no aborted corpus was read for outcomes, rescored, or rebound.
+
+Fixture-v2 was generated through the provider-free fixture runner and scorer at
+source `ca2cd188a6e10a41eb4bd36ee7eb10504b41978c`. The complete 200-trial bundle
+is retained under `evidence/structured-allocation-evaluation/fixture-v2/`, and
+`config/structured-allocation-evaluation-fixture-evidence-v2.json` binds every
+authoritative file by raw SHA-256 plus its canonical manifest, run-header,
+corpus and report identities. A resolver reopens every retained artifact and
+validates the actual report bytes before returning parsed scoring input.
+
+Live-v3 keeps live-v2's 40-cell, 120-slot, decision-evaluable topology and
+17,160,360 micro-USD matrix maximum. Its new hash,
+`18508f5a94cd3b7667037e77154f83e7327ed3ca368fe0c4d308e6aa0b9f245c`,
+binds the complete fixture-v2 authority. The production report command no
+longer accepts an arbitrary fixture path. REAL execution cannot reach
+authenticated preflight unless the repository-owned fixture bytes and
+production report owner validate, and a canonical provider-free test invokes
+that exact command over a complete controlled live-v3-shaped corpus.
+
 ## Version live evaluation topology; preserve live-v1 (2026-08-09)
 
 The frozen RETAIN rule requires families 2, 3, 5 and 6, while historical

@@ -7,7 +7,7 @@
 
 const assert = require('node:assert/strict');
 
-const manifest = require('../config/structured-allocation-evaluation-live-v2.json');
+const manifest = require('../config/structured-allocation-evaluation-live-v3.json');
 const protocol = require('../config/structured-allocation-evaluation-v1.json');
 const {
   evaluateLiveHardDisqualifiers, evaluateLiveOrdinaryDecision
@@ -131,8 +131,8 @@ function decide(branch) {
 
 function main() {
   console.log('evaluation live decision topology reachability');
-  ok(manifest.liveManifestVersion === 2 && validateLiveV2Topology(manifest.cells),
-    'the exact live-v2 manifest satisfies its canonical topology validator');
+  ok(manifest.liveManifestVersion === 3 && validateLiveV2Topology(manifest.cells),
+    'the exact live-v3 manifest preserves the canonical live-v2 topology validator');
   ok(JSON.stringify([...new Set(manifest.cells.map(cell => cell.family))]) ===
      JSON.stringify(REQUIRED_FAMILIES),
   'the live family set is exactly the four frozen RETAIN-required families');

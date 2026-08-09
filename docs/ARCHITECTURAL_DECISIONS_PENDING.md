@@ -1,7 +1,8 @@
 ## TRANCHE 6 LIVE-V2 CORPUS ABORTED BY MISSING IMMUTABLE FIXTURE INPUT (2026-08-09)
 
-**Status: OPEN — the run is permanently `ABORTED — NOT DECISION EVIDENCE`;
-do not resume, score, import, adapt, or use it to tune a later experiment.**
+**Status: RESOLVED IN SOURCE 2026-08-09 — the run remains permanently
+`ABORTED — NOT DECISION EVIDENCE`; do not resume, score, import, adapt, or use
+it to tune a later experiment.**
 
 The authorized REAL LIVE-V2 evaluation ran against exact executable source
 `bf7a932f8ea9b61087a189c51be1f383b8dc5960`, live-manifest v2 hash
@@ -48,6 +49,31 @@ the 125-file aborted-bundle hash is
 `293cd76a5f77fb9a63356b646e3555664b951e560db45364408ce8baca13881b`.
 Historical live-v1 manifests and every earlier aborted real corpus remain
 unchanged.
+
+The provenance gap is closed for future authorization by a new, versioned
+authority rather than by recreating or summarizing fixture-v1. Fixture-v2 was
+executed provider-free against source
+`ca2cd188a6e10a41eb4bd36ee7eb10504b41978c`; the repository retains its
+complete 200-trial corpus, journal, run header, scored JSON/Markdown, and a
+registry that separately validates canonical identities and raw-file SHA-256
+values under `evidence/structured-allocation-evaluation/fixture-v2/`. Its
+manifest, run-header, corpus and canonical report identities are respectively
+`3521079e6924abd2d546bad2a6a5bfda342b9d64f1578675af6a52a35a43d490`,
+`0529783aac957828ec6f012d3131d681f7f5a986d67e2cf113bae324d6be4a2e`,
+`be18c7e405efabedf135b5d88c46cbca207446093fc1fbbf60c25852b6769324`,
+and `24b672e6946aab780eb0662bbaacbe698e66b36f9ec0dbe07c38b5448dd5df22`.
+Its independently reproduced conclusion remains **FIXTURE EVIDENCE SUPPORTS
+STOP**.
+
+Live-v3 preserves the exact decision-evaluable v2 topology/economics but binds
+the complete fixture-v2 registry and retained bytes. Its manifest hash is
+`18508f5a94cd3b7667037e77154f83e7327ed3ca368fe0c4d308e6aa0b9f245c`.
+The production live report command now resolves that authority itself; an
+operator path or in-memory report-shaped capsule is insufficient. A mandatory
+provider-free production-command rehearsal proves the whole post-corpus path,
+and REAL preflight is gated on opening the same retained evidence. Live-v3 is
+candidate authority only: no provider authorization or real corpus is implied
+by this resolution.
 
 ---
 

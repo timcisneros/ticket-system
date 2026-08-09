@@ -96,7 +96,8 @@ function main() {
   for (const id of ['live_matrix_membership', 'sampling_parameters',
     'provider_seed_support', 'live_economic_ceiling',
     'provider_failure_classification', 'rate_limit_and_outage_handling',
-    'fixture_live_evidence_combination', 'live_phase_necessity']) {
+    'fixture_live_evidence_combination', 'live_phase_necessity',
+    'fixture_evidence_provenance']) {
     ok(frozen.has(id), `${id} is FROZEN, derived from the live manifest`);
   }
   ok(audit.unresolved.length === 0 &&
@@ -149,7 +150,7 @@ function main() {
     'every per-arm request ceiling states the frozen basis it came from');
   // A CAP IS NOT AN AUTHORIZATION TO SPEND IT. The manifest says so in terms.
   const liveManifestPath = path.join(__dirname, '..', 'config',
-    'structured-allocation-evaluation-live-v2.json');
+    'structured-allocation-evaluation-live-v3.json');
   ok(fs.existsSync(liveManifestPath),
     'the live manifest exists now that every decision is frozen');
   const liveManifest = JSON.parse(fs.readFileSync(liveManifestPath, 'utf8'));

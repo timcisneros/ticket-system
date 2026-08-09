@@ -1,0 +1,1214 @@
+{
+  "fixtureCorpusIndexVersion": 1,
+  "fixtureEvidenceVersion": 2,
+  "evidenceClass": "SCORED FIXTURE EVIDENCE",
+  "sourceCommit": "ca2cd188a6e10a41eb4bd36ee7eb10504b41978c",
+  "manifestHash": "3521079e6924abd2d546bad2a6a5bfda342b9d64f1578675af6a52a35a43d490",
+  "runHeaderHash": "0529783aac957828ec6f012d3131d681f7f5a986d67e2cf113bae324d6be4a2e",
+  "corpusHash": "be18c7e405efabedf135b5d88c46cbca207446093fc1fbbf60c25852b6769324",
+  "trialCount": 200,
+  "exclusionCount": 0,
+  "artifacts": [
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-001-family-3_none-A.json",
+      "rawFileSha256": "a268f305c7cf77170b51241d9d6396089b98a42508504090f5e566e5dbe18eae",
+      "trialId": "01-001-family-3_none-A",
+      "artifactHash": "86c7d3110ce2e461e3a256d6467439aad1f5818bc53a3298752a30305ded934f"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-002-family-4_none-A.json",
+      "rawFileSha256": "ae1c66203d0207271c66997a5b649cf67e55451ec4eb1a569f5ee87b7495ba69",
+      "trialId": "01-002-family-4_none-A",
+      "artifactHash": "15e6fc2c68075b3c47b304dfdafe139e03c807d47f0b2d0dd150b0de5cb679e9"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-003-family-8_8A-A.json",
+      "rawFileSha256": "ca3a4cfdd28e3eddb654dbbeeb1f8cf2efded9999fdb028bdad4895a5745467a",
+      "trialId": "01-003-family-8_8A-A",
+      "artifactHash": "b62f16d3242777b7a7ffe0835dbb8147ace21fd0a49b6a336bab858676e145de"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-004-family-8_8B-A.json",
+      "rawFileSha256": "14629c4549626ea3870ddf810cb33153e47faf7f6ab07b1c203c3bfdac1bbde7",
+      "trialId": "01-004-family-8_8B-A",
+      "artifactHash": "0230fd41c3fb049884e3163a4d63e0885e036478986444b4d1080ed281ad14ed"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-005-family-8_8C-A.json",
+      "rawFileSha256": "67e6eefd63801e8eac94141597c83f2fe19e6ff0186e27327efa6e4e1514be99",
+      "trialId": "01-005-family-8_8C-A",
+      "artifactHash": "a205322159675e3445be5db17f669a9676eaa8f1209b3471ef5145e2d39ed50d"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-006-family-8_8D-A.json",
+      "rawFileSha256": "501eed2d268f644f73bec430963bb1a3908db16c7cdee5fd405f06c5062a0f46",
+      "trialId": "01-006-family-8_8D-A",
+      "artifactHash": "bb7cf7cb521e1d59a8db6f7b212a82247855e6e262250bdd732a3e0aecc37da1"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-007-family-9_9A-A.json",
+      "rawFileSha256": "db060b3aafdb1e5010ce062b967e7974620ec2bd054708276cef3132426cadfd",
+      "trialId": "01-007-family-9_9A-A",
+      "artifactHash": "11feedc2d9c8ae0eb866d99883c27a53b5edbe69d23eb66f01a1afd7541f64d2"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-008-family-9_9C-A.json",
+      "rawFileSha256": "a73858c4e9c2a95defb4f79261b799a1e4acc9496ce3f84ca63a4c1c639dc881",
+      "trialId": "01-008-family-9_9C-A",
+      "artifactHash": "ae0151b6f1b31e5f5b7fcd92278fe86da04e4a9e7b3706c5cccdeea8901f39dc"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-009-family-3_none-A2a.json",
+      "rawFileSha256": "2ce0dc704e957cf028db5b1a21003930df0860299857dc4681179633821d6b09",
+      "trialId": "01-009-family-3_none-A2a",
+      "artifactHash": "33c30518fc668f063b83e50d144d6b1465d1a04aec84211fa085c3555a375fd1"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-010-family-4_none-A2a.json",
+      "rawFileSha256": "a2ecf8d70471d699e8866000ba34f3acd839c6e0b7d2a8f45dfd5902223f4618",
+      "trialId": "01-010-family-4_none-A2a",
+      "artifactHash": "f6323afd58f9e71c63279a3de19799e2c97b48f6a880ca39f7ee0bb508e7e1d8"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-011-family-8_8A-A2a.json",
+      "rawFileSha256": "53e266ac3d94d511ca5cb2fa43d77c38c765c9f4c8f193b0f9a2e33caa79133c",
+      "trialId": "01-011-family-8_8A-A2a",
+      "artifactHash": "f47ea5936422892f4f198c9baa17f329ff7d2398fac7872f4184a97e1dffd07d"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-012-family-8_8B-A2a.json",
+      "rawFileSha256": "d1d7d38fddeb06df10e8bdfa1666f0f8c7f723c2a45e0902fd22a363b23f9c3e",
+      "trialId": "01-012-family-8_8B-A2a",
+      "artifactHash": "8d82992db5821b723b38238b2a4378169744408ef00f81325fddab8b459a4ce0"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-013-family-8_8C-A2a.json",
+      "rawFileSha256": "c00bbd76c7984ed32f6ec20b5664c784a331f312aa44efde9117c6487b38ee5c",
+      "trialId": "01-013-family-8_8C-A2a",
+      "artifactHash": "c23158fe422b53d3377ba1ba60dc83f1cc2241debee6b1a01849db05038f7587"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-014-family-8_8D-A2a.json",
+      "rawFileSha256": "3e110f7e217bc2002caf8f4bbdfd7950c3b60138a60e2090a1e4eb1c25a3f32b",
+      "trialId": "01-014-family-8_8D-A2a",
+      "artifactHash": "71a683b0c343880b29bdfb8c7b1ca6fbdec4507259a35f1c47258616fdcaeeb9"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-015-family-9_9A-A2a.json",
+      "rawFileSha256": "0ccf36754492034e480c008fbf261adcf5ff8c5f4c78035f6c26dafeff46d09b",
+      "trialId": "01-015-family-9_9A-A2a",
+      "artifactHash": "e55518d761fd92f5e8ae2c6facdfe784df64251426e36d8ac9ababf0af01a47a"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-016-family-9_9C-A2a.json",
+      "rawFileSha256": "a326623df5d31abfc5634fe8c1c7f09ba585d76a18e30ef4d4778f855a9f3427",
+      "trialId": "01-016-family-9_9C-A2a",
+      "artifactHash": "4809ab83657c8dcc1ee43c5ad2f71dab32f6bd21dbb2e1e1b4ca317b33878037"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-017-family-3_none-A2b.json",
+      "rawFileSha256": "5cc1510dbcc61ff2ad8f9541044d95c7dd689549822c0b32877bbf162f63094d",
+      "trialId": "01-017-family-3_none-A2b",
+      "artifactHash": "f7170f67e157934b1eb6b056b036cfdd2c6b1e542d99f2f327f05df18038d662"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-018-family-4_none-A2b.json",
+      "rawFileSha256": "685958e58d5a61a3feeb94da35a3f63a0c95410efb87f9ab5ec1f13641bd73e1",
+      "trialId": "01-018-family-4_none-A2b",
+      "artifactHash": "17b38a61c38a878454d9ddb6ac33c36c3d21747ed8e6ae4c1b9145a6f7c2707b"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-019-family-9_9A-A2b.json",
+      "rawFileSha256": "8f827055f2776b298fc77d4ded11daddbca535c768e1aafb00a587660d6e3806",
+      "trialId": "01-019-family-9_9A-A2b",
+      "artifactHash": "ec496d6903fe82b1600fdeda8751f63b6b4bd8d95877802998941753aaf98910"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-020-family-9_9C-A2b.json",
+      "rawFileSha256": "0d3cfd59c4933d84563b6b91400185385f93004029fa84612027a3b9f8b24eee",
+      "trialId": "01-020-family-9_9C-A2b",
+      "artifactHash": "4623de489e267d476c7a2495b81b7bc4b8ae9c74b6e6eb96080eba911fcc5e0c"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-021-family-3_none-B.json",
+      "rawFileSha256": "8d2d5f9eef66ba3d8610c90bdf50f5db735cecdff499996f96b80e37950a830b",
+      "trialId": "01-021-family-3_none-B",
+      "artifactHash": "ab67506acf6ea6406277c7bbf54c35e531f5f0f8c1613e6947088c7033a8b4e0"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-022-family-4_none-B.json",
+      "rawFileSha256": "cf42d8464a7ebad6d4f287c73b82845ce7acf1aaf7c9c303108a09ba33ff94d6",
+      "trialId": "01-022-family-4_none-B",
+      "artifactHash": "4ee5bdf9add4ccd147e07e6df9b422f428b86a66a6afb3f90af768d3b175f61e"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-023-family-7_7A-B.json",
+      "rawFileSha256": "e0426435d5347b64c6ebc6e355cf158fd9e21051ade1cf7f31463892947a573e",
+      "trialId": "01-023-family-7_7A-B",
+      "artifactHash": "3b9631b074791f65f49573b3158ca06ca63395877cc6f8fd6d8124d7054769cf"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-024-family-7_7B-B.json",
+      "rawFileSha256": "80e81505a200ffea3319465318a439ac3ec7361e56c21d6cb86cde8fc1482328",
+      "trialId": "01-024-family-7_7B-B",
+      "artifactHash": "69ecb2b7fc178486994832d881fbc0440472c078b68c264923ebe8349b4bf8dd"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-025-family-7_7C-B.json",
+      "rawFileSha256": "9f74a14928e849424250b47819b6bac0821b3863a590e6d9f90e7ef6d0b5e49e",
+      "trialId": "01-025-family-7_7C-B",
+      "artifactHash": "07a3e66aa3990dd64321ec812a567dfa0926049af279ffea38a150fd5f9cb24d"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-026-family-7_7D-B.json",
+      "rawFileSha256": "bf1ab9c0a41967e0268a2d1e6ca99b598fd7bbd56020b06f4e3f935f31ac8546",
+      "trialId": "01-026-family-7_7D-B",
+      "artifactHash": "291da02e55d1d947bc5fd7c87ed4b46c09cc8123fc45a3f5dc7500cd17b25b86"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-027-family-8_8A-B.json",
+      "rawFileSha256": "d2e05517cf3250dbac6ba9117704f24e4ca37f11f0fd26e726e4902a27a8ead1",
+      "trialId": "01-027-family-8_8A-B",
+      "artifactHash": "b74bc46d86534cde69b67058c82b066e0dcdb89db91e65dde3d7b709147f8d3a"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-028-family-8_8B-B.json",
+      "rawFileSha256": "789238e7bef51782d2a6b9e72a5e186bf1477f0458b4065f0b9d5952adef147b",
+      "trialId": "01-028-family-8_8B-B",
+      "artifactHash": "9af06c159a14a204e4f415b9211c7765ec1955513023d7dd2bdd03f081d07ff5"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-029-family-8_8C-B.json",
+      "rawFileSha256": "c3eecb67b3e570da9122a659c4551766c22f811492575771f0692dc8a3f83a21",
+      "trialId": "01-029-family-8_8C-B",
+      "artifactHash": "dd5db83fb79fb6ef0408439b3ec141e5672f00310ede4c2992da265c4f675c8f"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-030-family-8_8D-B.json",
+      "rawFileSha256": "9072bec90a3e557e97e98a35b0bb0e9b21650b5fd9916dffa03f67f01c8153ec",
+      "trialId": "01-030-family-8_8D-B",
+      "artifactHash": "80d9e9ad50549dc7e7c48dd00a10d895ec12b7999c2d1622ecc58e323d0b792a"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-031-family-9_9A-B.json",
+      "rawFileSha256": "96a4953de40e18d8853685fefda5425a64c763edb3cc418e948a049306e4a9ae",
+      "trialId": "01-031-family-9_9A-B",
+      "artifactHash": "558422bdb9000b413269faff8d3d6550bcb754bf92cc01f69cd385243d4576d1"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-032-family-9_9C-B.json",
+      "rawFileSha256": "43e9e14e3155452619b0e48185c428f352b2f9ab8ef891b41cf142bdee5decd1",
+      "trialId": "01-032-family-9_9C-B",
+      "artifactHash": "051d63dafe12e5440b63894a7b633ca8075720eac68fae4579aef4bb568faad2"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-033-family-3_none-C.json",
+      "rawFileSha256": "b7a514a9be4946b6188cb5f2c994163f0c95672c60e6c146a4ea13d88c68cd00",
+      "trialId": "01-033-family-3_none-C",
+      "artifactHash": "8976c8da7144e8e41453c6e0808842c03192ba73b6f00c8ac514bb20cde2a6a6"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-034-family-4_none-C.json",
+      "rawFileSha256": "b5fae6ee5768f4de93d2671c8a56dda8e6d7f512a02ddc944ccd9e2d26ad32fb",
+      "trialId": "01-034-family-4_none-C",
+      "artifactHash": "a702c26612d039cb95d633158724a1f5c5fe3a8ef6296e2b5a6eeb97a48f6308"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-035-family-7_7A-C.json",
+      "rawFileSha256": "26cdff20a100fbb25b10dc9e242356f7f5fd7e49c903a5dd027124b334bd2a19",
+      "trialId": "01-035-family-7_7A-C",
+      "artifactHash": "5da8774d2b63b5764903cb403465ccaf93e9184c858ad2e61414ee7389d33a28"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-036-family-7_7B-C.json",
+      "rawFileSha256": "33e267c2948941f6c152440dde6bafd7eaa163b067b9134ef5f028aa42a640eb",
+      "trialId": "01-036-family-7_7B-C",
+      "artifactHash": "43c74ff54c9f1f21bf6b6d3973a405105a10c8f79e7e84071526789c0ecf3695"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-037-family-7_7C-C.json",
+      "rawFileSha256": "77e67da726b9a62dd95b864739c2a27614aacd47cc51338a5036f93c767aba1d",
+      "trialId": "01-037-family-7_7C-C",
+      "artifactHash": "d77e6bc05db2c96d2e79824f51c7f40fbf75014cc9ba9a439b2de6115f8ffc9d"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-038-family-7_7D-C.json",
+      "rawFileSha256": "81fce0cf4c03ee4b35acb236c5588f678c1254281ee715f7efa021f665ff2074",
+      "trialId": "01-038-family-7_7D-C",
+      "artifactHash": "6e321395b42531bf9e95a1e7c4b264a00ba85433b228398b2da53d0d03d165bb"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-039-family-9_9A-C.json",
+      "rawFileSha256": "c0f52fb34f60ae12f4897b252f995bb2813b239c339275bcff166fcfd9aaa374",
+      "trialId": "01-039-family-9_9A-C",
+      "artifactHash": "f8b814faeec5589b6f520d0758a3da07de743be7aacb0c5a4d9b5438bd2003ac"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/01-040-family-9_9C-C.json",
+      "rawFileSha256": "cce6a65f9322b4eb596b223bdcbddb6aa7c990171911dd6c6b0689c9aab9cd68",
+      "trialId": "01-040-family-9_9C-C",
+      "artifactHash": "7e01345b96df5fedc1a8e3fde981c18d77453138ddccce7c674fd36b730eebd3"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-001-family-3_none-A2a.json",
+      "rawFileSha256": "e4af4d341e5e2eaf063058d66b84ab60c35f5a2d2629920e9abb87fef4ed81c2",
+      "trialId": "02-001-family-3_none-A2a",
+      "artifactHash": "b2ff841c24a315a22903793366c68755a3c12ceb9cb1ef43183b46cd4b516725"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-002-family-4_none-A2a.json",
+      "rawFileSha256": "698cbdfd33e7bb71f716f332f278c5c5fd071aaf4e934baf3135c9fcd1dedf0e",
+      "trialId": "02-002-family-4_none-A2a",
+      "artifactHash": "9c7e2d034f47fd14223ad3364591ac35b52533e1e47b00a5e22f2090754af481"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-003-family-8_8A-A2a.json",
+      "rawFileSha256": "bd039ec9299dc33b30a45382e2ba628400bf6a3f5160c8eb409f664ec34c49b8",
+      "trialId": "02-003-family-8_8A-A2a",
+      "artifactHash": "1085819b81b6fceed44eaa04c26119e5ea978d4aed5e573db5e69b0e01f2364e"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-004-family-8_8B-A2a.json",
+      "rawFileSha256": "43949b437ca1b279eb978a904381b04382a52ef0f2a8b34837c7b90635649226",
+      "trialId": "02-004-family-8_8B-A2a",
+      "artifactHash": "67628cad5051569eb503bfd8960c80b56c3b7c5607dd703c51a336734b56f66b"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-005-family-8_8C-A2a.json",
+      "rawFileSha256": "7fb3faa817dafc66eda001d1551cb47d9dccebe53fd9f7d606531a2daad7c5a1",
+      "trialId": "02-005-family-8_8C-A2a",
+      "artifactHash": "29c397c4dee168157981330bd31b6301d82ef8bc30ae63c4be36c5b8ad2c6fcc"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-006-family-8_8D-A2a.json",
+      "rawFileSha256": "9d32f243dc1a2c3b68984848dd58d0166bc994f3c7e5674dda89939ea5055a51",
+      "trialId": "02-006-family-8_8D-A2a",
+      "artifactHash": "8e591514bc629a18330dd9692ae73f77136b1cc52a4916330b90d7e374110d8a"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-007-family-9_9A-A2a.json",
+      "rawFileSha256": "4ac40b018da0c1c5e253d97d7fafdcda6c3aec8edc34bbda83257c6b9069a609",
+      "trialId": "02-007-family-9_9A-A2a",
+      "artifactHash": "7f549624074ff39b460a4fd7c55ce44fb1cda4af13040b046abdc525e775ed1c"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-008-family-9_9C-A2a.json",
+      "rawFileSha256": "4150ccea8772dbc78a429e5daae4006877989df3bed50f9329a43ae2a2db40c7",
+      "trialId": "02-008-family-9_9C-A2a",
+      "artifactHash": "30827e92f914fa93813b20120dc7edbccd9343b4bd466071436ecf68947b15b8"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-009-family-3_none-A2b.json",
+      "rawFileSha256": "4af6dd7df62257e4b3924f2e368d0ea7151b14cb2dba99ee5417cd89f805189f",
+      "trialId": "02-009-family-3_none-A2b",
+      "artifactHash": "5a0f71995d13349da7e114fb83410345bdea0821c61ed52e7314353834aedd97"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-010-family-4_none-A2b.json",
+      "rawFileSha256": "4b84581a14dd8cf6a90d447101822dc688ca297011d4f79ed525cd7970e70e3f",
+      "trialId": "02-010-family-4_none-A2b",
+      "artifactHash": "35f70e26b821c209b4a2b8d1f66c59655fc35eb1bab1ea8d2f3d8ae23391142e"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-011-family-9_9A-A2b.json",
+      "rawFileSha256": "6e5cb3175b7285a7705b243ce8e81603fb4022289157b1ec422d1074ada575d3",
+      "trialId": "02-011-family-9_9A-A2b",
+      "artifactHash": "37fe044b8b9c521bdfbe40b682c06475925a1d12c8ecb9fe97891410bbf7fe83"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-012-family-9_9C-A2b.json",
+      "rawFileSha256": "478d2fea2c1b2a3714e61ce5b67fb9c51d424f8133a95252e6ceaebe7c89e865",
+      "trialId": "02-012-family-9_9C-A2b",
+      "artifactHash": "31559e0766e8e561ca6c05b51a84410f196406cc90c7a4346b056469b632351d"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-013-family-3_none-B.json",
+      "rawFileSha256": "7bbac459b92bbd64db75ac75c09fb218f3418e88f275419d4dae0f0a1699a9db",
+      "trialId": "02-013-family-3_none-B",
+      "artifactHash": "fbfd2f194d58ebb0a3e33715b31890ff17739b4edfbf01aae37a8774dd3cdd21"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-014-family-4_none-B.json",
+      "rawFileSha256": "7270ba6821de53883f65e53a181044db1fb6cefdccf4fc02c81db383f4a75dff",
+      "trialId": "02-014-family-4_none-B",
+      "artifactHash": "51aef3083aaa8bed224210ec18989b6c6db37c5507e36c793f78dbd384871e48"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-015-family-7_7A-B.json",
+      "rawFileSha256": "c25c054afdf57ccc087757a9cd8951a08d559a7a28174a5f51c34280bb4e7ee7",
+      "trialId": "02-015-family-7_7A-B",
+      "artifactHash": "e10a4c6d52a6f2913a64ef1aeaf96c004acbdbae3a0c0ba421d47b251f3991ef"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-016-family-7_7B-B.json",
+      "rawFileSha256": "6459389c7fcfca63bda82086e49749bd6ce71081430fe131bff61a1ebee62f42",
+      "trialId": "02-016-family-7_7B-B",
+      "artifactHash": "89bbeede3653d01c886748763bb6188272f526d6613987a99b2edf1195754ceb"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-017-family-7_7C-B.json",
+      "rawFileSha256": "a2427bb19521f2fd98ffbd8054b1b9c6ecdf42782ee3814ff4a895733be2a1b3",
+      "trialId": "02-017-family-7_7C-B",
+      "artifactHash": "55b0dcc865413158e276bcfc7b9a1b60483f8a995fcf591dfcdef58fbbd0ce99"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-018-family-7_7D-B.json",
+      "rawFileSha256": "345218463f342f50a9454fd93848d13a9eb59a35d04dcc83f22b632459f6bf25",
+      "trialId": "02-018-family-7_7D-B",
+      "artifactHash": "a042081faaf2e74992beb1b3c5a0bea9b20e82ad7c21a5676432d52d6891db60"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-019-family-8_8A-B.json",
+      "rawFileSha256": "da8d5895a191e1c71f58c6b8e41d46560c0e5fe4a42c72bd509c261b905ef6a7",
+      "trialId": "02-019-family-8_8A-B",
+      "artifactHash": "ab95f702da3306c368af3f67bbba715133e2a042daf9167380719838d5547e9c"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-020-family-8_8B-B.json",
+      "rawFileSha256": "ff039b062f73a9ee046c23a67dca85dffdd96b3b88f61308271b49effbfb5864",
+      "trialId": "02-020-family-8_8B-B",
+      "artifactHash": "7f3b7a115220428fa361e4ad2a6cddbedf6408029ade6710a6bc5761c40edb3e"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-021-family-8_8C-B.json",
+      "rawFileSha256": "fe3fa084653463cd8300bfb39b5db9707cbcc9822b4a8b4bc4d8fb263cc36f67",
+      "trialId": "02-021-family-8_8C-B",
+      "artifactHash": "61efdcd29dd2c512189bfb97bec5fc9c785e4318cbb15d298987912b70736c9b"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-022-family-8_8D-B.json",
+      "rawFileSha256": "7e90460e50aba4f8b7bc17a2f723036a159e55ccec264e63c775ef204a936cff",
+      "trialId": "02-022-family-8_8D-B",
+      "artifactHash": "47a64b01c6c0b4ceb14857001a85af2336b790b97c284dbe9d3aa3061f3829c7"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-023-family-9_9A-B.json",
+      "rawFileSha256": "43e2976a5f83229cf5a5599911b2c2784edb6de272a3518f4dbae3ba2512f89d",
+      "trialId": "02-023-family-9_9A-B",
+      "artifactHash": "536c3016dba7fa6d5aa66796d826e711a3b9a4e5efb80f944b209c82fc4231b3"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-024-family-9_9C-B.json",
+      "rawFileSha256": "879c93397d53e64fbfc8804c5fc2dddee79beb9655bd8045febe63679cabcc07",
+      "trialId": "02-024-family-9_9C-B",
+      "artifactHash": "1bf292af91198ee041128f1e7ae9658b1f0a509e83b57ef4a564bfad8b2e32fa"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-025-family-3_none-C.json",
+      "rawFileSha256": "ab9c33a26e72f770c938df4101d54be9c3c717dd8fd0ddb3815faead942622a5",
+      "trialId": "02-025-family-3_none-C",
+      "artifactHash": "152edb6686e4f3f9cc24211962c9660b950abe33f46bd849030a5bfff4820507"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-026-family-4_none-C.json",
+      "rawFileSha256": "8a6132ef5b0d90b30724033bd594ac41bfa5ca67b88fe2f82157115f5285c731",
+      "trialId": "02-026-family-4_none-C",
+      "artifactHash": "e93e7b6aefda9bd41ae73d33445b0f3922c5f6c68e84fdd8cf9eeb2c68b60409"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-027-family-7_7A-C.json",
+      "rawFileSha256": "0e6ce09d1ad5c4723b1bf8cd5774e12adc5b2f914784406558233761ad255622",
+      "trialId": "02-027-family-7_7A-C",
+      "artifactHash": "2f44221ed83618a53861b1abb6340d919889ba0a89590ecee42fba45925dd1e0"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-028-family-7_7B-C.json",
+      "rawFileSha256": "1a19333f8c4dee22a6c4d9d0974e393924973a7d514bfc3e41d83c0fd4fab4cd",
+      "trialId": "02-028-family-7_7B-C",
+      "artifactHash": "0d05626bc8f0cb169de606b2030ade565c2663ee02f76a15e511efc4d58b0a21"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-029-family-7_7C-C.json",
+      "rawFileSha256": "b919d915a217b259b8a2c335f55a468f95729bda50cb6afc4edb84722691cbc2",
+      "trialId": "02-029-family-7_7C-C",
+      "artifactHash": "474ef2d87fd229c3c16f41154656291397173472d6fa7dbd6ffff7dc173e11f4"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-030-family-7_7D-C.json",
+      "rawFileSha256": "70c850f8e9c2fbf06d67e57d2712af13bea2ac272279ab6a028403f880226b3c",
+      "trialId": "02-030-family-7_7D-C",
+      "artifactHash": "ca72a0d274cef2ce8460b922206c4149f0839e07bb779fdf1db788d685f83a3f"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-031-family-9_9A-C.json",
+      "rawFileSha256": "9c5c31bc17c36b14d4cd26170a0622ac7d06dd3d9b7399b2b85272fdfcbbd8ac",
+      "trialId": "02-031-family-9_9A-C",
+      "artifactHash": "f425d6078ca1d3e05faab1046c616328b27519b69dea6004ca682def07567628"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-032-family-9_9C-C.json",
+      "rawFileSha256": "d60e770b0193f6c348da9b7afcebb0ae1b67602b2901a0169f8ff65a88234e58",
+      "trialId": "02-032-family-9_9C-C",
+      "artifactHash": "e0af1c3baa51b8704cc2b050e0e0d0806a80f2ad5eeb14096ebd9a671fd4cf73"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-033-family-3_none-A.json",
+      "rawFileSha256": "01f8c07769198ae62e641d03657e59356786d5293bbbd00c7897a923b69b56ba",
+      "trialId": "02-033-family-3_none-A",
+      "artifactHash": "8e18ace7abe48ee2ec99beb387f664145e16130b92a1bebeac0ca8aaa5447d08"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-034-family-4_none-A.json",
+      "rawFileSha256": "bd8a7fee5e8cdc7d08189c9b802e91f63cb26392047e8d40bac83f3329b15ebc",
+      "trialId": "02-034-family-4_none-A",
+      "artifactHash": "976541dd069f66d1da05bfe88f3051b74966a1763fe6af0e5fc854280a4a8dce"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-035-family-8_8A-A.json",
+      "rawFileSha256": "44da417b5fc22cc0ea0a71804964b61d41af153c6a04132efbaf055246386672",
+      "trialId": "02-035-family-8_8A-A",
+      "artifactHash": "f215cabb48ac404ed16851c86f1634794da2f23a445d2341df574376d2a0e186"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-036-family-8_8B-A.json",
+      "rawFileSha256": "ffb215ec1284ed22a6b6aebbd388262e34a8619a83820458391d231ced13fd37",
+      "trialId": "02-036-family-8_8B-A",
+      "artifactHash": "ff7c585d9e010d6bc56bb0e90c0e7f0b55efcb684aa7e73e5b127b2b1bc0cc70"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-037-family-8_8C-A.json",
+      "rawFileSha256": "7496068ce5c8ddc76a87838b828ccada2ecf1b84b2ee538c7a3ad268a73517b7",
+      "trialId": "02-037-family-8_8C-A",
+      "artifactHash": "c637e8830ffc8f25b5c9c5521abc5c39a1b7416a925de1dfd69489d4dc72945b"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-038-family-8_8D-A.json",
+      "rawFileSha256": "4257a0a9811ebec37ca70c61471fa4c76be3b7cb907611865efa4574ce9bd25a",
+      "trialId": "02-038-family-8_8D-A",
+      "artifactHash": "4101b4a98cec8ce48c6ba08f56df21b640382c6be4b026e2c7b5b20c62a16fb5"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-039-family-9_9A-A.json",
+      "rawFileSha256": "bf0f3c1c8490aab320c3208d8f394a3e1cf8e9de2510fc8d9d7d36b55dff0663",
+      "trialId": "02-039-family-9_9A-A",
+      "artifactHash": "2cb45970dc44f65e02c0affeef330ef27f0ab06a3a1c7bea805668e534166e9c"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/02-040-family-9_9C-A.json",
+      "rawFileSha256": "ea83ab70e20e7827f5e89f7aa464bfe97ae0739ac8b994ba5adc2d444a0d1d8d",
+      "trialId": "02-040-family-9_9C-A",
+      "artifactHash": "d39d65e0b7de972d072a9c65f6a2581b446394e76616559db18430ae198ef1fa"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-001-family-3_none-A2b.json",
+      "rawFileSha256": "393b17e3d1de692ebc4f12289d4b064c089dd488ea86bee1db2a15d1fb050ec5",
+      "trialId": "03-001-family-3_none-A2b",
+      "artifactHash": "8bdc002df51e3399fbc9925e297f8653a9f46a30719112d19d3d466ca74da37f"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-002-family-4_none-A2b.json",
+      "rawFileSha256": "e79f2dd55243f54d8bf503663437009e318fa01011cc7e7c4eb230b569f99a9d",
+      "trialId": "03-002-family-4_none-A2b",
+      "artifactHash": "525f78372ecce916d4f2c42eba3bc81852ca44a5c998960dada702678f3ea4e1"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-003-family-9_9A-A2b.json",
+      "rawFileSha256": "7fa4e4052d5b56e40bcbfe01da15d9a0c5f224629a3ffd4024d97f13429310af",
+      "trialId": "03-003-family-9_9A-A2b",
+      "artifactHash": "369f21cbc0a538b841d84ae1aa7dd992dd78473d3190bb0642a2989a0c44647c"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-004-family-9_9C-A2b.json",
+      "rawFileSha256": "6c42630055c9b643e6969959696996dc6ab0b7d5a1fa23e5198516f3960131ef",
+      "trialId": "03-004-family-9_9C-A2b",
+      "artifactHash": "a2e2a543a53d040a4e7dcfe04b924f82f13e3a1ff9bf7acf975fe68fbbec8515"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-005-family-3_none-B.json",
+      "rawFileSha256": "a3335f4fe9f27eb69d9169f9bbd03811f4a5263a1f781ac9337247b8407546ab",
+      "trialId": "03-005-family-3_none-B",
+      "artifactHash": "c79e82b925849b35bacee5655b9c5ba2fa8e6ad05ae6ef9ea5c9c0dad781d311"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-006-family-4_none-B.json",
+      "rawFileSha256": "70b28ef8462c48f33a8eeb2f1666bfbd5611e329149eaa2d6c2f348e574e1453",
+      "trialId": "03-006-family-4_none-B",
+      "artifactHash": "afc260bc6208ff4c3747ed76ae2088c00fab9fdf0b6cb47c5d85cc44eb6c6d6f"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-007-family-7_7A-B.json",
+      "rawFileSha256": "a8070eb75a5fd0138ee15c14639116105b857f8de400d09bff41ebf3a2301a46",
+      "trialId": "03-007-family-7_7A-B",
+      "artifactHash": "d1ee86a9d195ee6533c117e3e9f552f411a72aad226fd5168c3c743446720f03"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-008-family-7_7B-B.json",
+      "rawFileSha256": "0040b11da075d1912ba3209f1523cd05b944e86961c797432e8cef7fafac5ec3",
+      "trialId": "03-008-family-7_7B-B",
+      "artifactHash": "4946e4edeecb0c30b2eb0d8f61ab15400621deb1c47f9d20be24d586dff6d298"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-009-family-7_7C-B.json",
+      "rawFileSha256": "debea6c7de6b2f0b87193ef071e9ff554ae80dbe76d9e528d878f06439146dcf",
+      "trialId": "03-009-family-7_7C-B",
+      "artifactHash": "307e8d03ec0d9a3da39677706d6a589a0d09766e8089be744e87251700979fa4"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-010-family-7_7D-B.json",
+      "rawFileSha256": "5b6e6198da4867fe94bbb082c3b2371a5a4c2e0f6d4f42b4d610c94d22511255",
+      "trialId": "03-010-family-7_7D-B",
+      "artifactHash": "8c7b23f26effecc306c6729d29a0a3989c4a4a805a82fe0e1692961ca752461a"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-011-family-8_8A-B.json",
+      "rawFileSha256": "d4665e85426e96c8b4f63bf5f2089f0b19f4f5937a769f62f1497a00ddf7628d",
+      "trialId": "03-011-family-8_8A-B",
+      "artifactHash": "1be495d82e133ec6d06488aa16bd4af8bc7b2c89a0ad6e4f6923f05c0cbb8590"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-012-family-8_8B-B.json",
+      "rawFileSha256": "9275105f621cd28923081f41e3ff9178f80c2c6fe64194582336ef3346707f2b",
+      "trialId": "03-012-family-8_8B-B",
+      "artifactHash": "6d17d8f58bd0330c00dfe8577beac76c27da10b1c6b3cbae05208a00c49c3326"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-013-family-8_8C-B.json",
+      "rawFileSha256": "0d886df82f0d794daafa5e50f473dba37a3110ebf7050db92b2facc17a606c52",
+      "trialId": "03-013-family-8_8C-B",
+      "artifactHash": "963a5e6cb39c9c74a1d8ed5227e57801441caa0ef1cacd8d06d7dedf329598e7"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-014-family-8_8D-B.json",
+      "rawFileSha256": "47e4b326068167443c68c370905aef6f8f3a8c0e4d877024487de4a4cf374180",
+      "trialId": "03-014-family-8_8D-B",
+      "artifactHash": "39b5d834fc3a827c269780f66bb08c5f7df014cb19396b5ec484d72fd3a070a3"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-015-family-9_9A-B.json",
+      "rawFileSha256": "5b448e822632ded5bbb19864fe20397b0e5040cef70cc18639ccc63399c7b426",
+      "trialId": "03-015-family-9_9A-B",
+      "artifactHash": "b5b8047f9383777a2064eb162e195ef47ff40c9f5fcfeb0f260f174f67a31e69"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-016-family-9_9C-B.json",
+      "rawFileSha256": "d26b7eec07d5f537501d99f431f9e64e02c720609ba325a9cedcf6bfd2a4f7bf",
+      "trialId": "03-016-family-9_9C-B",
+      "artifactHash": "ca4b5d6a54dd0f2dac2d2fab86789bcab46a34f368d3b820b4ff3f879b5fc9ca"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-017-family-3_none-C.json",
+      "rawFileSha256": "199b058add23f9a364551100b9ba893ca147f9ff81fb64932f19e3f97845fef4",
+      "trialId": "03-017-family-3_none-C",
+      "artifactHash": "086b9dcd6a936dbbc24d09bc36b3d6d970a7ac9526c2b943bdb7851c1fc11433"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-018-family-4_none-C.json",
+      "rawFileSha256": "d0512c7e5cea642f7fff73e21092ffca64141c5f7a332d6e92bd2115bd076ddc",
+      "trialId": "03-018-family-4_none-C",
+      "artifactHash": "a52f0460035003655ecdc34a9d45464cc00b1f3e772e62bbf0f615642b4e63b9"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-019-family-7_7A-C.json",
+      "rawFileSha256": "1de62cbdf9f4f8a76d30e813b88d58007119c62afbce93e7d99f36d4675e9872",
+      "trialId": "03-019-family-7_7A-C",
+      "artifactHash": "b1c24795c5d21cbb3089eb9b9a6d8dc79ed67526e4800a37f83207b63bfb53c7"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-020-family-7_7B-C.json",
+      "rawFileSha256": "a531c3fc1cbba785c69346030a6574d438089f57622602f228734a25e2cbf000",
+      "trialId": "03-020-family-7_7B-C",
+      "artifactHash": "b642473deae39cfa2a4de2ce28c03da9f04a884ce4c3d7210f99ed7359fd7ae3"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-021-family-7_7C-C.json",
+      "rawFileSha256": "5133bb1516b8619df28e0a15fe68fd91fd4b89ed6425c08e08468b415ac43023",
+      "trialId": "03-021-family-7_7C-C",
+      "artifactHash": "e6609542e4c0051ccb1a63d20d3d6a824a64393d9162a6a5937084e0ca73d087"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-022-family-7_7D-C.json",
+      "rawFileSha256": "6a02e0960f7982dea44e9a68427f1040d9be1cf610b77d63cbfcb20c8e2e0b67",
+      "trialId": "03-022-family-7_7D-C",
+      "artifactHash": "d6e09367aa605c367089a049e414af05e835f2ea134c2e3b45a6d38fc49456a8"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-023-family-9_9A-C.json",
+      "rawFileSha256": "20cfe79323375638a9200570ef96af03dbde6bcc729b2d5ba0ee1e1af083f12b",
+      "trialId": "03-023-family-9_9A-C",
+      "artifactHash": "3b1820098dc99f7491912c4ab58858e9f5493f1090dc814b8796e74f0725232e"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-024-family-9_9C-C.json",
+      "rawFileSha256": "2c32f022e4bf724602879cf4253356a81bd9303d3af4feff1c399f149140d741",
+      "trialId": "03-024-family-9_9C-C",
+      "artifactHash": "c2dfa717fd90f3d87422a6e9666e055bebc0b6f66e54693117887d5b4b454313"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-025-family-3_none-A.json",
+      "rawFileSha256": "aa0011761f18b1b6e46cb8a12ae4d5ff97784561f104f817be61cac90a731fcf",
+      "trialId": "03-025-family-3_none-A",
+      "artifactHash": "fb00d707fc6378ec6a84a0d5db4999e0eb0f0edfc0026fcf544d8f82fdb716a1"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-026-family-4_none-A.json",
+      "rawFileSha256": "07b5f7c8b187adda8618ffa28ce30e7e9e849f7a8b55e1d096f51e4d9009fe6c",
+      "trialId": "03-026-family-4_none-A",
+      "artifactHash": "17d7e4a7838f4b4de4ae3df2cf6ecf3815cf11a2ce6983a5f238b1604f0d8ffc"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-027-family-8_8A-A.json",
+      "rawFileSha256": "bcb7abb2ccd4f80d5d28615bd4433923454edac1e8d24eaebb5909d7f9f17337",
+      "trialId": "03-027-family-8_8A-A",
+      "artifactHash": "bb784f2241ac8d7ccc15fc81439c935b54a9f7900c88bf802c00c5747364ce7d"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-028-family-8_8B-A.json",
+      "rawFileSha256": "7214b3d6966ce078d26912cf11dcea1fc4899c086c80e32edb7f5f18e9fd883c",
+      "trialId": "03-028-family-8_8B-A",
+      "artifactHash": "5f9447797566cbc064cffe8f136320df763d42e520510ef81a7b75b71a8004ca"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-029-family-8_8C-A.json",
+      "rawFileSha256": "6a569588d18f22096b2be0c9f306edbc47ac548bf5413cea2f7e74c5f4184f75",
+      "trialId": "03-029-family-8_8C-A",
+      "artifactHash": "d724757f85159f8e4668abc77d65e06d24ad31be0b1979e90a7f19cb95344ea4"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-030-family-8_8D-A.json",
+      "rawFileSha256": "749e13cedccd8a9728ded72d377b0d2af33e410c4c827290eddc4ed97717580f",
+      "trialId": "03-030-family-8_8D-A",
+      "artifactHash": "707c8b40650ae4374d9efd44ba772cfccfc3f955c4b89c10e558731bebcb4739"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-031-family-9_9A-A.json",
+      "rawFileSha256": "7f5b7287714ccf02aab9fc74e92664e0e2f2643e9c3e1db09e40616f906680c8",
+      "trialId": "03-031-family-9_9A-A",
+      "artifactHash": "e29e5a90373122258fd050c122a34b70fbfbeb90c789d8cf4f0f2d07f03310ed"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-032-family-9_9C-A.json",
+      "rawFileSha256": "aaad86f589f9de2e51be72dccd839cc034d5a251ce20cad09b6363221ccf4020",
+      "trialId": "03-032-family-9_9C-A",
+      "artifactHash": "c87398f85c3a1f3f1e560d6cd0cb7d3a0bdd082a20fc392707476063893d53a3"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-033-family-3_none-A2a.json",
+      "rawFileSha256": "1db58fbbf447c75fe6626eac01537b3fd8d070a58b4dd717fa609a75742929ff",
+      "trialId": "03-033-family-3_none-A2a",
+      "artifactHash": "731f6ca7f00665d071efbf3580ac5f868b05f3743e62e7e6fb415568fd46651e"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-034-family-4_none-A2a.json",
+      "rawFileSha256": "46364e0abb13e2d79d7fc778889aa1fe2c73bb764e845ca100eac06553a95516",
+      "trialId": "03-034-family-4_none-A2a",
+      "artifactHash": "c81290bcdcbc9a007c4bf56f55fb50a9a51162fcc91c2e521d7f2bf1d4b38a7e"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-035-family-8_8A-A2a.json",
+      "rawFileSha256": "e596383e1c051db9774e12605ed08ef370f78c2bf60489ec57e16c9853defccf",
+      "trialId": "03-035-family-8_8A-A2a",
+      "artifactHash": "5c812046bd909d0b411941d6d19f7eb690a3e9908c74d8ef9711fc35c29585bb"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-036-family-8_8B-A2a.json",
+      "rawFileSha256": "03497fb4286f38c60a5163df7f4c2f3ba33dacd30645b51787b3803c74c355f7",
+      "trialId": "03-036-family-8_8B-A2a",
+      "artifactHash": "4fb0ac6d49919da810d9e5830adb34005de9a3705db36cfa5f1186217c457a66"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-037-family-8_8C-A2a.json",
+      "rawFileSha256": "f590ffce7bfd6aa8e4d5f2a7b679cec519e5044ee780d64c88977789a7c449b2",
+      "trialId": "03-037-family-8_8C-A2a",
+      "artifactHash": "922a47f3e648e97683944e12c03af1e74600305e6bedab294262d7e82cef7c62"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-038-family-8_8D-A2a.json",
+      "rawFileSha256": "50c41ab906bf7a870e5c3d04fdd182a3838968c9be0c9cf9fea31e6c44da5fcb",
+      "trialId": "03-038-family-8_8D-A2a",
+      "artifactHash": "a251fb343aa4198de4080a4daf2c61cff9f6f5f2fdd68f51ed0a4aed25c1af0d"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-039-family-9_9A-A2a.json",
+      "rawFileSha256": "b2b184bdad8d531b9948076f3968993857c9654f8f007e8593ea9da16311aeee",
+      "trialId": "03-039-family-9_9A-A2a",
+      "artifactHash": "a819ebb516424fb65b8a878458af02f10f140fd72e7f025c415e9fa63ae597d0"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/03-040-family-9_9C-A2a.json",
+      "rawFileSha256": "fbea8bf2baeeb68f52a4e8938c3f620f0f8291d8458808302408a4ef45337ddd",
+      "trialId": "03-040-family-9_9C-A2a",
+      "artifactHash": "ed2390299201bba808573f141db280b59379c7575ebfe3a86093179de259d9c5"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-001-family-3_none-B.json",
+      "rawFileSha256": "6f19f097c9b5b79ac2ba5301d6cfbc1955470c39b8b1266ca245f095b69b7b11",
+      "trialId": "04-001-family-3_none-B",
+      "artifactHash": "7ad0961e51dfee3d72854f997d8862df3156a7342ab0e0ffc666323248591977"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-002-family-4_none-B.json",
+      "rawFileSha256": "27df7a02ef3d69d0c5c504b67a9448553d8ed3d9f59680cf32fb258e763d2688",
+      "trialId": "04-002-family-4_none-B",
+      "artifactHash": "c17303b6f9e3a10dfc6deb5cefca90febb9cb35488579703d84f22597cf87a96"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-003-family-7_7A-B.json",
+      "rawFileSha256": "84f9575cc57bbd7c7be11cfbbf27388ba64b187a999313bc68ae669ed3508486",
+      "trialId": "04-003-family-7_7A-B",
+      "artifactHash": "34b3245e01905c86d8eb86a1ea9498ec30a1af56d703c07276630b695ccdc966"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-004-family-7_7B-B.json",
+      "rawFileSha256": "204562575bc40e6f178c34fad94d2e0f21bf3ab69646fd2b8e4b3fd3cde53df0",
+      "trialId": "04-004-family-7_7B-B",
+      "artifactHash": "ab9bd337253a0cca2d6e1ddbe94003bc1c095b1dc275d36699d993690fd1e2a7"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-005-family-7_7C-B.json",
+      "rawFileSha256": "1a69d13d3bd09465f347973d126fd5af073c375994b41de46dcdd7ef726a85d0",
+      "trialId": "04-005-family-7_7C-B",
+      "artifactHash": "898e36d056962d24f164be8ae689238694f9c418c8cb716f1db9226c2fc1d658"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-006-family-7_7D-B.json",
+      "rawFileSha256": "ce67872cd3653e22c31a4cc258199cbb18cf4bb78d5364eba06f5a50c27bda62",
+      "trialId": "04-006-family-7_7D-B",
+      "artifactHash": "a8215cb031c1b7d3fbb9a6ad5ff6de8a3b3a569e48ffc5f49d1f519585bc2fc4"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-007-family-8_8A-B.json",
+      "rawFileSha256": "c71897a9d63f57fcfefcde312a078be3010a1e17d150e04218f0d311d4aa6335",
+      "trialId": "04-007-family-8_8A-B",
+      "artifactHash": "e354c1f8170a408581152b4be551491b2b505e96c7da983d341decd9c4ec986c"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-008-family-8_8B-B.json",
+      "rawFileSha256": "b9ba28dcea9298e8adb36be8b7e47237a311dd5188ec5ce21e88bc12b356012a",
+      "trialId": "04-008-family-8_8B-B",
+      "artifactHash": "5d6f4f459221ae73fd349c7cc20431c8dfa332c7cfa44f1666439d2aa0583d42"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-009-family-8_8C-B.json",
+      "rawFileSha256": "6cb170b57c95e2fd39e892be14fee87cd47f4133ef2c54891586a2cc216183a7",
+      "trialId": "04-009-family-8_8C-B",
+      "artifactHash": "8b0aad53969ee268f80f097c6c2345e7580ac8e79b846f030fd11962cb870077"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-010-family-8_8D-B.json",
+      "rawFileSha256": "428d78def89f49bd2513f21f826214e368afa7d8bb4004f07981cc436f9a127c",
+      "trialId": "04-010-family-8_8D-B",
+      "artifactHash": "682e9680582be586f4dcb63754b2357e4502df4fc1c7ebe87439d5d0f5ddec95"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-011-family-9_9A-B.json",
+      "rawFileSha256": "22502603ea35828613a8c27cf8437e188e5ea64f685c3990f60c032bec0fef15",
+      "trialId": "04-011-family-9_9A-B",
+      "artifactHash": "fcdbde5584faa100be814cab6f839df25abf7371250dca9e35fcd3f22b2ff9c3"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-012-family-9_9C-B.json",
+      "rawFileSha256": "2096c8350e4ee00d31b780677b829742b17d78588b914e1e1770f1271b17b85f",
+      "trialId": "04-012-family-9_9C-B",
+      "artifactHash": "3ea81318beedac5962bbc3b073bbe584094b4cd255c9a13534dbf372f52fd46b"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-013-family-3_none-C.json",
+      "rawFileSha256": "fbdf2d0d5d130da565a9f1a7701627c01362c3e7bf6736d09236a13304d1c78a",
+      "trialId": "04-013-family-3_none-C",
+      "artifactHash": "c05f68f6a963b92cf61bd3d28c29cff37a8f41a60978be269d0db9475545907b"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-014-family-4_none-C.json",
+      "rawFileSha256": "42068ca74502aaaa1e01e7811a7515f61e695389105fab55527920b41cf31d7a",
+      "trialId": "04-014-family-4_none-C",
+      "artifactHash": "0bf6c144a1e062cdc0dd4a77a6b3d3d7a4bf4e7147f154d4a585d92b2621ce83"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-015-family-7_7A-C.json",
+      "rawFileSha256": "ef914b10b69ffb2e83e595a63bb5e7929541009f362707dae90af9d05d9b2e3e",
+      "trialId": "04-015-family-7_7A-C",
+      "artifactHash": "470813727eacb87a6d9b06a6ba4daf0fd5ce56bacca2d6df015f5372444b2e7d"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-016-family-7_7B-C.json",
+      "rawFileSha256": "331259347e1e7f0ee30688eb35e141d072d59069ec8155aec1e597aa7a5d4e58",
+      "trialId": "04-016-family-7_7B-C",
+      "artifactHash": "c994443b5ae94079100c9f17a88462e9c4d2a9413fec1c968b80c3af93adbdf3"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-017-family-7_7C-C.json",
+      "rawFileSha256": "4cb36ac5896cfa304e97a0af71705bb3118edb766cd1d56fdfb4ce5c67ec39e8",
+      "trialId": "04-017-family-7_7C-C",
+      "artifactHash": "069ed4eddac573c81e6db23b2001099b762d91c9bc3a4228dee650e09c14a85f"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-018-family-7_7D-C.json",
+      "rawFileSha256": "6cc5daf0d93bc16b878c492362d1e6e0276d02b5d1b0a96ee16eaa54410cb115",
+      "trialId": "04-018-family-7_7D-C",
+      "artifactHash": "a912a28170c16957022f0d8e7a09dd0409b50c3e120f0ec0812cd360e0ee9083"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-019-family-9_9A-C.json",
+      "rawFileSha256": "94de1c3d3199e03a8f88035043712ca18ada5512ddb7f5a0db307067d727209b",
+      "trialId": "04-019-family-9_9A-C",
+      "artifactHash": "495398c6b18bd917d8b2c6f8b7777aede283f963ff474e6d20ac37be09c94374"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-020-family-9_9C-C.json",
+      "rawFileSha256": "ed44eee47b72adae93603921ee0167a85c59c7b468362644848576155915aadb",
+      "trialId": "04-020-family-9_9C-C",
+      "artifactHash": "9132193a025bd70c8b25286cbf2a1c04ac7e82d4ab1e436f039cfc3ce3abc7ba"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-021-family-3_none-A.json",
+      "rawFileSha256": "73df36a3468c8afb62bf311fa16dd70a36700ed8e7bacbffc86d9ff9e1af5317",
+      "trialId": "04-021-family-3_none-A",
+      "artifactHash": "b5ecd813c08b887e98adc4614bd28c85840d3cefa1e1dbf083a004327da1bb65"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-022-family-4_none-A.json",
+      "rawFileSha256": "2b8eed75186d2ed999c39504744e26b06f32d5f20679f0595103324fb30ff704",
+      "trialId": "04-022-family-4_none-A",
+      "artifactHash": "7e56b47d55546e5025053144d51e8cd6d120ea8d611256c192949772b3d64d15"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-023-family-8_8A-A.json",
+      "rawFileSha256": "e0607360350c5ea551a49ab778ca264021ae61fd6da118d3bd3fe81915a087c8",
+      "trialId": "04-023-family-8_8A-A",
+      "artifactHash": "c2811b30290af66d28a380b3cfb05c62f38d14a5c87143342a5a13c65e45949e"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-024-family-8_8B-A.json",
+      "rawFileSha256": "b7ee555be525b7eae1c9aa59856408c2023f9b67a61349c80a16b21484f76008",
+      "trialId": "04-024-family-8_8B-A",
+      "artifactHash": "0af21c81d5e3366c2a1a32114e29007945c3d5cd422daeacd5c1507a66a66f92"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-025-family-8_8C-A.json",
+      "rawFileSha256": "a57ac15d572148604e63f75951938787ee42f9777327e44703e3b234611830a3",
+      "trialId": "04-025-family-8_8C-A",
+      "artifactHash": "4a7588d7ddf06c0413a3e6b4a77ddad4cec5597811d5f244466e166c428c45a3"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-026-family-8_8D-A.json",
+      "rawFileSha256": "ce85f0f455eda91446f28a39dca6ce953fb4d5438d120b36f78cf5ecd106c27b",
+      "trialId": "04-026-family-8_8D-A",
+      "artifactHash": "5fb08bac51c195e7e90164187dc3d4706ba6e3188a0f52b8964cb0f6cd97193b"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-027-family-9_9A-A.json",
+      "rawFileSha256": "24e673709f99196c4a44ccd3bd03844a69fe90329567db4a6683dd9a8366442b",
+      "trialId": "04-027-family-9_9A-A",
+      "artifactHash": "69fc86d0630bddb845dc8b273969b6b1a4bf9bfe02e54c7ac0a5aeb6c640a93b"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-028-family-9_9C-A.json",
+      "rawFileSha256": "c1cdd207554ed665e784ac7b53e296409f9655cefc8167601bfda6819a7c2a92",
+      "trialId": "04-028-family-9_9C-A",
+      "artifactHash": "50283bcca33472a01bdecb98b885e8863254de025f140cea9d903ef0a8c392fe"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-029-family-3_none-A2a.json",
+      "rawFileSha256": "6b68d66a1265f10d0630312c2ebd381127d2ec77252a41c8966e18e3169bc3eb",
+      "trialId": "04-029-family-3_none-A2a",
+      "artifactHash": "165e88dddeb2739dc7cdd40e2ffab4adfbd13bd6ea4b4d27a6248e679661ebbf"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-030-family-4_none-A2a.json",
+      "rawFileSha256": "35f99c4133d59d8b7e2f2d634abeb51608aa44162abdd1607f61d9d1175a606c",
+      "trialId": "04-030-family-4_none-A2a",
+      "artifactHash": "405186b8159a8e4ed77083203d25e9ccaeb22c723115de32fb9ea060f7c3780b"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-031-family-8_8A-A2a.json",
+      "rawFileSha256": "04ccff923066c0410a2eb4e8a40a59d18a00804ac49c842dacc7c2f318f92226",
+      "trialId": "04-031-family-8_8A-A2a",
+      "artifactHash": "98b304f8400027f8425a97db92a8546f0a2bad43f6fe9e1a1706f1a748fc9c4b"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-032-family-8_8B-A2a.json",
+      "rawFileSha256": "5b0214498ec2e9c6fdfb7b21b77724d57982dd67f6483c74464f55a49776f225",
+      "trialId": "04-032-family-8_8B-A2a",
+      "artifactHash": "0dafc478ab85ea47cc243532a2c4799c09b5eb32af4db7ec3189cae751bd4a6a"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-033-family-8_8C-A2a.json",
+      "rawFileSha256": "687e74ec34473009f2ba6a498bb22facaaa5b112a03903ca0edf65b36d9693b6",
+      "trialId": "04-033-family-8_8C-A2a",
+      "artifactHash": "cf6b6681b264bff6907b2b358452b8171d9fd9c945c66b3556428c21819ff506"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-034-family-8_8D-A2a.json",
+      "rawFileSha256": "f889ec07431a36c6222f93fdefe316204c9ebf5d8728ea589bec31b46b9cfd5d",
+      "trialId": "04-034-family-8_8D-A2a",
+      "artifactHash": "7ab68aa5056534b23f56c54d6b3d87c33c77aacb74117c64fac39f4f18dfb9e5"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-035-family-9_9A-A2a.json",
+      "rawFileSha256": "052766256d815f49cecbfb1b88d88abab31c3600d744f13ba75b1cac3316c83e",
+      "trialId": "04-035-family-9_9A-A2a",
+      "artifactHash": "0e0c09b977b757ffd5d3debe63e97b135bc2711afd30e4ca012d616ca7066512"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-036-family-9_9C-A2a.json",
+      "rawFileSha256": "8efd409e4afaa2e2cb7e109523d4bdaae0a3087298144d5d24108de2bcd720ec",
+      "trialId": "04-036-family-9_9C-A2a",
+      "artifactHash": "c23bf0d90e6860d8032d800e38e5c8662f1573571c8db16f95137a38aa12122d"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-037-family-3_none-A2b.json",
+      "rawFileSha256": "25d83881d105d5740dbbc5d8d42e82ec6839ebcf5fb4aef7fc125c4a38f623f9",
+      "trialId": "04-037-family-3_none-A2b",
+      "artifactHash": "2e6cd046e0369c7e14e1e7e49730a29c91f61cd2b4ce4b9b9bcfc8aa8808ea72"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-038-family-4_none-A2b.json",
+      "rawFileSha256": "9fdc0d4e087746da7ca6f27ba3cad3fa78a727e8d8258c1479c0f510583e6f64",
+      "trialId": "04-038-family-4_none-A2b",
+      "artifactHash": "4a5c5ea8a769560b13ed578469b6dcc966899fcfb6a17fca47d0758d94473784"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-039-family-9_9A-A2b.json",
+      "rawFileSha256": "ff96bcca90a7f23e6983146aa3c27e6ef75239b0ed7e8fefb0d52782eaf194fa",
+      "trialId": "04-039-family-9_9A-A2b",
+      "artifactHash": "a51a6a17b1f3b0d58d10a8e2fb898dec8675639b33e0b2ce4b0ff375e2c8c9d2"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/04-040-family-9_9C-A2b.json",
+      "rawFileSha256": "f2d7fe77ee0b3ad31021a1e6cb759ca718b0d8ae2e25dfa6390eeb8dc1653168",
+      "trialId": "04-040-family-9_9C-A2b",
+      "artifactHash": "d2ebe6a27fd19d434dc4f54e6ef3ce4c3617c628b996d520dfd99c5f4ad29ee7"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-001-family-3_none-C.json",
+      "rawFileSha256": "9204f0128e69557ba69bc7ea82dc94fdbb9320a7e1c03ea37832299f79756e38",
+      "trialId": "05-001-family-3_none-C",
+      "artifactHash": "426d20c016e2199de53213437646473adf3098567f05c5a0d7b1267df3b5adce"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-002-family-4_none-C.json",
+      "rawFileSha256": "8e1d0b590141b100e141a84fe637f040449464f906cd6b69949b28aed69b282f",
+      "trialId": "05-002-family-4_none-C",
+      "artifactHash": "0d91fa9262c1e57f00693a4ddc563dc01d333f5f35b880ded45307dea3c7065a"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-003-family-7_7A-C.json",
+      "rawFileSha256": "38899323aad59a6f981039baf8d45ac8ec0b935af7c8d0d43cb6be979780d920",
+      "trialId": "05-003-family-7_7A-C",
+      "artifactHash": "95aceeb2608476c458526b2f57b1237cbe428a076eb7006d19b249a77f8d7283"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-004-family-7_7B-C.json",
+      "rawFileSha256": "39df48e11192a20e191bf033300fe3e8b481be0b7549d6dd28aa91c3deb81ecc",
+      "trialId": "05-004-family-7_7B-C",
+      "artifactHash": "9e7d12807793945535b6a2165e430519ded10700062ad0d910ec42ebabe075e7"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-005-family-7_7C-C.json",
+      "rawFileSha256": "97caa408b2a3645ad67aa964baa3d38ff8430412b739c37d7862d210b518769c",
+      "trialId": "05-005-family-7_7C-C",
+      "artifactHash": "3348a1206d1da0a9e867827895acc0667b7d5243e40acaac6e6d29221a87d070"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-006-family-7_7D-C.json",
+      "rawFileSha256": "7bd406bf0abda204336de4ff6359b63779d39a88f2379ec417a589193ced9854",
+      "trialId": "05-006-family-7_7D-C",
+      "artifactHash": "c4f9cb449f3afb0897e0b4afd896bfc026fb2e8755f2ddcb8d4eb84714fe986f"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-007-family-9_9A-C.json",
+      "rawFileSha256": "aed2aa161c9c3c31ee5319919f435c6a9d9494ec5d21697cd263bfc8f72e101d",
+      "trialId": "05-007-family-9_9A-C",
+      "artifactHash": "32a04203bdb378d41eaf8228c5e8231f0f6574fbd70b23e71d2dd16a7e5faf55"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-008-family-9_9C-C.json",
+      "rawFileSha256": "6485fb427b8fca51551ea96370c15141ea11652dfc8705b8d2f0bd2f6ecfbfb1",
+      "trialId": "05-008-family-9_9C-C",
+      "artifactHash": "c595950547940137a9ff516a342e6afe0010cebc73355709b2f6d88273d7d4f8"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-009-family-3_none-A.json",
+      "rawFileSha256": "b67dd0bfd67166a10c46c304d493ac3ec8b3be6ff66c3aca102cff2c7c6e1153",
+      "trialId": "05-009-family-3_none-A",
+      "artifactHash": "5a13c3527f1c5b224b8090ba8c0d860b6ff008e1888384a60c0a79992bcc9999"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-010-family-4_none-A.json",
+      "rawFileSha256": "f42bddda027809c4f491339649959367038d96e99c29e40c8bfa578f23226ced",
+      "trialId": "05-010-family-4_none-A",
+      "artifactHash": "70ebe66d3b165db68f1b9f9ea6aaa665857dd087504c6a7fd5d8ee8b143f8fbc"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-011-family-8_8A-A.json",
+      "rawFileSha256": "2e9bae6a03e9767baef024ccd68167f416b1609c87fe45edcc90fd826de94b8a",
+      "trialId": "05-011-family-8_8A-A",
+      "artifactHash": "b471a53efe04b5186c18c44c6bd04902ff4dd81e429e5c40e9d303725cbe3226"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-012-family-8_8B-A.json",
+      "rawFileSha256": "e530bef7fd6e39f2236e9bd5afb610c1a81aa1dcf7650a8861880ead3659d32a",
+      "trialId": "05-012-family-8_8B-A",
+      "artifactHash": "18bc53265ba7f420dc01681792ebabd97e874e1d69f2c4818d8fda83b26629b8"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-013-family-8_8C-A.json",
+      "rawFileSha256": "79a609922c20ae5bc9f3ce46415ba9af9aa779e51641acfd3f6a495b82df0550",
+      "trialId": "05-013-family-8_8C-A",
+      "artifactHash": "9be22f6e0a7424736d0860aeb906c28cc6009f8f86a0326240c43a687b85aa05"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-014-family-8_8D-A.json",
+      "rawFileSha256": "7d360ebd58d402786fb3acee0a28965a716c8724937ce76d6b1d19dee8df61f5",
+      "trialId": "05-014-family-8_8D-A",
+      "artifactHash": "3afff6ed752b27dc01fa34727ee8573760308e0eacfdff11cac06745116c0a9c"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-015-family-9_9A-A.json",
+      "rawFileSha256": "8e9c77b1d33a5cd361c13d769ce2f417e7ab1a2cdf64a1183f68723d11a95db1",
+      "trialId": "05-015-family-9_9A-A",
+      "artifactHash": "e02f31b57629b14974d3361991b2dbae37fc18adedec53b2dcede86f0cdcbbf9"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-016-family-9_9C-A.json",
+      "rawFileSha256": "1008e6c9ffedb213c86f53f2a2f3fdebb866da3e50bd2cd0cd5c265a9632e667",
+      "trialId": "05-016-family-9_9C-A",
+      "artifactHash": "3ff466fe593650b906976824aa45c89ecd00a20c2d1735d5361be44fbe9355da"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-017-family-3_none-A2a.json",
+      "rawFileSha256": "004a28f9628dc0ca0eac22050b6f8348ef81c8abf7e418de29990847cb0e2b6c",
+      "trialId": "05-017-family-3_none-A2a",
+      "artifactHash": "818c5677290f2b6e2bccb92366ce644ece29a03babbf4c54d3f6602273f72b35"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-018-family-4_none-A2a.json",
+      "rawFileSha256": "a80a1bc9e47f0fe2230980cb0e19e0aa21655a0a69185875ef36a279279224e9",
+      "trialId": "05-018-family-4_none-A2a",
+      "artifactHash": "b2abf3ec74c082e7cec8fceb73d9030ad154d3540c01129e636721f99c8bd2c8"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-019-family-8_8A-A2a.json",
+      "rawFileSha256": "7875d6b834441d02b1b4ad166b8be9f506d172fee52ea6aa20f1e1ee1b620b7a",
+      "trialId": "05-019-family-8_8A-A2a",
+      "artifactHash": "021a5b053986a162f5ee6deea4b0bf7da0e870336c10a99e866e37bfd87fdcd9"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-020-family-8_8B-A2a.json",
+      "rawFileSha256": "1201385630afe6f6b9a98c4049ebf5edb6aff7c7c932a3333e218e96c5d53635",
+      "trialId": "05-020-family-8_8B-A2a",
+      "artifactHash": "86e93707453cd0edf1a65121fe19c282f64de80394d3fedf26c30c3dc10f2f67"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-021-family-8_8C-A2a.json",
+      "rawFileSha256": "26504ead2bce3a2ea558cb36fcf0a8353153805b38fc7e1e402e84e9e200ef42",
+      "trialId": "05-021-family-8_8C-A2a",
+      "artifactHash": "435153a553c72e96e3b4894867a83294ce18f62042ecc22745b2ac2078abecb9"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-022-family-8_8D-A2a.json",
+      "rawFileSha256": "59937435ad38b0b5e0ec5265e20cd4da7fd77d6695fccfc928f63f14e00ed027",
+      "trialId": "05-022-family-8_8D-A2a",
+      "artifactHash": "c3c62a61e0a5b6df1478c137ccaf7d9a9b053e282e27d2a156ea65258ed908cf"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-023-family-9_9A-A2a.json",
+      "rawFileSha256": "64a4af56b246adc4fdf36b2801531374a9801c99fa3d15986bf0d06085684e27",
+      "trialId": "05-023-family-9_9A-A2a",
+      "artifactHash": "58d6d09dc6f1164df792e2e7dd67a0e8351523635c1301940ac79cdd5997cf26"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-024-family-9_9C-A2a.json",
+      "rawFileSha256": "9ad54b6b75baa721437d9d74966aa83f8e16f4cf0a4d62fca312e8f36bf0078e",
+      "trialId": "05-024-family-9_9C-A2a",
+      "artifactHash": "99aac7b1995d77af4c7370437e8a7299c2bee625403e29e7fc14eb8dc5e6bd16"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-025-family-3_none-A2b.json",
+      "rawFileSha256": "0ba7841c48934f277a11bf6ae4f4fbef6ca83d94a826546028a0579bc1de2556",
+      "trialId": "05-025-family-3_none-A2b",
+      "artifactHash": "e1e131dd55e815bae41b20d22c118b70b3d34108b49686cdedd543a322d8f030"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-026-family-4_none-A2b.json",
+      "rawFileSha256": "be441f6de3cd1463a87ffd4c769b03c5ca205e621a48b60f810c748a1479997d",
+      "trialId": "05-026-family-4_none-A2b",
+      "artifactHash": "87d3fb91ebd044cb592ca3988759cfe02fe1a9a3578174e2691c3a1b56c1d12d"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-027-family-9_9A-A2b.json",
+      "rawFileSha256": "d46590b705fc9df14e48bb5b5237ecce967df2ed51e708a4e6319debadd78e9f",
+      "trialId": "05-027-family-9_9A-A2b",
+      "artifactHash": "e5f732b62aa9667d6001fec1380d63aead6dd82ac88ea8ee028700e1f10eb638"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-028-family-9_9C-A2b.json",
+      "rawFileSha256": "92d1c7fbcc95247e4f9d438b165a40d6cf68bcf67b65590ddcf1cb10f6dc1b9c",
+      "trialId": "05-028-family-9_9C-A2b",
+      "artifactHash": "135a7476f137be5c5d0fbe8a9b184d83691cdee6a99dc056b7ed1b6536db754a"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-029-family-3_none-B.json",
+      "rawFileSha256": "f41e6463566e35eba786fb5b3fb9bcaa3e13f383e675e29f7c20819354029e33",
+      "trialId": "05-029-family-3_none-B",
+      "artifactHash": "2bdd3848472f4ad163d4cb828bc80edf45358de529d3e3caccf82a9f7665ed80"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-030-family-4_none-B.json",
+      "rawFileSha256": "f7af7b0079f20c09fa2f666807d34a7100e96ef74fcb2be153db466be4d2b5ec",
+      "trialId": "05-030-family-4_none-B",
+      "artifactHash": "a4a749a8503164eea78aa5ad1d6ba9ac55a20d08b0ffcd6015d6bcdb51a9766d"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-031-family-7_7A-B.json",
+      "rawFileSha256": "a1f439262bb466cd9d1b8733e334383eec1af7e031bf5b691871c192b683ca5a",
+      "trialId": "05-031-family-7_7A-B",
+      "artifactHash": "180243f548f11e4554f6bf03b47b660fb59684902e7096641aa7c96b29b04f73"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-032-family-7_7B-B.json",
+      "rawFileSha256": "d1666debfc0230a839299eb3f17e06a7458e436d8fb34ac28cd9916f188e2c21",
+      "trialId": "05-032-family-7_7B-B",
+      "artifactHash": "d826fb50235357c3b367de210f1f1b984e0430bea76bc01c7290de6124fef527"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-033-family-7_7C-B.json",
+      "rawFileSha256": "c8bcb7f7ba2f1445e19fb81a87399ce1e78765a0468f3b64b7c4b7422959f47d",
+      "trialId": "05-033-family-7_7C-B",
+      "artifactHash": "a26c89f6fa37690610a109be540570c3f4b80aac6c1600f091e1d404ea1c4e88"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-034-family-7_7D-B.json",
+      "rawFileSha256": "53bc70f674765ca343064d1ba0a7a4a29b31c9418f027742fd50851d541d37b6",
+      "trialId": "05-034-family-7_7D-B",
+      "artifactHash": "5ce9e4ac8bba900c4abc09cca17f4f5f9467d7c5a77d18071055c2982c8692f1"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-035-family-8_8A-B.json",
+      "rawFileSha256": "087fd73934b03ea39bbb54c27cdc6f77f278cad169a164ce43e2cdad68578d44",
+      "trialId": "05-035-family-8_8A-B",
+      "artifactHash": "95cddcb1c80e18d7acef838438b1a6d2359bdacfd0f61b8b252f38d2fe9d468a"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-036-family-8_8B-B.json",
+      "rawFileSha256": "f276b967d3df7f197b4212bc31fc79f96c105c339fc736c0aa5d393c327b5d70",
+      "trialId": "05-036-family-8_8B-B",
+      "artifactHash": "650250a5a287c0fb4228d3c2dc3b63b2c50e3d1aba6355566c7e3366774ce356"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-037-family-8_8C-B.json",
+      "rawFileSha256": "eb441266c323b5b275766b0a548516b7aab0ef415e8533f3acdd2088829e84f2",
+      "trialId": "05-037-family-8_8C-B",
+      "artifactHash": "6cf36860f2620aed53b8054377e0a73ae57df4c1bb4a3e55146eca20b86b064d"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-038-family-8_8D-B.json",
+      "rawFileSha256": "62280071879e05c2a076830134c500df4d73f9176b3056df54420376f4ae9d63",
+      "trialId": "05-038-family-8_8D-B",
+      "artifactHash": "7379fa4808102c0d2ba541a586e9d4d66364d0927fda48b19c3c928f23814121"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-039-family-9_9A-B.json",
+      "rawFileSha256": "9bb3bec7b0d040717bbfc5757dd5e8635bc2d59e9cc760676a33cbfa59e75342",
+      "trialId": "05-039-family-9_9A-B",
+      "artifactHash": "77c3e82753d63502810fb002f669b645c51cca08cdeee7d27f0dad6d88cc4ff6"
+    },
+    {
+      "path": "evidence/structured-allocation-evaluation/fixture-v2/trials/05-040-family-9_9C-B.json",
+      "rawFileSha256": "7f9c0416eb177b26c300c088dcac1010326898bc4a400b596d7e302d496667df",
+      "trialId": "05-040-family-9_9C-B",
+      "artifactHash": "7ba7f1511f890a97df4feedbb666fb37e65566e4f09acf664971d1826f230272"
+    }
+  ],
+  "indexHash": "7b51e6b90c8bff461debcb525c61c78680e924cc856d112e466792c7911980cb"
+}

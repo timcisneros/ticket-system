@@ -199,6 +199,134 @@ const MUTATIONS = Object.freeze([
     find: "objective: 'Create folders reports/separable-alpha/done and ' +",
     replace: "objective: 'Create independent folders reports/separable-alpha/done and ' +",
     failure: 'family-2-cleanly-separable admits two execution-evaluable folder facts'
+  }),
+  Object.freeze({
+    name: 'fixture-report-raw-hash-disabled',
+    file: 'scripts/fixtures/evaluation-fixture-evidence.js',
+    suite: 'evaluation-fixture-evidence-test.js',
+    find: 'if (actual !== descriptor.rawFileSha256) {',
+    replace: 'if (false) {',
+    failure: 'one-byte fixture report mutation refuses at raw-file authority'
+  }),
+  Object.freeze({
+    name: 'fixture-registry-raw-hash-disabled',
+    file: 'scripts/fixtures/evaluation-fixture-evidence.js',
+    suite: 'evaluation-fixture-evidence-test.js',
+    edits: Object.freeze([
+      Object.freeze({
+        find: 'if (actualRegistryRawHash !== binding.registryRawFileSha256) {',
+        replace: 'if (false) {'
+      }),
+      Object.freeze({
+        find: 'if (registryBytes && expectedRegistryFileSha256 &&\n      sha256(registryBytes) !== expectedRegistryFileSha256) {',
+        replace: 'if (false) {'
+      })
+    ]),
+    failure: 'one-byte fixture registry mutation refuses at manifest-bound raw authority'
+  }),
+  Object.freeze({
+    name: 'fixture-report-canonical-binding-disabled',
+    file: 'scripts/fixtures/evaluation-fixture-evidence.js',
+    suite: 'evaluation-fixture-evidence-test.js',
+    edits: Object.freeze([
+      Object.freeze({
+        find: 'registry.fixtureCorpusHash !== corpusHash || registry.fixtureReportHash !== reportHash ||',
+        replace: 'registry.fixtureCorpusHash !== corpusHash ||'
+      }),
+      Object.freeze({
+        find: 'fixtureReportHash: manifest.source.fixtureReportHash,',
+        replace: 'fixtureReportHash: resolved.fixtureReportHash,'
+      })
+    ]),
+    failure: 'mutated canonical report hash refuses against actual report bytes'
+  }),
+  Object.freeze({
+    name: 'fixture-corpus-binding-disabled',
+    file: 'scripts/fixtures/evaluation-fixture-evidence.js',
+    suite: 'evaluation-fixture-evidence-test.js',
+    edits: Object.freeze([
+      Object.freeze({
+        find: 'registry.fixtureCorpusHash !== corpusHash ||',
+        replace: ''
+      }),
+      Object.freeze({
+        find: 'fixtureCorpusHash: manifest.source.fixtureCorpusHash,',
+        replace: 'fixtureCorpusHash: resolved.fixtureCorpusHash,'
+      })
+    ]),
+    failure: 'mutated fixture corpus hash refuses against the retained index'
+  }),
+  Object.freeze({
+    name: 'fixture-manifest-binding-disabled',
+    file: 'scripts/fixtures/evaluation-fixture-evidence.js',
+    suite: 'evaluation-fixture-evidence-test.js',
+    edits: Object.freeze([
+      Object.freeze({
+        find: 'if (registry.fixtureManifestHash !== manifestHash ||',
+        replace: 'if ('
+      }),
+      Object.freeze({
+        find: 'fixtureManifestHash: manifest.source.fixtureManifestHash,',
+        replace: 'fixtureManifestHash: resolved.fixtureManifestHash,'
+      })
+    ]),
+    failure: 'mutated fixture manifest hash refuses against the retained manifest'
+  }),
+  Object.freeze({
+    name: 'fixture-source-binding-disabled',
+    file: 'scripts/fixtures/evaluation-fixture-evidence.js',
+    suite: 'evaluation-fixture-evidence-test.js',
+    edits: Object.freeze([
+      Object.freeze({
+        find: 'header.repositoryCommit !== registry.fixtureSourceCommit ||',
+        replace: ''
+      }),
+      Object.freeze({
+        find: 'fixtureSourceCommit: binding.fixtureSourceCommit,',
+        replace: 'fixtureSourceCommit: resolved.fixtureSourceCommit,'
+      })
+    ]),
+    failure: 'mutated fixture source binding refuses against the retained run header'
+  }),
+  Object.freeze({
+    name: 'fixture-evidence-version-check-disabled',
+    file: 'scripts/fixtures/evaluation-fixture-evidence.js',
+    suite: 'evaluation-fixture-evidence-test.js',
+    find: 'binding.version !== SUPPORTED_FIXTURE_EVIDENCE_VERSION ||',
+    replace: 'false ||',
+    failure: 'live manifest pointing at fixture-v1 cannot enter the fixture-v2 resolver'
+  }),
+  Object.freeze({
+    name: 'fixture-conclusion-authority-disabled',
+    file: 'scripts/fixtures/evaluation-fixture-evidence.js',
+    suite: 'evaluation-fixture-evidence-test.js',
+    find: 'registry.conclusion !== FIXTURE_CONCLUSION) {',
+    replace: 'false) {',
+    failure: 'conclusion metadata cannot disagree with the retained STOP report'
+  }),
+  Object.freeze({
+    name: 'production-fixture-resolver-bypassed',
+    file: 'scripts/structured-allocation-evaluation-report-live.js',
+    suite: 'evaluation-live-production-closure-test.js',
+    find: 'const fixtureEvidence = resolveFixtureEvidenceForLiveManifest({\n    manifest, root: repositoryRoot\n  });',
+    replace: 'const fixtureEvidence = resolveFixtureEvidenceForLiveManifest({ manifest });',
+    failure: 'production command cannot bypass its repository-owned fixture resolver'
+  }),
+  Object.freeze({
+    name: 'production-report-owner-check-disabled',
+    file: 'scripts/fixtures/evaluation-live-scoring-closure.js',
+    suite: 'evaluation-live-production-closure-test.js',
+    find: "typeof productionOwner.buildLiveReportFromRoot !== 'function' ||",
+    replace: 'false ||',
+    failure: 'pre-provider gate refuses when the production report command is unavailable'
+  }),
+  Object.freeze({
+    name: 'arbitrary-fixture-report-path-accepted',
+    file: 'scripts/structured-allocation-evaluation-report-live.js',
+    suite: 'evaluation-live-production-closure-test.js',
+    find: "if (argv[index] !== '--readiness-dress-rehearsal') {\n      throw new Error('only --readiness-dress-rehearsal is accepted after the live root');\n    }",
+    replace: "if (argv[index] === '--fixture-report') { index += 1; continue; }\n    if (argv[index] !== '--readiness-dress-rehearsal') {\n      throw new Error('only --readiness-dress-rehearsal is accepted after the live root');\n    }",
+    failure: 'production command refuses an operator-supplied fixture report path'
   })
 ]);
 

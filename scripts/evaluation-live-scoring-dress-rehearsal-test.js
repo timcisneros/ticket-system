@@ -12,8 +12,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const liveManifest = require('../config/structured-allocation-evaluation-live-v2.json');
-const historicalLiveManifest = require('../config/structured-allocation-evaluation-live-v1.json');
+const liveManifest = require('../config/structured-allocation-evaluation-live-v3.json');
+const historicalLiveManifest = require('../config/structured-allocation-evaluation-live-v2.json');
+const historicalLiveV1Manifest = require('../config/structured-allocation-evaluation-live-v1.json');
 const fixtureManifest = require('../config/structured-allocation-evaluation-scored-v1.json');
 const protocol = require('../config/structured-allocation-evaluation-v1.json');
 const {
@@ -275,7 +276,7 @@ function main() {
   const markdown = renderLiveMarkdown(report);
   ok(report.finalProductDecision === 'RETAIN' &&
      report.liveOrdinaryDecision.ordinaryDecision === 'RETAIN',
-  'the complete controlled path reaches RETAIN from the actual v2 topology');
+  'the complete controlled path reaches RETAIN from the actual live-v3 topology');
   ok(report.authorizedDimensions.length === 5 &&
      Object.values(report.metricsByArm).every(metric =>
        ['allocation_quality', 'completion_truthfulness', 'latency', 'cost', 'churn']
@@ -453,7 +454,8 @@ function main() {
   for (const runHeaderHash of [
     'b2b59ad2b9d9fafc8ac860838b0530cb8f90bc02907b36a3a230b560bece2eef',
     '986249cebdf2239c93b37ed7340aedbebbb85df5e134f4f848264dd5c1916359',
-    '1cb2332d782b9478454d329dfd5ebd95e195acb6289ffd57b9e1255045d95022'
+    '1cb2332d782b9478454d329dfd5ebd95e195acb6289ffd57b9e1255045d95022',
+    'ad677632d187a791f885869f69dbd7232caab1d170ceb9fee7357f515871aed6'
   ]) {
     ok(refusalCode(() => assertLiveScoringCorpus({
       manifest: liveManifest, projection,
@@ -482,7 +484,7 @@ function main() {
     header: headerFor(historicalLiveManifest),
     artifacts: outcomeBearingTrap, exclusions: outcomeBearingTrap
   })) === 'LIVE_SCORING_RUN_HEADER_MISMATCH',
-  'a historical live-v1 run header cannot be paired with live-v2 before artifacts are read');
+  'a historical live-v2 run header cannot be paired with live-v3 before artifacts are read');
 
   // Immutable report files and hashes, in an isolated temporary directory.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'live-score-dress-'));
@@ -502,22 +504,34 @@ function main() {
     fs.rmSync(root, { recursive: true, force: true });
   }
 
-  ok(liveManifest.liveManifestVersion === 2 &&
-     liveManifest.manifestHash ===
-       '634963b5581a57449e0c45ffb7973f86a3ff0b6bd6b708d4fc06b9969c8c76b6',
-  'the candidate live-v2 manifest identity is exact');
+  ok(liveManifest.liveManifestVersion === 3 &&
+     liveManifest.source.fixtureEvidence?.version === 2,
+  'the candidate live-v3 manifest binds fixture-evidence v2');
   ok(historicalLiveManifest.manifestHash ===
+    '634963b5581a57449e0c45ffb7973f86a3ff0b6bd6b708d4fc06b9969c8c76b6',
+  'historical live-v2 manifest bytes remain bound to their exact hash');
+  ok(historicalLiveV1Manifest.manifestHash ===
     '792d228f939d597891da25bd4d779d76999940c2040e7e846afaf81fc35530b6',
   'historical live-v1 manifest bytes remain bound to their exact hash');
-  ok(fixtureReport().manifestHash ===
-     '044d37828f6f251eefaef66eccb2362ff6c6498c689baf54eb357870c4d9a07b' &&
+  ok(fixtureReport().manifestHash === liveManifest.source.fixtureManifestHash &&
      fixtureReport().corpusIntegrity.corpusHash ===
-       '40efc9db8242dc616808f00465124ded313b2d1c1d7b61ac077f5acf0fdbfc8f' &&
-     fixtureReport().reportHash ===
-       '17a8dcf83580d259e9794fac345e827640115327ee1a75152aac6b1029bb8569',
-  'immutable fixture evidence identities remain exact');
+       liveManifest.source.fixtureCorpusHash &&
+     fixtureReport().reportHash === liveManifest.source.fixtureReportHash,
+  'the low-level scorer fixture capsule follows the live-v3 binding');
 
   console.log(`\nevaluation live scoring dress rehearsal passed — ${passed} assertions; provider calls 0`);
 }
 
-main();
+module.exports = {
+  ARTIFACTS,
+  HEADER,
+  PREFLIGHT,
+  artifactFor,
+  fixtureReport,
+  headerFor,
+  liveManifest,
+  rehashArtifact,
+  score
+};
+
+if (require.main === module) main();

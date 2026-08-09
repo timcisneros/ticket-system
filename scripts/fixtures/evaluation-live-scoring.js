@@ -22,13 +22,15 @@ const { LIVE_MANIFEST_VERSION: LIVE_MANIFEST_V1 } =
   require('./evaluation-live-manifest');
 const { LIVE_MANIFEST_VERSION: LIVE_MANIFEST_V2 } =
   require('./evaluation-live-manifest-v2');
+const { LIVE_MANIFEST_VERSION: LIVE_MANIFEST_V3 } =
+  require('./evaluation-live-manifest-v3');
 const { validateLiveV2Topology } = require('./evaluation-live-v2-matrix');
 
 const LIVE_SCORING_PROJECTION_VERSION = 1;
 const LIVE_REPORT_VERSION = 1;
 const EXPECTED_ARMS = Object.freeze(['A', 'A2a', 'A2b', 'B', 'C']);
 const SUPPORTED_LIVE_MANIFEST_VERSIONS = Object.freeze([
-  LIVE_MANIFEST_V1, LIVE_MANIFEST_V2
+  LIVE_MANIFEST_V1, LIVE_MANIFEST_V2, LIVE_MANIFEST_V3
 ]);
 
 class LiveScoringError extends Error {
@@ -102,7 +104,8 @@ function projectLiveManifestToScoring({ manifest, protocol }) {
       'the live matrix is not the frozen 40-cell x 3-repetition x 120-slot authority',
       { code: 'LIVE_SCORING_MATRIX_SHAPE_MISMATCH' });
   }
-  if (manifest.liveManifestVersion === LIVE_MANIFEST_V2) {
+  if (manifest.liveManifestVersion === LIVE_MANIFEST_V2 ||
+      manifest.liveManifestVersion === LIVE_MANIFEST_V3) {
     try {
       validateLiveV2Topology(manifest.cells);
     } catch (error) {
@@ -203,7 +206,11 @@ function projectLiveManifestToScoring({ manifest, protocol }) {
   });
 }
 
-function assertLiveHeaderScorable({ header, manifest, projection }) {
+const READINESS_DRESS_REHEARSAL_EVIDENCE_CLASS =
+  'PROVIDER-FREE LIVE SCORING DRESS REHEARSAL — NOT PRODUCT EVIDENCE';
+
+function assertLiveHeaderScorable({ header, manifest, projection,
+  readinessDressRehearsal = false }) {
   if (isAbortedRunHeader(header)) {
     throw new LiveScoringError(
       'refusing an ABORTED — NOT DECISION EVIDENCE run before artifact aggregation',
@@ -214,6 +221,13 @@ function assertLiveHeaderScorable({ header, manifest, projection }) {
     throw new LiveScoringError(
       'synthetic acceptance is harness evidence and may never be scored as product data',
       { code: 'LIVE_SCORING_SYNTHETIC_NOT_PRODUCT_EVIDENCE' });
+  }
+  const headerIsDressRehearsal = header?.readinessDressRehearsal === true &&
+    header?.evidenceClass === READINESS_DRESS_REHEARSAL_EVIDENCE_CLASS;
+  if (readinessDressRehearsal !== headerIsDressRehearsal) {
+    throw new LiveScoringError(
+      'provider-free dress-rehearsal identity does not match the scoring invocation',
+      { code: 'LIVE_SCORING_DRESS_REHEARSAL_IDENTITY_MISMATCH' });
   }
   if (header && typeof header.runHeaderHash === 'string') {
     const identity = { ...header };
@@ -265,8 +279,11 @@ function artifactHashMatches(artifact) {
     crypto.createHash('sha256').update(JSON.stringify(body)).digest('hex') === stored;
 }
 
-function assertLiveScoringCorpus({ manifest, projection, header, artifacts, exclusions = [] }) {
-  assertLiveHeaderScorable({ header, manifest, projection });
+function assertLiveScoringCorpus({ manifest, projection, header, artifacts, exclusions = [],
+  readinessDressRehearsal = false }) {
+  assertLiveHeaderScorable({
+    header, manifest, projection, readinessDressRehearsal
+  });
   if (!Array.isArray(artifacts) || !Array.isArray(exclusions)) {
     throw new LiveScoringError('live artifacts and exclusions must be arrays',
       { code: 'LIVE_SCORING_CORPUS_SHAPE_INVALID' });
@@ -470,6 +487,7 @@ function fixtureSummary(manifest, fixtureReport) {
   }
   const disqualifiers = fixtureReport.hardDisqualifiers || [];
   return Object.freeze({
+    fixtureEvidenceVersion: manifest.source.fixtureEvidence?.version || 1,
     manifestHash: fixtureReport.manifestHash,
     corpusHash: fixtureReport.corpusIntegrity.corpusHash,
     reportHash: fixtureReport.reportHash,
@@ -516,10 +534,10 @@ function strongestCompetingInterpretation(finalDecision) {
 
 function scoreLiveCorpus({ manifest, protocol, header, artifacts, exclusions = [],
   fixtureReport, committedLiabilityMicroUsd, interruptionResumeHistory = [],
-  authenticatedPreflight = null }) {
+  authenticatedPreflight = null, readinessDressRehearsal = false }) {
   const projection = projectLiveManifestToScoring({ manifest, protocol });
   const integrity = assertLiveScoringCorpus({
-    manifest, projection, header, artifacts, exclusions
+    manifest, projection, header, artifacts, exclusions, readinessDressRehearsal
   });
   const contributing = integrity.artifacts;
   const byArm = {};
@@ -594,7 +612,9 @@ function scoreLiveCorpus({ manifest, protocol, header, artifacts, exclusions = [
     liveManifestVersion: manifest.liveManifestVersion,
     scoringProjectionVersion: LIVE_SCORING_PROJECTION_VERSION,
     scorerVersion: SCORER_VERSION,
-    evidenceClass: 'REAL LIVE PRODUCT EVIDENCE',
+    evidenceClass: readinessDressRehearsal
+      ? READINESS_DRESS_REHEARSAL_EVIDENCE_CLASS
+      : 'REAL LIVE PRODUCT EVIDENCE',
     protocolId: manifest.protocolId,
     protocolVersion: manifest.protocolVersion,
     trialSourceCommit: header.repositoryCommit,
@@ -666,6 +686,7 @@ module.exports = {
   EXPECTED_ARMS,
   LIVE_REPORT_VERSION,
   LIVE_SCORING_PROJECTION_VERSION,
+  READINESS_DRESS_REHEARSAL_EVIDENCE_CLASS,
   LiveScoringError,
   assertLiveHeaderScorable,
   assertLiveReportIdentity,

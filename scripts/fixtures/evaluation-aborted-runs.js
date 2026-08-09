@@ -47,6 +47,14 @@ const PERMANENTLY_ABORTED_RUNS = Object.freeze([
     reason: 'the authorized real-live run completed execution but the canonical ' +
       'scoring path did not accept the live manifest shape; source freeze made ' +
       'an after-the-fact adapter invalid and the run is permanently quarantined'
+  }),
+  Object.freeze({
+    runHeaderHash:
+      'ad677632d187a791f885869f69dbd7232caab1d170ceb9fee7357f515871aed6',
+    reason: 'the authorized real LIVE-V2 run completed execution but the ' +
+      'production report owner had no repository-owned immutable fixture input; ' +
+      'source freeze made retrofitting provenance invalid and the run is ' +
+      'permanently quarantined'
   })
 ]);
 

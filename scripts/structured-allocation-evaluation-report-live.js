@@ -13,10 +13,14 @@ const {
   assertScorableLiveCorpus, auditLiveCorpus
 } = require('./fixtures/evaluation-live-corpus-integrity');
 const {
+  READINESS_DRESS_REHEARSAL_EVIDENCE_CLASS,
   assertLiveHeaderScorable, assertLiveReportIdentity,
   projectLiveManifestToScoring, scoreLiveCorpus,
   trialIdForLiveAssignment
 } = require('./fixtures/evaluation-live-scoring');
+const {
+  resolveFixtureEvidenceForLiveManifest
+} = require('./fixtures/evaluation-fixture-evidence');
 const {
   reconstructCommittedLiability
 } = require('./fixtures/evaluation-live-budget-ledger');
@@ -25,16 +29,18 @@ const { readJournal } = require('./fixtures/evaluation-live-run-journal');
 function parseArguments(argv) {
   if (argv.length < 1) {
     throw new Error('usage: structured-allocation-evaluation-report-live.js ' +
-      '<real-live-root> --fixture-report <immutable-fixture-report.json>');
+      '<real-live-root> [--readiness-dress-rehearsal]');
   }
-  const parsed = { outputRoot: argv[0] };
-  for (let index = 1; index < argv.length; index += 2) {
-    if (argv[index] !== '--fixture-report' || !argv[index + 1]) {
-      throw new Error('only --fixture-report <path> is accepted after the live root');
+  const parsed = { outputRoot: argv[0], readinessDressRehearsal: false };
+  for (let index = 1; index < argv.length; index += 1) {
+    if (argv[index] !== '--readiness-dress-rehearsal') {
+      throw new Error('only --readiness-dress-rehearsal is accepted after the live root');
     }
-    parsed.fixtureReport = argv[index + 1];
+    if (parsed.readinessDressRehearsal) {
+      throw new Error('--readiness-dress-rehearsal may be supplied only once');
+    }
+    parsed.readinessDressRehearsal = true;
   }
-  if (!parsed.fixtureReport) throw new Error('--fixture-report is required');
   return parsed;
 }
 
@@ -65,9 +71,19 @@ function number(value, digits = 0) {
 
 function renderLiveMarkdown(report) {
   const lines = [];
-  lines.push(`# Structured Allocation — REAL Live Evaluation, Protocol v${report.protocolVersion}`);
+  const dressRehearsal =
+    report.evidenceClass === READINESS_DRESS_REHEARSAL_EVIDENCE_CLASS;
+  lines.push(dressRehearsal
+    ? `# Structured Allocation — Provider-Free Live Scoring Dress Rehearsal, Protocol v${report.protocolVersion}`
+    : `# Structured Allocation — REAL Live Evaluation, Protocol v${report.protocolVersion}`);
   lines.push('');
-  lines.push('**REAL LIVE PRODUCT EVIDENCE.** Fixture and live denominators were');
+  lines.push(dressRehearsal
+    ? `**${READINESS_DRESS_REHEARSAL_EVIDENCE_CLASS}.**`
+    : '**REAL LIVE PRODUCT EVIDENCE.** Fixture and live denominators were');
+  if (dressRehearsal) {
+    lines.push('Controlled synthetic live-shaped facts exercise the production report path.');
+    lines.push('Fixture and live denominators were');
+  }
   lines.push('scored separately and were never pooled.');
   lines.push('');
   lines.push('| | |');
@@ -176,11 +192,13 @@ function interruptionResumeHistory(journal) {
   }));
 }
 
-function buildLiveReportFromRoot({ outputRoot, fixtureReportPath,
+function buildLiveReportFromRoot({ outputRoot,
   manifestPath = path.join(__dirname, '..', 'config',
-    'structured-allocation-evaluation-live-v2.json'),
+    'structured-allocation-evaluation-live-v3.json'),
   protocolPath = path.join(__dirname, '..', 'config',
-    'structured-allocation-evaluation-v1.json') }) {
+    'structured-allocation-evaluation-v1.json'),
+  readinessDressRehearsal = false,
+  repositoryRoot = path.join(__dirname, '..') }) {
   const manifest = readJson(manifestPath);
   const protocol = readJson(protocolPath);
   const projection = projectLiveManifestToScoring({ manifest, protocol });
@@ -188,7 +206,9 @@ function buildLiveReportFromRoot({ outputRoot, fixtureReportPath,
 
   // The abort/synthetic/header gate runs BEFORE `trials/` or `exclusions/` is
   // listed. This ordering is load-bearing quarantine, not an optimization.
-  assertLiveHeaderScorable({ header, manifest, projection });
+  assertLiveHeaderScorable({
+    header, manifest, projection, readinessDressRehearsal
+  });
 
   const diskAudit = auditLiveCorpus({
     manifest, header, outputRoot, trialIdFor: trialIdForLiveAssignment
@@ -197,17 +217,36 @@ function buildLiveReportFromRoot({ outputRoot, fixtureReportPath,
   const { artifacts, exclusions } = readRealCorpusFiles(outputRoot);
   const journal = readJournal(outputRoot);
   const liability = reconstructCommittedLiability(outputRoot);
-  const fixtureReport = readJson(fixtureReportPath);
-  const preflightPath = `${outputRoot}.authenticated-preflight.json`;
-  if (!fs.existsSync(preflightPath)) {
-    throw new Error('the real live report requires the separately recorded authenticated preflight');
+  // THE PROVENANCE BOUNDARY. No caller supplies fixture report bytes. The live
+  // manifest names a repository registry, and the resolver re-opens the full
+  // retained fixture corpus/report before returning its parsed report.
+  const fixtureEvidence = resolveFixtureEvidenceForLiveManifest({
+    manifest, root: repositoryRoot
+  });
+  let authenticatedPreflight = null;
+  if (readinessDressRehearsal) {
+    const markerPath = path.join(outputRoot,
+      'PROVIDER-FREE-SCORING-DRESS-REHEARSAL.json');
+    const marker = readJson(markerPath);
+    if (marker.evidenceClass !== READINESS_DRESS_REHEARSAL_EVIDENCE_CLASS ||
+        marker.manifestHash !== manifest.manifestHash ||
+        marker.providerCalls !== 0) {
+      throw new Error('provider-free dress-rehearsal marker is absent or inconsistent');
+    }
+  } else {
+    const preflightPath = `${outputRoot}.authenticated-preflight.json`;
+    if (!fs.existsSync(preflightPath)) {
+      throw new Error('the real live report requires the separately recorded authenticated preflight');
+    }
+    authenticatedPreflight = readJson(preflightPath);
   }
-  const authenticatedPreflight = readJson(preflightPath);
   const inputs = {
-    manifest, protocol, header, artifacts, exclusions, fixtureReport,
+    manifest, protocol, header, artifacts, exclusions,
+    fixtureReport: fixtureEvidence.report,
     committedLiabilityMicroUsd: liability.committedMicroUsd,
     interruptionResumeHistory: interruptionResumeHistory(journal),
-    authenticatedPreflight
+    authenticatedPreflight,
+    readinessDressRehearsal
   };
   const report = scoreLiveCorpus(inputs);
   const repeated = scoreLiveCorpus(inputs);
@@ -219,23 +258,24 @@ function buildLiveReportFromRoot({ outputRoot, fixtureReportPath,
   if (markdown !== renderLiveMarkdown(repeated)) {
     throw new Error('live Markdown report is not deterministic under identical inputs');
   }
-  return Object.freeze({ report, markdown, diskAudit });
+  return Object.freeze({ report, markdown, diskAudit, fixtureEvidence });
 }
 
 function main() {
   const options = parseArguments(process.argv.slice(2));
   const built = buildLiveReportFromRoot({
     outputRoot: options.outputRoot,
-    fixtureReportPath: options.fixtureReport
+    readinessDressRehearsal: options.readinessDressRehearsal
   });
   const jsonBytes = `${JSON.stringify(built.report, null, 2)}\n`;
   const markdownBytes = built.markdown;
-  const jsonPath = path.join(options.outputRoot,
-    'structured-allocation-real-live-report-v2.json');
-  const markdownPath = path.join(options.outputRoot,
-    'structured-allocation-real-live-report-v2.md');
-  const hashesPath = path.join(options.outputRoot,
-    'structured-allocation-real-live-report-hashes-v2.json');
+  const prefix = options.readinessDressRehearsal
+    ? 'structured-allocation-live-scoring-dress-rehearsal'
+    : 'structured-allocation-real-live-report';
+  const version = built.report.liveManifestVersion;
+  const jsonPath = path.join(options.outputRoot, `${prefix}-v${version}.json`);
+  const markdownPath = path.join(options.outputRoot, `${prefix}-v${version}.md`);
+  const hashesPath = path.join(options.outputRoot, `${prefix}-hashes-v${version}.json`);
   writeImmutable(jsonPath, jsonBytes);
   writeImmutable(markdownPath, markdownBytes);
   const hashes = {

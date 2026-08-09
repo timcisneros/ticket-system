@@ -95,7 +95,7 @@ function fixtureRoot() {
     scoredRunHash: header.runHeaderHash,
     corpusIntegrity: { corpusHash, trials: sourceManifest.trials.length },
     hardDisqualifiers: [],
-    frozenDecision: { decision: 'STOP' }
+    frozenDecision: { decision: FIXTURE_CONCLUSION }
   };
   report.reportHash = hashCanonical(report);
   write(path.join(bundle, 'structured-allocation-scored-fixture-report-v2.json'),
@@ -121,7 +121,12 @@ function manifestBinding(root) {
         registryPath: CANONICAL_REGISTRY_PATH,
         registryHash: registry.registryHash,
         registryRawFileSha256: sha256(registryBytes),
+        fixtureSourceCommit: registry.fixtureSourceCommit,
         runHeaderHash: registry.fixtureRunHeaderHash,
+        corpusIndexHash: registry.fixtureCorpusIndexHash,
+        manifestRawFileSha256: registry.files.manifest.rawFileSha256,
+        runHeaderRawFileSha256: registry.files.runHeader.rawFileSha256,
+        corpusIndexRawFileSha256: registry.files.corpusIndex.rawFileSha256,
         reportRawFileSha256: registry.files.reportJson.rawFileSha256,
         markdownRawFileSha256: registry.files.reportMarkdown.rawFileSha256
       }
@@ -164,12 +169,26 @@ function main() {
       root: complete, manifest: binding
     });
     ok(resolved.fixtureEvidenceVersion === 2 &&
-       resolved.report.frozenDecision.decision === 'STOP' &&
+       resolved.report.frozenDecision.decision === FIXTURE_CONCLUSION &&
        resolved.conclusion === FIXTURE_CONCLUSION,
     'the resolver parses and validates the actual retained fixture-v2 report bytes');
     ok(resolved.registry.trialCount === sourceManifest.trials.length &&
        resolved.fixtureCorpusHash === resolved.report.corpusIntegrity.corpusHash,
     'the complete retained trial corpus closes the report provenance chain');
+
+    const missingRegistry = make();
+    const missingRegistryManifest = manifestBinding(missingRegistry);
+    fs.unlinkSync(path.join(missingRegistry, CANONICAL_REGISTRY_PATH));
+    ok(refuses(missingRegistry, missingRegistryManifest,
+      'FIXTURE_EVIDENCE_FILE_MISSING'),
+    'an absent repository-owned fixture registry refuses');
+
+    const changedRegistry = make();
+    const changedRegistryManifest = manifestBinding(changedRegistry);
+    fs.appendFileSync(path.join(changedRegistry, CANONICAL_REGISTRY_PATH), ' ');
+    ok(refuses(changedRegistry, changedRegistryManifest,
+      'FIXTURE_EVIDENCE_REGISTRY_RAW_HASH_DRIFT'),
+    'a one-byte fixture registry mutation refuses at manifest-bound raw authority');
 
     const missing = make();
     fs.unlinkSync(path.join(missing, CANONICAL_BUNDLE_ROOT,
@@ -182,6 +201,14 @@ function main() {
       'structured-allocation-scored-fixture-report-v2.json'), ' ');
     ok(refuses(changed, manifestBinding(changed), 'FIXTURE_EVIDENCE_RAW_HASH_DRIFT'),
       'a one-byte fixture report mutation refuses at raw-file authority');
+
+    const reportRawIdentity = make();
+    const reportRawIdentityManifest = rewriteRegistry(reportRawIdentity, registry => {
+      registry.files.reportJson.rawFileSha256 = 'b'.repeat(64);
+    });
+    ok(refuses(reportRawIdentity, reportRawIdentityManifest,
+      'FIXTURE_EVIDENCE_RAW_HASH_DRIFT'),
+    'a mutated report raw-file SHA refuses against actual report bytes');
 
     const reportIdentity = make();
     const reportIdentityManifest = rewriteRegistry(reportIdentity, registry => {
@@ -206,6 +233,14 @@ function main() {
     ok(refuses(manifestIdentity, manifestIdentityManifest,
       'FIXTURE_EVIDENCE_REGISTRY_IDENTITY_DRIFT'),
     'a mutated fixture manifest hash refuses against the retained manifest');
+
+    const sourceIdentity = make();
+    const sourceIdentityManifest = rewriteRegistry(sourceIdentity, registry => {
+      registry.fixtureSourceCommit = 'd'.repeat(40);
+    });
+    ok(refuses(sourceIdentity, sourceIdentityManifest,
+      'FIXTURE_EVIDENCE_RUN_HEADER_DRIFT'),
+    'a mutated fixture source binding refuses against the retained run header');
 
     const wrongVersion = make();
     const wrongVersionManifest = manifestBinding(wrongVersion);

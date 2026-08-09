@@ -44,7 +44,7 @@ const {
 const { ROLE_ECONOMICS } = require('./fixtures/governed-role-policy-container');
 
 const MANIFEST_PATH = path.join(__dirname, '..', 'config',
-  'structured-allocation-evaluation-live-v2.json');
+  'structured-allocation-evaluation-live-v3.json');
 const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8'));
 
 // FIXED BEFORE EXECUTION, not chosen from what the run happened to do.

@@ -20,6 +20,22 @@
 const protocol = require('../../config/structured-allocation-evaluation-v1.json');
 
 const LIVE_READINESS_VERSION = 1;
+let cachedFixtureClosure = null;
+
+function fixtureClosureReady(live) {
+  if (cachedFixtureClosure && cachedFixtureClosure.manifestHash === live?.manifestHash) {
+    return cachedFixtureClosure.ready;
+  }
+  let ready = false;
+  try {
+    // eslint-disable-next-line global-require
+    const { assertLiveScoringClosureReady } =
+      require('./evaluation-live-scoring-closure');
+    ready = assertLiveScoringClosureReady({ manifest: live }).ready === true;
+  } catch (_) { ready = false; }
+  cachedFixtureClosure = { manifestHash: live?.manifestHash || null, ready };
+  return ready;
+}
 
 // The exact worst case the frozen contracts imply, not an estimate.
 //
@@ -161,7 +177,7 @@ function auditLiveReadiness({ liveManifest, sources = {} } = {}) {
   if (liveManifest === undefined) {
     try {
       // eslint-disable-next-line global-require
-      live = require('../../config/structured-allocation-evaluation-live-v2.json');
+      live = require('../../config/structured-allocation-evaluation-live-v3.json');
     } catch (_) { live = null; }
   }
 
@@ -173,7 +189,8 @@ function auditLiveReadiness({ liveManifest, sources = {} } = {}) {
       (live.liveManifestVersion === 1
         ? live.cells.every(cell => Array.isArray(cell.sourceFixtureSlots) &&
             cell.sourceFixtureSlots.length > 0)
-        : live.liveManifestVersion === 2 && live.decisionTopology &&
+        : (live.liveManifestVersion === 2 || live.liveManifestVersion === 3) &&
+          live.decisionTopology &&
           live.decisionTopology.everyRequiredFamilyHasAllComparisonArms === true &&
           live.decisionTopology.everyRequiredCellIsFiveArmMatched === true &&
           live.decisionTopology.matchedCellsPerRequiredFamily >= 2 &&
@@ -184,6 +201,16 @@ function auditLiveReadiness({ liveManifest, sources = {} } = {}) {
       `${live.totalAssignedTrials} slots, derived from live manifest version ` +
       `${live.liveManifestVersion} membership authority`,
     'live manifest cells / decisionTopology');
+
+  const closureReady = sources.fixtureClosureReady === undefined
+    ? Boolean(live && fixtureClosureReady(live))
+    : sources.fixtureClosureReady === true;
+  derived('fixture_evidence_provenance', closureReady,
+    live && live.source?.fixtureEvidence
+      ? `fixture evidence v${live.source.fixtureEvidence.version}, registry ` +
+        `${live.source.fixtureEvidence.registryHash}`
+      : null,
+    'live manifest fixtureEvidence + repository-owned production report resolver');
 
   derived('sampling_parameters',
     live && live.sampling && live.sampling.temperature === 0 && live.sampling.topP === 1 &&

@@ -1,0 +1,2051 @@
+{
+  "liveManifestVersion": 3,
+  "protocolId": "structured-allocation-controlled-evaluation",
+  "protocolVersion": 1,
+  "mode": "live",
+  "containsResults": false,
+  "source": {
+    "fixtureManifestHash": "3521079e6924abd2d546bad2a6a5bfda342b9d64f1578675af6a52a35a43d490",
+    "fixtureCorpusHash": "be18c7e405efabedf135b5d88c46cbca207446093fc1fbbf60c25852b6769324",
+    "fixtureReportHash": "24b672e6946aab780eb0662bbaacbe698e66b36f9ec0dbe07c38b5448dd5df22",
+    "fixtureDecision": "FIXTURE EVIDENCE SUPPORTS STOP",
+    "derivation": "deterministic decision-evaluable topology from the frozen protocol and executable scenario catalog; no observed outcome participates; fixture decision input is the complete repository-owned fixture-v2 evidence bundle",
+    "fixtureEvidence": {
+      "version": 2,
+      "registryPath": "config/structured-allocation-evaluation-fixture-evidence-v2.json",
+      "registryHash": "9a3884d53918046e8afbf96e9ff39d0bb96ed82bc22a4b03241e1f953634f75f",
+      "registryRawFileSha256": "09512f5a98632d1e49bc3001c06c797b8d0c7dd9876e43935d76dd98ce18bbae",
+      "fixtureSourceCommit": "ca2cd188a6e10a41eb4bd36ee7eb10504b41978c",
+      "runHeaderHash": "0529783aac957828ec6f012d3131d681f7f5a986d67e2cf113bae324d6be4a2e",
+      "corpusIndexHash": "7b51e6b90c8bff461debcb525c61c78680e924cc856d112e466792c7911980cb",
+      "manifestRawFileSha256": "5d30b785190d6576459607521f9bdee3a634961c336e253540eb77c179f2f0b8",
+      "runHeaderRawFileSha256": "d0fb4239e199a3f0bd9391ab9f9cb2c575710bd2c035bdf930c4db28f606494b",
+      "corpusIndexRawFileSha256": "9690971c6de67f887a3be4f75c6e0bfccac24d703131a7d9be1b77874bf819ff",
+      "reportRawFileSha256": "a636cd055124ce845823a3e5949f3d344d05dfc657873e0abddc43910fe9d5d6",
+      "markdownRawFileSha256": "af91f515a7fc908c0d30ce1a5fe9247ce37bd98fc3c54b2c56f666a2fbad98b5",
+      "conclusion": "FIXTURE EVIDENCE SUPPORTS STOP"
+    }
+  },
+  "repositoryBaselineRule": "every live artifact binds the repository commit it was produced from, and a corpus mixing commits is refused",
+  "provider": "openai",
+  "model": "gpt-4o-mini-2024-07-18",
+  "adapterId": "openai.responses.v1",
+  "plannerModel": "gpt-4o-mini-2024-07-18",
+  "workerModel": "gpt-4o-mini-2024-07-18",
+  "sameModelForPlannerAndWorkers": true,
+  "sampling": {
+    "temperature": 0,
+    "topP": 1,
+    "appliesTo": [
+      "structured_planner",
+      "structured_leaf_executor",
+      "ungoverned_worker"
+    ],
+    "note": "one sampling configuration for every role; no role may differ"
+  },
+  "providerSeedSupport": false,
+  "providerSeed": null,
+  "stochasticityDeclaration": "the production Responses request contract owns no seed field, so residual provider stochasticity is an experimental variable controlled by the exact model snapshot, exact request inputs, temperature/top_p, 3 repetitions and balanced ordering — determinism is not claimed",
+  "contextWindowTokens": 128000,
+  "maximumOutputTokensPerRequest": 2048,
+  "pricing": {
+    "inputMicroUsdPerMillionTokens": 150000,
+    "outputMicroUsdPerMillionTokens": 600000,
+    "boundMethod": "model_context_window_ceiling"
+  },
+  "uniqueCellCount": 40,
+  "cells": [
+    {
+      "cellKey": "family-2/2A||A",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "family": 2,
+      "armId": "A",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 2"
+    },
+    {
+      "cellKey": "family-2/2A||A2a",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "family": 2,
+      "armId": "A2a",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 2"
+    },
+    {
+      "cellKey": "family-2/2A||A2b",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "family": 2,
+      "armId": "A2b",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 2"
+    },
+    {
+      "cellKey": "family-2/2A||B",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "family": 2,
+      "armId": "B",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 2"
+    },
+    {
+      "cellKey": "family-2/2A||C",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "family": 2,
+      "armId": "C",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 2"
+    },
+    {
+      "cellKey": "family-2/2B||A",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "family": 2,
+      "armId": "A",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-2/2B||A2a",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "family": 2,
+      "armId": "A2a",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-2/2B||A2b",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "family": 2,
+      "armId": "A2b",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-2/2B||B",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "family": 2,
+      "armId": "B",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-2/2B||C",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "family": 2,
+      "armId": "C",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-3/3A||A",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "family": 3,
+      "armId": "A",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 3"
+    },
+    {
+      "cellKey": "family-3/3A||A2a",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "family": 3,
+      "armId": "A2a",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 3"
+    },
+    {
+      "cellKey": "family-3/3A||A2b",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "family": 3,
+      "armId": "A2b",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 3"
+    },
+    {
+      "cellKey": "family-3/3A||B",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "family": 3,
+      "armId": "B",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 3"
+    },
+    {
+      "cellKey": "family-3/3A||C",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "family": 3,
+      "armId": "C",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 3"
+    },
+    {
+      "cellKey": "family-3/3B||A",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "family": 3,
+      "armId": "A",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-3/3B||A2a",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "family": 3,
+      "armId": "A2a",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-3/3B||A2b",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "family": 3,
+      "armId": "A2b",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-3/3B||B",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "family": 3,
+      "armId": "B",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-3/3B||C",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "family": 3,
+      "armId": "C",
+      "expectedOracleAuthority": "coupling_raw_state_and_fixture_access_log",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-5/5A||A",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "family": 5,
+      "armId": "A",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 5"
+    },
+    {
+      "cellKey": "family-5/5A||A2a",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "family": 5,
+      "armId": "A2a",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 5"
+    },
+    {
+      "cellKey": "family-5/5A||A2b",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "family": 5,
+      "armId": "A2b",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 5"
+    },
+    {
+      "cellKey": "family-5/5A||B",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "family": 5,
+      "armId": "B",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 5"
+    },
+    {
+      "cellKey": "family-5/5A||C",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "family": 5,
+      "armId": "C",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 5"
+    },
+    {
+      "cellKey": "family-5/5B||A",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "family": 5,
+      "armId": "A",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-5/5B||A2a",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "family": 5,
+      "armId": "A2a",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-5/5B||A2b",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "family": 5,
+      "armId": "A2b",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-5/5B||B",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "family": 5,
+      "armId": "B",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-5/5B||C",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "family": 5,
+      "armId": "C",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-6/6A||A",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "family": 6,
+      "armId": "A",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 6"
+    },
+    {
+      "cellKey": "family-6/6A||A2a",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "family": 6,
+      "armId": "A2a",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 6"
+    },
+    {
+      "cellKey": "family-6/6A||A2b",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "family": 6,
+      "armId": "A2b",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 6"
+    },
+    {
+      "cellKey": "family-6/6A||B",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "family": 6,
+      "armId": "B",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 6"
+    },
+    {
+      "cellKey": "family-6/6A||C",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "family": 6,
+      "armId": "C",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "first matched cell for frozen RETAIN-required family 6"
+    },
+    {
+      "cellKey": "family-6/6B||A",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "family": 6,
+      "armId": "A",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-6/6B||A2a",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "family": 6,
+      "armId": "A2a",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-6/6B||A2b",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "family": 6,
+      "armId": "A2b",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-6/6B||B",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "family": 6,
+      "armId": "B",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    },
+    {
+      "cellKey": "family-6/6B||C",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "family": 6,
+      "armId": "C",
+      "expectedOracleAuthority": "raw_state",
+      "expectedQuiescence": "quiescent",
+      "scenarioVersion": 1,
+      "selectionAuthority": "frozen_decision_topology_v2",
+      "selectionRationale": "second matched cell makes rate and cost baselines jointly evaluable"
+    }
+  ],
+  "repetitions": 3,
+  "totalAssignedTrials": 120,
+  "ordering": {
+    "strategy": "deterministic_balanced_latin_square",
+    "generatedBeforeExecution": true,
+    "permutations": [
+      [
+        "A",
+        "A2a",
+        "A2b",
+        "B",
+        "C"
+      ],
+      [
+        "A2a",
+        "A2b",
+        "B",
+        "C",
+        "A"
+      ],
+      [
+        "A2b",
+        "B",
+        "C",
+        "A",
+        "A2a"
+      ]
+    ],
+    "balance": {
+      "repetitions": 3,
+      "arms": 5,
+      "completeLatinSquarePossible": false,
+      "achievedProperty": "every arm occupies a DIFFERENT ordinal position in each repetition; with 3 repetitions and 5 arms each arm reaches 3 of the 5 positions, which is the maximum achievable",
+      "residualImbalance": "each arm misses 2 of the 5 ordinal positions; no arm is first or last more than once",
+      "perArm": {
+        "A": {
+          "positionCounts": {
+            "0": 1,
+            "3": 1,
+            "4": 1
+          },
+          "distinctPositions": 3
+        },
+        "A2a": {
+          "positionCounts": {
+            "0": 1,
+            "1": 1,
+            "4": 1
+          },
+          "distinctPositions": 3
+        },
+        "A2b": {
+          "positionCounts": {
+            "0": 1,
+            "1": 1,
+            "2": 1
+          },
+          "distinctPositions": 3
+        },
+        "B": {
+          "positionCounts": {
+            "1": 1,
+            "2": 1,
+            "3": 1
+          },
+          "distinctPositions": 3
+        },
+        "C": {
+          "positionCounts": {
+            "2": 1,
+            "3": 1,
+            "4": 1
+          },
+          "distinctPositions": 3
+        }
+      }
+    }
+  },
+  "slots": [
+    {
+      "slot": 1,
+      "repetition": 1,
+      "cellKey": "family-2/2A||A",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "ad3e1c6e0e4bf99cf983a2a81a8900a9941b817754804a5359d2704ba6c38e2c"
+    },
+    {
+      "slot": 2,
+      "repetition": 1,
+      "cellKey": "family-2/2B||A",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "a0dd96b8253ef7d8e8041176bc3c134a693cdf86bfede6a4c94d50f36b5050cd"
+    },
+    {
+      "slot": 3,
+      "repetition": 1,
+      "cellKey": "family-3/3A||A",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "4ea7d20da34d12d118a06182a76e076dd77cb8442a8bb897882f0ee17732fb5b"
+    },
+    {
+      "slot": 4,
+      "repetition": 1,
+      "cellKey": "family-3/3B||A",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "2b880d576958ecb3cfbbcf0692bcec99d89ba1cd71ca61562dec821f50138cba"
+    },
+    {
+      "slot": 5,
+      "repetition": 1,
+      "cellKey": "family-5/5A||A",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "7bb3ecf5b7120e23701236fc4d7cad8d964c5ff49bafab544c9001ccd2db1d44"
+    },
+    {
+      "slot": 6,
+      "repetition": 1,
+      "cellKey": "family-5/5B||A",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "8004b088232435448049ed68f0ac120f585abed37e3d03fe3a2bcf6d060ad063"
+    },
+    {
+      "slot": 7,
+      "repetition": 1,
+      "cellKey": "family-6/6A||A",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "f0cab4e947d9c34b00d78784af01f109fa286c36cadf08c0165a99f64fff3105"
+    },
+    {
+      "slot": 8,
+      "repetition": 1,
+      "cellKey": "family-6/6B||A",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "8e353bc7d22327741a8e40597f93b34ee0abb73248bab38d3c36b0a6d687fa53"
+    },
+    {
+      "slot": 9,
+      "repetition": 1,
+      "cellKey": "family-2/2A||A2a",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "2828c9906031ff1888bb40c2637e2aaa075d870866d6589d6da9fe2f2b7c2838"
+    },
+    {
+      "slot": 10,
+      "repetition": 1,
+      "cellKey": "family-2/2B||A2a",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "cd2215b72fac3731abe42b69c94719412e74c4054e29bcb2e1dbe98458183384"
+    },
+    {
+      "slot": 11,
+      "repetition": 1,
+      "cellKey": "family-3/3A||A2a",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "8b79663044f40c1ffcd10764220a0447929c17c8b175fb0fb2d9963256294653"
+    },
+    {
+      "slot": 12,
+      "repetition": 1,
+      "cellKey": "family-3/3B||A2a",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "ee8212cacbe368ee5c20f0907d62cf2fd62b8aa98f322e490ad1e005a6dcf6dd"
+    },
+    {
+      "slot": 13,
+      "repetition": 1,
+      "cellKey": "family-5/5A||A2a",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "afa99e82c1246e7d62bfc1e935c1fa7e64665c74c9a155b7ee8a52a07c990a3a"
+    },
+    {
+      "slot": 14,
+      "repetition": 1,
+      "cellKey": "family-5/5B||A2a",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "61c82dd1a2228c78023e35c1b6e5486715929dc755868edee624faea4e539dc4"
+    },
+    {
+      "slot": 15,
+      "repetition": 1,
+      "cellKey": "family-6/6A||A2a",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "2c806cf199fca98bfbe7dc40b52881103a6d673a19e412e7bb7f716960e80558"
+    },
+    {
+      "slot": 16,
+      "repetition": 1,
+      "cellKey": "family-6/6B||A2a",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "24e5a4c24d73a3e14491207bd4700adc49e1e26c07c5cdfb5b5ec54393c719a6"
+    },
+    {
+      "slot": 17,
+      "repetition": 1,
+      "cellKey": "family-2/2A||A2b",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "617d6e42ed2e3ab1c6b44593ca77edf344943301a6a6aef8637c44d592212054"
+    },
+    {
+      "slot": 18,
+      "repetition": 1,
+      "cellKey": "family-2/2B||A2b",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "f5eb94f5c6a8fcf453051ac1aa35ad0a8e37ee121672263fa8640cc89bec3620"
+    },
+    {
+      "slot": 19,
+      "repetition": 1,
+      "cellKey": "family-3/3A||A2b",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "5ca178ceb8ed0d32280d2ae49b3eb0388bff2d41916a902b4f934827d090fc40"
+    },
+    {
+      "slot": 20,
+      "repetition": 1,
+      "cellKey": "family-3/3B||A2b",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "7ea0d06fb83c8a30968b2c987c3d74d5adc83a29e298a0376f1e57ec7578c9ca"
+    },
+    {
+      "slot": 21,
+      "repetition": 1,
+      "cellKey": "family-5/5A||A2b",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "efeedc50d2379cf7289c894554ba1a586a13b210cd141b34810d12f59c00da24"
+    },
+    {
+      "slot": 22,
+      "repetition": 1,
+      "cellKey": "family-5/5B||A2b",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "ea9bdeba2cf90ee08188fb9c8eead81b889681e8d923c653f5f74a34ea855742"
+    },
+    {
+      "slot": 23,
+      "repetition": 1,
+      "cellKey": "family-6/6A||A2b",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "50a28ef48fcb59d7d546ae5b57cc029b50091cbfe4d168e01ed3e84814cf71e9"
+    },
+    {
+      "slot": 24,
+      "repetition": 1,
+      "cellKey": "family-6/6B||A2b",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "2544c6c79ed570bf4856f95bf83183922275718ea04416d3bd3d27f5439d5043"
+    },
+    {
+      "slot": 25,
+      "repetition": 1,
+      "cellKey": "family-2/2A||B",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "386ee5122e1e24972f422d37c9b26ca71eb932ed9223d77a7bc4085d32706dc7"
+    },
+    {
+      "slot": 26,
+      "repetition": 1,
+      "cellKey": "family-2/2B||B",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "d471e5eb2ee8d2ebb624802c20ecda94eaae56842172e6546bb4e683ba019cd3"
+    },
+    {
+      "slot": 27,
+      "repetition": 1,
+      "cellKey": "family-3/3A||B",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "1196490444b34fa507e8c6e17af2c73ed4c9f3786ee57bc35f24e0a8a8f887da"
+    },
+    {
+      "slot": 28,
+      "repetition": 1,
+      "cellKey": "family-3/3B||B",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "14b644ef0ca093f61700a58ec52179cc5de761b6600f02698612ab0164667eb3"
+    },
+    {
+      "slot": 29,
+      "repetition": 1,
+      "cellKey": "family-5/5A||B",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "da916dc4b89a462dac3bdd839ea4961cf2f099779362751f22e7e8fa8ac3238c"
+    },
+    {
+      "slot": 30,
+      "repetition": 1,
+      "cellKey": "family-5/5B||B",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "8eebd3fecf1663af68b2682f8a5292aedc4e0b532f4659bc83b29f569ff186c6"
+    },
+    {
+      "slot": 31,
+      "repetition": 1,
+      "cellKey": "family-6/6A||B",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "d158d4bb606c81437d1eed5486cad8f435041600515719dc1080754823179496"
+    },
+    {
+      "slot": 32,
+      "repetition": 1,
+      "cellKey": "family-6/6B||B",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "0924b101db69c48edce524b4dcb648341d9b1fa8ae68049ed614e65b5356f58e"
+    },
+    {
+      "slot": 33,
+      "repetition": 1,
+      "cellKey": "family-2/2A||C",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "a44b29235ea9f0287d21067648f1c8da11b018272c66458a875d988598efc9d2"
+    },
+    {
+      "slot": 34,
+      "repetition": 1,
+      "cellKey": "family-2/2B||C",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "6cc4e1f532867ab416a6b5c8811ec360cb2029bf449577305b999a6ffa1966ae"
+    },
+    {
+      "slot": 35,
+      "repetition": 1,
+      "cellKey": "family-3/3A||C",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "97b4544a1c905696bd81b07f3586f64def414a085c13c6c7e5566b99b3ac096e"
+    },
+    {
+      "slot": 36,
+      "repetition": 1,
+      "cellKey": "family-3/3B||C",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "43fc3774e921af42dc8c54ecca313ca6317f15b6af5cebf81589d37863ede52e"
+    },
+    {
+      "slot": 37,
+      "repetition": 1,
+      "cellKey": "family-5/5A||C",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "dc7684f6e82d95f3aafc473fc765d8f7640012cb2755c5ff2fddccb38222123b"
+    },
+    {
+      "slot": 38,
+      "repetition": 1,
+      "cellKey": "family-5/5B||C",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "261fc1de5866914a64f69f93395a88c8b26435ab35ecc6658e7fdd7a4687aacd"
+    },
+    {
+      "slot": 39,
+      "repetition": 1,
+      "cellKey": "family-6/6A||C",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "dbf3ff19ffead7bb3a56db184beb14ec77c33fbd98878c47078aab9d544c3ee8"
+    },
+    {
+      "slot": 40,
+      "repetition": 1,
+      "cellKey": "family-6/6B||C",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "028d49dd1dd6e99d8ed9f6a70988ad63cc766bd39462385a538bd5380c05ac66"
+    },
+    {
+      "slot": 1,
+      "repetition": 2,
+      "cellKey": "family-2/2A||A2a",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "2828c9906031ff1888bb40c2637e2aaa075d870866d6589d6da9fe2f2b7c2838"
+    },
+    {
+      "slot": 2,
+      "repetition": 2,
+      "cellKey": "family-2/2B||A2a",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "cd2215b72fac3731abe42b69c94719412e74c4054e29bcb2e1dbe98458183384"
+    },
+    {
+      "slot": 3,
+      "repetition": 2,
+      "cellKey": "family-3/3A||A2a",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "8b79663044f40c1ffcd10764220a0447929c17c8b175fb0fb2d9963256294653"
+    },
+    {
+      "slot": 4,
+      "repetition": 2,
+      "cellKey": "family-3/3B||A2a",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "ee8212cacbe368ee5c20f0907d62cf2fd62b8aa98f322e490ad1e005a6dcf6dd"
+    },
+    {
+      "slot": 5,
+      "repetition": 2,
+      "cellKey": "family-5/5A||A2a",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "afa99e82c1246e7d62bfc1e935c1fa7e64665c74c9a155b7ee8a52a07c990a3a"
+    },
+    {
+      "slot": 6,
+      "repetition": 2,
+      "cellKey": "family-5/5B||A2a",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "61c82dd1a2228c78023e35c1b6e5486715929dc755868edee624faea4e539dc4"
+    },
+    {
+      "slot": 7,
+      "repetition": 2,
+      "cellKey": "family-6/6A||A2a",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "2c806cf199fca98bfbe7dc40b52881103a6d673a19e412e7bb7f716960e80558"
+    },
+    {
+      "slot": 8,
+      "repetition": 2,
+      "cellKey": "family-6/6B||A2a",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "24e5a4c24d73a3e14491207bd4700adc49e1e26c07c5cdfb5b5ec54393c719a6"
+    },
+    {
+      "slot": 9,
+      "repetition": 2,
+      "cellKey": "family-2/2A||A2b",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "617d6e42ed2e3ab1c6b44593ca77edf344943301a6a6aef8637c44d592212054"
+    },
+    {
+      "slot": 10,
+      "repetition": 2,
+      "cellKey": "family-2/2B||A2b",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "f5eb94f5c6a8fcf453051ac1aa35ad0a8e37ee121672263fa8640cc89bec3620"
+    },
+    {
+      "slot": 11,
+      "repetition": 2,
+      "cellKey": "family-3/3A||A2b",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "5ca178ceb8ed0d32280d2ae49b3eb0388bff2d41916a902b4f934827d090fc40"
+    },
+    {
+      "slot": 12,
+      "repetition": 2,
+      "cellKey": "family-3/3B||A2b",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "7ea0d06fb83c8a30968b2c987c3d74d5adc83a29e298a0376f1e57ec7578c9ca"
+    },
+    {
+      "slot": 13,
+      "repetition": 2,
+      "cellKey": "family-5/5A||A2b",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "efeedc50d2379cf7289c894554ba1a586a13b210cd141b34810d12f59c00da24"
+    },
+    {
+      "slot": 14,
+      "repetition": 2,
+      "cellKey": "family-5/5B||A2b",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "ea9bdeba2cf90ee08188fb9c8eead81b889681e8d923c653f5f74a34ea855742"
+    },
+    {
+      "slot": 15,
+      "repetition": 2,
+      "cellKey": "family-6/6A||A2b",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "50a28ef48fcb59d7d546ae5b57cc029b50091cbfe4d168e01ed3e84814cf71e9"
+    },
+    {
+      "slot": 16,
+      "repetition": 2,
+      "cellKey": "family-6/6B||A2b",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "2544c6c79ed570bf4856f95bf83183922275718ea04416d3bd3d27f5439d5043"
+    },
+    {
+      "slot": 17,
+      "repetition": 2,
+      "cellKey": "family-2/2A||B",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "386ee5122e1e24972f422d37c9b26ca71eb932ed9223d77a7bc4085d32706dc7"
+    },
+    {
+      "slot": 18,
+      "repetition": 2,
+      "cellKey": "family-2/2B||B",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "d471e5eb2ee8d2ebb624802c20ecda94eaae56842172e6546bb4e683ba019cd3"
+    },
+    {
+      "slot": 19,
+      "repetition": 2,
+      "cellKey": "family-3/3A||B",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "1196490444b34fa507e8c6e17af2c73ed4c9f3786ee57bc35f24e0a8a8f887da"
+    },
+    {
+      "slot": 20,
+      "repetition": 2,
+      "cellKey": "family-3/3B||B",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "14b644ef0ca093f61700a58ec52179cc5de761b6600f02698612ab0164667eb3"
+    },
+    {
+      "slot": 21,
+      "repetition": 2,
+      "cellKey": "family-5/5A||B",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "da916dc4b89a462dac3bdd839ea4961cf2f099779362751f22e7e8fa8ac3238c"
+    },
+    {
+      "slot": 22,
+      "repetition": 2,
+      "cellKey": "family-5/5B||B",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "8eebd3fecf1663af68b2682f8a5292aedc4e0b532f4659bc83b29f569ff186c6"
+    },
+    {
+      "slot": 23,
+      "repetition": 2,
+      "cellKey": "family-6/6A||B",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "d158d4bb606c81437d1eed5486cad8f435041600515719dc1080754823179496"
+    },
+    {
+      "slot": 24,
+      "repetition": 2,
+      "cellKey": "family-6/6B||B",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "0924b101db69c48edce524b4dcb648341d9b1fa8ae68049ed614e65b5356f58e"
+    },
+    {
+      "slot": 25,
+      "repetition": 2,
+      "cellKey": "family-2/2A||C",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "a44b29235ea9f0287d21067648f1c8da11b018272c66458a875d988598efc9d2"
+    },
+    {
+      "slot": 26,
+      "repetition": 2,
+      "cellKey": "family-2/2B||C",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "6cc4e1f532867ab416a6b5c8811ec360cb2029bf449577305b999a6ffa1966ae"
+    },
+    {
+      "slot": 27,
+      "repetition": 2,
+      "cellKey": "family-3/3A||C",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "97b4544a1c905696bd81b07f3586f64def414a085c13c6c7e5566b99b3ac096e"
+    },
+    {
+      "slot": 28,
+      "repetition": 2,
+      "cellKey": "family-3/3B||C",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "43fc3774e921af42dc8c54ecca313ca6317f15b6af5cebf81589d37863ede52e"
+    },
+    {
+      "slot": 29,
+      "repetition": 2,
+      "cellKey": "family-5/5A||C",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "dc7684f6e82d95f3aafc473fc765d8f7640012cb2755c5ff2fddccb38222123b"
+    },
+    {
+      "slot": 30,
+      "repetition": 2,
+      "cellKey": "family-5/5B||C",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "261fc1de5866914a64f69f93395a88c8b26435ab35ecc6658e7fdd7a4687aacd"
+    },
+    {
+      "slot": 31,
+      "repetition": 2,
+      "cellKey": "family-6/6A||C",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "dbf3ff19ffead7bb3a56db184beb14ec77c33fbd98878c47078aab9d544c3ee8"
+    },
+    {
+      "slot": 32,
+      "repetition": 2,
+      "cellKey": "family-6/6B||C",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "028d49dd1dd6e99d8ed9f6a70988ad63cc766bd39462385a538bd5380c05ac66"
+    },
+    {
+      "slot": 33,
+      "repetition": 2,
+      "cellKey": "family-2/2A||A",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "ad3e1c6e0e4bf99cf983a2a81a8900a9941b817754804a5359d2704ba6c38e2c"
+    },
+    {
+      "slot": 34,
+      "repetition": 2,
+      "cellKey": "family-2/2B||A",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "a0dd96b8253ef7d8e8041176bc3c134a693cdf86bfede6a4c94d50f36b5050cd"
+    },
+    {
+      "slot": 35,
+      "repetition": 2,
+      "cellKey": "family-3/3A||A",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "4ea7d20da34d12d118a06182a76e076dd77cb8442a8bb897882f0ee17732fb5b"
+    },
+    {
+      "slot": 36,
+      "repetition": 2,
+      "cellKey": "family-3/3B||A",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "2b880d576958ecb3cfbbcf0692bcec99d89ba1cd71ca61562dec821f50138cba"
+    },
+    {
+      "slot": 37,
+      "repetition": 2,
+      "cellKey": "family-5/5A||A",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "7bb3ecf5b7120e23701236fc4d7cad8d964c5ff49bafab544c9001ccd2db1d44"
+    },
+    {
+      "slot": 38,
+      "repetition": 2,
+      "cellKey": "family-5/5B||A",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "8004b088232435448049ed68f0ac120f585abed37e3d03fe3a2bcf6d060ad063"
+    },
+    {
+      "slot": 39,
+      "repetition": 2,
+      "cellKey": "family-6/6A||A",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "f0cab4e947d9c34b00d78784af01f109fa286c36cadf08c0165a99f64fff3105"
+    },
+    {
+      "slot": 40,
+      "repetition": 2,
+      "cellKey": "family-6/6B||A",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "8e353bc7d22327741a8e40597f93b34ee0abb73248bab38d3c36b0a6d687fa53"
+    },
+    {
+      "slot": 1,
+      "repetition": 3,
+      "cellKey": "family-2/2A||A2b",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "617d6e42ed2e3ab1c6b44593ca77edf344943301a6a6aef8637c44d592212054"
+    },
+    {
+      "slot": 2,
+      "repetition": 3,
+      "cellKey": "family-2/2B||A2b",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "f5eb94f5c6a8fcf453051ac1aa35ad0a8e37ee121672263fa8640cc89bec3620"
+    },
+    {
+      "slot": 3,
+      "repetition": 3,
+      "cellKey": "family-3/3A||A2b",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "5ca178ceb8ed0d32280d2ae49b3eb0388bff2d41916a902b4f934827d090fc40"
+    },
+    {
+      "slot": 4,
+      "repetition": 3,
+      "cellKey": "family-3/3B||A2b",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "7ea0d06fb83c8a30968b2c987c3d74d5adc83a29e298a0376f1e57ec7578c9ca"
+    },
+    {
+      "slot": 5,
+      "repetition": 3,
+      "cellKey": "family-5/5A||A2b",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "efeedc50d2379cf7289c894554ba1a586a13b210cd141b34810d12f59c00da24"
+    },
+    {
+      "slot": 6,
+      "repetition": 3,
+      "cellKey": "family-5/5B||A2b",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "ea9bdeba2cf90ee08188fb9c8eead81b889681e8d923c653f5f74a34ea855742"
+    },
+    {
+      "slot": 7,
+      "repetition": 3,
+      "cellKey": "family-6/6A||A2b",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "50a28ef48fcb59d7d546ae5b57cc029b50091cbfe4d168e01ed3e84814cf71e9"
+    },
+    {
+      "slot": 8,
+      "repetition": 3,
+      "cellKey": "family-6/6B||A2b",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "armId": "A2b",
+      "stochasticIdentity": "2544c6c79ed570bf4856f95bf83183922275718ea04416d3bd3d27f5439d5043"
+    },
+    {
+      "slot": 9,
+      "repetition": 3,
+      "cellKey": "family-2/2A||B",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "386ee5122e1e24972f422d37c9b26ca71eb932ed9223d77a7bc4085d32706dc7"
+    },
+    {
+      "slot": 10,
+      "repetition": 3,
+      "cellKey": "family-2/2B||B",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "d471e5eb2ee8d2ebb624802c20ecda94eaae56842172e6546bb4e683ba019cd3"
+    },
+    {
+      "slot": 11,
+      "repetition": 3,
+      "cellKey": "family-3/3A||B",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "1196490444b34fa507e8c6e17af2c73ed4c9f3786ee57bc35f24e0a8a8f887da"
+    },
+    {
+      "slot": 12,
+      "repetition": 3,
+      "cellKey": "family-3/3B||B",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "14b644ef0ca093f61700a58ec52179cc5de761b6600f02698612ab0164667eb3"
+    },
+    {
+      "slot": 13,
+      "repetition": 3,
+      "cellKey": "family-5/5A||B",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "da916dc4b89a462dac3bdd839ea4961cf2f099779362751f22e7e8fa8ac3238c"
+    },
+    {
+      "slot": 14,
+      "repetition": 3,
+      "cellKey": "family-5/5B||B",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "8eebd3fecf1663af68b2682f8a5292aedc4e0b532f4659bc83b29f569ff186c6"
+    },
+    {
+      "slot": 15,
+      "repetition": 3,
+      "cellKey": "family-6/6A||B",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "d158d4bb606c81437d1eed5486cad8f435041600515719dc1080754823179496"
+    },
+    {
+      "slot": 16,
+      "repetition": 3,
+      "cellKey": "family-6/6B||B",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "armId": "B",
+      "stochasticIdentity": "0924b101db69c48edce524b4dcb648341d9b1fa8ae68049ed614e65b5356f58e"
+    },
+    {
+      "slot": 17,
+      "repetition": 3,
+      "cellKey": "family-2/2A||C",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "a44b29235ea9f0287d21067648f1c8da11b018272c66458a875d988598efc9d2"
+    },
+    {
+      "slot": 18,
+      "repetition": 3,
+      "cellKey": "family-2/2B||C",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "6cc4e1f532867ab416a6b5c8811ec360cb2029bf449577305b999a6ffa1966ae"
+    },
+    {
+      "slot": 19,
+      "repetition": 3,
+      "cellKey": "family-3/3A||C",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "97b4544a1c905696bd81b07f3586f64def414a085c13c6c7e5566b99b3ac096e"
+    },
+    {
+      "slot": 20,
+      "repetition": 3,
+      "cellKey": "family-3/3B||C",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "43fc3774e921af42dc8c54ecca313ca6317f15b6af5cebf81589d37863ede52e"
+    },
+    {
+      "slot": 21,
+      "repetition": 3,
+      "cellKey": "family-5/5A||C",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "dc7684f6e82d95f3aafc473fc765d8f7640012cb2755c5ff2fddccb38222123b"
+    },
+    {
+      "slot": 22,
+      "repetition": 3,
+      "cellKey": "family-5/5B||C",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "261fc1de5866914a64f69f93395a88c8b26435ab35ecc6658e7fdd7a4687aacd"
+    },
+    {
+      "slot": 23,
+      "repetition": 3,
+      "cellKey": "family-6/6A||C",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "dbf3ff19ffead7bb3a56db184beb14ec77c33fbd98878c47078aab9d544c3ee8"
+    },
+    {
+      "slot": 24,
+      "repetition": 3,
+      "cellKey": "family-6/6B||C",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "armId": "C",
+      "stochasticIdentity": "028d49dd1dd6e99d8ed9f6a70988ad63cc766bd39462385a538bd5380c05ac66"
+    },
+    {
+      "slot": 25,
+      "repetition": 3,
+      "cellKey": "family-2/2A||A",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "ad3e1c6e0e4bf99cf983a2a81a8900a9941b817754804a5359d2704ba6c38e2c"
+    },
+    {
+      "slot": 26,
+      "repetition": 3,
+      "cellKey": "family-2/2B||A",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "a0dd96b8253ef7d8e8041176bc3c134a693cdf86bfede6a4c94d50f36b5050cd"
+    },
+    {
+      "slot": 27,
+      "repetition": 3,
+      "cellKey": "family-3/3A||A",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "4ea7d20da34d12d118a06182a76e076dd77cb8442a8bb897882f0ee17732fb5b"
+    },
+    {
+      "slot": 28,
+      "repetition": 3,
+      "cellKey": "family-3/3B||A",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "2b880d576958ecb3cfbbcf0692bcec99d89ba1cd71ca61562dec821f50138cba"
+    },
+    {
+      "slot": 29,
+      "repetition": 3,
+      "cellKey": "family-5/5A||A",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "7bb3ecf5b7120e23701236fc4d7cad8d964c5ff49bafab544c9001ccd2db1d44"
+    },
+    {
+      "slot": 30,
+      "repetition": 3,
+      "cellKey": "family-5/5B||A",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "8004b088232435448049ed68f0ac120f585abed37e3d03fe3a2bcf6d060ad063"
+    },
+    {
+      "slot": 31,
+      "repetition": 3,
+      "cellKey": "family-6/6A||A",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "f0cab4e947d9c34b00d78784af01f109fa286c36cadf08c0165a99f64fff3105"
+    },
+    {
+      "slot": 32,
+      "repetition": 3,
+      "cellKey": "family-6/6B||A",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "armId": "A",
+      "stochasticIdentity": "8e353bc7d22327741a8e40597f93b34ee0abb73248bab38d3c36b0a6d687fa53"
+    },
+    {
+      "slot": 33,
+      "repetition": 3,
+      "cellKey": "family-2/2A||A2a",
+      "cellId": "family-2/2A",
+      "scenarioId": "family-2-cleanly-separable",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "2828c9906031ff1888bb40c2637e2aaa075d870866d6589d6da9fe2f2b7c2838"
+    },
+    {
+      "slot": 34,
+      "repetition": 3,
+      "cellKey": "family-2/2B||A2a",
+      "cellId": "family-2/2B",
+      "scenarioId": "family-2-cleanly-separable-alt",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "cd2215b72fac3731abe42b69c94719412e74c4054e29bcb2e1dbe98458183384"
+    },
+    {
+      "slot": 35,
+      "repetition": 3,
+      "cellKey": "family-3/3A||A2a",
+      "cellId": "family-3/3A",
+      "scenarioId": "family-3-sibling-dependency",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "8b79663044f40c1ffcd10764220a0447929c17c8b175fb0fb2d9963256294653"
+    },
+    {
+      "slot": 36,
+      "repetition": 3,
+      "cellKey": "family-3/3B||A2a",
+      "cellId": "family-3/3B",
+      "scenarioId": "family-3-sibling-dependency-alt",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "ee8212cacbe368ee5c20f0907d62cf2fd62b8aa98f322e490ad1e005a6dcf6dd"
+    },
+    {
+      "slot": 37,
+      "repetition": 3,
+      "cellKey": "family-5/5A||A2a",
+      "cellId": "family-5/5A",
+      "scenarioId": "family-5-ownership-known",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "afa99e82c1246e7d62bfc1e935c1fa7e64665c74c9a155b7ee8a52a07c990a3a"
+    },
+    {
+      "slot": 38,
+      "repetition": 3,
+      "cellKey": "family-5/5B||A2a",
+      "cellId": "family-5/5B",
+      "scenarioId": "family-5-ownership-known-alt",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "61c82dd1a2228c78023e35c1b6e5486715929dc755868edee624faea4e539dc4"
+    },
+    {
+      "slot": 39,
+      "repetition": 3,
+      "cellKey": "family-6/6A||A2a",
+      "cellId": "family-6/6A",
+      "scenarioId": "family-6-ownership-unknown",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "2c806cf199fca98bfbe7dc40b52881103a6d673a19e412e7bb7f716960e80558"
+    },
+    {
+      "slot": 40,
+      "repetition": 3,
+      "cellKey": "family-6/6B||A2a",
+      "cellId": "family-6/6B",
+      "scenarioId": "family-6-ownership-unknown-alt",
+      "variantId": null,
+      "armId": "A2a",
+      "stochasticIdentity": "24e5a4c24d73a3e14491207bd4700adc49e1e26c07c5cdfb5b5ec54393c719a6"
+    }
+  ],
+  "timeoutMs": 900000,
+  "productFailureRule": "a failed product trial remains data and is never discarded as a bad run",
+  "resultFreezing": "trial records are written once and never rewritten; a re-run produces a new trialId",
+  "economics": {
+    "maximumTotalLiveMicroUsd": 20000000,
+    "computedWorstCaseMicroUsd": 17160360,
+    "headroomMicroUsd": 2839640,
+    "liability": {
+      "boundMethod": "model_context_window_ceiling",
+      "perRequestMicroUsd": 20429,
+      "runtimeMaxModelRequestsPerRun": 3,
+      "byArm": {
+        "A": {
+          "trials": 24,
+          "plannerRequestsPerTrial": 0,
+          "workerRequestsPerTrial": 3,
+          "maximumWorkerRuns": 1,
+          "workerRequestsPerRun": 3,
+          "attemptsPerRun": 1,
+          "totalProviderAttempts": 3,
+          "basis": "individual agent ticket -> exactly one ungoverned Run",
+          "perTrialMicroUsd": 61287,
+          "totalMicroUsd": 1470888
+        },
+        "A2a": {
+          "trials": 24,
+          "plannerRequestsPerTrial": 0,
+          "workerRequestsPerTrial": 6,
+          "maximumWorkerRuns": 2,
+          "workerRequestsPerRun": 3,
+          "attemptsPerRun": 1,
+          "totalProviderAttempts": 6,
+          "basis": "legacy v1 group allocation -> one ungoverned Run per worker agent (2)",
+          "perTrialMicroUsd": 122574,
+          "totalMicroUsd": 2941776
+        },
+        "A2b": {
+          "trials": 24,
+          "plannerRequestsPerTrial": 0,
+          "workerRequestsPerTrial": 6,
+          "maximumWorkerRuns": 2,
+          "workerRequestsPerRun": 3,
+          "attemptsPerRun": 1,
+          "totalProviderAttempts": 6,
+          "basis": "legacy v1 group dynamic -> one ungoverned Run per worker agent (2)",
+          "perTrialMicroUsd": 122574,
+          "totalMicroUsd": 2941776
+        },
+        "B": {
+          "trials": 24,
+          "plannerRequestsPerTrial": 1,
+          "workerRequestsPerTrial": 9,
+          "maximumWorkerRuns": 3,
+          "workerRequestsPerRun": 3,
+          "attemptsPerRun": 1,
+          "totalProviderAttempts": 10,
+          "basis": "one planning attempt + one governed leaf Run per candidate (2 workers + the planner agent, itself a group member)",
+          "perTrialMicroUsd": 204290,
+          "totalMicroUsd": 4902960
+        },
+        "C": {
+          "trials": 24,
+          "plannerRequestsPerTrial": 1,
+          "workerRequestsPerTrial": 9,
+          "maximumWorkerRuns": 3,
+          "workerRequestsPerRun": 3,
+          "attemptsPerRun": 1,
+          "totalProviderAttempts": 10,
+          "basis": "one planning attempt + one governed leaf Run per candidate (2 workers + the planner agent, itself a group member)",
+          "perTrialMicroUsd": 204290,
+          "totalMicroUsd": 4902960
+        }
+      },
+      "byCellMicroUsd": {
+        "family-2/2A||A": 183861,
+        "family-2/2B||A": 183861,
+        "family-3/3A||A": 183861,
+        "family-3/3B||A": 183861,
+        "family-5/5A||A": 183861,
+        "family-5/5B||A": 183861,
+        "family-6/6A||A": 183861,
+        "family-6/6B||A": 183861,
+        "family-2/2A||A2a": 367722,
+        "family-2/2B||A2a": 367722,
+        "family-3/3A||A2a": 367722,
+        "family-3/3B||A2a": 367722,
+        "family-5/5A||A2a": 367722,
+        "family-5/5B||A2a": 367722,
+        "family-6/6A||A2a": 367722,
+        "family-6/6B||A2a": 367722,
+        "family-2/2A||A2b": 367722,
+        "family-2/2B||A2b": 367722,
+        "family-3/3A||A2b": 367722,
+        "family-3/3B||A2b": 367722,
+        "family-5/5A||A2b": 367722,
+        "family-5/5B||A2b": 367722,
+        "family-6/6A||A2b": 367722,
+        "family-6/6B||A2b": 367722,
+        "family-2/2A||B": 612870,
+        "family-2/2B||B": 612870,
+        "family-3/3A||B": 612870,
+        "family-3/3B||B": 612870,
+        "family-5/5A||B": 612870,
+        "family-5/5B||B": 612870,
+        "family-6/6A||B": 612870,
+        "family-6/6B||B": 612870,
+        "family-2/2A||C": 612870,
+        "family-2/2B||C": 612870,
+        "family-3/3A||C": 612870,
+        "family-3/3B||C": 612870,
+        "family-5/5A||C": 612870,
+        "family-5/5B||C": 612870,
+        "family-6/6A||C": 612870,
+        "family-6/6B||C": 612870
+      },
+      "totalMicroUsd": 17160360,
+      "totalUsdInformational": 17.16036
+    },
+    "note": "a HARD GLOBAL CAP. It may only tighten existing per-role and per-trial economic authority and may never widen a Run's limit. It is not spending authorization; execution requires explicit approval."
+  },
+  "authorizedDimensions": [
+    "allocation_quality",
+    "completion_truthfulness",
+    "latency",
+    "cost",
+    "churn"
+  ],
+  "hardDisqualifierVersion": 1,
+  "decisionRuleVersion": 1,
+  "artifactRootRecipe": "/tmp/ticket-system-structured-evaluation-live-v3/real-<commit>-<run-header-prefix>",
+  "livePhaseMandatory": true,
+  "decisionTopology": {
+    "topologyVersion": 2,
+    "requiredFamilies": [
+      2,
+      3,
+      5,
+      6
+    ],
+    "familyArmCoverage": {
+      "2": [
+        "A",
+        "A2a",
+        "A2b",
+        "B",
+        "C"
+      ],
+      "3": [
+        "A",
+        "A2a",
+        "A2b",
+        "B",
+        "C"
+      ],
+      "5": [
+        "A",
+        "A2a",
+        "A2b",
+        "B",
+        "C"
+      ],
+      "6": [
+        "A",
+        "A2a",
+        "A2b",
+        "B",
+        "C"
+      ]
+    },
+    "matchedCellsPerRequiredFamily": 2,
+    "everyRequiredFamilyHasAllComparisonArms": true,
+    "everyRequiredCellIsFiveArmMatched": true,
+    "everyStructuredFamilyHasArmABaseline": true,
+    "terminalDecisionsRequiredReachable": [
+      "RETAIN",
+      "REVISE",
+      "STOP"
+    ]
+  },
+  "historicalLiveManifests": [
+    {
+      "liveManifestVersion": 1,
+      "manifestHash": "792d228f939d597891da25bd4d779d76999940c2040e7e846afaf81fc35530b6",
+      "status": "historical execution authority; unchanged"
+    },
+    {
+      "liveManifestVersion": 2,
+      "manifestHash": "634963b5581a57449e0c45ffb7973f86a3ff0b6bd6b708d4fc06b9969c8c76b6",
+      "status": "historical execution authority; unchanged; real run remains aborted"
+    }
+  ],
+  "manifestHash": "18508f5a94cd3b7667037e77154f83e7327ed3ca368fe0c4d308e6aa0b9f245c"
+}
