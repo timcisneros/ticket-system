@@ -40,6 +40,9 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'evaluation-observation-sink-test.js',
   // Tranche 6 — the frozen scored-run manifest. Deterministic: config only.
   'evaluation-scored-manifest-test.js',
+  // Tranche 6 — retained fixture evidence means actual repository-owned bytes,
+  // never an in-memory capsule of recorded hashes.
+  'evaluation-fixture-evidence-test.js',
   // Tranche 6 — live-model readiness. Deterministic: config only, no provider.
   'evaluation-live-readiness-test.js',
   // Tranche 6 — complete provider-free post-corpus scoring/report rehearsal.

@@ -153,6 +153,10 @@ function buildRunHeader({ manifest, manifestPath, outputRoot }) {
     },
     outputRoot
   };
+  if (manifest.fixtureEvidenceVersion !== undefined) {
+    header.fixtureEvidenceVersion = manifest.fixtureEvidenceVersion;
+    header.scoredManifestVersion = manifest.manifestVersion;
+  }
   header.runHeaderHash = hashCanonical(header);
   return Object.freeze(header);
 }

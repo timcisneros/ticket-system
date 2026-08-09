@@ -983,6 +983,14 @@ function scoreCorpus({ manifest, header, artifacts, exclusions = [], protocol })
       ? 'REQUIRES LIVE-MODEL MATRIX'
       : 'READY FROM FIXTURE EVIDENCE'
   };
+  // Historical fixture-v1 did not carry a fixture-evidence version. Keep its
+  // canonical report shape unchanged. New versioned fixture authorities bind
+  // their manifest/evidence versions explicitly so a future live manifest can
+  // never confuse a new retained corpus with the historical /tmp-only run.
+  if (manifest.fixtureEvidenceVersion !== undefined) {
+    report.fixtureEvidenceVersion = manifest.fixtureEvidenceVersion;
+    report.scoredManifestVersion = manifest.manifestVersion;
+  }
   report.reportHash = hashCanonical(report);
   return Object.freeze(report);
 }

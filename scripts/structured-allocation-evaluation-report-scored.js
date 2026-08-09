@@ -35,7 +35,9 @@ function number(value, digits = 0) {
 
 function renderMarkdown(report) {
   const lines = [];
-  lines.push('# Structured Allocation — Scored Fixture Evaluation, Protocol v1');
+  const evidenceVersion = report.fixtureEvidenceVersion || 1;
+  lines.push(`# Structured Allocation — Scored Fixture Evaluation v${evidenceVersion}, ` +
+    `Protocol v${report.protocolVersion}`);
   lines.push('');
   lines.push('**SCORED FIXTURE EVIDENCE.** Deterministic fixture trials only. No');
   lines.push('live-model trial contributed to any number below.');
@@ -120,23 +122,39 @@ function renderMarkdown(report) {
   return `${lines.join('\n')}\n`;
 }
 
-function main() {
-  const outputRoot = process.argv[2];
-  if (!outputRoot) {
-    console.error('usage: structured-allocation-evaluation-report-scored.js <scored-run-root>');
-    process.exit(2);
+function parseArguments(argv) {
+  if (argv.length < 1) {
+    throw new Error('usage: structured-allocation-evaluation-report-scored.js ' +
+      '<scored-run-root> [--manifest <fixture-manifest.json>]');
   }
+  const parsed = { outputRoot: argv[0], manifestPath: null };
+  for (let index = 1; index < argv.length; index += 2) {
+    if (argv[index] !== '--manifest' || !argv[index + 1]) {
+      throw new Error('only --manifest <fixture-manifest.json> is accepted after the root');
+    }
+    parsed.manifestPath = argv[index + 1];
+  }
+  return parsed;
+}
+
+function main() {
+  const options = parseArguments(process.argv.slice(2));
+  const outputRoot = options.outputRoot;
+  const manifestPath = options.manifestPath || path.join(__dirname, '..', 'config',
+    'structured-allocation-evaluation-scored-v1.json');
   const manifest = JSON.parse(fs.readFileSync(
-    path.join(__dirname, '..', 'config',
-      'structured-allocation-evaluation-scored-v1.json'), 'utf8'));
+    manifestPath, 'utf8'));
   const protocol = JSON.parse(fs.readFileSync(
     path.join(__dirname, '..', 'config',
       'structured-allocation-evaluation-v1.json'), 'utf8'));
   const { header, artifacts, exclusions } = loadCorpus(outputRoot);
   const report = scoreCorpus({ manifest, header, artifacts, exclusions, protocol });
 
-  const jsonPath = path.join(outputRoot, 'structured-allocation-scored-fixture-report-v1.json');
-  const mdPath = path.join(outputRoot, 'structured-allocation-scored-fixture-report-v1.md');
+  const evidenceVersion = manifest.fixtureEvidenceVersion || 1;
+  const jsonPath = path.join(outputRoot,
+    `structured-allocation-scored-fixture-report-v${evidenceVersion}.json`);
+  const mdPath = path.join(outputRoot,
+    `structured-allocation-scored-fixture-report-v${evidenceVersion}.md`);
   fs.writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`);
   fs.writeFileSync(mdPath, renderMarkdown(report));
   console.log(report.corpusIntegrity.verdict);
@@ -148,6 +166,6 @@ function main() {
   console.log(mdPath);
 }
 
-module.exports = { loadCorpus, renderMarkdown };
+module.exports = { loadCorpus, parseArguments, renderMarkdown };
 
 if (require.main === module) main();

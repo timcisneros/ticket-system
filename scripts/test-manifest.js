@@ -207,6 +207,7 @@ const TESTS = Object.freeze([
   { file: "governed-role-economic-policy-set-test.js", status: "required" },
   { file: "evaluation-observation-sink-test.js", status: "required" },
   { file: "evaluation-scored-manifest-test.js", status: "required" },
+  { file: "evaluation-fixture-evidence-test.js", status: "required" },
   { file: "evaluation-live-readiness-test.js", status: "required" },
   { file: "evaluation-live-scoring-dress-rehearsal-test.js", status: "required" },
   { file: "evaluation-live-decision-topology-test.js", status: "required" },

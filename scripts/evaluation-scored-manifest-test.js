@@ -24,6 +24,10 @@ const { requiredTrials } = require('./fixtures/evaluation-execution-matrix');
 const protocol = require('../config/structured-allocation-evaluation-v1.json');
 
 const FROZEN = require('../config/structured-allocation-evaluation-scored-v1.json');
+const FIXTURE_V2 = require('../config/structured-allocation-evaluation-scored-v2.json');
+const {
+  buildScoredManifestV2
+} = require('./fixtures/evaluation-scored-manifest-v2');
 
 let passed = 0;
 function ok(condition, message) {
@@ -42,6 +46,14 @@ function main() {
   // ── The manifest is FROZEN, not regenerated per run ───────────────────
   ok(rebuilt.manifestHash === FROZEN.manifestHash,
     'the committed manifest reproduces exactly from the frozen protocol seed');
+  const rebuiltV2 = buildScoredManifestV2({ artifactRoot: FIXTURE_V2.artifactRoot });
+  ok(rebuiltV2.manifestHash === FIXTURE_V2.manifestHash &&
+     FIXTURE_V2.fixtureEvidenceVersion === 2,
+  'fixture-v2 reproduces exactly as repository-owned evidence authority');
+  ok(FIXTURE_V2.trials.length === FROZEN.trials.length &&
+     FIXTURE_V2.trials.every((trial, index) =>
+       JSON.stringify(trial) === JSON.stringify(FROZEN.trials[index])),
+  'fixture-v2 preserves every frozen fixture assignment and seed');
   ok(FROZEN.trials.length === requiredTrials().length * FROZEN.repetitions,
     `every required cell appears in every repetition ` +
     `(${FROZEN.trials.length} trials)`);
