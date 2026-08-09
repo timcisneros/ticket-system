@@ -817,6 +817,39 @@ async function runTrial({
     fs.writeFileSync(namespace.stagedPath, JSON.stringify(table));
   }
 
+  // ONE PER-TRIAL ECONOMIC AUTHORITY. A standalone live caller asks runTrial
+  // to reserve this bound; the matrix executor has already reserved the same
+  // bound. Derive it here in both cases so the comparison envelope and the
+  // durable reservation can never describe different ceilings.
+  let liveTrialBound = null;
+  if (mode === 'live') {
+    if (!liveBudget) {
+      throw new EvaluationRunnerError(
+        'a live trial requires an explicit global budget authority; refusing to ' +
+        'dispatch against an unbounded ceiling');
+    }
+    liveTrialBound = trialWorstCaseMicroUsd({
+      armId: arm.armId,
+      perRequestMicroUsd: liveBudget.perRequestMicroUsd,
+      runtimeMaxModelRequestsPerRun: liveBudget.runtimeMaxModelRequestsPerRun,
+      governedLeafMaximumProviderRequests:
+        liveBudget.governedLeafMaximumProviderRequests,
+      governedPlannerMaximumProviderRequests:
+        liveBudget.governedPlannerMaximumProviderRequests,
+      // The trial form supplies no executionPolicy and auto retry is a strict
+      // opt-in. If that changes, this bound must grow rather than understate.
+      autoRetryEnabled: false,
+      maxAttempts: null
+    });
+    if (liveReservationAlreadyCommitted &&
+        liveBudget.trialMaximumLiabilityMicroUsd !==
+          liveTrialBound.trialWorstCaseMicroUsd) {
+      throw new EvaluationRunnerError(
+        'the precommitted live trial liability does not match the canonical ' +
+        'per-trial economic authority');
+    }
+  }
+
   const envelope = buildComparisonEnvelope({
     objective: scenario.objective,
     declaredWorkHash: crypto.createHash('sha256')
@@ -832,7 +865,7 @@ async function runTrial({
     contextWindowTokens: 128000,
     runtimeLimitsHash: 'default',
     economicCeilingMicroUsd: mode === 'live'
-      ? liveBudget && liveBudget.trialMaximumLiabilityMicroUsd
+      ? liveTrialBound.trialWorstCaseMicroUsd
       : 1_000_000,
     retryPolicyHash: 'autoRetry:false',
     allowParallelRuns: false,
@@ -907,36 +940,10 @@ async function runTrial({
   // sized for one. The bound is derived from the arm's Run topology and the two
   // enforced per-Run request ceilings, so it cannot drift from what the product
   // can actually spend.
-  let liveTrialBound = null;
   if (isLive && liveReservationAlreadyCommitted) {
     // THE ORCHESTRATOR ALREADY RESERVED THIS SLOT. Reserving again here would
     // double-commit the trial's liability and shrink the ceiling for the run.
-    if (!liveBudget) {
-      throw new EvaluationRunnerError(
-        'a live trial requires an explicit global budget authority; refusing to ' +
-        'dispatch against an unbounded ceiling');
-    }
   } else if (isLive) {
-    if (!liveBudget) {
-      throw new EvaluationRunnerError(
-        'a live trial requires an explicit global budget authority; refusing to ' +
-        'dispatch against an unbounded ceiling');
-    }
-    liveTrialBound = trialWorstCaseMicroUsd({
-      armId: arm.armId,
-      perRequestMicroUsd: liveBudget.perRequestMicroUsd,
-      runtimeMaxModelRequestsPerRun: liveBudget.runtimeMaxModelRequestsPerRun,
-      governedLeafMaximumProviderRequests:
-        liveBudget.governedLeafMaximumProviderRequests,
-      governedPlannerMaximumProviderRequests:
-        liveBudget.governedPlannerMaximumProviderRequests,
-      // Proven off for every live trial: the trial form supplies no
-      // executionPolicy and `normalizeExecutionPolicy` makes autoRetry a strict
-      // opt-in. If that ever changed, the bound would grow, not silently
-      // understate.
-      autoRetryEnabled: false,
-      maxAttempts: null
-    });
     assertDispatchWithinGlobalCeiling({
       runRoot: liveBudget.runRoot,
       ceilingMicroUsd: liveBudget.ceilingMicroUsd,
