@@ -1,3 +1,61 @@
+## TRANCHE 6 LIVE-V3 CORPUS ABORTED BY ACCEPTED/SCORABLE OBSERVATION CONTRADICTION (2026-08-09)
+
+**Status: OPEN — the run is permanently `ABORTED — NOT DECISION EVIDENCE`;
+do not resume, score, import, adapt, or use it to tune a later experiment.**
+
+The authorized REAL LIVE-V3 evaluation ran against exact executable source
+`015f5ec04fab291e4f560b46887b2b9edabcd94e`, live-manifest v3 hash
+`18508f5a94cd3b7667037e77154f83e7327ed3ca368fe0c4d308e6aa0b9f245c`,
+repository-owned fixture-v2 authority, and configured-agent credential
+authority ID 1 / revision 2 / provider `openai`. The one authenticated
+preflight used the exact pinned model and controls, used 20 input and 9 output
+tokens, and cost 9 micro-USD separately from the experiment.
+
+All 120 assigned slots executed once and were accepted, with zero exclusions,
+replacements, interruptions, resumes, or reused slots. The disk corpus gate
+returned `LIVE CORPUS COMPLETE AND INTERNALLY CONSISTENT`; run-header hash
+`ced9446747f0e98c11228e3732e9d704395df0d002ec08bbaada8abf9e88714f`
+and pre-abort disk-corpus hash
+`5f977c7ba47f330aff5dcd84f1661274c2a2417b9ed28b9857d726c547120097`
+identify the preserved corpus.
+
+The exact production report command then refused before aggregation with
+`LIVE_SCORING_ORACLE_INCOMPLETE` at assigned trial identity
+`01-001-family-2_2A-A`. The executor had accepted an artifact whose
+`observationCompleteness` was not `complete`, while the artifact's oracle
+verdict was not `refused`; `scripts/fixtures/evaluation-live-scoring.js:345`
+correctly refuses to make a decision from that combination. The structural
+defect is the missing end-to-end contract between product-artifact acceptance
+and the scorer's complete-observation input domain. Provider-free dress
+rehearsals exercised controlled terminal shapes but did not prove that every
+legitimate product-failure artifact accepted by the REAL executor is also a
+valid scorer input. This is a post-dispatch scoring-integration defect, so
+source freeze forbids patching, retrying, or rescoring this corpus.
+
+No five-arm or family metric, hard-disqualifier state, ordinary live decision,
+final decision, or live report hash was produced. Fixture-v2 remains immutable
+and **FIXTURE EVIDENCE SUPPORTS STOP**, but it was not combined with this
+aborted corpus.
+
+The ledger committed exactly 17,160,360 micro-USD, the v3 matrix maximum and
+2,839,640 below the 20,000,000 micro-USD experiment ceiling. The preserved
+structural economic record contains 488 canonical metered requests, including
+48 planner and 440 worker/leaf requests, with 855,064 input and 39,392 output
+tokens and observable metered experiment cost of 152,306 micro-USD. Including
+preflight, observable provider cost was 152,315 micro-USD. Normalized cost has
+the same numeric value because all canonical requests were metered, but it is
+not actual-billing authority and the abort keeps it out of decision evidence.
+
+Preserved evidence root:
+`/tmp/ticket-system-structured-evaluation-live-v3/real-015f5ec-073f722193e157d0`.
+The abort-record hash is
+`39ff58a7208514cdf2666c525af5fa91d54a0be159e0bcab591a8d114afdcbf8`;
+the 125-file aborted-bundle hash is
+`35ee2e0c9bec4704e716de3557df4ab4d7a583ef2049e2a7adbc1424a559c61b`.
+Every earlier aborted real corpus remains independently quarantined.
+
+---
+
 ## TRANCHE 6 LIVE-V2 CORPUS ABORTED BY MISSING IMMUTABLE FIXTURE INPUT (2026-08-09)
 
 **Status: RESOLVED IN SOURCE 2026-08-09 — the run remains permanently
