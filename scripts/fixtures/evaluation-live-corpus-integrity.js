@@ -19,8 +19,12 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const { acceptedSlots, readJournal } = require('./evaluation-live-run-journal');
+const {
+  assertLiveProductArtifactScorable
+} = require('./evaluation-live-artifact-domain');
 
 const COMPLETE_VERDICT = 'LIVE CORPUS COMPLETE AND INTERNALLY CONSISTENT';
+const SCORING_INPUT_COMPLETE_VERDICT = 'LIVE SCORING INPUT DOMAIN COMPLETE';
 
 // The synthetic acceptance corpus wears this label. The scorer refuses it, so
 // a harness proof can never be mistaken for product evidence.
@@ -128,6 +132,7 @@ function auditLiveCorpus({ manifest, header, outputRoot, trialIdFor }) {
   const assigned = manifest.slots;
   const assignedIds = assigned.map(trialIdFor);
   const bySlotId = new Map(assigned.map(slot => [trialIdFor(slot), slot]));
+  const cells = new Map((manifest.cells || []).map(cell => [cell.cellKey, cell]));
 
   // ── 120 assigned, 120 accounted for ──────────────────────────────────
   if (assigned.length !== manifest.totalAssignedTrials) {
@@ -232,6 +237,22 @@ function auditLiveCorpus({ manifest, header, outputRoot, trialIdFor }) {
         `artifact ${id} carries no zero-drift proof (ticketReport.secondReadIdentical)`,
         { trialId: id });
     }
+    const cell = cells.get(slot.cellKey);
+    try {
+      assertLiveProductArtifactScorable({
+        artifact: parsed,
+        manifest,
+        trial: {
+          trialId: id,
+          expectedOracleAuthority: cell && cell.expectedOracleAuthority,
+          expectedQuiescence: cell && cell.expectedQuiescence
+        }
+      });
+    } catch (error) {
+      fail(error.code || 'LIVE_ARTIFACT_OUTSIDE_SCORING_DOMAIN',
+        `artifact ${id} is outside the frozen live scoring-input domain`,
+        { trialId: id, disposition: 'refuse_before_product_evidence' });
+    }
     artifacts.push(parsed);
   }
 
@@ -255,6 +276,9 @@ function auditLiveCorpus({ manifest, header, outputRoot, trialIdFor }) {
   return Object.freeze({
     verdict: complete ? COMPLETE_VERDICT : 'LIVE CORPUS INCONSISTENT',
     complete,
+    scoringInputDomainComplete: complete,
+    scoringInputDomainVerdict: complete ? SCORING_INPUT_COMPLETE_VERDICT
+      : 'LIVE SCORING INPUT DOMAIN INCOMPLETE',
     assignedCount: assigned.length,
     accountedForCount: accepted.size,
     artifactCount: artifacts.length,
@@ -296,12 +320,19 @@ function assertScorableLiveCorpus(audit) {
       `refusing to score: ${audit.failures.length} integrity failure(s)`,
       { code: 'LIVE_CORPUS_INCONSISTENT', failures: audit.failures.slice(0, 10) });
   }
+  if (audit.scoringInputDomainComplete !== true ||
+      audit.scoringInputDomainVerdict !== SCORING_INPUT_COMPLETE_VERDICT) {
+    throw new LiveCorpusError(
+      'refusing to score: the accepted product-artifact domain is incomplete',
+      { code: 'LIVE_SCORING_INPUT_DOMAIN_INCOMPLETE' });
+  }
   return true;
 }
 
 module.exports = {
   ABORTED_LABEL,
   COMPLETE_VERDICT,
+  SCORING_INPUT_COMPLETE_VERDICT,
   PERMANENTLY_ABORTED_RUNS,
   buildExclusionArtifact,
   LiveCorpusError,

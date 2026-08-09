@@ -90,6 +90,7 @@ function renderLiveMarkdown(report) {
   lines.push('|---|---|');
   lines.push(`| Trial source | \`${report.trialSourceCommit}\` |`);
   lines.push(`| Live manifest | v${report.liveManifestVersion} \`${report.liveManifestHash}\` |`);
+  lines.push(`| Live artifact domain | v${report.liveArtifactDomainVersion} |`);
   lines.push(`| Real run header | \`${report.realRunHeaderHash}\` |`);
   lines.push(`| Live corpus | \`${report.liveCorpusHash}\` |`);
   lines.push(`| Credential authority | configured agent ${report.credentialAuthority.configuredAgentId}, revision ${report.credentialAuthority.configuredAgentRevision}, ${report.credentialAuthority.provider} |`);

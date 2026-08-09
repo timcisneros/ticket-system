@@ -49,6 +49,9 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'evaluation-live-scoring-dress-rehearsal-test.js',
   // Tranche 6 — actual production report CLI + retained fixture-v2 closure.
   'evaluation-live-production-closure-test.js',
+  // Tranche 6 — every accepted REAL product artifact has a frozen scoring,
+  // exclusion, or pre-acceptance refusal disposition.
+  'evaluation-live-artifact-domain-test.js',
   // Tranche 6 — actual live topology reaches RETAIN/REVISE/STOP without a provider.
   'evaluation-live-decision-topology-test.js',
   // Tranche 6 — the frozen live manifest and its guards. No provider call.
@@ -146,6 +149,9 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // hop; makes zero external calls.
   'structured-allocation-live-dispatch-postgres-test.js',
   'structured-allocation-live-matrix-postgres-test.js',
+  // Tranche 6 — actual runner-produced failure shapes mixed into the complete
+  // production scoring/report command. Controlled boundary, zero provider.
+  'evaluation-live-artifact-domain-postgres-test.js',
   'evaluation-live-credential-postgres-test.js',
   // Tranche 6 — the durable provider-transport observation, on both production
   // transports and all three roles. Replaces the final hop; zero external calls.

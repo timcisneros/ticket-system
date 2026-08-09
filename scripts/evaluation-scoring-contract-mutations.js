@@ -327,6 +327,62 @@ const MUTATIONS = Object.freeze([
     find: "if (argv[index] !== '--readiness-dress-rehearsal') {\n      throw new Error('only --readiness-dress-rehearsal is accepted after the live root');\n    }",
     replace: "if (argv[index] === '--fixture-report') { index += 1; continue; }\n    if (argv[index] !== '--readiness-dress-rehearsal') {\n      throw new Error('only --readiness-dress-rehearsal is accepted after the live root');\n    }",
     failure: 'production command refuses an operator-supplied fixture report path'
+  }),
+  Object.freeze({
+    name: 'raw-state-tied-to-fixture-sink',
+    file: 'scripts/fixtures/evaluation-live-artifact-domain.js',
+    suite: 'evaluation-live-artifact-domain-test.js',
+    find: "if (trial.expectedOracleAuthority === 'coupling_raw_state_and_fixture_access_log' &&",
+    replace: 'if (true &&',
+    failure: 'raw-state pass with incomplete test observation is scorable'
+  }),
+  Object.freeze({
+    name: 'coupling-incomplete-observation-accepted',
+    file: 'scripts/fixtures/evaluation-live-artifact-domain.js',
+    suite: 'evaluation-live-artifact-domain-test.js',
+    find: "if (trial.expectedOracleAuthority === 'coupling_raw_state_and_fixture_access_log' &&",
+    replace: 'if (false &&',
+    failure: 'coupling pass with incomplete access observation refuses pre-acceptance'
+  }),
+  Object.freeze({
+    name: 'timeout-oracle-guess-accepted',
+    file: 'scripts/fixtures/evaluation-live-artifact-domain.js',
+    suite: 'evaluation-live-artifact-domain-test.js',
+    find: "if (timedOut && (quiescent || oracleVerdict !== 'refused')) {",
+    replace: 'if (false) {',
+    failure: 'a timeout cannot smuggle a pre-quiescence oracle guess into evidence'
+  }),
+  Object.freeze({
+    name: 'truthfulness-reproduction-disabled',
+    file: 'scripts/fixtures/evaluation-live-artifact-domain.js',
+    suite: 'evaluation-live-artifact-domain-test.js',
+    find: 'artifact.truthfulness !== expectedTruthfulness) {',
+    replace: 'false) {',
+    failure: 'truthfulness must reproduce from product authority and independent oracle'
+  }),
+  Object.freeze({
+    name: 'unknown-product-terminal-accepted',
+    file: 'scripts/fixtures/evaluation-live-artifact-domain.js',
+    suite: 'evaluation-live-artifact-domain-test.js',
+    find: 'if (!timedOut && !PRODUCT_TERMINAL_STATUSES.includes(',
+    replace: 'if (false && !PRODUCT_TERMINAL_STATUSES.includes(',
+    failure: 'a new terminal artifact type fails until its scoring disposition is defined'
+  }),
+  Object.freeze({
+    name: 'fixture-sink-used-as-real-churn-authority',
+    file: 'scripts/fixtures/evaluation-live-artifact-domain.js',
+    suite: 'evaluation-live-artifact-domain-test.js',
+    find: "facts.evidenceAuthority !== 'durable_ticket_report_v1' ||",
+    replace: 'false ||',
+    failure: 'REAL churn cannot be supplied by the fixture-only observation sink'
+  }),
+  Object.freeze({
+    name: 'oracle-refusal-treated-as-ordinary-false',
+    file: 'scripts/fixtures/evaluation-oracle.js',
+    suite: 'evaluation-live-artifact-domain-test.js',
+    find: "if (oracleResult.verdict === 'refused') return 'oracle_refused';",
+    replace: "if (false) return 'oracle_refused';",
+    failure: 'raw-state refused with complete test observation is scorable'
   })
 ]);
 

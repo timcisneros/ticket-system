@@ -120,6 +120,33 @@ function workerAnswer(body) {
     : { message: 'No declared folder in this objective.', actions: [], complete: true });
 }
 
+function objectiveFolderAnswer(body) {
+  const text = requestMessages(body).map(message =>
+    (typeof message.content === 'string' ? message.content : '')).join('\n');
+  const match = text.match(/Create folders ([^\s,"']+) and ([^\s,"']+)/i);
+  const folders = match ? [match[1], match[2]] : [];
+  return JSON.stringify({
+    message: folders.length === 2 ? 'Creating both declared folders.' : 'Objective unavailable.',
+    actions: folders.map(folder => ({ operation: 'createFolder', args: { path: folder } })),
+    complete: folders.length === 2
+  });
+}
+
+function workerInspectionAnswer(body) {
+  const envelope = runtimeEnvelopeOf(body) || {};
+  const owned = Array.isArray(envelope.ownedOutputPaths) && envelope.ownedOutputPaths[0]
+    ? envelope.ownedOutputPaths[0] : '';
+  return JSON.stringify({
+    message: 'Inspecting the controlled owned path without advancing a fact.',
+    actions: [{ operation: 'listDirectory', args: { path: owned } }],
+    complete: false
+  });
+}
+
+function responseSpec() {
+  return JSON.parse(fs.readFileSync(RESPONSE_PATH, 'utf8'));
+}
+
 // The runtime envelope this request carried. It is the production message the
 // worker prompt is built from, so reading it is reading the request itself.
 function runtimeEnvelopeOf(body) {
@@ -134,10 +161,14 @@ function runtimeEnvelopeOf(body) {
 }
 
 function modelTextFor(body) {
-  const spec = JSON.parse(fs.readFileSync(RESPONSE_PATH, 'utf8'));
+  const spec = responseSpec();
   if (spec.kind === 'literal') return spec.text;
+  if (spec.kind === 'objective-folders') return objectiveFolderAnswer(body);
   if (spec.kind === 'role-aware-structured-success') {
     return isPlannerRequest(body) ? plannerProposal(body) : workerAnswer(body);
+  }
+  if (spec.kind === 'role-aware-structured-inspection') {
+    return isPlannerRequest(body) ? plannerProposal(body) : workerInspectionAnswer(body);
   }
   if (spec.kind === 'one-action-createFolder-by-owned-root') {
     const envelope = runtimeEnvelopeOf(body) || {};
@@ -160,6 +191,20 @@ function modelTextFor(body) {
 }
 
 function realShapedResponse(body) {
+  const spec = responseSpec();
+  if (spec.kind === 'provider-refusal') {
+    return JSON.stringify({
+      id: 'resp_boundary_controlled_refusal',
+      object: 'response',
+      status: 'completed',
+      model: 'gpt-4o-mini-2024-07-18',
+      output: [{
+        type: 'message', role: 'assistant',
+        content: [{ type: 'refusal', refusal: 'Controlled provider refusal.' }]
+      }],
+      usage: { input_tokens: 1737, output_tokens: 7, total_tokens: 1744 }
+    });
+  }
   return JSON.stringify({
     id: 'resp_boundary_controlled',
     object: 'response',
@@ -238,6 +283,7 @@ globalThis.fetch = async function observedFetch(input, init) {
     body
   });
   if (RESPONSE_PATH) {
+    if (responseSpec().kind === 'hang') return new Promise(() => {});
     const payload = realShapedResponse(body);
     // The real platform Response, for the same reason: production consumes
     // more of this interface than a hand-written stub tends to provide.
@@ -288,6 +334,7 @@ https.request = function observedHttpsRequest(options, onResponse) {
         body
       });
       if (RESPONSE_PATH) {
+        if (responseSpec().kind === 'hang') return request;
         response.statusCode = 200;
         response.headers = {
           'x-request-id': 'req_boundary_controlled',

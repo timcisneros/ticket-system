@@ -25,6 +25,9 @@ const { LIVE_MANIFEST_VERSION: LIVE_MANIFEST_V2 } =
 const { LIVE_MANIFEST_VERSION: LIVE_MANIFEST_V3 } =
   require('./evaluation-live-manifest-v3');
 const { validateLiveV2Topology } = require('./evaluation-live-v2-matrix');
+const {
+  LIVE_ARTIFACT_DOMAIN_VERSION, assertLiveProductArtifactScorable
+} = require('./evaluation-live-artifact-domain');
 
 const LIVE_SCORING_PROJECTION_VERSION = 1;
 const LIVE_REPORT_VERSION = 1;
@@ -238,6 +241,7 @@ function assertLiveHeaderScorable({ header, manifest, projection,
     }
   }
   if (!header || header.mode !== 'live' || header.assignedSetField !== 'slots' ||
+      header.liveArtifactDomainVersion !== LIVE_ARTIFACT_DOMAIN_VERSION ||
       header.manifestHash !== manifest.manifestHash ||
       header.expectedTrialCount !== projection.trials.length ||
       !Array.isArray(header.trialIds) ||
@@ -261,14 +265,6 @@ function assertLiveHeaderScorable({ header, manifest, projection,
     }
   }
   return true;
-}
-
-function expectedOracleAuthority(value) {
-  if (value === 'raw_state') return 'independent_raw_state_observation';
-  if (value === 'coupling_raw_state_and_fixture_access_log') {
-    return 'independent_raw_state_and_fixture_access_log';
-  }
-  return null;
 }
 
 function artifactHashMatches(artifact) {
@@ -335,68 +331,7 @@ function assertLiveScoringCorpus({ manifest, projection, header, artifacts, excl
       throw new LiveScoringError(`${trial.trialId} lacks report zero-drift proof`,
         { code: 'LIVE_SCORING_ZERO_DRIFT_UNPROVEN', trialId: trial.trialId });
     }
-    const oracleAuthority = expectedOracleAuthority(trial.expectedOracleAuthority);
-    if (!oracleAuthority || artifact.oracleResult?.authority !== oracleAuthority) {
-      throw new LiveScoringError(`${trial.trialId} does not carry its frozen oracle authority`,
-        { code: 'LIVE_SCORING_ORACLE_AUTHORITY_DRIFT', trialId: trial.trialId });
-    }
-    if (artifact.observationCompleteness !== 'complete' &&
-        artifact.oracleResult?.verdict !== 'refused') {
-      throw new LiveScoringError(`${trial.trialId} decides from incomplete observation`,
-        { code: 'LIVE_SCORING_ORACLE_INCOMPLETE', trialId: trial.trialId });
-    }
-    if (!['quiescent', 'quiescent_or_truthful_failure']
-      .includes(trial.expectedQuiescence) ||
-        artifact.quiescence?.quiescent !== true ||
-        artifact.quiescence?.timedOut !== false) {
-      throw new LiveScoringError(`${trial.trialId} lacks its frozen quiescence authority`,
-        { code: 'LIVE_SCORING_QUIESCENCE_UNPROVEN', trialId: trial.trialId });
-    }
-    const hasAllocation = artifact.pathProof &&
-      typeof artifact.pathProof.observedPath === 'string' &&
-      Number.isSafeInteger(artifact.pathProof.runCount) &&
-      (artifact.pathProof.observedPath !== 'structured_v2' ||
-        (Number.isSafeInteger(artifact.pathProof.governedLeafRunCount) &&
-         Number.isSafeInteger(artifact.pathProof.executableItemCount) &&
-         typeof artifact.pathProof.governedLeafExecutionObserved === 'boolean'));
-    const hasTruthfulness = [
-      'false_positive_completion', 'true_positive_completion',
-      'false_negative_completion', 'true_negative_completion', 'oracle_refused'
-    ].includes(artifact.truthfulness);
-    const hasLatency = Number.isFinite(artifact.latency?.endToEndMs) &&
-      artifact.latency.endToEndMs >= 0;
-    const cost = artifact.normalizedCost;
-    const requests = cost && Array.isArray(cost.requests) ? cost.requests : [];
-    const planner = requests.filter(request => request.role === 'planner');
-    const worker = requests.filter(request => request.role === 'worker');
-    const sum = rows => rows.reduce((total, request) => total + request.microUsd, 0);
-    const hasCost = cost && Number.isSafeInteger(cost.totalNormalizedMicroUsd) &&
-      cost.totalNormalizedMicroUsd >= 0 &&
-      Number.isSafeInteger(cost.plannerRequestCount) &&
-      Number.isSafeInteger(cost.workerRequestCount) &&
-      planner.length === cost.plannerRequestCount &&
-      worker.length === cost.workerRequestCount &&
-      requests.length === cost.plannerRequestCount + cost.workerRequestCount &&
-      requests.every(request => Number.isSafeInteger(request.microUsd) &&
-        request.microUsd >= 0 && request.provider === manifest.provider &&
-        request.model === manifest.model) &&
-      sum(planner) === cost.plannerMicroUsd &&
-      sum(worker) === cost.workerMicroUsd &&
-      sum(requests) === cost.totalNormalizedMicroUsd;
-    const governedArm = artifact.armId === 'B' || artifact.armId === 'C';
-    const hasChurn = artifact.churnFacts &&
-      artifact.churnFacts.observationCompleteness === 'complete' &&
-      (Number.isSafeInteger(artifact.churnFacts.noProgressStreak) ||
-        (!governedArm && artifact.churnFacts.noProgressStreak === null)) &&
-      Number.isSafeInteger(artifact.churnFacts.worker?.attemptedTransports) &&
-      Number.isSafeInteger(artifact.churnFacts.worker?.durableResponses);
-    if (!hasAllocation || !hasTruthfulness || !hasLatency || !hasCost || !hasChurn) {
-      throw new LiveScoringError(
-        `${trial.trialId} lacks complete input for one or more frozen metrics`,
-        { code: 'LIVE_SCORING_METRIC_EVIDENCE_MISSING', trialId: trial.trialId,
-          allocation: hasAllocation, truthfulness: hasTruthfulness,
-          latency: hasLatency, cost: Boolean(hasCost), churn: Boolean(hasChurn) });
-    }
+    assertLiveProductArtifactScorable({ artifact, trial, manifest });
     scoringArtifacts.push(Object.freeze({ ...artifact,
       cellKey: trial.cellKey, cellId: trial.cellId,
       expectedOracleAuthority: trial.expectedOracleAuthority,
@@ -610,6 +545,7 @@ function scoreLiveCorpus({ manifest, protocol, header, artifacts, exclusions = [
   const report = {
     reportVersion: LIVE_REPORT_VERSION,
     liveManifestVersion: manifest.liveManifestVersion,
+    liveArtifactDomainVersion: LIVE_ARTIFACT_DOMAIN_VERSION,
     scoringProjectionVersion: LIVE_SCORING_PROJECTION_VERSION,
     scorerVersion: SCORER_VERSION,
     evidenceClass: readinessDressRehearsal

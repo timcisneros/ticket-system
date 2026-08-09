@@ -55,6 +55,9 @@ const {
 } = require('./fixtures/evaluation-observation-sink');
 const { evaluateScenarioOutcome, classifyTruthfulness } = require('./fixtures/evaluation-oracle');
 const {
+  assertLiveProductArtifactScorable
+} = require('./fixtures/evaluation-live-artifact-domain');
+const {
   observeQuiescence, buildTrialArtifact, writeTrialArtifact, assertMode
 } = require('./fixtures/evaluation-quiescence');
 const {
@@ -235,7 +238,43 @@ function transportFactsFor(transport, role) {
   });
 }
 
-function buildChurnFacts(report, observations) {
+function buildChurnFacts(report, observations, mode = 'fixture') {
+  if (mode === 'live') {
+    // REAL execution does not install the fixture observation sink. Churn is
+    // nevertheless durable production evidence: governed progress blocks and
+    // committed model-request charges are read from the Ticket report after
+    // quiescence. Only responses delivered into an evaluated product window
+    // count here; unanswered/interrupted requests are excluded by the frozen
+    // churn contract rather than subtracted as model churn.
+    const governed = report.armId === 'B' || report.armId === 'C';
+    const delivered = governed && report.churn &&
+      Number.isSafeInteger(report.churn.deliveredResponses)
+      ? report.churn.deliveredResponses : 0;
+    const planner = report.durableObservation?.transport?.byRole?.structured_planner;
+    return Object.freeze({
+      evidenceAuthority: 'durable_ticket_report_v1',
+      observationCompleteness: 'complete',
+      planner: Object.freeze({
+        attemptedTransports: Number.isSafeInteger(planner) ? planner : 0,
+        // The durable projection currently has no per-role response count.
+        // `canonicalRequests` includes authorized-maximum fallback rows and is
+        // therefore cost authority, not evidence that a response was durable.
+        durableResponses: null
+      }),
+      worker: Object.freeze({
+        attemptedTransports: delivered,
+        durableResponses: delivered
+      }),
+      durableResponses: delivered,
+      refusedTransports: null,
+      refusalReasons: Object.freeze([]),
+      noProgressStreak: governed ? report.churn.noProgressStreak : null,
+      progressBlocks: governed ? report.churn.progressBlocks : null,
+      verifiedProgressCredits: null,
+      providerRequests: Array.isArray(report.canonicalRequests)
+        ? report.canonicalRequests.length : null
+    });
+  }
   const transport = observations.transport;
   const served = transport.filter(entry => entry.boundary === 'response_durable');
   const refused = transport.filter(entry => entry.boundary !== 'response_durable');
@@ -609,6 +648,9 @@ async function runTrial({
   // Set by the live matrix executor, which commits the reservation itself
   // before spawning anything capable of provider transport.
   liveReservationAlreadyCommitted = false,
+  // TEST-ONLY failure-shape injection. Production callers omit it and retain
+  // the frozen runner timeout. It changes no provider control or retry rule.
+  quiescenceTimeoutMs = QUIESCENCE_TIMEOUT_MS,
   // TEST-ONLY. Observes the exact child environment at the spawn boundary and
   // may stop there, so the REAL uncaptured live credential branch can be proved
   // without creating a process able to contact a provider.
@@ -1113,8 +1155,11 @@ async function runTrial({
     }
     const ticketId = ticketRows[0].id;
 
+    if (!Number.isSafeInteger(quiescenceTimeoutMs) || quiescenceTimeoutMs <= 0) {
+      throw new EvaluationRunnerError('quiescenceTimeoutMs must be a positive integer');
+    }
     const quiescence = await waitForQuiescence(
-      store, ticketId, namespace, QUIESCENCE_TIMEOUT_MS);
+      store, ticketId, namespace, quiescenceTimeoutMs);
 
     const pathProof = await proveDurablePath(store, ticketId, arm);
 
@@ -1151,7 +1196,24 @@ async function runTrial({
     // negative finding.
     const observations = readObservations(namespace.dir);
     let oracleResult;
-    if (scenario.oracle.kind === 'coupling') {
+    if (quiescence.timedOut) {
+      // The frozen timeout is PRODUCT DATA, never an infrastructure exclusion.
+      // But an oracle may not sample a half-finished system. Preserve the trial
+      // while truthfully refusing the postcondition judgement.
+      oracleResult = Object.freeze({
+        scenarioId: scenario.scenarioId,
+        scenarioVersion: scenario.version,
+        expectationHash: oracleContract.expectationHash || null,
+        verdict: 'refused',
+        observations: Object.freeze([]),
+        refusedCount: 1,
+        failedCount: 0,
+        reason: 'trial timeout occurred before the frozen quiescence boundary',
+        authority: scenario.oracle.kind === 'coupling'
+          ? 'independent_raw_state_and_fixture_access_log'
+          : 'independent_raw_state_observation'
+      });
+    } else if (scenario.oracle.kind === 'coupling') {
       // AVAILABILITY IS ABOUT THE OBSERVER, NOT ABOUT WHAT IT SAW.
       //
       // The log file is created lazily, on the first observed read. Treating an
@@ -1227,7 +1289,7 @@ async function runTrial({
       durableGovernedCost: firstReport.durableGovernedMicroUsd,
       latency: firstReport.latency,
       churn: firstReport.churn,
-      churnFacts: buildChurnFacts(firstReport, observations),
+      churnFacts: buildChurnFacts(firstReport, observations, mode),
       recoveryFacts: buildRecoveryFacts(observations, trialWorkspace, scenario),
       observationSinkVersion: OBSERVATION_SINK_VERSION,
       observationCompleteness: observations.completeness,
@@ -1245,6 +1307,25 @@ async function runTrial({
         `zeroDriftFingerprint=${JSON.stringify(before)}`
       ])
     });
+    // REAL scored evidence is accepted only when the exact same semantic
+    // predicate used by disk-corpus integrity and scoring can consume it. This
+    // is the earliest boundary at which all durable Ticket facts, oracle facts
+    // and metric inputs coexist.
+    if (mode === 'live' && scoredIdentity) {
+      assertLiveProductArtifactScorable({
+        artifact,
+        manifest: {
+          provider: envelope.provider,
+          model: envelope.model
+        },
+        trial: {
+          trialId: scoredIdentity.trialId,
+          expectedOracleAuthority: scenario.oracle.kind === 'coupling'
+            ? 'coupling_raw_state_and_fixture_access_log' : 'raw_state',
+          expectedQuiescence: 'quiescent'
+        }
+      });
+    }
     writeTrialArtifact(outputPath, artifact);
   } finally {
     if (process.env.EVALUATION_DUMP_SERVER_OUTPUT === '1') {

@@ -1,7 +1,8 @@
 ## TRANCHE 6 LIVE-V3 CORPUS ABORTED BY ACCEPTED/SCORABLE OBSERVATION CONTRADICTION (2026-08-09)
 
-**Status: OPEN — the run is permanently `ABORTED — NOT DECISION EVIDENCE`;
-do not resume, score, import, adapt, or use it to tune a later experiment.**
+**Status: RESOLVED IN SOURCE 2026-08-09 — the run remains permanently
+`ABORTED — NOT DECISION EVIDENCE`; do not resume, score, import, adapt, or use
+it to tune a later experiment.**
 
 The authorized REAL LIVE-V3 evaluation ran against exact executable source
 `015f5ec04fab291e4f560b46887b2b9edabcd94e`, live-manifest v3 hash
@@ -23,14 +24,28 @@ The exact production report command then refused before aggregation with
 `LIVE_SCORING_ORACLE_INCOMPLETE` at assigned trial identity
 `01-001-family-2_2A-A`. The executor had accepted an artifact whose
 `observationCompleteness` was not `complete`, while the artifact's oracle
-verdict was not `refused`; `scripts/fixtures/evaluation-live-scoring.js:345`
-correctly refuses to make a decision from that combination. The structural
-defect is the missing end-to-end contract between product-artifact acceptance
-and the scorer's complete-observation input domain. Provider-free dress
-rehearsals exercised controlled terminal shapes but did not prove that every
-legitimate product-failure artifact accepted by the REAL executor is also a
-valid scorer input. This is a post-dispatch scoring-integration defect, so
-source freeze forbids patching, retrying, or rescoring this corpus.
+verdict was not `refused`; the scorer's then-current blanket observation rule
+refused that combination. Source authority establishes that the shared
+fixture/capture observation sink is independent of a raw-state oracle, while a
+coupling oracle may decide only from a complete access-observation stream. The
+structural defect was the missing end-to-end contract between product-artifact
+acceptance and that authority-sensitive scorer input domain. Provider-free
+dress rehearsals exercised controlled terminal shapes but did not prove that
+every legitimate product-failure artifact accepted by the REAL executor was
+also a valid scorer input. This was a post-dispatch scoring-integration defect,
+so source freeze forbids patching, retrying, or rescoring this corpus.
+
+Future exact-source runs use one shared, versioned REAL artifact-domain owner
+before artifact write/slot acceptance, at disk-corpus integrity, and at live
+scoring. Raw-state pass/fail/refusal remains scorable when the fixture sink is
+unavailable; coupling pass/fail requires complete access observation and
+otherwise refuses before product-evidence acceptance. Frozen product timeouts
+remain data but carry oracle refusal rather than a pre-quiescence guess. REAL
+churn comes from the durable Ticket report, not the fixture-only sink. A
+canonical runner/PostgreSQL regression now feeds non-ideal product outcomes
+through the actual production report command, and release coverage owns the
+closed artifact-domain gate. This resolution does not score or reinterpret the
+preserved aborted run.
 
 No five-arm or family metric, hard-disqualifier state, ordinary live decision,
 final decision, or live report hash was produced. Fixture-v2 remains immutable

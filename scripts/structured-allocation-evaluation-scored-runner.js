@@ -58,6 +58,10 @@ const {
 const {
   assertLiveScoringClosureReady
 } = require('./fixtures/evaluation-live-scoring-closure');
+const {
+  LIVE_ARTIFACT_DOMAIN_VERSION,
+  assertLiveProductArtifactScorable
+} = require('./fixtures/evaluation-live-artifact-domain');
 
 const SCORED_RUNNER_VERSION = 1;
 const SCORED_ARTIFACT_LABEL = 'SCORED FIXTURE TRIAL — FROZEN PROTOCOL V1';
@@ -178,6 +182,19 @@ function trialIdFor(trial) {
 
 function artifactPathFor(outputRoot, trial) {
   return path.join(outputRoot, 'trials', `${trialIdFor(trial)}.json`);
+}
+
+function scoringAuthorityForSlot(manifest, slot) {
+  const cell = manifest.cells.find(entry => entry.cellKey === slot.cellKey);
+  if (!cell) {
+    throw new ScoredRunnerError(`slot ${trialIdFor(slot)} has no frozen cell authority`,
+      { code: 'LIVE_SLOT_CELL_AUTHORITY_MISSING', trialId: trialIdFor(slot) });
+  }
+  return Object.freeze({
+    trialId: trialIdFor(slot),
+    expectedOracleAuthority: cell.expectedOracleAuthority,
+    expectedQuiescence: cell.expectedQuiescence
+  });
 }
 
 // ── Resume ──────────────────────────────────────────────────────────────────
@@ -464,6 +481,7 @@ async function executeLiveRun({
       pricing: manifest.pricing,
       monetaryAuthorityVersion: 'canonical-integer-micro-usd/v1',
       hardDisqualifierVersion: manifest.hardDisqualifierVersion,
+      liveArtifactDomainVersion: LIVE_ARTIFACT_DOMAIN_VERSION,
       fixtureSource: manifest.source,
       economics: {
         maximumTotalLiveMicroUsd: manifest.economics.maximumTotalLiveMicroUsd,
@@ -533,6 +551,11 @@ async function executeLiveRun({
         if (existing.state === 'complete') {
           // The artifact survived a crash before its acceptance was journalled.
           // Accept it rather than re-running: the provider was already paid.
+          assertLiveProductArtifactScorable({
+            artifact: existing.artifact,
+            trial: scoringAuthorityForSlot(manifest, slot),
+            manifest
+          });
           appendJournal(outputRoot, { ...bind, event: 'slot_accepted', trialId: id,
             slotOrdinal: slot.slot, recoveredArtifact: true });
           reused += 1;
@@ -648,6 +671,12 @@ async function executeLiveRun({
             `trial ${id} produced no artifact and was not an infrastructure ` +
             `failure: ${failure.message}`, { trialId: id });
         }
+
+        assertLiveProductArtifactScorable({
+          artifact,
+          trial: scoringAuthorityForSlot(manifest, slot),
+          manifest
+        });
 
         appendJournal(outputRoot, { ...bind, event: 'artifact_committed', trialId: id,
           slotOrdinal: slot.slot });

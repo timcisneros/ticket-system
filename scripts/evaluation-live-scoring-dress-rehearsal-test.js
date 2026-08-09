@@ -26,6 +26,9 @@ const {
   assertLiveScoringCorpus, projectLiveManifestToScoring, scoreLiveCorpus,
   trialIdForLiveAssignment
 } = require('./fixtures/evaluation-live-scoring');
+const {
+  LIVE_ARTIFACT_DOMAIN_VERSION
+} = require('./fixtures/evaluation-live-artifact-domain');
 const { hashCanonical } = require('./structured-allocation-evaluation-scorer');
 const {
   renderLiveMarkdown, sha256, writeImmutable
@@ -65,6 +68,7 @@ function headerFor(manifest = liveManifest) {
     provider: manifest.provider,
     model: manifest.model,
     adapterId: manifest.adapterId,
+    liveArtifactDomainVersion: LIVE_ARTIFACT_DOMAIN_VERSION,
     credentialAuthority: {
       kind: 'configured_agent', configuredAgentId: 41,
       configuredAgentRevision: 7, provider: 'openai'
@@ -143,6 +147,12 @@ function artifactFor(slot, header = HEADER) {
       secondReadIdentical: true,
       productClaimsCompleted: completed,
       terminalTicketStatus: terminal,
+      durableObservation: {
+        version: 1,
+        transport: { byRole: { ungoverned_worker: structured ? 0 : 1,
+          structured_planner: structured ? 1 : 0,
+          governed_leaf_worker: structured ? 1 : 0 } }
+      },
       authority: {
         ticketStatus: terminal,
         anyRunCompleted: completed,
@@ -183,9 +193,11 @@ function artifactFor(slot, header = HEADER) {
       timeToFirstExecutionMs: 50 },
     churn: null,
     observationSinkVersion: 1,
-    observationCompleteness: 'complete',
+    observationCompleteness: cell.expectedOracleAuthority === 'raw_state'
+      ? 'unavailable' : 'complete',
     observationStreamIdentities: [],
     churnFacts: {
+      evidenceAuthority: 'durable_ticket_report_v1',
       observationCompleteness: 'complete', noProgressStreak: structured ? 0 : null,
       worker: { attemptedTransports: 1, durableResponses: 1 }
     },
@@ -439,8 +451,8 @@ function main() {
     quiescence: { ...ARTIFACTS[0].quiescence, quiescent: false, timedOut: true } });
   ok(refusalCode(() => score({
     artifacts: [nonQuiescent, ...ARTIFACTS.slice(1)]
-  })) === 'LIVE_SCORING_QUIESCENCE_UNPROVEN',
-  'a non-quiescent artifact cannot enter product aggregation');
+  })) === 'LIVE_ARTIFACT_TIMEOUT_ORACLE_INVALID',
+  'a product timeout cannot carry an oracle verdict sampled before quiescence');
 
   const alteredReport = { ...report, finalProductDecision: 'STOP' };
   ok(refusalCode(() => assertLiveReportIdentity(alteredReport)) ===
