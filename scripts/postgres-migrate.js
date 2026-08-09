@@ -2,16 +2,14 @@
 'use strict';
 
 const { PostgresRuntimeStore } = require('../persistence/postgres/store');
+const { developmentConfig } = require('./dev-environment');
 
 async function main() {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error('DATABASE_URL is required');
-  }
+  const config = developmentConfig(process.env);
 
   const store = new PostgresRuntimeStore({
-    connectionString,
-    schema: process.env.POSTGRES_SCHEMA || 'ticket_system'
+    connectionString: config.databaseUrl,
+    schema: config.postgresSchema
   });
   try {
     const applied = await store.migrate();

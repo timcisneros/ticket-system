@@ -8,10 +8,12 @@ const dotenv = require('dotenv');
 
 const ROOT = path.resolve(__dirname, '..');
 const LOCAL_ENV_PATH = path.join(ROOT, '.env.local');
+const DEFAULT_BUNDLED_POSTGRES_PORT = 5432;
 const MIN_SESSION_SECRET_LENGTH = 32;
 const MIN_ADMIN_PASSWORD_LENGTH = 12;
 const DEVELOPMENT_KEYS = Object.freeze([
   'DATABASE_URL',
+  'TICKET_SYSTEM_POSTGRES_PORT',
   'POSTGRES_SCHEMA',
   'SESSION_SECRET',
   'ADMIN_BOOTSTRAP_PASSWORD',
@@ -41,6 +43,11 @@ function applyLocalEnv(env = process.env, filePath = LOCAL_ENV_PATH) {
       env[key] = values[key];
     }
   }
+  // Normalize the effective URL back into the shared environment. Consumers
+  // such as the development server read DATABASE_URL directly after the
+  // preflight, so they must see the same port the resolver gave Compose,
+  // setup, doctor, and the host-readiness probe.
+  env.DATABASE_URL = resolveDevelopmentDatabaseTarget(env).databaseUrl;
   return values;
 }
 
@@ -57,6 +64,76 @@ function validateDatabaseUrl(value) {
     return 'DATABASE_URL must be a valid PostgreSQL URL';
   }
   return null;
+}
+
+function bundledDatabaseUrl(port = DEFAULT_BUNDLED_POSTGRES_PORT) {
+  const normalizedPort = Number(port);
+  if (!Number.isSafeInteger(normalizedPort) || normalizedPort < 1 || normalizedPort > 65535) {
+    throw new Error('TICKET_SYSTEM_POSTGRES_PORT must be an integer from 1 through 65535');
+  }
+  return `postgresql://ticket_system:ticket_system@127.0.0.1:${normalizedPort}/ticket_system`;
+}
+
+const DEFAULT_DATABASE_URL = bundledDatabaseUrl();
+
+function isBundledDatabaseUrl(value) {
+  let parsed;
+  try { parsed = new URL(value); } catch (_) { return false; }
+  return parsed.protocol === 'postgresql:' &&
+    parsed.username === 'ticket_system' &&
+    parsed.password === 'ticket_system' &&
+    parsed.hostname === '127.0.0.1' &&
+    parsed.pathname === '/ticket_system' &&
+    parsed.search === '' &&
+    parsed.hash === '';
+}
+
+function resolveDevelopmentDatabaseTarget(env = process.env) {
+  const configuredUrl = String(env.DATABASE_URL || '').trim();
+  const configuredPort = String(env.TICKET_SYSTEM_POSTGRES_PORT || '').trim();
+  const composePort = configuredPort
+    ? Number(configuredPort)
+    : DEFAULT_BUNDLED_POSTGRES_PORT;
+  if (configuredPort &&
+      (!/^\d+$/.test(configuredPort) || !Number.isSafeInteger(composePort) || composePort < 1 || composePort > 65535)) {
+    throw new Error('TICKET_SYSTEM_POSTGRES_PORT must be an integer from 1 through 65535');
+  }
+
+  if (!configuredUrl) {
+    return Object.freeze({
+      kind: 'bundled',
+      databaseUrl: bundledDatabaseUrl(composePort),
+      composePort,
+      source: configuredPort ? 'bundled-port' : 'default'
+    });
+  }
+
+  const databaseError = validateDatabaseUrl(configuredUrl);
+  if (databaseError) throw new Error(databaseError);
+  if (!isBundledDatabaseUrl(configuredUrl)) {
+    if (configuredPort) {
+      throw new Error(
+        'TICKET_SYSTEM_POSTGRES_PORT configures the bundled database and cannot be combined ' +
+        'with an external DATABASE_URL'
+      );
+    }
+    return Object.freeze({
+      kind: 'external',
+      databaseUrl: configuredUrl,
+      composePort: null,
+      source: 'database-url'
+    });
+  }
+
+  const parsed = new URL(configuredUrl);
+  const databasePort = parsed.port ? Number(parsed.port) : DEFAULT_BUNDLED_POSTGRES_PORT;
+  const effectivePort = configuredPort ? composePort : databasePort;
+  return Object.freeze({
+    kind: 'bundled',
+    databaseUrl: bundledDatabaseUrl(effectivePort),
+    composePort: effectivePort,
+    source: configuredPort ? 'bundled-port' : 'database-url'
+  });
 }
 
 function validateSessionSecret(value) {
@@ -80,8 +157,10 @@ function validateAdminPassword(value, { required = false } = {}) {
 }
 
 function developmentConfig(env = process.env) {
+  const databaseTarget = resolveDevelopmentDatabaseTarget(env);
   return {
-    databaseUrl: String(env.DATABASE_URL || '').trim(),
+    databaseUrl: databaseTarget.databaseUrl,
+    databaseTarget,
     postgresSchema: String(env.POSTGRES_SCHEMA || 'ticket_system').trim(),
     sessionSecret: String(env.SESSION_SECRET || ''),
     adminBootstrapPassword: String(env.ADMIN_BOOTSTRAP_PASSWORD || ''),
@@ -190,16 +269,20 @@ function safeErrorMessage(error) {
 }
 
 module.exports = {
+  DEFAULT_BUNDLED_POSTGRES_PORT,
+  DEFAULT_DATABASE_URL,
   LOCAL_ENV_PATH,
   MIN_ADMIN_PASSWORD_LENGTH,
   MIN_SESSION_SECRET_LENGTH,
   applyLocalEnv,
+  bundledDatabaseUrl,
   developmentConfig,
   generateSessionSecret,
   loadLocalEnvFile,
   promptHidden,
   promptVisible,
   renderLocalEnv,
+  resolveDevelopmentDatabaseTarget,
   safeErrorMessage,
   validateAdminPassword,
   validateDatabaseUrl,

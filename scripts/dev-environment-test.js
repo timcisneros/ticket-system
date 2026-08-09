@@ -7,10 +7,15 @@ const os = require('os');
 const path = require('path');
 const dotenv = require('dotenv');
 const {
+  DEFAULT_BUNDLED_POSTGRES_PORT,
+  DEFAULT_DATABASE_URL,
   MIN_ADMIN_PASSWORD_LENGTH,
   applyLocalEnv,
+  bundledDatabaseUrl,
+  developmentConfig,
   generateSessionSecret,
   renderLocalEnv,
+  resolveDevelopmentDatabaseTarget,
   safeErrorMessage,
   validateAdminPassword,
   validateDatabaseUrl,
@@ -25,8 +30,12 @@ const {
   promptProviderConfig,
   providerConfigFromEnvironment
 } = require('./dev-agent-config');
-const { selectComposeRuntime, startDevelopmentDatabase } = require('./dev-database');
-const { createInitialAdmin } = require('./dev-setup');
+const {
+  selectComposeRuntime,
+  startDevelopmentDatabase,
+  verifyConfiguredDatabase
+} = require('./dev-database');
+const { DEFAULT_DATABASE_URL: SETUP_DEFAULT_DATABASE_URL, createInitialAdmin } = require('./dev-setup');
 const { parseArgs, rotateUserPassword } = require('./admin-password');
 const { parseArgs: parseSmokeArgs, runSmoke, SMOKE_OBJECTIVE } = require('./dev-smoke');
 
@@ -40,6 +49,55 @@ async function main() {
   assert.match(validateAdminPassword('short', { required: true }), new RegExp(String(MIN_ADMIN_PASSWORD_LENGTH)));
   assert.equal(validateAdminPassword('long-enough-development-password', { required: true }), null);
   assert.equal(safeErrorMessage(new Error('connect postgresql://user:secret@localhost/db failed')).includes('secret'), false);
+
+  const defaultDatabaseTarget = resolveDevelopmentDatabaseTarget({});
+  assert.deepEqual(defaultDatabaseTarget, {
+    kind: 'bundled',
+    databaseUrl: DEFAULT_DATABASE_URL,
+    composePort: DEFAULT_BUNDLED_POSTGRES_PORT,
+    source: 'default'
+  });
+  assert.equal(SETUP_DEFAULT_DATABASE_URL, DEFAULT_DATABASE_URL);
+  assert.equal(developmentConfig({}).databaseUrl, DEFAULT_DATABASE_URL);
+  const customBundledUrl = bundledDatabaseUrl(55432);
+  assert.deepEqual(resolveDevelopmentDatabaseTarget({ TICKET_SYSTEM_POSTGRES_PORT: '55432' }), {
+    kind: 'bundled',
+    databaseUrl: customBundledUrl,
+    composePort: 55432,
+    source: 'bundled-port'
+  });
+  assert.deepEqual(resolveDevelopmentDatabaseTarget({ DATABASE_URL: customBundledUrl }), {
+    kind: 'bundled',
+    databaseUrl: customBundledUrl,
+    composePort: 55432,
+    source: 'database-url'
+  });
+  assert.deepEqual(
+    resolveDevelopmentDatabaseTarget({
+      DATABASE_URL: DEFAULT_DATABASE_URL,
+      TICKET_SYSTEM_POSTGRES_PORT: '55432'
+    }),
+    {
+      kind: 'bundled',
+      databaseUrl: customBundledUrl,
+      composePort: 55432,
+      source: 'bundled-port'
+    }
+  );
+  const externalDatabaseUrl = 'postgresql://external:test-only-password@db.example.test:6543/external';
+  assert.deepEqual(resolveDevelopmentDatabaseTarget({ DATABASE_URL: externalDatabaseUrl }), {
+    kind: 'external',
+    databaseUrl: externalDatabaseUrl,
+    composePort: null,
+    source: 'database-url'
+  });
+  assert.throws(
+    () => resolveDevelopmentDatabaseTarget({
+      DATABASE_URL: externalDatabaseUrl,
+      TICKET_SYSTEM_POSTGRES_PORT: '55432'
+    }),
+    /cannot be combined/
+  );
 
   assert.equal(packageManagerCheck('pnpm/10.0.0 npm/? node/v24').status, 'fail');
   assert.deepEqual(packageManagerCheck('npm/11.0.0 node/v24'), { status: 'pass', label: 'npm', message: '11; supported script runner' });
@@ -66,6 +124,13 @@ async function main() {
     applyLocalEnv(explicit, envPath);
     assert.equal(explicit.DATABASE_URL, 'postgresql://explicit:pass@localhost/explicit');
     assert.equal(explicit.SESSION_SECRET, values.sessionSecret);
+
+    const customBundled = {
+      DATABASE_URL: DEFAULT_DATABASE_URL,
+      TICKET_SYSTEM_POSTGRES_PORT: '55432'
+    };
+    applyLocalEnv(customBundled, path.join(temporary, 'absent.env'));
+    assert.equal(customBundled.DATABASE_URL, bundledDatabaseUrl(55432));
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }
@@ -163,22 +228,175 @@ async function main() {
   });
   assert.equal(standaloneRuntime.command, 'podman-compose');
   const composeCalls = [];
-  const startedRuntime = startDevelopmentDatabase({
+  const verifiedTargets = [];
+  const started = await startDevelopmentDatabase({
     runtime: podmanRuntime,
     composeFile: '/repo/compose.dev.yml',
+    env: {},
+    applyEnv() {},
     spawn(command, args, options) {
       composeCalls.push({ command, args, options });
       return { status: 0 };
-    }
+    },
+    async verifyDatabase({ databaseTarget }) { verifiedTargets.push(databaseTarget); }
   });
-  assert.equal(startedRuntime, podmanRuntime);
+  assert.equal(started.runtime, podmanRuntime);
+  assert.equal(started.databaseTarget.databaseUrl, DEFAULT_DATABASE_URL);
+  assert.deepEqual(verifiedTargets, [defaultDatabaseTarget]);
   assert.equal(composeCalls[0].command, 'podman');
   assert.deepEqual(composeCalls[0].args, [
     'compose', '-f', '/repo/compose.dev.yml', 'up', '-d', '--wait'
   ]);
-  assert.throws(
-    () => startDevelopmentDatabase({ runtime: null, spawn: () => ({ status: 1 }) }),
+  assert.equal(composeCalls[0].options.env.TICKET_SYSTEM_POSTGRES_PORT, '5432');
+  await assert.rejects(
+    startDevelopmentDatabase({
+      runtime: null,
+      env: {},
+      applyEnv() {},
+      spawn: () => ({ status: 1 })
+    }),
     /Docker Compose or Podman Compose is required/
+  );
+  await assert.rejects(
+    startDevelopmentDatabase({
+      runtime: podmanRuntime,
+      composeFile: '/repo/compose.dev.yml',
+      env: {},
+      applyEnv() {},
+      spawn: () => ({ status: 0 }),
+      async verifyDatabase() { throw Object.assign(new Error('connect refused'), { code: 'ECONNREFUSED' }); }
+    }),
+    /connect refused/
+  );
+
+  let readinessConfig;
+  const verifiedTarget = await verifyConfiguredDatabase({
+    databaseTarget: defaultDatabaseTarget,
+    clientFactory(config) {
+      readinessConfig = config;
+      return {
+        async connect() {},
+        async query(sql) { assert.equal(sql, 'SELECT 1'); },
+        async end() {}
+      };
+    }
+  });
+  assert.equal(verifiedTarget, defaultDatabaseTarget);
+  assert.equal(readinessConfig.connectionString, DEFAULT_DATABASE_URL);
+  assert.equal(readinessConfig.connectionTimeoutMillis, 3000);
+  await assert.rejects(
+    verifyConfiguredDatabase({
+      databaseTarget: {
+        kind: 'external',
+        databaseUrl: 'postgresql://user:test-only-password@127.0.0.1:55432/db'
+      },
+      clientFactory() {
+        return {
+          async connect() {
+            throw new Error(
+              'connect postgresql://user:test-only-password@127.0.0.1:55432/db failed'
+            );
+          },
+          async end() {}
+        };
+      }
+    }),
+    error => {
+      assert.match(error.message, /cannot complete a host-side PostgreSQL query/);
+      assert.match(error.message, /external DATABASE_URL/);
+      assert.equal(error.message.includes('test-only-password'), false);
+      return true;
+    }
+  );
+
+  let externalSpawnCalls = 0;
+  let verifiedExternalTarget = null;
+  const external = await startDevelopmentDatabase({
+    env: { DATABASE_URL: externalDatabaseUrl },
+    applyEnv() {},
+    spawn() { externalSpawnCalls += 1; return { status: 0 }; },
+    async verifyDatabase({ databaseTarget }) { verifiedExternalTarget = databaseTarget; }
+  });
+  assert.equal(external.runtime, null);
+  assert.equal(external.databaseTarget.kind, 'external');
+  assert.equal(verifiedExternalTarget.databaseUrl, externalDatabaseUrl);
+  assert.equal(externalSpawnCalls, 0);
+
+  let failedExternalSpawnCalls = 0;
+  await assert.rejects(
+    startDevelopmentDatabase({
+      env: { DATABASE_URL: externalDatabaseUrl },
+      applyEnv() {},
+      spawn() { failedExternalSpawnCalls += 1; return { status: 0 }; },
+      async verifyDatabase({ databaseTarget }) {
+        return verifyConfiguredDatabase({
+          databaseTarget,
+          clientFactory() {
+            return {
+              async connect() { throw new Error('external connectivity failed'); },
+              async end() {}
+            };
+          }
+        });
+      }
+    }),
+    /configured external DATABASE_URL.*external connectivity failed/
+  );
+  assert.equal(failedExternalSpawnCalls, 0);
+
+  const customComposeCalls = [];
+  let customVerifiedTarget = null;
+  await startDevelopmentDatabase({
+    runtime: podmanRuntime,
+    composeFile: '/repo/compose.dev.yml',
+    env: {
+      DATABASE_URL: DEFAULT_DATABASE_URL,
+      TICKET_SYSTEM_POSTGRES_PORT: '55432'
+    },
+    applyEnv() {},
+    spawn(command, args, options) {
+      customComposeCalls.push({ command, args, options });
+      return { status: 0 };
+    },
+    async verifyDatabase({ databaseTarget }) { customVerifiedTarget = databaseTarget; }
+  });
+  assert.equal(customComposeCalls[0].options.env.TICKET_SYSTEM_POSTGRES_PORT, '55432');
+  assert.equal(new URL(customVerifiedTarget.databaseUrl).port, '55432');
+
+  let repeatedComposeStarts = 0;
+  let repeatedHostChecks = 0;
+  for (let index = 0; index < 2; index += 1) {
+    await startDevelopmentDatabase({
+      runtime: podmanRuntime,
+      env: {},
+      applyEnv() {},
+      spawn() { repeatedComposeStarts += 1; return { status: 0 }; },
+      async verifyDatabase() { repeatedHostChecks += 1; }
+    });
+  }
+  assert.equal(repeatedComposeStarts, 2);
+  assert.equal(repeatedHostChecks, 2);
+
+  for (const file of ['dev-database.js', 'dev-setup.js', 'dev-doctor.js', 'postgres-migrate.js']) {
+    const source = fs.readFileSync(path.join(__dirname, file), 'utf8');
+    assert.equal(
+      source.includes(DEFAULT_DATABASE_URL),
+      false,
+      `${file} must consume the shared development database authority rather than duplicate its URL`
+    );
+  }
+  assert.match(
+    fs.readFileSync(path.join(__dirname, 'dev-doctor.js'), 'utf8'),
+    /developmentConfig\(env\)/,
+    'dev:doctor must resolve its database through the shared development configuration'
+  );
+  const migrationSource = fs.readFileSync(path.join(__dirname, 'postgres-migrate.js'), 'utf8');
+  assert.match(migrationSource, /developmentConfig\(process\.env\)/);
+  assert.doesNotMatch(migrationSource, /process\.env\.DATABASE_URL/);
+  const developmentStartupSource = fs.readFileSync(path.join(__dirname, 'dev.js'), 'utf8');
+  assert.ok(
+    developmentStartupSource.indexOf('applyLocalEnv()') < developmentStartupSource.indexOf("require('../server')"),
+    'dev startup must normalize DATABASE_URL before loading the server that consumes it directly'
   );
 
   let bootstrapCalls = 0;

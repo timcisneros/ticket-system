@@ -5,8 +5,11 @@ const fs = require('fs');
 const argon2 = require('argon2');
 const { PostgresRuntimeStore } = require('../persistence/postgres/store');
 const {
+  DEFAULT_BUNDLED_POSTGRES_PORT,
+  DEFAULT_DATABASE_URL,
   LOCAL_ENV_PATH,
   applyLocalEnv,
+  bundledDatabaseUrl,
   developmentConfig,
   generateSessionSecret,
   promptHidden,
@@ -19,8 +22,6 @@ const {
 } = require('./dev-environment');
 const { ensureInitialAgent } = require('./dev-agent-config');
 const { postgresHelp } = require('./dev-doctor');
-
-const DEFAULT_DATABASE_URL = 'postgresql://ticket_system:ticket_system@127.0.0.1:5432/ticket_system';
 
 async function createInitialAdmin({ store, password, hashPassword = argon2.hash }) {
   const existing = await store.getUserByUsername('admin');
@@ -51,7 +52,10 @@ async function prepareLocalEnv(env = process.env) {
     return;
   }
 
-  const databaseUrl = env.DATABASE_URL || await promptVisible('PostgreSQL URL', { defaultValue: DEFAULT_DATABASE_URL });
+  const defaultDatabaseUrl = bundledDatabaseUrl(
+    env.TICKET_SYSTEM_POSTGRES_PORT || DEFAULT_BUNDLED_POSTGRES_PORT
+  );
+  const databaseUrl = env.DATABASE_URL || await promptVisible('PostgreSQL URL', { defaultValue: defaultDatabaseUrl });
   const sessionSecret = env.SESSION_SECRET || generateSessionSecret();
   const databaseError = validateDatabaseUrl(databaseUrl);
   if (databaseError) throw new Error(databaseError);
