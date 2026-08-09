@@ -11,6 +11,7 @@
     "dev:doctor": "node --env-file-if-exists=.env.local scripts/dev-doctor.js",
     "dev:smoke": "node --env-file-if-exists=.env.local scripts/dev-smoke.js",
     "admin:password": "node --env-file-if-exists=.env.local scripts/admin-password.js",
+    "session:rotate": "node scripts/rotate-session-secret.js",
     "build": "node scripts/check-js-syntax.js",
     "build:materializer": "cargo build --release --manifest-path native/process-materializer/Cargo.toml",
     "fmt:materializer": "cargo fmt --manifest-path native/process-materializer/Cargo.toml -- --check",
