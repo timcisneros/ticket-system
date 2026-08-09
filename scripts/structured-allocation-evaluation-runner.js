@@ -46,7 +46,9 @@ const { assertDispatchWithinGlobalCeiling } =
   require('./fixtures/evaluation-live-budget-ledger');
 const { trialWorstCaseMicroUsd } = require('./fixtures/evaluation-live-trial-liability');
 const {
-  buildEvaluationServerCredentialEnv
+  SENTINEL_CREDENTIAL,
+  buildEvaluationServerCredentialEnv,
+  classifyEvaluationServerMode
 } = require('./fixtures/evaluation-server-env');
 const {
   OBSERVATION_SINK_VERSION, readObservations
@@ -576,6 +578,10 @@ async function runTrial({
   mode = 'fixture',
   liveRequestControls = null,
   liveTransportCapture = null,
+  // REAL LIVE ONLY. The explicitly selected configured-agent credential is
+  // resolved outside the trial and retained only in memory. Fixture and
+  // captured modes must never receive it.
+  resolvedLiveCredentialAuthority = null,
   // THE GLOBAL ECONOMIC CEILING, enforced at dispatch.
   //
   // "At dispatch" is taken conservatively: the trial's ENTIRE authorized worst
@@ -608,6 +614,18 @@ async function runTrial({
   liveProviderTransportObservationFault = null
 }) {
   assertMode(mode);
+  // FAIL BEFORE ANY TRIAL STATE IS CREATED. A real run without resolved
+  // credential authority is a configuration failure, not product data. The
+  // resulting projection is held only until the child is spawned and is never
+  // written to an agent row, artifact, journal or diagnostic record.
+  const evaluationServerMode = classifyEvaluationServerMode({
+    mode, liveTransportCapture
+  });
+  const serverCredentialProjection = buildEvaluationServerCredentialEnv({
+    mode,
+    liveTransportCapture,
+    resolvedLiveCredentialAuthority
+  });
   // ONE RESOLUTION POINT. The variant is resolved into a complete scenario here
   // and nowhere else, so every downstream step — staging, oracle, artifact —
   // consumes it exactly as it consumes a single-variant scenario. An unknown
@@ -677,7 +695,12 @@ async function runTrial({
     value: {
       name: `${name} ${stamp}`, provider: 'openai',
       model: 'gpt-4o-mini-2024-07-18',
-      apiKey: 'test-only-sentinel-not-a-real-credential'
+      // A real trial deliberately persists NO credential here. Production's
+      // normal configured-agent-first precedence then reaches the explicitly
+      // projected child environment credential. Fixture and captured modes
+      // keep the sentinel as their provider-escape guard.
+      ...(evaluationServerMode === 'real_uncaptured_live'
+        ? {} : { apiKey: SENTINEL_CREDENTIAL })
     },
     groupIds: [group.id], changedBy: 'evaluation-runner'
   })).agent;
@@ -979,9 +1002,7 @@ async function runTrial({
       // and this override is applied after it, so it is what a real uncaptured
       // live run depends on. That branch previously supplied nothing, on the
       // false assumption that inheritance would carry it.
-      ...buildEvaluationServerCredentialEnv({
-        mode, liveTransportCapture, env: process.env
-      }).env,
+      ...serverCredentialProjection.env,
       // NOT AGGRESSIVE. A 200 ms tick made a scheduler continuation race the
       // synchronous post-planning leaf admission for the same plan, and the
       // loser blocked the Ticket with `leaf_admission_conflict` before any leaf

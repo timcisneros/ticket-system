@@ -41,7 +41,8 @@ const {
   buildPricingCatalog, computeMaximumLiability, findPricingEntry
 } = require('../runtime/model-pricing-catalog');
 const {
-  buildEvaluationServerCredentialEnv, describeEvaluationServerCredential
+  buildEvaluationServerCredentialEnv, describeEvaluationServerCredential,
+  resolveRealLiveCredentialAuthority
 } = require('./fixtures/evaluation-server-env');
 const { pricedCatalogValue } = require('./governed-structured-fixture');
 const { buildOpenAiResponsesBody } = require('../runtime/provider-request-body');
@@ -69,7 +70,7 @@ function ok(condition, message) {
 function refuses(fn) { try { fn(); return null; } catch (error) { return error; } }
 function freshRoot() { return fs.mkdtempSync(path.join(os.tmpdir(), 'live-budget-')); }
 
-function main() {
+async function main() {
   console.log('evaluation live budget');
 
   // ── 1-3. Reserve, persist, reconstruct ────────────────────────────────
@@ -657,8 +658,17 @@ function main() {
 
   // THE SECRET NEVER BECOMES OBSERVABLE.
   const probe = 'probe-credential-value';
+  const resolvedProbe = await resolveRealLiveCredentialAuthority({
+    store: { getConfiguredAgentById: async () => ({
+      id: 41, revision: 7, provider: 'openai', model: 'not-authoritative',
+      apiKey: probe
+    }) },
+    credentialAuthority: { kind: 'configured_agent', configuredAgentId: 41 },
+    expectedProvider: 'openai'
+  });
   const built = buildEvaluationServerCredentialEnv({
-    mode: 'live', liveTransportCapture: null, env: { OPENAI_API_KEY: probe } });
+    mode: 'live', liveTransportCapture: null,
+    resolvedLiveCredentialAuthority: resolvedProbe });
   ok(built.env.OPENAI_API_KEY === probe && built.usesRealCredential === true,
     'the real live branch passes the credential through untouched');
   const describedProbe = JSON.stringify(describeEvaluationServerCredential(built));
@@ -671,4 +681,4 @@ function main() {
   console.log('EXTERNAL PROVIDER CALLS: 0');
 }
 
-main();
+main().catch(error => { console.error(error); process.exit(1); });

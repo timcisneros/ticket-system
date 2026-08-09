@@ -107,9 +107,13 @@ function main() {
      FROZEN_EXPERIMENTAL_OPTIONS.includes('threshold'),
   '1-3 the frozen-option list names seeds, ordering and thresholds');
   // Operational options ARE allowed — the runner still has to be runnable.
-  const parsed = parseArguments(['--manifest', 'm.json', '--output-root', '/tmp/x', '--resume']);
-  ok(parsed.manifest === 'm.json' && parsed.resume === true,
-    '1-3 operational options (output, resume) remain available');
+  const parsed = parseArguments([
+    '--manifest', 'm.json', '--output-root', '/tmp/x', '--resume',
+    '--credential-agent-id', '42'
+  ]);
+  ok(parsed.manifest === 'm.json' && parsed.resume === true &&
+     parsed['credential-agent-id'] === '42',
+  '1-3 operational options (output, resume, explicit credential authority) remain available');
 
   // ── 4, 12. Foreign manifest / commit / run refuse ─────────────────────
   {

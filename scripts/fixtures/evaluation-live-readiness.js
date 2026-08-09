@@ -606,32 +606,37 @@ function auditLiveReadiness({ liveManifest, sources = {} } = {}) {
         .includes('evaluation-live-credential-postgres-test.js');
     } catch (_) { return false; }
   })();
-  // BEHAVIOURAL: the module is CALLED, in each of the three modes.
+  // BEHAVIOURAL: hermetic modes are called directly. A real authority cannot
+  // be fabricated here because the resolver brands its asynchronous
+  // configured-agent repository result; the registered PostgreSQL owner proves
+  // that branch end to end. This audit does prove the real branch refuses an
+  // unresolved/ambient-only credential.
   const credentialModes = envModule === null ? null : (() => {
     try {
-      const probe = 'probe-credential-value';
       const fixture = envModule.buildEvaluationServerCredentialEnv({
-        mode: 'fixture', env: { OPENAI_API_KEY: probe } });
+        mode: 'fixture' });
       const captured = envModule.buildEvaluationServerCredentialEnv({
-        mode: 'live', liveTransportCapture: '/x', env: { OPENAI_API_KEY: probe } });
-      const live = envModule.buildEvaluationServerCredentialEnv({
-        mode: 'live', liveTransportCapture: null, env: { OPENAI_API_KEY: probe } });
+        mode: 'live', liveTransportCapture: '/x' });
       let refused = false;
       try {
         envModule.buildEvaluationServerCredentialEnv({
-          mode: 'live', liveTransportCapture: null, env: {} });
-      } catch (error) { refused = error.code === 'REAL_LIVE_CREDENTIAL_ABSENT'; }
-      return { fixture, captured, live, refused, probe };
+          mode: 'live', liveTransportCapture: null });
+      } catch (error) {
+        refused = error.code === 'REAL_LIVE_CREDENTIAL_AUTHORITY_UNRESOLVED';
+      }
+      return { fixture, captured, refused };
     } catch (_) { return null; }
   })();
 
   record('realLiveCredentialPropagationImplemented',
     credentialModes !== null &&
-      credentialModes.live.env.OPENAI_API_KEY === credentialModes.probe &&
+      credentialModes.refused === true &&
+      typeof envModule.resolveRealLiveCredentialAuthority === 'function' &&
+      runnerSource.includes('resolvedLiveCredentialAuthority') &&
       runnerSource.includes('buildEvaluationServerCredentialEnv({')
       ? 'FROZEN' : 'UNRESOLVED',
-    'the real uncaptured live branch forwards the authorized credential',
-    'evaluation-server-env buildEvaluationServerCredentialEnv');
+    'the real uncaptured live branch requires explicit configured-agent authority',
+    'evaluation-server-env resolver and buildEvaluationServerCredentialEnv');
 
   record('realLiveCredentialPropagationBehaviourallyProved',
     credentialSuiteRegistered ? 'FROZEN' : 'UNRESOLVED',
@@ -658,7 +663,7 @@ function auditLiveReadiness({ liveManifest, sources = {} } = {}) {
     credentialModes !== null && credentialModes.refused === true
       ? 'FROZEN' : 'UNRESOLVED',
     'a real live trial with no credential refuses before a server is spawned',
-    'evaluation-server-env REAL_LIVE_CREDENTIAL_ABSENT');
+    'evaluation-server-env REAL_LIVE_CREDENTIAL_AUTHORITY_UNRESOLVED');
 
   // ── THE LAYERS THE THREE-ROLE DISPATCH PROOF DOES NOT COVER ─────────────
   //

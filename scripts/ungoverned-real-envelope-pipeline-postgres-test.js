@@ -45,6 +45,9 @@ const { getScenario } = require('./fixtures/evaluation-scenarios');
 const { runTrial } = require('./structured-allocation-evaluation-runner');
 const { ROLE_ECONOMICS } = require('./fixtures/governed-role-policy-container');
 const {
+  resolveRealLiveCredentialAuthority
+} = require('./fixtures/evaluation-server-env');
+const {
   PROVIDER_TRANSPORT_INVOKED_EVENT
 } = require('../runtime/provider-transport-observation');
 const liveManifest = require('../config/structured-allocation-evaluation-live-v1.json');
@@ -175,13 +178,20 @@ async function main() {
     })
   });
 
-  const inheritedCredential = process.env.OPENAI_API_KEY;
-  process.env.OPENAI_API_KEY = DUMMY_LIVE_CREDENTIAL;
-
-  try {
-    await withHarness('ungoverned real envelope pipeline',
+  await withHarness('ungoverned real envelope pipeline',
       async ({ store, workspaceRoot, startServer }) => {
         const assertThat = createAsserter();
+        const resolvedLiveCredentialAuthority =
+          await resolveRealLiveCredentialAuthority({
+            store: { getConfiguredAgentById: async () => ({
+              id: 83, revision: 1, provider: 'openai',
+              model: 'not-authoritative', apiKey: DUMMY_LIVE_CREDENTIAL
+            }) },
+            credentialAuthority: {
+              kind: 'configured_agent', configuredAgentId: 83
+            },
+            expectedProvider: 'openai'
+          });
 
         const budgetRoot = path.join(root, 'budget');
         fs.mkdirSync(budgetRoot, { recursive: true });
@@ -213,6 +223,7 @@ async function main() {
               commit: 'real-envelope-proof', smokeRoot: root,
               namespaceRoot: path.join(root, `ns-${label}`),
               mode: 'live',
+              resolvedLiveCredentialAuthority,
               liveRequestControls: CONTROLS,
               // NO final-hop capture: this is the real uncaptured branch.
               liveTransportCapture: null,
@@ -516,10 +527,6 @@ async function main() {
         console.log(`\n  (${assertThat.count()} ungoverned real-envelope assertions)`);
         console.log('  EXTERNAL PROVIDER CALLS MADE: 0');
       }, { timeoutMs: 1_800_000 });
-  } finally {
-    if (inheritedCredential === undefined) delete process.env.OPENAI_API_KEY;
-    else process.env.OPENAI_API_KEY = inheritedCredential;
-  }
 
   console.log('ungoverned real envelope pipeline PostgreSQL test passed');
 }

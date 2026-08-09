@@ -46,6 +46,14 @@ const { classifyLiveFailure } = require('./fixtures/evaluation-live-failure-clas
 const { trialWorstCaseMicroUsd } = require('./fixtures/evaluation-live-trial-liability');
 const { ROLE_ECONOMICS } = require('./fixtures/governed-role-policy-container');
 const { withHarness } = require('./postgres-test-harness');
+const { PostgresRuntimeStore } = require('../persistence/postgres/store');
+const {
+  assertAuthenticatedPreflightAuthority,
+  authenticatedRealLivePreflight,
+  realLiveCredentialAuthorityIdentity,
+  resolveRealLiveCredentialAuthority,
+  sameCredentialAuthority
+} = require('./fixtures/evaluation-server-env');
 
 const SCORED_RUNNER_VERSION = 1;
 const SCORED_ARTIFACT_LABEL = 'SCORED FIXTURE TRIAL — FROZEN PROTOCOL V1';
@@ -64,7 +72,8 @@ class ScoredRunnerError extends Error {
 // `--threshold` or `--exclude`. An option that could change the experiment is
 // not an option, it is a second protocol.
 const OPERATIONAL_OPTIONS = Object.freeze([
-  'manifest', 'output-root', 'resume', 'verbose', 'limit', 'dry-run'
+  'manifest', 'output-root', 'resume', 'verbose', 'limit', 'dry-run',
+  'credential-agent-id'
 ]);
 
 const FROZEN_EXPERIMENTAL_OPTIONS = Object.freeze([
@@ -206,7 +215,9 @@ function classifyExistingArtifact(target, header) {
 // It performs zero provider transport. That is asserted by construction: it
 // never constructs a transport, and the dry run returns before any executor
 // loop begins.
-async function preflightLiveRun({ manifestPath, outputRoot }) {
+async function preflightLiveRun({
+  manifestPath, outputRoot, resolvedLiveCredentialAuthority
+}) {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   if (manifest.mode !== 'live') {
     throw new ScoredRunnerError(
@@ -216,16 +227,22 @@ async function preflightLiveRun({ manifestPath, outputRoot }) {
   if (manifest.containsResults !== false) {
     throw new ScoredRunnerError('a manifest that carries results may not drive a run');
   }
-  // CREDENTIAL PRESENCE ONLY. The value is never read into a variable that is
-  // returned, logged, hashed or written.
-  const credentialPresent = typeof process.env.OPENAI_API_KEY === 'string' &&
-    process.env.OPENAI_API_KEY.length > 0;
+  // CREDENTIAL AUTHORITY ONLY. Ambient OPENAI_API_KEY is deliberately ignored:
+  // the explicitly selected configured-agent row is the durable authority.
+  // Only its non-secret identity is written; the resolver's credential stays
+  // on the in-memory authority object.
+  const credentialAuthority = realLiveCredentialAuthorityIdentity(
+    resolvedLiveCredentialAuthority);
+  const credentialPresent = true;
 
   fs.mkdirSync(path.join(outputRoot, 'trials'), { recursive: true });
-  // The header is frozen by its builder, so presence is recorded beside it
-  // rather than mutated into it — and it is a BOOLEAN, never the value.
   const baseHeader = buildRunHeader({ manifest, manifestPath, outputRoot });
-  const header = Object.freeze({ ...baseHeader, credentialPresent });
+  const headerIdentity = {
+    ...baseHeader, credentialPresent, credentialAuthority
+  };
+  delete headerIdentity.runHeaderHash;
+  headerIdentity.runHeaderHash = hashCanonical(headerIdentity);
+  const header = Object.freeze(headerIdentity);
   fs.writeFileSync(path.join(outputRoot, 'scored-run-header.json'),
     JSON.stringify(header, null, 2));
 
@@ -288,6 +305,7 @@ async function preflightLiveRun({ manifestPath, outputRoot }) {
     verdict: 'LIVE DRY RUN REACHED REAL PROVIDER DISPATCH BOUNDARY — 0 CALLS MADE',
     providerCallsMade: 0,
     credentialPresent,
+    credentialAuthority,
     header,
     assignedTrials: manifest.slots.length,
     globalCeilingProved: true,
@@ -322,6 +340,10 @@ async function preflightLiveRun({ manifestPath, outputRoot }) {
 // search.
 async function executeLiveRun({
   manifestPath, outputRoot, resume = false, limit = null,
+  // REAL LIVE ONLY. This is the single configured-agent authority result used
+  // by both authenticated preflight and every spawned production server.
+  resolvedLiveCredentialAuthority = null,
+  authenticatedPreflight = null,
   // TEST-ONLY. When set, the final network hop is replaced by the role-aware
   // capture and the run is permanently marked as NOT product evidence.
   syntheticTransportCapture = null,
@@ -346,6 +368,16 @@ async function executeLiveRun({
     protocolSeed: manifest.protocolSeed,
     manifestHash: manifest.manifestHash
   });
+
+  const syntheticAcceptance = Boolean(syntheticTransportCapture);
+  if (syntheticAcceptance && resolvedLiveCredentialAuthority !== null) {
+    throw new ScoredRunnerError(
+      'synthetic acceptance must not receive real credential authority',
+      { code: 'SYNTHETIC_ACCEPTANCE_REAL_CREDENTIAL_FORBIDDEN' });
+  }
+  const credentialAuthority = syntheticAcceptance
+    ? null
+    : realLiveCredentialAuthorityIdentity(resolvedLiveCredentialAuthority);
 
   fs.mkdirSync(path.join(outputRoot, 'trials'), { recursive: true });
   fs.mkdirSync(path.join(outputRoot, 'exclusions'), { recursive: true });
@@ -382,7 +414,32 @@ async function executeLiveRun({
         'refusing to resume: this directory was started under a different transport ' +
         'class; a synthetic acceptance corpus and a product corpus never mix');
     }
+    if (header.syntheticAcceptance) {
+      if (header.credentialAuthority !== null &&
+          header.credentialAuthority !== undefined) {
+        throw new ScoredRunnerError(
+          'refusing to resume: a synthetic acceptance header carries real ' +
+          'credential authority',
+          { code: 'SYNTHETIC_ACCEPTANCE_AUTHORITY_BINDING_FORBIDDEN' });
+      }
+    } else if (!sameCredentialAuthority(
+      header.credentialAuthority, credentialAuthority)) {
+      throw new ScoredRunnerError(
+        'refusing to resume: configured-agent credential authority changed',
+        {
+          code: 'REAL_LIVE_CREDENTIAL_AUTHORITY_CHANGED',
+          existing: header.credentialAuthority,
+          supplied: credentialAuthority
+        });
+    }
   } else {
+    if (!syntheticAcceptance) {
+      assertAuthenticatedPreflightAuthority({
+        preflight: authenticatedPreflight,
+        resolvedLiveCredentialAuthority,
+        manifestHash: manifest.manifestHash
+      });
+    }
     const base = buildRunHeader({ manifest, manifestPath, outputRoot });
     const identity = {
       ...base,
@@ -402,9 +459,13 @@ async function executeLiveRun({
         canonicalMatrixMaximumMicroUsd: manifest.economics.computedWorstCaseMicroUsd,
         perRequestMicroUsd: manifest.economics.liability.perRequestMicroUsd
       },
+      // Execution authority, not an experimental dimension. The persisted
+      // secret and any secret-derived value are intentionally absent. A later
+      // configured-agent edit increments this revision and makes resume refuse.
+      credentialAuthority,
       // A synthetic run says so in its own identity, so nothing downstream has
       // to infer it from how the run was invoked.
-      syntheticAcceptance: Boolean(syntheticTransportCapture),
+      syntheticAcceptance,
       syntheticAcceptanceLabel: syntheticTransportCapture
         ? SYNTHETIC_ACCEPTANCE_LABEL : null
     };
@@ -417,7 +478,7 @@ async function executeLiveRun({
   const bind = { runHeaderHash: header.runHeaderHash, manifestHash: header.manifestHash };
   const alreadyAccepted = acceptedSlots(outputRoot);
   const assigned = manifest.slots;
-  const plan = limit ? assigned.slice(0, limit) : assigned;
+  const plan = limit === null ? assigned : assigned.slice(0, limit);
 
   const liveBudget = {
     runRoot: outputRoot,
@@ -517,6 +578,7 @@ async function executeLiveRun({
             smokeRoot: outputRoot,
             namespaceRoot,
             mode: 'live',
+            resolvedLiveCredentialAuthority,
             liveRequestControls: controls,
             liveTransportCapture: syntheticTransportCapture
               ? path.join(syntheticTransportCapture, `${id}.jsonl`) : null,
@@ -602,6 +664,72 @@ async function executeLiveRun({
     complete,
     stoppedAfter: stopped,
     syntheticAcceptance: header.syntheticAcceptance === true
+  });
+}
+
+// ── AUTHORIZED REAL-LIVE OWNER ─────────────────────────────────────────────
+//
+// Resolves one explicit configured-agent row ONCE. The resulting in-memory
+// object feeds both the authenticated preflight and the child-server
+// projection. Identity equality alone is insufficient here: the preflight
+// proof carries a private reference to this exact authority object, and
+// executeLiveRun mechanically checks it before writing a real run header.
+async function executeAuthorizedLiveRun({
+  manifestPath, outputRoot, credentialAuthority, authorityStore,
+  resume = false, limit = null, preflightTransport = undefined,
+  preflightOutputPath = `${outputRoot}.authenticated-preflight.json`
+}) {
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  if (manifest.mode !== 'live') {
+    throw new ScoredRunnerError(
+      'authorized live execution requires a live manifest',
+      { code: 'REAL_LIVE_MANIFEST_REQUIRED' });
+  }
+  const resolvedLiveCredentialAuthority =
+    await resolveRealLiveCredentialAuthority({
+      store: authorityStore,
+      credentialAuthority,
+      expectedProvider: manifest.provider
+    });
+
+  if (resume) {
+    // No second preflight and no second corpus. The existing run header is the
+    // durable identity; executeLiveRun compares its configured-agent id and
+    // revision to the freshly resolved row before touching any remaining slot.
+    return executeLiveRun({
+      manifestPath, outputRoot, resume: true, limit,
+      resolvedLiveCredentialAuthority
+    });
+  }
+
+  if ((fs.existsSync(outputRoot) && fs.readdirSync(outputRoot).length > 0) ||
+      fs.existsSync(path.join(outputRoot, 'live-run-header.json')) ||
+      fs.existsSync(preflightOutputPath)) {
+    throw new ScoredRunnerError(
+      'real live output or authenticated-preflight evidence already exists; ' +
+      'choose a fresh output root or explicitly resume the existing corpus',
+      { code: 'REAL_LIVE_OUTPUT_NOT_FRESH' });
+  }
+
+  const authenticatedPreflight = await authenticatedRealLivePreflight({
+    manifest,
+    resolvedLiveCredentialAuthority,
+    ...(preflightTransport === undefined ? {} : { transport: preflightTransport })
+  });
+  fs.mkdirSync(path.dirname(preflightOutputPath), { recursive: true });
+  fs.writeFileSync(preflightOutputPath,
+    `${JSON.stringify(authenticatedPreflight, null, 2)}\n`,
+    { flag: 'wx', mode: 0o600 });
+
+  const result = await executeLiveRun({
+    manifestPath, outputRoot, resume: false, limit,
+    resolvedLiveCredentialAuthority,
+    authenticatedPreflight
+  });
+  return Object.freeze({
+    ...result,
+    authenticatedPreflight,
+    authenticatedPreflightPath: preflightOutputPath
   });
 }
 
@@ -741,13 +869,14 @@ async function executeScoredRun({ manifestPath, outputRoot, resume = false, limi
   return Object.freeze({ header, executed, reused, planned: plan.length });
 }
 
-const LIVE_RUN_VERSION = 1;
+const LIVE_RUN_VERSION = 2;
 
 module.exports = {
   LIVE_RUN_VERSION,
   assignedSetOf,
   auditLiveCorpus,
   assertScorableLiveCorpus,
+  executeAuthorizedLiveRun,
   executeLiveRun,
   readJournal,
   preflightLiveRun,
@@ -764,31 +893,95 @@ module.exports = {
   trialIdFor
 };
 
-if (require.main === module) {
+async function runMain() {
   const options = parseArguments(process.argv.slice(2));
   if (options.verbose) process.env.SCORED_RUNNER_VERBOSE = '1';
+  const manifest = JSON.parse(fs.readFileSync(options.manifest, 'utf8'));
+  const limit = options.limit === undefined ? null : Number(options.limit);
+  if (limit !== null && (!Number.isSafeInteger(limit) || limit < 0)) {
+    throw new ScoredRunnerError('--limit must be a non-negative integer');
+  }
+
   // A branch rather than an early return: the repository's syntax gate parses
   // every file as a script, where a top-level `return` is illegal.
   if (options['dry-run']) {
-    preflightLiveRun({
-      manifestPath: options.manifest, outputRoot: options['output-root']
-    }).then(result => {
-      console.log(result.verdict);
-      console.log(`credential present: ${result.credentialPresent}`);
-      console.log(`assigned trials: ${result.assignedTrials}`);
-      console.log(`stopped before: ${result.stoppedBefore}`);
-      console.log(`run header: ${result.header.runHeaderHash}`);
-    }).catch(error => { console.error(error); process.exit(1); });
+    if (manifest.mode !== 'live') {
+      throw new ScoredRunnerError('--dry-run requires a live manifest');
+    }
+  }
+
+  if (manifest.mode === 'live') {
+    const configuredAgentId = Number(options['credential-agent-id']);
+    if (!Number.isSafeInteger(configuredAgentId) || configuredAgentId <= 0) {
+      throw new ScoredRunnerError(
+        'REAL live execution requires --credential-agent-id with a positive id');
+    }
+    if (!process.env.DATABASE_URL) {
+      throw new ScoredRunnerError(
+        'DATABASE_URL is required to resolve the explicit configured-agent authority');
+    }
+    const authorityStore = new PostgresRuntimeStore({
+      connectionString: process.env.DATABASE_URL,
+      schema: process.env.POSTGRES_SCHEMA || 'ticket_system'
+    });
+    try {
+      const selection = {
+        kind: 'configured_agent', configuredAgentId
+      };
+      if (options['dry-run']) {
+        const resolved = await resolveRealLiveCredentialAuthority({
+          store: authorityStore,
+          credentialAuthority: selection,
+          expectedProvider: manifest.provider
+        });
+        const result = await preflightLiveRun({
+          manifestPath: options.manifest,
+          outputRoot: options['output-root'],
+          resolvedLiveCredentialAuthority: resolved
+        });
+        console.log(result.verdict);
+        console.log(`credential authority: configured agent ${configuredAgentId}, ` +
+          `revision ${result.credentialAuthority.configuredAgentRevision}`);
+        console.log(`assigned trials: ${result.assignedTrials}`);
+        console.log(`stopped before: ${result.stoppedBefore}`);
+        console.log(`run header: ${result.header.runHeaderHash}`);
+      } else {
+        if (!process.env.TEST_DATABASE_URL) {
+          throw new ScoredRunnerError(
+            'TEST_DATABASE_URL is required for isolated evaluation trial state');
+        }
+        const result = await executeAuthorizedLiveRun({
+          manifestPath: options.manifest,
+          outputRoot: options['output-root'],
+          credentialAuthority: selection,
+          authorityStore,
+          resume: Boolean(options.resume),
+          limit
+        });
+        console.log(`live run: ${result.executed} executed, ${result.reused} reused, ` +
+          `${result.accepted}/${result.assigned} accepted`);
+        console.log(`run header: ${result.header.runHeaderHash}`);
+      }
+    } finally {
+      await authorityStore.close();
+    }
   } else {
-    executeScoredRun({
+    if (options['credential-agent-id'] !== undefined) {
+      throw new ScoredRunnerError(
+        '--credential-agent-id is valid only for REAL live execution');
+    }
+    const result = await executeScoredRun({
       manifestPath: options.manifest,
       outputRoot: options['output-root'],
       resume: Boolean(options.resume),
-      limit: options.limit ? Number(options.limit) : null
-    }).then(result => {
-      console.log(`scored run complete: ${result.executed} executed, ` +
-        `${result.reused} reused, ${result.planned} planned`);
-      console.log(`run header: ${result.header.runHeaderHash}`);
-    }).catch(error => { console.error(error); process.exit(1); });
+      limit
+    });
+    console.log(`scored run complete: ${result.executed} executed, ` +
+      `${result.reused} reused, ${result.planned} planned`);
+    console.log(`run header: ${result.header.runHeaderHash}`);
   }
+}
+
+if (require.main === module) {
+  runMain().catch(error => { console.error(error); process.exit(1); });
 }

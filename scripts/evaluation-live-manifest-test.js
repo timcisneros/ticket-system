@@ -29,6 +29,9 @@ const { auditLiveReadiness, assertLiveExecutionPermitted } =
 const { parseArguments, preflightLiveRun, ScoredRunnerError, executeScoredRun } =
   require('./structured-allocation-evaluation-scored-runner');
 const { buildOpenAiResponsesBody } = require('../runtime/provider-request-body');
+const {
+  resolveRealLiveCredentialAuthority
+} = require('./fixtures/evaluation-server-env');
 
 let passed = 0;
 function ok(condition, message) {
@@ -235,10 +238,19 @@ async function main() {
 
   // ── 28-29. Executor contract ──────────────────────────────────────────
   const dryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'live-dry-'));
+  const dryAuthority = await resolveRealLiveCredentialAuthority({
+    store: { getConfiguredAgentById: async () => ({
+      id: 73, revision: 4, provider: 'openai', model: 'not-authoritative',
+      apiKey: 'fake-manifest-preflight-credential'
+    }) },
+    credentialAuthority: { kind: 'configured_agent', configuredAgentId: 73 },
+    expectedProvider: 'openai'
+  });
   const result = await preflightLiveRun({
     manifestPath: path.join(__dirname, '..', 'config',
       'structured-allocation-evaluation-live-v1.json'),
-    outputRoot: dryRoot
+    outputRoot: dryRoot,
+    resolvedLiveCredentialAuthority: dryAuthority
   });
   ok(result.providerCallsMade === 0 && result.stoppedBefore === 'provider_dispatch',
     '28 the dry run performs ZERO provider calls and stops before dispatch');
@@ -250,6 +262,9 @@ async function main() {
   '28 and the first request envelope carries the frozen sampling and no seed');
   ok(typeof result.credentialPresent === 'boolean',
     '24 credential PRESENCE is recorded as a boolean');
+  ok(result.credentialAuthority.configuredAgentId === 73 &&
+     result.credentialAuthority.configuredAgentRevision === 4,
+  '24 dry run binds only the explicit non-secret credential authority');
   // THE DRY RUN SPENDS NOTHING, and proves that by touching the real gate and
   // then giving the authority back under the only proof that permits it. A
   // reservation left committed would silently shrink the ceiling for the run

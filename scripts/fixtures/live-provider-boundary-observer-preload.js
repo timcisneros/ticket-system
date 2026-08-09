@@ -24,6 +24,7 @@
 const fs = require('node:fs');
 const http = require('node:http');
 const https = require('node:https');
+const { PassThrough } = require('node:stream');
 
 const OBSERVATION_PATH = process.env.LIVE_PROVIDER_BOUNDARY_OBSERVATION || null;
 // OPTIONAL REAL-SHAPED RESPONSE. When set, the boundary answers with a
@@ -55,12 +56,68 @@ const OBSERVATION_PATH = process.env.LIVE_PROVIDER_BOUNDARY_OBSERVATION || null;
 //     knowledge about the scenario, not about the transport boundary. Selection
 //     reads the request and never an arm label, so it cannot force a path.
 const RESPONSE_PATH = process.env.LIVE_PROVIDER_BOUNDARY_RESPONSE || null;
+const PLANNER_MARKER = 'You are an allocation planner';
 
 function requestMessages(body) {
   try {
     const parsed = JSON.parse(body);
     return Array.isArray(parsed.input) ? parsed.input : [];
   } catch (_) { return []; }
+}
+
+function isPlannerRequest(body) {
+  return requestMessages(body).some(message =>
+    typeof message.content === 'string' && message.content.includes(PLANNER_MARKER));
+}
+
+function plannerContext(body) {
+  for (const message of requestMessages(body)) {
+    if (message.role !== 'user' || typeof message.content !== 'string') continue;
+    try {
+      const parsed = JSON.parse(message.content);
+      if (Array.isArray(parsed.candidates)) return parsed;
+    } catch (_) { /* not the planning context */ }
+  }
+  return null;
+}
+
+function plannerProposal(body) {
+  const context = plannerContext(body);
+  const candidates = context ? context.candidates : [];
+  const items = candidates.map((candidate, index) => {
+    const owned = Array.isArray(candidate.ownedOutputPaths) && candidate.ownedOutputPaths[0]
+      ? String(candidate.ownedOutputPaths[0]).replace(/\/+$/, '')
+      : `reports/agent-${index}`;
+    const folder = `${owned}/out`;
+    return {
+      assignedAgentId: candidate.agentId,
+      objective: `Create the folder ${folder} holding this agent's allocated output`,
+      expectedOutputs: [{ kind: 'text', declaration: `The folder ${folder}` }],
+      successCriteria: [{ kind: 'text', declaration: `The folder ${folder} exists` }],
+      evidenceRequirements: []
+    };
+  });
+  return JSON.stringify({
+    version: 1,
+    sharedConstraints: [
+      { kind: 'text', declaration: 'Write only inside your own allocated path' }
+    ],
+    items
+  });
+}
+
+function workerAnswer(body) {
+  const text = requestMessages(body).map(message =>
+    (typeof message.content === 'string' ? message.content : '')).join('\n');
+  const match = text.match(/Create the folder ([^\s,"']+)/);
+  const folder = match ? match[1] : null;
+  return JSON.stringify(folder
+    ? {
+      message: `Creating ${folder}.`,
+      actions: [{ type: 'create_folder', path: folder }],
+      complete: true
+    }
+    : { message: 'No declared folder in this objective.', actions: [], complete: true });
 }
 
 // The runtime envelope this request carried. It is the production message the
@@ -79,6 +136,9 @@ function runtimeEnvelopeOf(body) {
 function modelTextFor(body) {
   const spec = JSON.parse(fs.readFileSync(RESPONSE_PATH, 'utf8'));
   if (spec.kind === 'literal') return spec.text;
+  if (spec.kind === 'role-aware-structured-success') {
+    return isPlannerRequest(body) ? plannerProposal(body) : workerAnswer(body);
+  }
   if (spec.kind === 'one-action-createFolder-by-owned-root') {
     const envelope = runtimeEnvelopeOf(body) || {};
     const owned = Array.isArray(envelope.ownedOutputPaths) && envelope.ownedOutputPaths[0]
@@ -113,6 +173,25 @@ function realShapedResponse(body) {
     usage: { input_tokens: 1737, output_tokens: 77, total_tokens: 1814 }
   });
 }
+
+function authorizationHeader(headers) {
+  if (!headers || typeof headers !== 'object') return null;
+  for (const [name, value] of Object.entries(headers)) {
+    if (name.toLowerCase() === 'authorization') return String(value);
+  }
+  return null;
+}
+
+function authorizationMatchesProjectedCredential(headers) {
+  const projected = process.env.OPENAI_API_KEY;
+  return typeof projected === 'string' && projected.length > 0 &&
+    authorizationHeader(headers) === `Bearer ${projected}`;
+}
+
+function observedRole(body, transport) {
+  if (isPlannerRequest(body)) return 'structured_planner';
+  return transport === 'governed' ? 'governed_leaf_worker' : 'ungoverned_worker';
+}
 // TEST-ONLY: a failure at the exact point the durable transport observation is
 // written, so a suite can prove that an observation which does not land changes
 // nothing about the provider request it was observing. One owner, shared with
@@ -143,6 +222,7 @@ globalThis.fetch = async function observedFetch(input, init) {
   if (hostname && isLocal(hostname)) return realFetch.call(this, input, init);
 
   const headers = (init && init.headers) || {};
+  const body = init && typeof init.body === 'string' ? init.body : '';
   record({
     boundary: 'fetch',
     transport: 'ungoverned',
@@ -152,11 +232,13 @@ globalThis.fetch = async function observedFetch(input, init) {
     headerNames: Object.keys(headers).sort(),
     // PRESENCE ONLY. The value is never recorded.
     hasAuthorization: Boolean(headers.Authorization || headers.authorization),
-    body: init && typeof init.body === 'string' ? init.body : ''
+    authorizationMatchesProjectedCredential:
+      authorizationMatchesProjectedCredential(headers),
+    role: observedRole(body, 'ungoverned'),
+    body
   });
   if (RESPONSE_PATH) {
-    const payload = realShapedResponse(
-      init && typeof init.body === 'string' ? init.body : '');
+    const payload = realShapedResponse(body);
     // The real platform Response, for the same reason: production consumes
     // more of this interface than a hand-written stub tends to provide.
     return new Response(payload, {
@@ -183,6 +265,7 @@ https.request = function observedHttpsRequest(options, onResponse) {
   if (isLocal(hostname)) return realHttpsRequest.apply(this, arguments);
 
   const chunks = [];
+  const response = new PassThrough();
   const request = {
     on() { return request; },
     setTimeout() { return request; },
@@ -190,6 +273,7 @@ https.request = function observedHttpsRequest(options, onResponse) {
     write(chunk) { chunks.push(Buffer.from(chunk)); return true; },
     end(chunk) {
       if (chunk) chunks.push(Buffer.from(chunk));
+      const body = Buffer.concat(chunks).toString('utf8');
       record({
         boundary: 'https.request',
         transport: 'governed',
@@ -198,8 +282,21 @@ https.request = function observedHttpsRequest(options, onResponse) {
         method: options.method,
         headerNames: Object.keys(options.headers || {}).sort(),
         hasAuthorization: Boolean(options.headers && options.headers.Authorization),
-        body: Buffer.concat(chunks).toString('utf8')
+        authorizationMatchesProjectedCredential:
+          authorizationMatchesProjectedCredential(options.headers || {}),
+        role: observedRole(body, 'governed'),
+        body
       });
+      if (RESPONSE_PATH) {
+        response.statusCode = 200;
+        response.headers = {
+          'x-request-id': 'req_boundary_controlled',
+          'content-type': 'application/json'
+        };
+        onResponse(response);
+        response.end(realShapedResponse(body));
+        return request;
+      }
       const error = new Error(BOUNDARY_REFUSAL);
       error.code = BOUNDARY_REFUSAL;
       throw error;
