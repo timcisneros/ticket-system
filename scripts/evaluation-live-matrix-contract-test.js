@@ -21,7 +21,8 @@ const {
 } = require('./fixtures/evaluation-live-run-journal');
 const {
   ABORTED_LABEL, COMPLETE_VERDICT, LiveCorpusError, PERMANENTLY_ABORTED_RUNS,
-  SYNTHETIC_ACCEPTANCE_LABEL, assertScorableLiveCorpus, auditLiveCorpus,
+  REAL_LIVE_ARTIFACT_LABEL, SYNTHETIC_ACCEPTANCE_LABEL,
+  assertScorableLiveCorpus, auditLiveCorpus,
   buildExclusionArtifact, isAbortedRunHeader
 } = require('./fixtures/evaluation-live-corpus-integrity');
 const {
@@ -63,6 +64,7 @@ function seedCorpus(root, count, overrides = {}) {
       manifestHash: HEADER.manifestHash,
       sourceCommit: HEADER.repositoryCommit,
       mode: 'live',
+      label: REAL_LIVE_ARTIFACT_LABEL,
       armId: slot.armId,
       repetition: slot.repetition,
       seed: slot.stochasticIdentity,
@@ -224,7 +226,7 @@ function main() {
   // ── THE SYNTHETIC CORPUS IS NOT PRODUCT EVIDENCE ─────────────────────
   {
     const root = freshRoot();
-    seedCorpus(root, manifest.slots.length);
+    seedCorpus(root, manifest.slots.length, { label: SYNTHETIC_ACCEPTANCE_LABEL });
     const syntheticHeader = { ...HEADER, syntheticAcceptance: true };
     // It is judged against its own run header, so it is internally complete.
     const audit = auditLiveCorpus({

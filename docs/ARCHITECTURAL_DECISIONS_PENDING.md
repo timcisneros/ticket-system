@@ -1,6 +1,6 @@
 ## TRANCHE 6 REAL-LIVE CORPUS ABORTED BY MISSING LIVE SCORER ADAPTER (2026-08-08)
 
-**Status: OPEN — source-proven scoring-harness defect. The run is permanently
+**Status: RESOLVED IN SOURCE 2026-08-08 — the run remains permanently
 `ABORTED — NOT DECISION EVIDENCE`; do not resume, score, adapt, or import it.**
 
 The newly authorized real-live evaluation ran against exact executable source
@@ -58,12 +58,16 @@ Its 125-file abort bundle hash is
 the abort-record hash is
 `77b040bbae0924a9bb379d825456adfcfb1617333cacc6740e9fa2b74a252e86`.
 
-The missing live scoring/report owner must be designed and proved under
-separate source authority. Because the defect is evaluation-source reachable,
-the correction requires a new exact-source proof and an entirely fresh live
-authorization. This 120-artifact run may never be retrofitted into product
-decision evidence. The immutable fixture conclusion remains
-**FIXTURE EVIDENCE SUPPORTS STOP**, and the earlier historical aborted run
+The repository now owns an explicit, validated live-slot scoring projection,
+a REAL-live scorer/report path, planner-inclusive normalized economics, the
+family-scoped hard-disqualifier rules, and the complete frozen ordinary
+decision contract. A deterministic provider-free dress rehearsal traverses
+all five metrics, all hard disqualifiers, fixture/live combination, and
+immutable JSON/Markdown reporting before a paid dispatch can be authorized.
+The correction still requires exact-source release proof and an entirely fresh
+live authorization. This 120-artifact run may never be retrofitted into product
+decision evidence. The immutable fixture conclusion remains **FIXTURE EVIDENCE
+SUPPORTS STOP**, and the earlier historical aborted run
 `b2b59ad2b9d9fafc8ac860838b0530cb8f90bc02907b36a3a230b560bece2eef`
 is unchanged.
 

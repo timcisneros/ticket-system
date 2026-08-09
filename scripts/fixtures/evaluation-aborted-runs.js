@@ -33,6 +33,20 @@ const PERMANENTLY_ABORTED_RUNS = Object.freeze([
     reason: '120 slots assigned, 31 accepted before a deliberate abort; the ' +
       'provider responses were not retained and the exact cause was never ' +
       'established, so no product conclusion may rest on it'
+  }),
+  Object.freeze({
+    runHeaderHash:
+      '986249cebdf2239c93b37ed7340aedbebbb85df5e134f4f848264dd5c1916359',
+    reason: 'the authorized real-live run stopped after provider dispatch when ' +
+      'the zero-drift evidence gate refused; source freeze made patch-and-resume ' +
+      'invalid and the partial corpus is permanently quarantined'
+  }),
+  Object.freeze({
+    runHeaderHash:
+      '1cb2332d782b9478454d329dfd5ebd95e195acb6289ffd57b9e1255045d95022',
+    reason: 'the authorized real-live run completed execution but the canonical ' +
+      'scoring path did not accept the live manifest shape; source freeze made ' +
+      'an after-the-fact adapter invalid and the run is permanently quarantined'
   })
 ]);
 

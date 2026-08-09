@@ -62,7 +62,8 @@ async function collectTicketFacts(store, ticketId) {
             body->>'allocationPlanId' AS allocation_plan_id,
             body->>'allocationItemId' AS allocation_item_id,
             body ? 'leafRunBinding' AS governed_leaf,
-            body ? 'governedProgressBlock' AS has_block
+            body ? 'governedProgressBlock' AS has_block,
+            body->'governedProgressBlock' AS progress_block
        FROM ${store.table('runs')}
       WHERE ticket_id = $1 ORDER BY id`, [ticketId]);
 
@@ -71,8 +72,10 @@ async function collectTicketFacts(store, ticketId) {
     [ticketId]);
 
   const reservations = await readOnly(store,
-    `SELECT id, run_id, role, state, model_request_ordinal,
-            settled_micro_usd, settlement_receipt IS NOT NULL AS settled
+    `SELECT id, ticket_id, planning_attempt_id, run_id, role, state,
+            model_request_ordinal, logical_source_identity, exact_request_hash,
+            settled_micro_usd, settlement_receipt,
+            settlement_receipt IS NOT NULL AS settled
        FROM ${store.table('economic_request_reservations')}
       WHERE ticket_id = $1 ORDER BY id`, [ticketId]);
 
@@ -173,9 +176,23 @@ function deriveLatency(facts) {
 // so "this arm cannot be blocked" is never read as "this arm did not churn".
 function deriveChurn(facts, arm) {
   if (!arm.expectedGoverned) return null;
-  const blocks = facts.runs.filter(run => run.has_block).length;
+  const persistedBlocks = facts.runs.map(run => run.progress_block).filter(Boolean);
+  const blocks = persistedBlocks.length;
   const blockEvents = facts.events.filter(e => e.type === 'run.progress_blocked');
+  if (persistedBlocks.some(block =>
+    !Number.isSafeInteger(block.consecutiveNoProgressWindows) ||
+    block.consecutiveNoProgressWindows < 0)) {
+    throw new EvaluationReaderError(
+      'a persisted governed progress block lacks its no-progress-window authority');
+  }
   return {
+    // A Run without a persisted stop has no durable non-progress streak. A
+    // stopped Run carries the exact cutoff-bound count in its immutable block.
+    // Zero is therefore an observed absence under complete durable state, not
+    // a guess from provider behavior.
+    noProgressStreak: persistedBlocks.reduce((maximum, block) =>
+      Math.max(maximum, block.consecutiveNoProgressWindows), 0),
+    progressBlocks: blocks,
     persistedProgressBlocks: blocks,
     blockEvents: blockEvents.length,
     // Reservations that were started and answered but whose window credited no
@@ -207,35 +224,124 @@ function deriveObservedPath(facts) {
   };
 }
 
-// Canonical request list for normalized pricing. One entry per committed
-// model-request charge, which exists on every arm.
+// Canonical request list for normalized pricing. Governed requests come from
+// their immutable economic reservations; ungoverned requests come from the
+// committed Run-budget charge authority that exists on those arms.
 function deriveCanonicalRequests(facts, { provider, model, authorizedOutputTokens, boundInputTokens }) {
+  if (!facts || !Array.isArray(facts.reservations) || !Array.isArray(facts.charges) ||
+      !Array.isArray(facts.usageLogs)) {
+    throw new EvaluationReaderError(
+      'canonical request projection requires reservations, charges and usage logs');
+  }
   const usageByRun = new Map();
   for (const row of facts.usageLogs) {
     if (!usageByRun.has(row.run_id)) usageByRun.set(row.run_id, []);
     usageByRun.get(row.run_id).push(row.usage);
   }
-  const plannerRunIds = new Set(facts.reservations
-    .filter(r => r.role === GOVERNED_PLANNER_ROLE).map(r => r.run_id));
+  // Governed requests have a stronger request authority than the generic Run
+  // budget ledger: one immutable economic reservation captures the exact
+  // request, provider/model/pricing authority, response and settlement usage.
+  // Planner reservations are planning-attempt scoped and therefore have no
+  // Run charge at all. Leaf reservations carry the SAME logical source
+  // identity as their Run charge. Projecting governed reservations first and
+  // suppressing only that exact matching charge includes planners while
+  // preventing leaf requests from being counted twice.
+  const governed = [];
+  const governedIdentities = new Set();
+  const governedChargeKeys = new Set();
+  const expectedTicketId = facts.ticket && Number(facts.ticket.id);
+  for (const reservation of facts.reservations) {
+    if (Number.isSafeInteger(expectedTicketId) &&
+        Number(reservation.ticket_id) !== expectedTicketId) {
+      throw new EvaluationReaderError(
+        `economic reservation ${reservation.id} belongs to another Ticket`);
+    }
+    if (reservation.state === 'released') continue;
+    if (reservation.state !== 'settled' || !reservation.settlement_receipt) {
+      throw new EvaluationReaderError(
+        `economic reservation ${reservation.id} is ${reservation.state} and has no ` +
+        'complete settlement authority; normalized cost refuses to guess');
+    }
+    const receipt = reservation.settlement_receipt;
+    if (Number(receipt.ticketId) !== Number(reservation.ticket_id) ||
+        receipt.role !== reservation.role || receipt.requestCount !== 1) {
+      throw new EvaluationReaderError(
+        `economic reservation ${reservation.id} settlement identity is inconsistent`);
+    }
+    const planner = reservation.role === GOVERNED_PLANNER_ROLE;
+    const worker = reservation.role === GOVERNED_WORKER_ROLE;
+    if (!planner && !worker) {
+      throw new EvaluationReaderError(
+        `economic reservation ${reservation.id} has unsupported role ${reservation.role}`);
+    }
+    const identity = planner
+      ? `planner:${reservation.ticket_id}:${reservation.planning_attempt_id}:` +
+        `${reservation.model_request_ordinal}`
+      : `worker:${reservation.run_id}:${reservation.logical_source_identity}`;
+    if ((planner && (!reservation.planning_attempt_id || reservation.run_id !== null)) ||
+        (worker && (!Number.isSafeInteger(Number(reservation.run_id)) ||
+          !reservation.logical_source_identity))) {
+      throw new EvaluationReaderError(
+        `economic reservation ${reservation.id} has ambiguous subject identity`);
+    }
+    if (governedIdentities.has(identity)) {
+      throw new EvaluationReaderError(`duplicate governed request identity ${identity}`);
+    }
+    governedIdentities.add(identity);
+    if (worker) {
+      governedChargeKeys.add(
+        `${Number(reservation.run_id)}:${reservation.logical_source_identity}`);
+    }
+    const common = { role: planner ? 'planner' : 'worker', provider, model };
+    if (receipt.usageSource === 'provider_reported') {
+      if (!Number.isSafeInteger(receipt.inputTokens) || receipt.inputTokens < 0 ||
+          !Number.isSafeInteger(receipt.outputTokens) || receipt.outputTokens < 0) {
+        throw new EvaluationReaderError(
+          `economic reservation ${reservation.id} has invalid metered settlement usage`);
+      }
+      governed.push({ ...common,
+        inputTokens: receipt.inputTokens, outputTokens: receipt.outputTokens });
+    } else if (receipt.usageSource === 'authorized_maximum_assumed') {
+      const output = receipt.authorizedOutputTokens;
+      const input = receipt.contextWindowTokens;
+      if (!Number.isSafeInteger(output) || output < 0 ||
+          !Number.isSafeInteger(input) || input < 0) {
+        throw new EvaluationReaderError(
+          `economic reservation ${reservation.id} has no usable authorized maximum`);
+      }
+      governed.push({ ...common,
+        authorizedOutputTokens: output, boundInputTokens: input });
+    } else {
+      throw new EvaluationReaderError(
+        `economic reservation ${reservation.id} has unrecognized usage authority`);
+    }
+  }
 
-  return facts.charges
-    .filter(charge => charge.state === 'committed')
-    .map(charge => {
+  const ungoverned = [];
+  const chargeIdentities = new Set();
+  for (const charge of facts.charges.filter(row => row.state === 'committed')) {
+    const chargeKey = `${Number(charge.run_id)}:${charge.source_identity}`;
+    if (chargeIdentities.has(chargeKey)) {
+      throw new EvaluationReaderError(`duplicate model-request charge identity ${chargeKey}`);
+    }
+    chargeIdentities.add(chargeKey);
+    if (governedChargeKeys.has(chargeKey)) continue;
       const pending = usageByRun.get(charge.run_id) || [];
       const usage = pending.shift() || null;
       const input = usage && Number.isFinite(Number(usage.input_tokens ?? usage.prompt_tokens))
         ? Number(usage.input_tokens ?? usage.prompt_tokens) : null;
       const output = usage && Number.isFinite(Number(usage.output_tokens ?? usage.completion_tokens))
         ? Number(usage.output_tokens ?? usage.completion_tokens) : null;
-      return {
-        role: plannerRunIds.has(charge.run_id) ? 'planner' : 'worker',
+      ungoverned.push({
+        role: 'worker',
         provider,
         model,
         ...(Number.isSafeInteger(input) && Number.isSafeInteger(output)
           ? { inputTokens: input, outputTokens: output }
           : { authorizedOutputTokens, boundInputTokens })
-      };
-    });
+      });
+  }
+  return Object.freeze([...governed, ...ungoverned]);
 }
 
 function durableGovernedMicroUsd(facts, arm) {

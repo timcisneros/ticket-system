@@ -27,6 +27,12 @@ const COMPLETE_VERDICT = 'LIVE CORPUS COMPLETE AND INTERNALLY CONSISTENT';
 const SYNTHETIC_ACCEPTANCE_LABEL =
   'LIVE EXECUTOR ACCEPTANCE — SYNTHETIC FINAL-TRANSPORT CAPTURE — NOT PRODUCT EVIDENCE';
 
+// REAL product evidence has its own identity. Fixture branding previously
+// leaked into real artifacts, which made a downstream scorer unable to tell the
+// two evidence classes apart without trusting directory names.
+const REAL_LIVE_ARTIFACT_LABEL =
+  'REAL LIVE PRODUCT EVIDENCE — FROZEN PROTOCOL V1';
+
 // ── ABORTED RUNS ────────────────────────────────────────────────────────────
 //
 // The identity and the predicate live in `evaluation-aborted-runs`, which has
@@ -94,13 +100,29 @@ function auditLiveCorpus({ manifest, header, outputRoot, trialIdFor }) {
   // for completeness here.
   const aborted = isAbortedRunHeader(header);
   if (aborted) {
-    // NESTED, not spread: `fail` spreads its detail, and the aborted detail
-    // carries its own `code` — which would silently replace the failure code
-    // this gate is identified by.
-    fail('LIVE_CORPUS_ABORTED_NOT_DECISION_EVIDENCE',
-      'this run is marked ABORTED — NOT DECISION EVIDENCE and may never be ' +
-      'imported into a valid corpus',
-      { aborted: abortedRunDetail(header) });
+    // RETURN BEFORE READING THE JOURNAL OR ANY OUTCOME ARTIFACT. Quarantine is
+    // an identity decision, not an aggregation result; no fact from an aborted
+    // prefix may influence compatibility logic or future score design.
+    const detail = Object.freeze(abortedRunDetail(header));
+    return Object.freeze({
+      verdict: 'LIVE CORPUS ABORTED — NOT DECISION EVIDENCE',
+      complete: false,
+      assignedCount: Array.isArray(manifest && manifest.slots)
+        ? manifest.slots.length : 0,
+      accountedForCount: 0,
+      artifactCount: 0,
+      exclusionCount: 0,
+      corpusHash: null,
+      syntheticAcceptance: header && header.syntheticAcceptance === true,
+      aborted: true,
+      abortedDetail: detail,
+      failures: Object.freeze([Object.freeze({
+        code: 'LIVE_CORPUS_ABORTED_NOT_DECISION_EVIDENCE',
+        message: 'this run is marked ABORTED — NOT DECISION EVIDENCE and may ' +
+          'never be imported into a valid corpus',
+        aborted: detail
+      })])
+    });
   }
 
   const assigned = manifest.slots;
@@ -183,6 +205,13 @@ function auditLiveCorpus({ manifest, header, outputRoot, trialIdFor }) {
     }
     if (parsed.mode !== 'live') {
       fail('FIXTURE_LIVE_MIXING', `artifact ${id} is not a live-mode artifact`, { trialId: id });
+    }
+    const expectedLabel = header.syntheticAcceptance === true
+      ? SYNTHETIC_ACCEPTANCE_LABEL : REAL_LIVE_ARTIFACT_LABEL;
+    if (parsed.label !== expectedLabel) {
+      fail('LIVE_ARTIFACT_IDENTITY_MISMATCH',
+        `artifact ${id} does not carry the expected live evidence identity`,
+        { trialId: id });
     }
     // The assigned identity must be the one that ran.
     for (const [field, expected] of [['armId', slot.armId], ['repetition', slot.repetition],
@@ -276,6 +305,7 @@ module.exports = {
   PERMANENTLY_ABORTED_RUNS,
   buildExclusionArtifact,
   LiveCorpusError,
+  REAL_LIVE_ARTIFACT_LABEL,
   SYNTHETIC_ACCEPTANCE_LABEL,
   abortedRunDetail,
   assertScorableLiveCorpus,

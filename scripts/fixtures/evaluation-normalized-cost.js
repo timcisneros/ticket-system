@@ -154,7 +154,8 @@ function buildNormalizedCost({
   truthfulCompletions,
   durableGovernedMicroUsd = null,
   releasedReservations = 0,
-  retries = 0
+  retries = 0,
+  economicCeilingMicroUsd = null
 }) {
   if (!snapshot || typeof snapshot.snapshotHash !== 'string') {
     throw new NormalizedCostError('a frozen pricing snapshot is required');
@@ -181,6 +182,13 @@ function buildNormalizedCost({
   const durable = Number.isSafeInteger(durableGovernedMicroUsd)
     ? durableGovernedMicroUsd
     : null;
+  const ceiling = Number.isSafeInteger(economicCeilingMicroUsd) &&
+    economicCeilingMicroUsd >= 0 ? economicCeilingMicroUsd : null;
+  const normalizedExceedsCeiling = ceiling === null ? null : totalMicroUsd > ceiling;
+  const durableGovernedExceedsCeiling = ceiling === null || durable === null
+    ? null : durable > ceiling;
+  const exceededCeiling = ceiling === null ? null
+    : normalizedExceedsCeiling === true || durableGovernedExceedsCeiling === true;
 
   return Object.freeze({
     pricingSnapshotHash: snapshot.snapshotHash,
@@ -197,6 +205,12 @@ function buildNormalizedCost({
     normalizedMicroUsdPerTruthfulCompletion: perTruthfulCompletion,
     unmeteredRequestCount: priced.filter(
       item => item.tokenSource === 'authorized_maximum_assumed').length,
+    capturedEconomicCeilingMicroUsd: ceiling,
+    ceilingAuthority: ceiling === null ? 'not_evaluable' : 'captured_trial_economic_ceiling',
+    normalizedExceedsCeiling,
+    durableGovernedExceedsCeiling,
+    // Tri-state by design. Missing ceiling evidence is not a clean `false`.
+    exceededCeiling,
     // Reported, never compared across arms.
     durableGovernedMicroUsd: durable,
     durableVersusNormalizedDeltaMicroUsd: durable === null

@@ -21,7 +21,8 @@ const {
 } = require('./structured-allocation-evaluation-scored-runner');
 const {
   AUTHORIZED_DIMENSIONS, ScorerError, applyFrozenDecisionRules,
-  assertCorpusIntegrity, evaluateHardDisqualifiers, scoreCorpus, scoreDimensions
+  assertCorpusIntegrity, evaluateHardDisqualifiers, evaluateLiveHardDisqualifiers,
+  evaluateLiveOrdinaryDecision, scoreCorpus, scoreDimensions
 } = require('./structured-allocation-evaluation-scorer');
 
 const manifest = require('../config/structured-allocation-evaluation-scored-v1.json');
@@ -90,6 +91,127 @@ function artifactFor(trial, overrides = {}) {
 
 function fullCorpus(overrides = () => ({})) {
   return manifest.trials.map((trial, index) => artifactFor(trial, overrides(trial, index)));
+}
+
+function liveArtifact(id, overrides = {}) {
+  const armId = overrides.armId || 'A';
+  const structured = armId === 'B' || armId === 'C';
+  const truthfulness = overrides.truthfulness || 'true_negative_completion';
+  const completed = ['true_positive_completion', 'false_positive_completion']
+    .includes(truthfulness);
+  const terminal = completed ? 'completed' : 'failed';
+  const family = overrides.family || 3;
+  const totalNormalizedMicroUsd = overrides.totalNormalizedMicroUsd ?? 100;
+  const capturedEconomicCeilingMicroUsd =
+    overrides.capturedEconomicCeilingMicroUsd ?? 1_000;
+  const artifact = {
+    trialId: id,
+    trialSlot: overrides.trialSlot || 1,
+    repetition: overrides.repetition || 1,
+    cellId: overrides.cellId || `family-${family}-${armId}-${id}`,
+    scenarioId: overrides.scenarioId || `family-${family}`,
+    variantId: overrides.variantId || null,
+    family,
+    armId,
+    truthfulness,
+    envelopeHash: overrides.envelopeHash || `envelope-${id}`,
+    ticketReport: {
+      secondReadIdentical: true,
+      productClaimsCompleted: completed,
+      terminalTicketStatus: terminal,
+      authority: {
+        ticketStatus: terminal,
+        anyRunCompleted: completed,
+        completionDecisionCount: completed ? 1 : 0,
+        completionDecidedEvents: completed ? 1 : 0
+      },
+      churn: structured ? { persistedProgressBlocks: 0, blockEvents: 0 } : null
+    },
+    pathProof: {
+      observedPath: structured ? 'structured_v2' : 'direct',
+      ticketResultStatus: terminal,
+      ticketStatus: terminal,
+      leafRunsAdmitted: structured,
+      governedLeafRunCount: structured ? 1 : 0,
+      sameParentPolicyRevision: structured ? true : null,
+      aggregateReconciliationObserved: structured,
+      aggregateReconciliationAuthority: structured
+        ? { events: 1, aggregateStatus: terminal,
+          aggregateDecisionHash: `decision-${id}` }
+        : null,
+      runCount: 1,
+      executableItemCount: structured ? 1 : 0,
+      governedLeafExecutionObserved: structured
+    },
+    latency: { endToEndMs: overrides.endToEndMs ?? (structured ? 120 : 100) },
+    normalizedCost: {
+      totalNormalizedMicroUsd,
+      capturedEconomicCeilingMicroUsd,
+      exceededCeiling: totalNormalizedMicroUsd > capturedEconomicCeilingMicroUsd
+    },
+    churnFacts: {
+      observationCompleteness: 'complete', noProgressStreak: 0,
+      worker: { attemptedTransports: 1, durableResponses: 1 }
+    }
+  };
+  const merged = { ...artifact, ...overrides };
+  // Nested evidence defaults remain intact unless a test intentionally
+  // supplies the entire nested owner.
+  if (!Object.prototype.hasOwnProperty.call(overrides, 'ticketReport')) {
+    merged.ticketReport = artifact.ticketReport;
+  }
+  if (!Object.prototype.hasOwnProperty.call(overrides, 'pathProof')) {
+    merged.pathProof = artifact.pathProof;
+  }
+  if (!Object.prototype.hasOwnProperty.call(overrides, 'normalizedCost')) {
+    merged.normalizedCost = artifact.normalizedCost;
+  }
+  if (!Object.prototype.hasOwnProperty.call(overrides, 'churnFacts')) {
+    merged.churnFacts = artifact.churnFacts;
+  }
+  return merged;
+}
+
+function byArmOf(rows) {
+  return rows.reduce((byArm, row) => {
+    (byArm[row.armId] = byArm[row.armId] || []).push(row);
+    return byArm;
+  }, {});
+}
+
+function disqualifierOf(rows, pattern) {
+  return evaluateLiveHardDisqualifiers({
+    protocol, byArm: byArmOf(rows), artifacts: rows
+  }).find(entry => pattern.test(entry.statement));
+}
+
+function decisionFamily(family, { aTrue = 5, a2True = 5, structuredTrue = 7,
+  aLatency = 100, structuredLatency = 120, aCost = 100, structuredCost = 100,
+  falsePositiveStructured = 0, cellPrefix = `family-${family}` } = {}) {
+  const rows = [];
+  const addArm = (armId, trueCount, latency, cost, falsePositive = 0) => {
+    for (let index = 0; index < 10; index += 1) {
+      const truthfulness = index < trueCount ? 'true_positive_completion'
+        : (index < trueCount + falsePositive
+            ? 'false_positive_completion' : 'true_negative_completion');
+      rows.push(liveArtifact(`${cellPrefix}-${armId}-${index}`, {
+        family, armId, truthfulness, endToEndMs: latency,
+        totalNormalizedMicroUsd: cost,
+        // One controlled row per cell keeps the repetition verdict consistent;
+        // a separate test below creates repeated disagreeing rows.
+        cellId: `${cellPrefix}-${armId}-${index}`
+      }));
+    }
+  };
+  addArm('A', aTrue, aLatency, aCost);
+  addArm('A2a', a2True, aLatency, aCost);
+  addArm('B', structuredTrue, structuredLatency, structuredCost,
+    falsePositiveStructured);
+  return rows;
+}
+
+function retainRows() {
+  return [2, 3, 5, 6].flatMap(family => decisionFamily(family));
 }
 
 function main() {
@@ -329,6 +451,227 @@ function main() {
   // ── 18. Normalized cost is the common cross-arm basis ─────────────────
   ok(Boolean(dimensions.cost.normalized) && Boolean(dimensions.cost.governedCrossCheck),
     '18 normalized cost is the basis and governed settlement is a cross-check');
+
+  // ── Live hard disqualifiers: every frozen statement has an owner ──────
+  // These rows are controlled scorer inputs, not fixture or product evidence.
+  {
+    const clean = [liveArtifact('hard-clean-a', { family: 3, armId: 'A' }),
+      liveArtifact('hard-clean-b', { family: 3, armId: 'B' })];
+    ok(disqualifierOf(clean, /false-positive completion/i).result === 'NOT TRIGGERED',
+      'live false-positive disqualifier has a clean family-level case');
+    const familyUnsafe = [
+      ...Array.from({ length: 10 }, (_, i) => liveArtifact(`fp-a2-${i}`, {
+        family: 2, armId: 'A', truthfulness: i === 0
+          ? 'false_positive_completion' : 'true_negative_completion' })),
+      ...Array.from({ length: 10 }, (_, i) => liveArtifact(`fp-b2-${i}`, {
+        family: 2, armId: 'B', truthfulness: i < 2
+          ? 'false_positive_completion' : 'true_negative_completion' })),
+      ...Array.from({ length: 10 }, (_, i) => liveArtifact(`fp-a3-${i}`, {
+        family: 3, armId: 'A', truthfulness: i < 9
+          ? 'false_positive_completion' : 'true_negative_completion' })),
+      ...Array.from({ length: 10 }, (_, i) => liveArtifact(`fp-b3-${i}`, {
+        family: 3, armId: 'B' }))
+    ];
+    const familyFalsePositive = disqualifierOf(familyUnsafe, /false-positive completion/i);
+    ok(familyFalsePositive.result === 'TRIGGERED' &&
+       familyFalsePositive.contributingFamilies.includes(2) &&
+       !familyFalsePositive.contributingFamilies.includes(3),
+    'an overall-safe aggregate cannot hide one family with a worse false-positive rate');
+    const armMasked = [
+      ...Array.from({ length: 10 }, (_, i) => liveArtifact(`fp-arm-a-${i}`, {
+        family: 3, armId: 'A', truthfulness: i === 0
+          ? 'false_positive_completion' : 'true_negative_completion' })),
+      ...Array.from({ length: 10 }, (_, i) => liveArtifact(`fp-arm-b-${i}`, {
+        family: 3, armId: 'B', truthfulness: i < 2
+          ? 'false_positive_completion' : 'true_negative_completion' })),
+      ...Array.from({ length: 30 }, (_, i) => liveArtifact(`fp-arm-c-${i}`, {
+        family: 3, armId: 'C', truthfulness: 'true_negative_completion' }))
+    ];
+    ok(disqualifierOf(armMasked, /false-positive completion/i).result === 'TRIGGERED',
+      'a clean structured arm cannot average away another structured arm that is unsafe');
+    ok(disqualifierOf([
+      liveArtifact('fp-missing-baseline', { family: 7, armId: 'B' })
+    ], /false-positive completion/i).result === 'NOT EVALUABLE',
+    'family false-positive authority is NOT EVALUABLE without arm A evidence');
+
+    ok(disqualifierOf(clean, /authority violation/i).result === 'NOT TRIGGERED',
+      'live authority disqualifier has a complete clean case');
+    const drifted = liveArtifact('authority-drift', { family: 3, armId: 'B' });
+    drifted.ticketReport = { ...drifted.ticketReport, secondReadIdentical: false };
+    ok(disqualifierOf([drifted], /authority violation/i).result === 'TRIGGERED',
+      'a cross-projection/zero-drift authority violation triggers');
+    const authorityMissing = liveArtifact('authority-missing', { family: 3, armId: 'B' });
+    authorityMissing.ticketReport = { ...authorityMissing.ticketReport, authority: null };
+    ok(disqualifierOf([authorityMissing], /authority violation/i).result === 'NOT EVALUABLE',
+      'missing canonical completion authority does not silently become clean');
+    const fabricatedCompletion = liveArtifact('authority-completion', {
+      family: 3, armId: 'B', truthfulness: 'true_positive_completion' });
+    fabricatedCompletion.ticketReport = {
+      ...fabricatedCompletion.ticketReport,
+      authority: { ...fabricatedCompletion.ticketReport.authority,
+        completionDecisionCount: 0, completionDecidedEvents: 0 }
+    };
+    ok(disqualifierOf([fabricatedCompletion], /authority violation/i).result === 'TRIGGERED',
+      'completion without its canonical decision triggers the authority disqualifier');
+
+    ok(disqualifierOf(clean, /uncontrolled cost/i).result === 'NOT TRIGGERED',
+      'captured normalized cost below its ceiling is controlled');
+    const overCost = liveArtifact('cost-over', {
+      family: 3, armId: 'B', totalNormalizedMicroUsd: 1_001,
+      capturedEconomicCeilingMicroUsd: 1_000 });
+    ok(disqualifierOf([overCost], /uncontrolled cost/i).result === 'TRIGGERED',
+      'normalized cost above the captured economic ceiling triggers');
+    const inconsistentCost = liveArtifact('cost-inconsistent', { family: 3, armId: 'B' });
+    inconsistentCost.normalizedCost = {
+      ...inconsistentCost.normalizedCost, exceededCeiling: true
+    };
+    ok(disqualifierOf([inconsistentCost], /uncontrolled cost/i).result === 'NOT EVALUABLE',
+      'an inconsistent cost/ceiling claim cannot silently become NOT TRIGGERED');
+
+    const sameRecovery = [
+      liveArtifact('recovery-same-1', { envelopeHash: 'same-recovery' }),
+      liveArtifact('recovery-same-2', { envelopeHash: 'same-recovery' })
+    ];
+    ok(disqualifierOf(sameRecovery, /non-deterministic recovery/i).result ===
+       'NOT TRIGGERED',
+    'identical durable input with identical terminal disposition is deterministic');
+    const divergentRecovery = [...sameRecovery];
+    divergentRecovery[1] = liveArtifact('recovery-different', {
+      envelopeHash: 'same-recovery', truthfulness: 'true_positive_completion' });
+    ok(disqualifierOf(divergentRecovery, /non-deterministic recovery/i).result ===
+       'TRIGGERED',
+    'identical durable input with divergent terminal dispositions triggers');
+    ok(disqualifierOf(clean, /non-deterministic recovery/i).result === 'NOT EVALUABLE',
+      'non-repeated durable inputs retain the recovery NOT EVALUABLE state');
+
+    ok(disqualifierOf(clean, /systematic churn misclassification/i).result ===
+       'NOT TRIGGERED',
+    'complete delivered-response churn evidence has a clean case');
+    const churnWrong = liveArtifact('churn-wrong', { family: 7, armId: 'B' });
+    churnWrong.churnFacts = { ...churnWrong.churnFacts,
+      noProgressStreak: 1,
+      worker: { attemptedTransports: 1, durableResponses: 0 } };
+    ok(disqualifierOf([churnWrong], /systematic churn misclassification/i).result ===
+       'TRIGGERED',
+    'an unanswered worker request attributed to model churn triggers');
+    const churnMissing = liveArtifact('churn-missing', { family: 7, armId: 'B' });
+    churnMissing.churnFacts = { ...churnMissing.churnFacts,
+      observationCompleteness: 'unavailable' };
+    ok(disqualifierOf([churnMissing], /systematic churn misclassification/i).result ===
+       'NOT EVALUABLE',
+    'missing churn-boundary evidence remains NOT EVALUABLE');
+  }
+
+  // ── Complete ordinary decision: each frozen hinge is executable ───────
+  {
+    const decide = rows => evaluateLiveOrdinaryDecision({
+      protocol, disqualifiers: [], byArm: byArmOf(rows)
+    });
+    const passing = retainRows();
+    ok(decide(passing).ordinaryDecision === 'RETAIN',
+      'the controlled all-criteria case reaches live RETAIN');
+
+    const failFamilyA = retainRows().filter(row => row.family !== 2)
+      .concat(decisionFamily(2, { structuredTrue: 5, cellPrefix: 'hinge-family-a' }));
+    ok(decide(failFamilyA).ordinaryDecision === 'REVISE' &&
+       decide(failFamilyA).requiredFamilyCriteria
+         .find(entry => entry.family === 2).gainVersusAPassed === false,
+    'per-family gain versus A is an executable RETAIN hinge');
+
+    const failFamilyA2 = retainRows().filter(row => row.family !== 2)
+      .concat(decisionFamily(2, { a2True: 8, structuredTrue: 7,
+        cellPrefix: 'hinge-family-a2' }));
+    ok(decide(failFamilyA2).ordinaryDecision === 'REVISE' &&
+       decide(failFamilyA2).requiredFamilyCriteria
+         .find(entry => entry.family === 2).gainVersusA2Passed === false,
+    'per-family gain versus A2 is an executable RETAIN hinge');
+
+    const failLatency = retainRows().filter(row => row.family !== 2)
+      .concat(decisionFamily(2, { structuredLatency: 151,
+        cellPrefix: 'hinge-latency' }));
+    ok(decide(failLatency).ordinaryDecision === 'REVISE' &&
+       decide(failLatency).requiredFamilyCriteria
+         .find(entry => entry.family === 2).latencyPassed === false,
+    'the 1.5x family latency bound is an executable RETAIN hinge');
+
+    const failCost = retainRows().filter(row => row.family !== 2)
+      .concat(decisionFamily(2, { structuredCost: 220,
+        cellPrefix: 'hinge-cost' }));
+    ok(decide(failCost).ordinaryDecision === 'REVISE' &&
+       decide(failCost).requiredFamilyCriteria
+         .find(entry => entry.family === 2).costPassed === false,
+    'the 1.5x cost-per-truthful-completion bound is an executable RETAIN hinge');
+
+    const failNoFamilyWorse = retainRows().concat(decisionFamily(4, {
+      aTrue: 8, a2True: 7, structuredTrue: 7, cellPrefix: 'hinge-no-family-worse'
+    }));
+    ok(decide(failNoFamilyWorse).ordinaryDecision === 'REVISE' &&
+       decide(failNoFamilyWorse).noFamilyWorse === false,
+    'one non-required family worse on truthfulness blocks RETAIN');
+
+    const failFalsePositive = retainRows().filter(row => row.family !== 3)
+      .concat(decisionFamily(3, { structuredTrue: 7, falsePositiveStructured: 1,
+        cellPrefix: 'hinge-false-positive' }));
+    ok(decide(failFalsePositive).ordinaryDecision === 'REVISE' &&
+       decide(failFalsePositive).falsePositiveNoWorse === false,
+    'the family false-positive comparison is also an ordinary RETAIN hinge');
+
+    const overallAHinge = retainRows();
+    for (let index = 0; index < 50; index += 1) {
+      overallAHinge.push(liveArtifact(`overall-a-A-${index}`, {
+        family: 4, armId: 'A', truthfulness: 'true_positive_completion' }));
+      overallAHinge.push(liveArtifact(`overall-a-B-${index}`, {
+        family: 4, armId: 'B', truthfulness: 'true_positive_completion' }));
+      overallAHinge.push(liveArtifact(`overall-a-A2-${index}`, {
+        family: 4, armId: 'A2a',
+        truthfulness: index < 25 ? 'true_positive_completion' : 'true_negative_completion' }));
+    }
+    const overallAResult = decide(overallAHinge);
+    ok(overallAResult.ordinaryDecision === 'REVISE' &&
+       overallAResult.overallCriteria.gainVersusA.passed === false &&
+       overallAResult.overallCriteria.gainVersusA2.passed === true,
+    'the existing overall gain-versus-A threshold is independently executable');
+
+    const overallA2Hinge = retainRows();
+    for (let index = 0; index < 200; index += 1) {
+      overallA2Hinge.push(liveArtifact(`overall-a2-A-${index}`, {
+        family: 4, armId: 'A',
+        truthfulness: index < 100 ? 'true_positive_completion' : 'true_negative_completion' }));
+      overallA2Hinge.push(liveArtifact(`overall-a2-B-${index}`, {
+        family: 4, armId: 'B', truthfulness: 'true_positive_completion' }));
+      overallA2Hinge.push(liveArtifact(`overall-a2-A2-${index}`, {
+        family: 4, armId: 'A2a', truthfulness: 'true_positive_completion' }));
+    }
+    const overallA2Result = decide(overallA2Hinge);
+    ok(overallA2Result.ordinaryDecision === 'REVISE' &&
+       overallA2Result.overallCriteria.gainVersusA.passed === true &&
+       overallA2Result.overallCriteria.gainVersusA2.passed === false,
+    'the existing overall gain-versus-A2 threshold is independently executable');
+
+    const repeated = retainRows();
+    const repeatedB = repeated.find(row => row.family === 2 && row.armId === 'B');
+    repeated.push(liveArtifact('repetition-disagreement', {
+      family: 2, armId: 'B', repetition: 2, cellId: repeatedB.cellId,
+      truthfulness: 'true_negative_completion' }));
+    const repeatedResult = decide(repeated);
+    ok(repeatedResult.ordinaryDecision === 'REVISE' &&
+       repeatedResult.requiredFamilyCriteria
+         .find(entry => entry.family === 2).evaluable === false,
+    'disagreeing repeated completion verdicts are INCONCLUSIVE, never favourable');
+
+    const noGain = [2, 3, 5, 6].flatMap(family => decisionFamily(family, {
+      structuredTrue: 5, cellPrefix: `stop-${family}`
+    }));
+    ok(decide(noGain).ordinaryDecision === 'STOP' &&
+       decide(noGain).qualifyingFamilies.length === 0,
+    'the frozen STOP hinge fires when no family gains five points within bounds');
+    ok(evaluateLiveOrdinaryDecision({
+      protocol,
+      disqualifiers: [{ statement: 'controlled veto', result: 'TRIGGERED' }],
+      byArm: byArmOf(passing)
+    }).ordinaryDecision === 'STOP',
+    'a live hard disqualifier overrides an otherwise RETAIN-worthy corpus');
+  }
 
   // ── 21. Byte-identical rescoring ──────────────────────────────────────
   const first = scoreCorpus({ manifest, header: HEADER, artifacts: corpus, protocol });

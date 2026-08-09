@@ -39,7 +39,8 @@ const {
   acceptedSlots, appendJournal, readJournal
 } = require('./fixtures/evaluation-live-run-journal');
 const {
-  SYNTHETIC_ACCEPTANCE_LABEL, assertScorableLiveCorpus, auditLiveCorpus,
+  REAL_LIVE_ARTIFACT_LABEL, SYNTHETIC_ACCEPTANCE_LABEL,
+  assertScorableLiveCorpus, auditLiveCorpus,
   buildExclusionArtifact
 } = require('./fixtures/evaluation-live-corpus-integrity');
 const { classifyLiveFailure } = require('./fixtures/evaluation-live-failure-classifier');
@@ -582,13 +583,16 @@ async function executeLiveRun({
             liveRequestControls: controls,
             liveTransportCapture: syntheticTransportCapture
               ? path.join(syntheticTransportCapture, `${id}.jsonl`) : null,
-            liveBudget,
+            liveBudget: {
+              ...liveBudget,
+              trialMaximumLiabilityMicroUsd: bound.trialWorstCaseMicroUsd
+            },
             // The reservation is already committed for this slot; runTrial must
             // not take a second one.
             liveReservationAlreadyCommitted: true,
             scoredIdentity: {
               label: header.syntheticAcceptance
-                ? SYNTHETIC_ACCEPTANCE_LABEL : SCORED_ARTIFACT_LABEL,
+                ? SYNTHETIC_ACCEPTANCE_LABEL : REAL_LIVE_ARTIFACT_LABEL,
               scoredRunHash: header.runHeaderHash,
               manifestHash: header.manifestHash,
               trialSlot: slot.slot,
@@ -618,7 +622,7 @@ async function executeLiveRun({
           if (classified.classification === 'infrastructure_exclusion') {
             const exclusion = buildExclusionArtifact({
               label: header.syntheticAcceptance
-                ? SYNTHETIC_ACCEPTANCE_LABEL : SCORED_ARTIFACT_LABEL,
+                ? SYNTHETIC_ACCEPTANCE_LABEL : REAL_LIVE_ARTIFACT_LABEL,
               trialId: id, header, slot, classified
             });
             fs.writeFileSync(path.join(outputRoot, 'exclusions', `${id}.json`),
@@ -882,6 +886,7 @@ module.exports = {
   preflightLiveRun,
   FROZEN_EXPERIMENTAL_OPTIONS,
   OPERATIONAL_OPTIONS,
+  REAL_LIVE_ARTIFACT_LABEL,
   SCORED_ARTIFACT_LABEL,
   SCORED_RUNNER_VERSION,
   ScoredRunnerError,

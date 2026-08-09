@@ -831,7 +831,9 @@ async function runTrial({
     maxOutputTokens: 2048,
     contextWindowTokens: 128000,
     runtimeLimitsHash: 'default',
-    economicCeilingMicroUsd: 1_000_000,
+    economicCeilingMicroUsd: mode === 'live'
+      ? liveBudget && liveBudget.trialMaximumLiabilityMicroUsd
+      : 1_000_000,
     retryPolicyHash: 'autoRetry:false',
     allowParallelRuns: false,
     toolCatalogHash: 'default',
@@ -1095,7 +1097,7 @@ async function runTrial({
     const before = await durableFingerprint(store, ticketId);
     const pricingInputs = {
       provider: 'openai', model: 'gpt-4o-mini-2024-07-18',
-      authorizedOutputTokens: 2048, boundInputTokens: 8000
+      authorizedOutputTokens: 2048, boundInputTokens: 128000
     };
     const firstReport = await collectTrialObservations(store, {
       ticketId, armId: arm.armId, pricingInputs });
@@ -1167,7 +1169,8 @@ async function runTrial({
       requests: firstReport.canonicalRequests,
       truthfulCompletions: truthfulness === 'true_positive_completion' ? 1 : 0,
       durableGovernedMicroUsd: firstReport.durableGovernedMicroUsd,
-      releasedReservations: firstReport.releasedReservations
+      releasedReservations: firstReport.releasedReservations,
+      economicCeilingMicroUsd: envelope.economicCeilingMicroUsd
     });
 
     const transcript = readTranscript(namespace);

@@ -89,6 +89,20 @@ async function main() {
           `${armId}: the artifact is labelled unscored`);
         assertThat(artifact.repositoryCommit === commit,
           `${armId}: the artifact records the exact repository commit`);
+        const canonicalRequests = artifact.ticketReport.canonicalRequests || [];
+        const normalized = artifact.normalizedCost;
+        assertThat(normalized && normalized.requests.length === canonicalRequests.length &&
+          normalized.plannerRequestCount + normalized.workerRequestCount ===
+            canonicalRequests.length,
+        `${armId}: normalized economics includes every canonical provider request once`);
+        if (arm.expectedPath === 'structured_v2') {
+          assertThat(normalized.plannerRequestCount === 1 &&
+            normalized.requests.filter(request => request.role === 'planner').length === 1,
+          `${armId}: normalized economics includes the planning-attempt request exactly once`);
+        } else {
+          assertThat(normalized.plannerRequestCount === 0,
+            `${armId}: an ungoverned/legacy trial invents no planner request`);
+        }
 
         // ── DURABLE PATH PROOF, not the arm label ────────────────────────
         assertThat(artifact.pathProof.authority === 'durable_state',

@@ -39,6 +39,9 @@ const {
   classifyTrialInclusion, buildTrialRecord, aggregateTicketScoped, CONTROLLED_FIELDS
 } = require('./fixtures/evaluation-trial-record');
 const { buildPricingCatalog } = require('../runtime/model-pricing-catalog');
+const {
+  deriveCanonicalRequests, deriveChurn, EvaluationReaderError
+} = require('./structured-allocation-evaluation-report');
 
 async function main() {
 let passed = 0;
@@ -328,11 +331,118 @@ const ok = (condition, message) => {
   ok(none.normalizedMicroUsdPerTruthfulCompletion === null,
     '4 cost: cost per truthful completion is null when there were none');
 
+  // The durable Ticket join. Planner requests have no Run and therefore no
+  // run-budget charge; leaf requests carry the exact logical source identity
+  // of their charge. The projection must include the first and suppress only
+  // the exact duplicate representation of the second.
+  const receipt = (role, usageSource = 'provider_reported') => ({
+    ticketId: 7, role, requestCount: 1, usageSource,
+    inputTokens: usageSource === 'provider_reported' ? 1000 : null,
+    outputTokens: usageSource === 'provider_reported' ? 500 : null,
+    authorizedOutputTokens: 2048, contextWindowTokens: 128000
+  });
+  const plannerReservation = (overrides = {}) => ({
+    id: 1, ticket_id: 7, planning_attempt_id: '11111111-1111-4111-8111-111111111111',
+    run_id: null, role: 'structured_planner', state: 'settled',
+    model_request_ordinal: 1, logical_source_identity: null,
+    settlement_receipt: receipt('structured_planner'), ...overrides
+  });
+  const leafReservation = (overrides = {}) => ({
+    id: 2, ticket_id: 7, planning_attempt_id: null, run_id: 42,
+    role: 'structured_leaf_executor', state: 'settled',
+    model_request_ordinal: 1, logical_source_identity: 'model-request:leaf:1',
+    settlement_receipt: receipt('structured_leaf_executor'), ...overrides
+  });
+  const pricingInputs = {
+    provider: 'openai', model: 'gpt-4o-mini-2024-07-18',
+    authorizedOutputTokens: 2048, boundInputTokens: 128000
+  };
+  const facts = (reservations, charges = [], usageLogs = []) => ({
+    ticket: { id: 7 }, reservations, charges, usageLogs
+  });
+  const plannerOnly = deriveCanonicalRequests(
+    facts([plannerReservation()]), pricingInputs);
+  ok(plannerOnly.length === 1 && plannerOnly[0].role === 'planner' &&
+     plannerOnly[0].inputTokens === 1000,
+  '4 cost: a metered planning-attempt reservation contributes one planner request');
+  const plannerFallback = deriveCanonicalRequests(facts([
+    plannerReservation({ settlement_receipt:
+      receipt('structured_planner', 'authorized_maximum_assumed') })
+  ]), pricingInputs);
+  ok(plannerFallback.length === 1 &&
+     plannerFallback[0].boundInputTokens === 128000 &&
+     plannerFallback[0].authorizedOutputTokens === 2048,
+  '4 cost: unmetered planner settlement carries its captured authorized maximum');
+  const both = deriveCanonicalRequests(facts([
+    plannerReservation(), leafReservation()
+  ], [{ run_id: 42, source_identity: 'model-request:leaf:1', state: 'committed' }]),
+  pricingInputs);
+  ok(both.length === 2 && both.filter(item => item.role === 'planner').length === 1 &&
+     both.filter(item => item.role === 'worker').length === 1,
+  '4 cost: planner plus leaf contributes both logical requests exactly once');
+  const manyPlanners = deriveCanonicalRequests(facts(Array.from({ length: 60 }, (_, index) =>
+    plannerReservation({
+      id: index + 1,
+      planning_attempt_id: `${String(index + 1).padStart(8, '0')}-1111-4111-8111-111111111111`
+    }))), pricingInputs);
+  ok(manyPlanners.length === 60 && manyPlanners.every(item => item.role === 'planner'),
+    '4 cost: the controlled 60-planner structural regression includes all 60');
+  assert.throws(() => deriveCanonicalRequests(facts([
+    plannerReservation({ state: 'response_persisted', settlement_receipt: null })
+  ]), pricingInputs), error => error instanceof EvaluationReaderError &&
+    /refuses to guess/.test(error.message));
+  passed += 1;
+  console.log('  ok 4 cost: incomplete planner settlement refuses rather than guessing');
+  assert.throws(() => deriveCanonicalRequests(facts([
+    plannerReservation(), plannerReservation({ id: 9 })
+  ]), pricingInputs), error => error instanceof EvaluationReaderError &&
+    /duplicate governed request identity/.test(error.message));
+  passed += 1;
+  console.log('  ok 4 cost: duplicate economic evidence cannot double count');
+  assert.throws(() => deriveCanonicalRequests(facts([
+    plannerReservation({ ticket_id: 8, settlement_receipt: {
+      ...receipt('structured_planner'), ticketId: 8 } })
+  ]), pricingInputs), error => error instanceof EvaluationReaderError &&
+    /another Ticket/.test(error.message));
+  passed += 1;
+  console.log('  ok 4 cost: another Ticket\'s planning attempt cannot enter the trial');
+
+  const bounded = buildNormalizedCost({
+    snapshot, requests: plannerOnly, truthfulCompletions: 1,
+    economicCeilingMicroUsd: 1
+  });
+  ok(bounded.exceededCeiling === true && bounded.ceilingAuthority ===
+     'captured_trial_economic_ceiling',
+  '4 cost: exceeded-ceiling authority is derived from cost and captured ceiling');
+  const noCeiling = buildNormalizedCost({
+    snapshot, requests: plannerOnly, truthfulCompletions: 1
+  });
+  ok(noCeiling.exceededCeiling === null && noCeiling.ceilingAuthority === 'not_evaluable',
+    '4 cost: absent ceiling authority is not silently reported false');
+
   assert.throws(() => assertComparablePricing([
     { pricingSnapshotHash: 'a' }, { pricingSnapshotHash: 'b' }
   ]));
   passed += 1;
   console.log('  ok 4 cost: costs priced under different snapshots may not be pooled');
+
+  const churnFacts = base => ({
+    runs: base, events: [], charges: [], reservations: [], receipts: []
+  });
+  const noBlock = deriveChurn(churnFacts([{ progress_block: null }]), ARMS.B);
+  ok(noBlock.noProgressStreak === 0 && noBlock.progressBlocks === 0,
+    '4 churn: complete governed state with no persisted block records a zero streak');
+  const blocked = deriveChurn(churnFacts([{
+    progress_block: { consecutiveNoProgressWindows: 2 }
+  }]), ARMS.B);
+  ok(blocked.noProgressStreak === 2 && blocked.progressBlocks === 1,
+    '4 churn: the cutoff-bound persisted block supplies the no-progress-window count');
+  assert.throws(() => deriveChurn(churnFacts([{
+    progress_block: { consecutiveNoProgressWindows: null }
+  }]), ARMS.B), error => error instanceof EvaluationReaderError &&
+    /lacks its no-progress-window authority/.test(error.message));
+  passed += 1;
+  console.log('  ok 4 churn: malformed persisted window authority refuses rather than becoming zero');
 }
 
 // ── 5. COMPARABILITY IS ENFORCED, NOT DOCUMENTED ───────────────────────────
