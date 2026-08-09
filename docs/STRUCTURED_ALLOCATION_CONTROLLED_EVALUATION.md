@@ -2514,3 +2514,64 @@ The detailed open defect and required next authority are recorded in
 **Tranche 6 live-model evaluation status: BLOCKED.** A separately authorized
 diagnosis and new exact-source live run are required. This aborted run can never
 become decision evidence.
+
+## 15. Authorized real-live attempt: complete execution, permanently aborted at scoring (2026-08-08)
+
+The next authorized real-live attempt ran against exact executable source
+`fd5ff21602a221dd5e769b2afe9f967a35736e56`, canonical live-manifest hash
+`792d228f939d597891da25bd4d779d76999940c2040e7e846afaf81fc35530b6`,
+and configured-agent credential authority ID 1 / revision 2 / provider
+`openai`. Its immutable run-header hash is
+`1cb2332d782b9478454d329dfd5ebd95e195acb6289ffd57b9e1255045d95022`.
+
+The authenticated preflight succeeded against
+`gpt-4o-mini-2024-07-18` and the frozen Responses controls, separately using
+20 input and 9 output tokens for 9 micro-USD. The matrix then executed all 120
+assigned slots exactly once in frozen order: 120 accepted, 0 exclusions, 0
+duplicates, 0 replacements, 0 interruptions, and 0 resumes. The canonical
+corpus gate passed with 120 artifacts and no failures. Its pre-abort integrity
+hash is
+`930e288a4b1f438c7abb5278848e67f12ead982edcbb780c93584bd5810edc3b`.
+
+The run nevertheless is permanently:
+
+> **ABORTED — NOT DECISION EVIDENCE**
+
+The first invocation of the frozen scorer failed before aggregation. The live
+manifest owns `slots`; the scorer unconditionally requires `trials`; and the
+repository has no live-manifest scoring/report adapter. The only scored report
+command loads the fixture manifest and emits fixture-branded output. Adapting
+the manifest or changing scorer/report source after real dispatch would violate
+the source freeze, so no after-the-fact projection was manufactured and no
+retry occurred.
+
+No A/A2a/A2b/B/C metric result, hard-disqualifier state, live ordinary decision,
+report hash, or final RETAIN / REVISE / STOP decision exists. The integrity hash
+above identifies the evidence at the pre-scoring gate; it does not make an
+aborted run scoreable. The immutable fixture conclusion remains
+**FIXTURE EVIDENCE SUPPORTS STOP**, and fixture/live denominators were never
+pooled.
+
+The ledger committed 18,140,952 micro-USD, exactly the canonical matrix maximum
+and 1,859,048 below the 20,000,000 micro-USD ceiling. Durable artifacts record
+561 transport invocations and 501 persisted responses. Metered usage is present
+for 233 normalized request records (434,941 input and 17,950 output tokens),
+yielding an observable actual-cost lower bound of 76,204 micro-USD. Another 268
+request records are unmetered and 60 planner transport invocations are not in
+the normalized request projection, so total actual experiment spend is
+**UNKNOWN**. The 727,176 micro-USD normalized cost is not actual billing.
+
+The read-only evidence is preserved at
+`/tmp/ticket-system-structured-evaluation-live/real-fd5ff216-qqJwYxWD`.
+The 125-file aborted bundle hash is
+`5d8d7d243df9b83f1ba986881548a1a22aa09a4c2040138d3989616225d2c343`;
+the abort-record hash is
+`77b040bbae0924a9bb379d825456adfcfb1617333cacc6740e9fa2b74a252e86`.
+The exact missing owner and required next authority are recorded in
+`docs/ARCHITECTURAL_DECISIONS_PENDING.md`.
+
+**Tranche 6 live-model evaluation status: BLOCKED.** The scoring/report harness
+must be corrected under separate authorization, then re-proved against a new
+exact source and exercised only through an entirely new live authorization.
+This completed-but-aborted corpus may never be resumed, adapted, scored, or
+imported as decision evidence.

@@ -1,3 +1,74 @@
+## TRANCHE 6 REAL-LIVE CORPUS ABORTED BY MISSING LIVE SCORER ADAPTER (2026-08-08)
+
+**Status: OPEN — source-proven scoring-harness defect. The run is permanently
+`ABORTED — NOT DECISION EVIDENCE`; do not resume, score, adapt, or import it.**
+
+The newly authorized real-live evaluation ran against exact executable source
+`fd5ff21602a221dd5e769b2afe9f967a35736e56`, canonical live-manifest hash
+`792d228f939d597891da25bd4d779d76999940c2040e7e846afaf81fc35530b6`,
+configured-agent credential authority ID 1 / revision 2 / provider `openai`,
+and immutable run-header hash
+`1cb2332d782b9478454d329dfd5ebd95e195acb6289ffd57b9e1255045d95022`.
+The minimum authenticated preflight succeeded against the exact pinned model
+and frozen Responses controls. It used 20 input and 9 output tokens and cost 9
+micro-USD; it is separate from experiment evidence.
+
+All 120 assigned slots executed once in frozen order and were accepted with
+zero infrastructure exclusions, duplicates, replacements, interruptions, or
+resumes. Before scoring, the canonical live corpus gate returned
+`LIVE CORPUS COMPLETE AND INTERNALLY CONSISTENT`: 120 accounted for, 120
+artifacts, zero failures, and pre-abort integrity hash
+`930e288a4b1f438c7abb5278848e67f12ead982edcbb780c93584bd5810edc3b`.
+
+The frozen scorer then failed before aggregation with
+`Cannot read properties of undefined (reading 'length')`. The exact
+contradiction is structural:
+
+- the canonical live manifest enumerates assigned evidence as
+  `manifest.slots`;
+- `scripts/structured-allocation-evaluation-scorer.js:assertCorpusIntegrity`
+  unconditionally reads `manifest.trials.length` and later iterates
+  `manifest.trials`;
+- the only repository-owned scored report command loads the fixture manifest
+  and emits fixture-branded reports;
+- no repository-owned live-manifest-to-scorer/report adapter exists.
+
+Creating an ad-hoc manifest projection or changing scorer/report source after
+real dispatch would violate the frozen-source contract. The run was therefore
+stopped and permanently marked `ABORTED — NOT DECISION EVIDENCE`. No five-arm
+metric table, hard-disqualifier state, live ordinary decision, report hash, or
+final RETAIN / REVISE / STOP decision was produced. The pre-abort integrity
+hash names preserved abort evidence; it is not a scoreable live result.
+
+The durable ledger committed the canonical 18,140,952 micro-USD matrix maximum,
+remaining below the absolute 20,000,000 micro-USD ceiling by 1,859,048
+micro-USD. Durable evidence records 561 production transport invocations and
+501 persisted responses. Of 501 normalized request records, 233 carry metered
+usage (434,941 input and 17,950 output tokens) with an observable actual-cost
+lower bound of 76,204 micro-USD; 268 use the authorized-maximum fallback, and
+60 additional planner transport invocations are outside the normalized request
+projection. Total actual experiment spend is therefore **UNKNOWN**. The
+727,176 micro-USD normalized scoring cost and 18,140,952 micro-USD committed
+liability are not actual billing.
+
+Preserved read-only evidence root:
+`/tmp/ticket-system-structured-evaluation-live/real-fd5ff216-qqJwYxWD`.
+Its 125-file abort bundle hash is
+`5d8d7d243df9b83f1ba986881548a1a22aa09a4c2040138d3989616225d2c343`;
+the abort-record hash is
+`77b040bbae0924a9bb379d825456adfcfb1617333cacc6740e9fa2b74a252e86`.
+
+The missing live scoring/report owner must be designed and proved under
+separate source authority. Because the defect is evaluation-source reachable,
+the correction requires a new exact-source proof and an entirely fresh live
+authorization. This 120-artifact run may never be retrofitted into product
+decision evidence. The immutable fixture conclusion remains
+**FIXTURE EVIDENCE SUPPORTS STOP**, and the earlier historical aborted run
+`b2b59ad2b9d9fafc8ac860838b0530cb8f90bc02907b36a3a230b560bece2eef`
+is unchanged.
+
+---
+
 ## TRANCHE 6 REAL-LIVE CORPUS ABORTED BY REPORT ZERO-DRIFT VIOLATION (2026-08-08)
 
 **Status: OPEN — exact causal owner not yet diagnosed. The run is permanently
