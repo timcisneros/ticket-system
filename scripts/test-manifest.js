@@ -312,6 +312,7 @@ const TESTS = Object.freeze([
   { file: "rerun-mode-evidence-test.js", status: "required" },
   { file: "resumable-execution-test.js", status: "required" },
   { file: "resume-obvious-postcondition-test.js", status: "required" },
+  { file: "rotate-session-secret-test.js", status: "required" },
   { file: "run-consequence-mutation-test.js", status: "required" },
   { file: "run-customer-support-test.js", status: "excluded", reason: "manual-demo" },
   { file: "run-decision-graph-projection-test.js", status: "required" },
