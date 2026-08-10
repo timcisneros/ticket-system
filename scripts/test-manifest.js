@@ -311,6 +311,7 @@ const TESTS = Object.freeze([
   { file: "recovery-regression-test.js", status: "required" },
   { file: "recovery-state-reconstruction-test.js", status: "required" },
   { file: "release-checkpoint-coverage-test.js", status: "required" },
+  { file: "release-checkpoint-results-test.js", status: "required" },
   { file: "renamepath-runtime-regression-test.js", status: "required" },
   { file: "replay-snapshot-storage-test.js", status: "required" },
   { file: "report-generation-test.js", status: "excluded", reason: "source-coupled-other" },

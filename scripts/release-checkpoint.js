@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 'use strict';
 
-const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const {
+  DEFAULT_RESULT_PARENT,
+  executeCheckpoint
+} = require('./release-checkpoint-results');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -119,6 +122,10 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'workspace-snapshot-availability-test.js',
   'run-evidence-drain-test.js',
   'release-checkpoint-coverage-test.js',
+  // Canonical checkpoint evidence must survive terminal/session loss. This
+  // deterministic suite drives the real recorder through pass, fail-fast,
+  // and interrupted orchestration paths.
+  'release-checkpoint-results-test.js',
   // A20 — deterministic suites that pass today and were never registered. Nothing
   // was wrong with them; nothing ran them either, which is the same gap that let the
   // cutover orphans rot unnoticed. scripts/test-manifest.js now classifies every
@@ -343,41 +350,66 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'run-mutation-evidence-test.js'
 ]);
 
-function runCheckpoint() {
-  if (!process.env.TEST_DATABASE_URL) {
+function buildCheckpointChecks() {
+  return [
+    { owner: 'check-js-syntax.js', category: 'syntax' },
+    ...CHECKPOINT_TEST_SCRIPTS.map(owner => ({ owner, category: 'deterministic' })),
+    ...POSTGRES_INTEGRATION_SCRIPTS.map(owner => ({ owner, category: 'postgres' }))
+  ].map(check => ({
+    ...check,
+    sourcePath: path.join(ROOT, 'scripts', check.owner),
+    command: process.execPath,
+    args: [path.join('scripts', check.owner)],
+    cwd: ROOT
+  }));
+}
+
+async function runCheckpoint({
+  environment = process.env,
+  resultParent = environment.RELEASE_CHECKPOINT_RESULTS_ROOT || DEFAULT_RESULT_PARENT
+} = {}) {
+  if (!environment.TEST_DATABASE_URL) {
     console.error('CHECKPOINT FAILED: TEST_DATABASE_URL is required for the Postgres release checkpoint');
-    process.exit(1);
+    return 1;
   }
   const allScripts = [...CHECKPOINT_TEST_SCRIPTS, ...POSTGRES_INTEGRATION_SCRIPTS];
   const missing = allScripts.filter(name => !fs.existsSync(path.join(ROOT, 'scripts', name)));
   if (missing.length) {
     console.error(`CHECKPOINT FAILED: missing test scripts: ${missing.join(', ')}`);
-    process.exit(1);
+    return 1;
   }
-  const checks = [
-    { label: 'project-wide JavaScript syntax', script: 'check-js-syntax.js' },
-    ...allScripts.map(script => ({ label: script, script }))
-  ];
-  const env = { ...process.env, NODE_ENV: process.env.NODE_ENV || 'test' };
   const startedAt = Date.now();
-  let passed = 0;
-  for (const check of checks) {
-    console.log(`\n$ node scripts/${check.script}`);
-    const result = spawnSync(process.execPath, [path.join('scripts', check.script)], {
-      cwd: ROOT,
-      env,
-      stdio: 'inherit'
-    });
-    if (result.error || result.status !== 0) {
-      console.error(`\nCHECKPOINT FAILED: ${check.label}${result.error ? `: ${result.error.message}` : ` (exit ${result.status})`}`);
-      console.error(`${passed}/${checks.length} checks passed before the failure.`);
-      process.exit(result.status || 1);
-    }
-    passed += 1;
+  const execution = await executeCheckpoint({
+    root: ROOT,
+    checks: buildCheckpointChecks(),
+    environment: { ...environment, NODE_ENV: environment.NODE_ENV || 'test' },
+    resultParent
+  });
+  if (execution.terminal.state === 'FAILED') {
+    console.error(`\nCHECKPOINT FAILED: ${execution.terminal.firstFailedOwner} ` +
+      `(${execution.terminal.failureResult.toLowerCase()}` +
+      `${execution.terminal.signal ? ` ${execution.terminal.signal}` : ` exit ${execution.terminal.exitCode}`})`);
+    console.error(`${execution.terminal.passedCount}/${execution.terminal.totalCount} checks passed before the failure.`);
+    console.error(`Durable checkpoint result: ${execution.runRoot}`);
+    return execution.exitCode;
   }
-  console.log(`\nRELEASE CHECKPOINT PASSED: ${passed}/${checks.length} checks in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
+  console.log(`\nRELEASE CHECKPOINT PASSED: ${execution.terminal.passedCount}/${execution.terminal.totalCount} checks in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
+  console.log(`Durable checkpoint result: ${execution.runRoot}`);
+  return 0;
 }
 
-module.exports = { CHECKPOINT_TEST_SCRIPTS, POSTGRES_INTEGRATION_SCRIPTS };
+module.exports = {
+  CHECKPOINT_TEST_SCRIPTS,
+  POSTGRES_INTEGRATION_SCRIPTS,
+  buildCheckpointChecks,
+  runCheckpoint
+};
 
-if (require.main === module) runCheckpoint();
+if (require.main === module) {
+  runCheckpoint()
+    .then(exitCode => { process.exitCode = exitCode; })
+    .catch(error => {
+      console.error(`CHECKPOINT ORCHESTRATION FAILED: ${error.message}`);
+      process.exitCode = 1;
+    });
+}
