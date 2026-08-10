@@ -30,6 +30,9 @@ const {
 } = require('./fixtures/evaluation-evidence-combination');
 const { assertCorpusIntegrity } = require('./structured-allocation-evaluation-scorer');
 const { trialIdFor } = require('./structured-allocation-evaluation-scored-runner');
+const {
+  artifactFor, rehashArtifact
+} = require('./evaluation-live-scoring-dress-rehearsal-test');
 
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config',
   'structured-allocation-evaluation-live-v3.json'), 'utf8'));
@@ -59,18 +62,12 @@ function seedCorpus(root, count, overrides = {}) {
   fs.mkdirSync(path.join(root, 'exclusions'), { recursive: true });
   for (const slot of manifest.slots.slice(0, count)) {
     const id = trialIdFor(slot);
-    fs.writeFileSync(path.join(root, 'trials', `${id}.json`), JSON.stringify({
-      scoredRunHash: HEADER.runHeaderHash,
-      manifestHash: HEADER.manifestHash,
-      sourceCommit: HEADER.repositoryCommit,
-      mode: 'live',
-      label: REAL_LIVE_ARTIFACT_LABEL,
-      armId: slot.armId,
-      repetition: slot.repetition,
-      seed: slot.stochasticIdentity,
-      ticketReport: { secondReadIdentical: true },
-      ...overrides
-    }));
+    // A corpus claimed to be complete must be made from the same controlled,
+    // five-metric artifacts used by the scoring-domain rehearsal.  The former
+    // minimal identity-only object proved disk accounting but silently fell
+    // outside the scorer domain once that domain became explicit.
+    fs.writeFileSync(path.join(root, 'trials', `${id}.json`), JSON.stringify(
+      rehashArtifact({ ...artifactFor(slot, HEADER), ...overrides })));
     appendJournal(root, { ...bind, event: 'reservation_committed', trialId: id, slotOrdinal: slot.slot });
     appendJournal(root, { ...bind, event: 'trial_started', trialId: id, slotOrdinal: slot.slot });
     appendJournal(root, { ...bind, event: 'artifact_committed', trialId: id, slotOrdinal: slot.slot });
