@@ -283,12 +283,46 @@ function rebuildTicketProjection(ticketEvents, allEvents) {
     }
   }
 
-  // Derive ticket status from run outcomes
+  // Current authority: the kernel-owned Ticket-attempt events. Run topology is
+  // retained below only to reconstruct event logs that predate explicit attempt
+  // authority; it is not used when any current attempt event exists.
+  const attemptEvents = ticketEvents.filter(event =>
+    event.type === 'ticket.attempt_admitted' ||
+    event.type === 'ticket.attempt_settled');
+  const latestAttemptOrdinal = attemptEvents.reduce((maximum, event) => {
+    const ordinal = Number(event.payload && event.payload.ticketAttemptOrdinal);
+    return Number.isSafeInteger(ordinal) && ordinal > maximum ? ordinal : maximum;
+  }, 0);
+  const latestAttemptSettlement = attemptEvents
+    .filter(event => event.type === 'ticket.attempt_settled' &&
+      Number(event.payload && event.payload.ticketAttemptOrdinal) === latestAttemptOrdinal)
+    .at(-1) || null;
+
+  // Derive ticket status from generic attempt disposition when available.
   let derivedStatus = 'open';
   let failureState = null;
   let interruptionState = null;
 
-  if (hasFailedRun) {
+  if (latestAttemptOrdinal > 0 && !latestAttemptSettlement) {
+    derivedStatus = 'in_progress';
+  } else if (latestAttemptSettlement) {
+    const disposition = latestAttemptSettlement.payload &&
+      latestAttemptSettlement.payload.ticketAttemptDisposition;
+    if (disposition === 'completed') derivedStatus = 'completed';
+    else if (disposition === 'failed') {
+      derivedStatus = 'failed';
+      failureState = 'failed';
+    } else if (disposition === 'blocked') {
+      derivedStatus = 'blocked';
+      failureState = 'blocked';
+    } else if (disposition === 'interrupted') {
+      derivedStatus = 'open';
+      interruptionState = 'interrupted';
+    } else {
+      throw new Error(`Ticket ${ticketId} has an invalid attempt disposition`);
+    }
+  } else if (hasFailedRun) {
+    // Historical pre-attempt event compatibility only.
     derivedStatus = 'failed';
     failureState = 'failed';
   } else if (latestRunTerminalStatus === 'interrupted') {

@@ -95,6 +95,11 @@ async function main() {
           leaseExpiresAt: new Date(Date.now() + 3600000).toISOString()
         } : {})
       });
+      return driveRun(created, toStatus, { terminalized, error });
+    }
+
+    async function driveRun(created, toStatus, { terminalized = true, error = null } = {}) {
+      const ticketId = created.ticketId;
       if (toStatus === 'pending') return store.getRun(created.id);
 
       const claim = await store.claimPendingRun({
@@ -151,9 +156,24 @@ async function main() {
     // ordering is the whole point: with a pending latest run the healer would stop at
     // its terminal-status branch and the in-flight guard would never be reached, so
     // the control would prove nothing. Here only the guard stands in the way.
-    const inFlightTicket = await makeTicket('in-flight');
-    const inFlightPending = await makeRun(inFlightTicket.id, 'pending', { held: true });
-    const inFlightDone = await makeRun(inFlightTicket.id, 'completed');
+    const inFlightTicket = await makeTicket('in-flight', 'open');
+    const inFlightAttempt = await store.createRunsAndStartTicket({
+      ticketId: inFlightTicket.id,
+      runDrafts: [
+        { ticketId: inFlightTicket.id, agentId: agent.id, agentName: agent.name,
+          runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
+          executionPolicySnapshot: { requireVerification: 'never' }, status: 'pending' },
+        { ticketId: inFlightTicket.id, agentId: agent.id, agentName: agent.name,
+          runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
+          executionPolicySnapshot: { requireVerification: 'never' }, status: 'pending' }
+      ]
+    });
+    const inFlightPending = (await store.claimPendingRun({
+      leaseOwner: 'startup-convergence-holder',
+      leaseDurationMs: 3_600_000,
+      eligibleRunIds: [inFlightAttempt.runs[0].id]
+    })).run;
+    const inFlightDone = await driveRun(inFlightAttempt.runs[1], 'completed');
 
     // NEGATIVE CONTROL: in_progress with no runs at all — no evidence to act on.
     const noRunTicket = await makeTicket('no-runs');

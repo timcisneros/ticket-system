@@ -6787,20 +6787,6 @@ async function releaseRunLease(runId, payload = {}) {
   return released ? released.run : null;
 }
 
-function countRunRetryAttempts(run, suppliedRuns = null) {
-  if (!run) return 0;
-  const runCreatedAt = run.createdAt ? Date.parse(run.createdAt) : null;
-
-  const runs = Array.isArray(suppliedRuns) ? suppliedRuns : [];
-  return runs.filter(item => {
-    if (item.id === run.id || item.ticketId !== run.ticketId) return false;
-    if (runCreatedAt === null || Number.isNaN(runCreatedAt)) return item.id < run.id;
-    const itemCreatedAt = item.createdAt ? Date.parse(item.createdAt) : null;
-    if (itemCreatedAt === null || Number.isNaN(itemCreatedAt)) return item.id < run.id;
-    return itemCreatedAt < runCreatedAt;
-  }).length;
-}
-
 function projectRunEvaluationOperationCounts(runId, evaluation, operations) {
   if (!evaluation || typeof evaluation !== 'object' || !Array.isArray(operations)) return evaluation;
   // Historical evaluations may carry aggregate counts without retained generic
@@ -6956,7 +6942,7 @@ function buildRunEvaluation(run, {
       mutationCount,
       retryCount: suppliedAttemptPosition && Number.isSafeInteger(suppliedAttemptPosition.attemptNumber)
         ? Math.max(0, suppliedAttemptPosition.attemptNumber - 1)
-        : countRunRetryAttempts(run, suppliedTicketRuns)
+        : null
     },
     violations: {
       status: violationStatus,
@@ -7107,21 +7093,15 @@ function makeUnavailableBrowserReport() {
 function buildRunAttemptUsage(run, ticketRuns = null, suppliedEvents = null, suppliedAttemptPosition = null) {
   if (!run) return null;
 
-  // Attempt ordering is creation order; run ids are globally monotonic via
-  // nextId(), so id-ascending within a ticket is a stable attempt sequence.
-  let attemptCount;
-  let attemptNumber;
-  if (suppliedAttemptPosition) {
-    attemptCount = suppliedAttemptPosition.attemptCount;
-    attemptNumber = suppliedAttemptPosition.attemptNumber;
-  } else {
-    const siblings = (Array.isArray(ticketRuns) ? ticketRuns : [])
-      .slice()
-      .sort((a, b) => (a.id || 0) - (b.id || 0));
-    attemptCount = siblings.length;
-    const index = siblings.findIndex(item => item.id === run.id);
-    attemptNumber = index >= 0 ? index + 1 : null;
-  }
+  // Attempt identity and ordering come only from kernel-owned Ticket-attempt
+  // rows. Missing authority is reported as unavailable; Run IDs/timestamps are
+  // never used as a compatibility guess.
+  const attemptCount = suppliedAttemptPosition
+    ? suppliedAttemptPosition.attemptCount
+    : null;
+  const attemptNumber = suppliedAttemptPosition
+    ? suppliedAttemptPosition.attemptNumber
+    : null;
 
   const isTerminal = ['completed', 'failed', 'interrupted'].includes(run.status);
   // Only trust usage counts once there is terminal evidence (persisted evaluation
@@ -7220,13 +7200,21 @@ function buildRunRuntimeLimitsDisplay(run, snapshot, attemptUsage) {
 }
 
 // Per-ticket attempt roll-up for the ticket detail view. Derived only.
-function buildTicketAttemptSummary(ticketRuns) {
+function buildTicketAttemptSummary(ticketRuns, attemptPositions = []) {
   const runs = (Array.isArray(ticketRuns) ? ticketRuns : [])
     .slice()
     .sort((a, b) => (a.id || 0) - (b.id || 0));
+  const positionByRunId = new Map(
+    (Array.isArray(attemptPositions) ? attemptPositions : [])
+      .map(position => [position.runId, position])
+  );
+  const knownCounts = [...positionByRunId.values()].map(position => position.attemptCount);
   return {
-    attemptCount: runs.length,
-    attempts: runs.map(run => ({ runId: run.id, ...buildRunAttemptUsage(run, runs) }))
+    attemptCount: knownCounts.length > 0 ? Math.max(...knownCounts) : 0,
+    attempts: runs.map(run => ({
+      runId: run.id,
+      ...buildRunAttemptUsage(run, null, null, positionByRunId.get(run.id) || null)
+    }))
   };
 }
 
@@ -8686,6 +8674,12 @@ async function serializeTicketRuntimeState(ticketId) {
   const latestRun = ticketRuns[0] || null;
   const visibleRun = currentRun || latestRun;
   const visibleRuns = [...new Map([currentRun, latestRun].filter(Boolean).map(run => [run.id, run])).values()];
+  const visibleAttemptPositions = visibleRuns.length > 0
+    ? await repository.getRunAttemptPositions({ runIds: visibleRuns.map(run => run.id) })
+    : [];
+  const visibleAttemptPositionByRunId = new Map(
+    visibleAttemptPositions.map(position => [position.runId, position])
+  );
   const visibleLogs = visibleRuns.length > 0
     ? await getDiagnosticLogRepository().listLogsForRuns({ runIds: visibleRuns.map(run => run.id), limitPerRun: 25 })
     : [];
@@ -8757,13 +8751,13 @@ async function serializeTicketRuntimeState(ticketId) {
       eventSummary: summaryByRunId.get(currentRun.id),
       events: eventsByRunId.get(currentRun.id),
       operations: operationsByRunId.get(currentRun.id),
-      ticketRuns
+      attemptPosition: visibleAttemptPositionByRunId.get(currentRun.id) || null
     }) : null,
     latestRun: latestRun ? serializeRunRuntimeState(latestRun, logsByRunId, {
       eventSummary: summaryByRunId.get(latestRun.id),
       events: eventsByRunId.get(latestRun.id),
       operations: operationsByRunId.get(latestRun.id),
-      ticketRuns
+      attemptPosition: visibleAttemptPositionByRunId.get(latestRun.id) || null
     }) : null,
     currentMessage: visibleRun ? getRunCurrentMessage(visibleRun, logsByRunId, eventSummary) : null,
     currentStep: eventSummary ? eventSummary.currentStep : null,
@@ -9124,6 +9118,9 @@ async function buildTicketTimeline(ticketId) {
         : {})
     };
   }));
+  const attemptPositions = runs.length > 0
+    ? await repository.getRunAttemptPositions({ runIds: runs.map(run => run.id) })
+    : [];
   const runIds = new Set(runs.map(run => run.id));
   const events = (await readAllTicketEvents(parsedTicketId))
     .slice()
@@ -9312,7 +9309,9 @@ async function buildTicketTimeline(ticketId) {
     });
   }
 
-  const runAttemptById = new Map(runs.map((run, index) => [run.id, index + 1]));
+  const runAttemptById = new Map(
+    attemptPositions.map(position => [position.runId, position.attemptNumber])
+  );
   for (const run of runs) {
     const runEvents = events.filter(event => event.runId === run.id);
     if (!runEvents.some(event => event.type === 'run.created')) {
@@ -13863,6 +13862,8 @@ async function commitRunTerminalization(run, {
   // Execution objects can predate later replay-metadata and heartbeat writes.
   // Reload through the selected authority before preparing the terminal bundle.
   run = await getRunLeaseRepository().getRun(run.id) || run;
+  const attemptPosition = (await getRuntimeStateReadRepository()
+    .getRunAttemptPositions({ runIds: [run.id] }))[0] || null;
   const completedAt = new Date().toISOString();
   const finalized = await buildFinalizedRunReplayState(
     run,
@@ -13945,7 +13946,8 @@ async function commitRunTerminalization(run, {
       return buildRunEvaluation(projectedRun, {
         snapshot: finalized.snapshot,
         events: projectedEvents,
-        operations: context.operations || []
+        operations: context.operations || [],
+        attemptPosition
       });
     },
     consequence: context => {
@@ -15156,39 +15158,20 @@ async function validateManualTicketCompletion(ticket) {
     return { allowed: false, reason: 'Ticket cannot be completed while ticket-level triage is required.' };
   }
 
-  const latestStoredRun = (await readLatestRunsForTickets([ticket.id]))[0] || null;
-  const latestRun = await hydrateRunReplaySnapshot(latestStoredRun);
-  if (!latestRun) {
+  const currentAttempt = await getRuntimeStateReadRepository()
+    .getCurrentTicketAttempt(ticket.id);
+  if (!currentAttempt) {
     return { allowed: false, reason: 'Ticket cannot be completed without supporting runtime evidence.' };
   }
-  if (latestRun.status !== 'completed') {
-    return { allowed: false, reason: `Ticket cannot be completed because the latest run is ${latestRun.status}.` };
-  }
-  if (latestRun.triage && latestRun.triage.required) {
-    return { allowed: false, reason: 'Ticket cannot be completed while the latest run requires triage.' };
-  }
-
-  const objectiveSuccess = buildObjectiveSuccess(latestRun);
-  const hasCompletionDecision = Boolean(
-    latestRun.runConsequence && latestRun.runConsequence.completionDecision
-  );
-  // Option A: completion means execution reached a valid terminal completion state.
-  // When declared verification applies to this run, completion still requires a
-  // passing verdict (verified). When no verification was required for the run
-  // (e.g. a postcondition-free direct or branch run), operational completion is a
-  // legitimate completed-but-unverified state and may be completed manually,
-  // unless the run's objective success is explicitly failed.
-  if (isRunVerificationRequired(latestRun)) {
-    if (!objectiveSuccess.scored || objectiveSuccess.status !== 'succeeded') {
-      return { allowed: false, reason: 'Ticket cannot be completed because the latest run has no verified objective-success evidence.' };
-    }
-  } else if (hasCompletionDecision && objectiveSuccess.status !== 'succeeded') {
-    return { allowed: false, reason: 'Ticket cannot be completed because the canonical completion decision did not establish objective completion.' };
-  } else if (objectiveSuccess.status === 'failed') {
-    return { allowed: false, reason: 'Ticket cannot be completed because the latest run did not reach objective success.' };
+  if (currentAttempt.disposition !== 'completed') {
+    const state = currentAttempt.disposition || 'unsettled';
+    return {
+      allowed: false,
+      reason: `Ticket cannot be completed because its current attempt is ${state}.`
+    };
   }
 
-  return { allowed: true, latestRun, objectiveSuccess };
+  return { allowed: true, currentAttempt };
 }
 
 // Serialize lifecycle transitions per ticket while allowing unrelated tickets
@@ -15243,6 +15226,8 @@ function mergeRunEvidenceEvents(...groups) {
 
 async function reconcileTerminalRunUnlocked(run) {
   const runId = run.id;
+  const attemptPosition = (await getRuntimeStateReadRepository()
+    .getRunAttemptPositions({ runIds: [runId] }))[0] || null;
   const [events, operations] = await Promise.all([
     readAllRunScopedEvents(runId),
     readAllRunOperations(runId)
@@ -15418,7 +15403,8 @@ async function reconcileTerminalRunUnlocked(run) {
         snapshot: context.replaySnapshot,
         events: evaluationEvents,
         logs: [],
-        operations: context.operations || []
+        operations: context.operations || [],
+        attemptPosition
       });
     },
     consequence: context => {
@@ -15596,7 +15582,7 @@ async function validateManualRerun(ticket) {
     (Number.isInteger(runtimeLimits.maxAttempts) ? runtimeLimits.maxAttempts : null) ||
     getDeploymentRuntimeDefaults().maxAttempts;
 
-  const attemptCount = countTicketAdmissionAttempts(await readAllRunsForTicket(ticket.id));
+  const attemptCount = await getRuntimeStateReadRepository().countTicketAttempts(ticket.id);
   if (attemptCount >= maxAttempts) {
     return {
       allowed: false,
@@ -15658,7 +15644,7 @@ async function assessAutoRetryAfterFailureIfPolicyAllows(failedRun, failure, mut
   }
 
   // The just-failed run is already counted; require room under the ceiling.
-  const attemptCount = countTicketAdmissionAttempts(await readAllRunsForTicket(ticket.id));
+  const attemptCount = await getRuntimeStateReadRepository().countTicketAttempts(ticket.id);
   if (attemptCount >= maxAttempts) return { eligible: false, reason: 'max_attempts_exhausted' };
   return { eligible: true, ticketId: ticket.id, attemptCount, maxAttempts, reasonCode: prospectiveReasonCode };
 }
@@ -15887,32 +15873,39 @@ async function reconcileUnfinalizedTicketsOnStartup() {
   let finalizedCount = 0;
 
   for (const ticket of tickets) {
+    const currentAttempt = await getRuntimeStateReadRepository()
+      .getCurrentTicketAttempt(ticket.id);
+    if (!currentAttempt || currentAttempt.disposition !== null) continue;
     const ticketRuns = await readAllRunsForTicket(ticket.id);
-    if (ticketRuns.length === 0) continue;
+    const attemptRuns = ticketRuns.filter(run =>
+      run.ticketAttemptId === currentAttempt.id);
+    if (attemptRuns.length !== currentAttempt.memberCount) continue;
     // Never finalize while execution could still be in flight.
-    if (ticketRuns.some(run => ['pending', 'running'].includes(run.status))) continue;
+    if (attemptRuns.some(run => ['pending', 'running'].includes(run.status))) continue;
 
-    const latestRun = ticketRuns.slice().sort(compareRunsNewestFirst)[0];
-    if (!latestRun) continue;
-    // Only heal genuinely terminalized runs — run.terminalized is emitted after
-    // verification has already passed/failed, so latestRun.status is trustworthy.
-    const events = await readAllRunScopedEvents(latestRun.id);
-    if (!events.some(event => event.type === 'run.terminalized')) continue;
-
-    let updated = null;
-    if (latestRun.status === 'completed' || latestRun.status === 'failed') {
-      updated = await finalizeTicketForRun(latestRun, latestRun.status);
-    } else if (latestRun.status === 'interrupted') {
-      updated = await updateTicketAfterRunInterrupted(latestRun);
-    } else {
-      continue;
+    // Every exact member must have reached the durable terminal boundary. A
+    // latest-Run shortcut would reintroduce topology-dependent membership.
+    let terminalEvidenceComplete = true;
+    for (const member of attemptRuns) {
+      const events = await readAllRunScopedEvents(member.id);
+      if (!events.some(event => event.type === 'run.terminalized')) {
+        terminalEvidenceComplete = false;
+        break;
+      }
     }
+    if (!terminalEvidenceComplete) continue;
+
+    const routeRun = attemptRuns[0];
+    const result = await getTicketRunLifecycleRepository()
+      .transitionTicketAfterRun({ runId: routeRun.id });
+    if (result && result.changed) broadcastTicketChange();
+    const updated = result ? result.ticket : null;
 
     if (updated && updated.status !== 'in_progress') {
       finalizedCount++;
-      appendRunLog(latestRun, 'run:ticket_finalized',
-        `Startup: finalized stuck ticket #${ticket.id} from 'in_progress' to '${updated.status}' from terminal run ${latestRun.id}`);
-      await settleTerminalRunEvidence(latestRun);
+      appendRunLog(routeRun, 'run:ticket_finalized',
+        `Startup: finalized stuck ticket #${ticket.id} from 'in_progress' to '${updated.status}' from attempt ${currentAttempt.ordinal}`);
+      for (const member of attemptRuns) await settleTerminalRunEvidence(member);
     }
   }
 
@@ -15981,6 +15974,11 @@ async function failAgentRunUnlocked(run, error, workspaceAction = null) {
       payload: { triage }
     }] : []
   });
+  // Retry admission is a NEW Ticket attempt. Settle and project the failed
+  // predecessor attempt first; createRetryRun may then reopen that settled
+  // Ticket and atomically admit the successor. A resume path never comes here
+  // and retains the original Run/attempt identity.
+  await finalizeTicketForRun(failedRun, 'failed');
   const autoRetry = await runAutoRetryAfterFailureIfPolicyAllows(failedRun, autoRetryAssessment);
   if (autoRetryAssessment.eligible && !autoRetry.retried) {
     triage = await buildRunTriage(failedRun, {
@@ -15998,11 +15996,6 @@ async function failAgentRunUnlocked(run, error, workspaceAction = null) {
     failure,
     ...(autoRetry.retried ? { autoRetryRunId: autoRetry.newRun.id } : {})
   });
-  // When auto-retry created a new pending run it already reopened the ticket; do not
-  // finalize the ticket as failed in that case.
-  if (!autoRetry.retried) {
-    await finalizeTicketForRun(failedRun, 'failed');
-  }
   return failedRun;
 }
 
@@ -16332,18 +16325,6 @@ async function buildOperationalSummary(options = {}) {
   };
 }
 
-function countTicketAdmissionAttempts(runs) {
-  const attemptKeys = new Set();
-  for (const run of Array.isArray(runs) ? runs : []) {
-    const allocationPlanId = run && run.allocationPlanId;
-    attemptKeys.add(allocationPlanId === null || allocationPlanId === undefined ||
-      String(allocationPlanId).trim() === ''
-      ? `run:${run.id}`
-      : `allocation:${String(allocationPlanId).trim()}`);
-  }
-  return attemptKeys.size;
-}
-
 async function prepareAgentRunDraft(ticket, agent, allocationItem = null, allocationPlanId = null, delegated = null, options = {}) {
   const runs = await readAllRunsForTicket(ticket.id);
   const activeRun = runs.find(run =>
@@ -16424,7 +16405,8 @@ async function prepareAgentRunDraft(ticket, agent, allocationItem = null, alloca
     },
     executionPolicy: executionPolicySnapshot
   });
-  const admittedAttemptCount = countTicketAdmissionAttempts(runs);
+  const admittedAttemptCount = await getRuntimeStateReadRepository()
+    .countTicketAttempts(ticket.id);
   if (admittedAttemptCount >= runtimeBudgetSnapshot.maxAttempts) {
     const error = new Error(
       `Run attempt budget exhausted: ticket ${ticket.id} already has ${admittedAttemptCount} ` +
@@ -26632,6 +26614,9 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     readAllChildTickets(ticketId)
   ]);
   const ticketRuns = await hydrateRunReplaySnapshots(enrichTicketRuns(rawTicketRuns, operationHistory, agents));
+  const ticketAttemptPositions = ticketRuns.length > 0
+    ? await repository.getRunAttemptPositions({ runIds: ticketRuns.map(run => run.id) })
+    : [];
   ticketRuns.forEach(item => {
     const declaredWork = projectDeclaredWorkForRun(item);
     item.declaredWorkSnapshot = declaredWork.snapshot;
@@ -26735,7 +26720,7 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     runStateInconsistency,
     executionState,
     reviewStatus,
-    attemptSummary: buildTicketAttemptSummary(ticketRuns),
+    attemptSummary: buildTicketAttemptSummary(ticketRuns, ticketAttemptPositions),
     budgetSummary: buildTicketBudgetSummary(ticketRuns),
     timeline,
     latestTriage: latestRuntimeRun ? normalizeTriage(latestRuntimeRun.triage) : null,
@@ -29151,6 +29136,8 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     collectDiagnosticLogPages({ runId }),
     postgresRuntimeStore.listProcessOperationsForRun(runId)
   ]);
+  const runAttemptPosition = (await getRuntimeStateReadRepository()
+    .getRunAttemptPositions({ runIds: [run.id] }))[0] || null;
   const processSupervision = await readRunProcessSupervision(run, {
     events: runEvents,
     receipts: runOperations,
@@ -29237,7 +29224,12 @@ fastify.get('/runs/:id', { preHandler: fastify.requireAuth }, async (request, re
     }));
 
   const diagnosticsGeneratedAt = new Date().toISOString();
-  const runDetailAttemptUsage = buildRunAttemptUsage(run, ticketRuns, runEvents);
+  const runDetailAttemptUsage = buildRunAttemptUsage(
+    run,
+    null,
+    runEvents,
+    runAttemptPosition
+  );
   const runtimeLimitsDisplay = buildRunRuntimeLimitsDisplay(run, snapshot, runDetailAttemptUsage, ticket && ticket.objective);
   const routingDisplay = buildRoutingDisplay(run, snapshot);
   const recentRunLogs = await getRecentLogsForRun(runId);
@@ -29384,7 +29376,8 @@ fastify.get('/api/runs/:id/state', { preHandler: fastify.requireAuth }, async (r
     operations,
     ticketRuns,
     runtimeBudgetState,
-    processOperations
+    processOperations,
+    attemptPositions
   ] = await Promise.all([
     readAllRunTimelineEvents(runId),
     readAllRunOperations(runId),
@@ -29392,7 +29385,8 @@ fastify.get('/api/runs/:id/state', { preHandler: fastify.requireAuth }, async (r
     getRunRuntimeBudgetSnapshot(run)
       ? postgresRuntimeStore.getRunBudgetState(run.id)
       : Promise.resolve(null),
-    postgresRuntimeStore.listProcessOperationsForRun(runId)
+    postgresRuntimeStore.listProcessOperationsForRun(runId),
+    getRuntimeStateReadRepository().getRunAttemptPositions({ runIds: [runId] })
   ]);
   const processSupervision = await readRunProcessSupervision(run, {
     events,
@@ -29402,7 +29396,7 @@ fastify.get('/api/runs/:id/state', { preHandler: fastify.requireAuth }, async (r
   return serializeRunRuntimeState(run, null, {
     events,
     operations,
-    ticketRuns,
+    attemptPosition: attemptPositions[0] || null,
     runtimeBudgetState,
     processSupervision,
     eventSummary: (await recentEventSummary(runId, events))

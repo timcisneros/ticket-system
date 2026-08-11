@@ -22,9 +22,8 @@
 //
 // ATTEMPT SEMANTICS, STATED RATHER THAN ASSUMED. `maxAttempts` bounds TOTAL
 // admitted attempts, not retries — the initial execution is attempt 1. An
-// attempt is counted per allocation plan when the Run carries one, and per Run
-// otherwise, so a multi-Run allocation batch is ONE attempt. Both rules are
-// asserted below rather than left to a reader of the comparison.
+// attempt is one kernel-owned atomic admission wave, whether that wave contains
+// one Run or many. Allocation topology is not attempt identity.
 
 const assert = require('node:assert/strict');
 const { withHarness } = require('./postgres-test-harness');
@@ -95,9 +94,10 @@ async function main() {
     // that has nothing to do with the ceiling.
     const terminalizePredecessors = async ticketId => {
       const runs = (await store.listRunsForTicket({ ticketId, limit: 50 })).runs;
+      let routeRun = null;
       for (const run of runs) {
         if (!['pending', 'running'].includes(run.status)) continue;
-        await store.transitionRun({
+        const transitioned = await store.transitionRun({
           runId: run.id,
           expectedRevision: run.revision,
           fromStatuses: [run.status],
@@ -105,7 +105,9 @@ async function main() {
           eventType: 'run.execution_failed',
           eventPayload: { source: ACTOR }
         });
+        routeRun = transitioned.run;
       }
+      if (routeRun) await store.transitionTicketAfterRun({ runId: routeRun.id });
     };
     const reopenIfNeeded = async ticketId => {
       const ticket = await store.getTicket(ticketId);
@@ -131,12 +133,7 @@ async function main() {
       return error;
     };
 
-    const attemptsOf = async ticketId => Number((await store.pool.query(
-      `SELECT COUNT(DISTINCT CASE
-         WHEN NULLIF(body->>'allocationPlanId', '') IS NOT NULL
-           THEN 'allocation:' || (body->>'allocationPlanId')
-         ELSE 'run:' || id::text END)::bigint AS count
-       FROM ${store.table('runs')} WHERE ticket_id = $1`, [ticketId])).rows[0].count);
+    const attemptsOf = async ticketId => store.countTicketAttempts(ticketId);
 
     const runCount = async ticketId => Number((await store.pool.query(
       `SELECT count(*) AS n FROM ${store.table('runs')} WHERE ticket_id = $1`,
@@ -204,17 +201,19 @@ async function main() {
         'and the count is unchanged by the refusal');
     }
 
-    // ── A BATCH MAY NOT STRADDLE THE CEILING ───────────────────────────────
+    // ── ONE ATOMIC MULTI-RUN BATCH IS ONE ATTEMPT ─────────────────────────
     {
       const ticket = await makeTicket('ceiling batch');
       await admit(ticket.id, 2);
-      await refused(admitBatch(ticket.id, [draft(ticket.id, 2), draft(ticket.id, 2)]),
-        'a batch requesting more attempts than remain');
-      ok(await attemptsOf(ticket.id) === 1,
-        'the whole batch is refused atomically, admitting none of it');
+      await admitBatch(ticket.id, [draft(ticket.id, 2), draft(ticket.id, 2)]);
+      ok(await runCount(ticket.id) === 3,
+        'the second attempt may contain two atomically admitted Runs');
+      ok(await attemptsOf(ticket.id) === 2,
+        'the multi-Run batch consumes exactly one remaining attempt');
+      await refused(admit(ticket.id, 2), 'the next batch at the ceiling');
     }
 
-    // ── ONE ALLOCATION PLAN IS ONE ATTEMPT ─────────────────────────────────
+    // ── TOPOLOGY DOES NOT DEFINE ATTEMPT IDENTITY ───────────────────────────
     //
     // Sibling Runs of one structured attempt must not each consume the ceiling,
     // or a two-leaf plan would exhaust a ceiling of 2 on its first execution.
@@ -226,7 +225,7 @@ async function main() {
       ]);
       ok(await runCount(ticket.id) === 2, 'two sibling Runs exist');
       ok(await attemptsOf(ticket.id) === 1,
-        'but they are ONE attempt, because they share one allocation plan');
+        'but they are ONE attempt because they were admitted atomically');
       await admitBatch(ticket.id, [draft(ticket.id, 2, { allocationPlanId: 'plan-two' })]);
       ok(await attemptsOf(ticket.id) === 2, 'a second plan is a second attempt');
       await refused(admitBatch(ticket.id, [draft(ticket.id, 2, { allocationPlanId: 'plan-three' })]),
