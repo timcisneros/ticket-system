@@ -30,7 +30,7 @@ const CONTRACTS = Object.freeze({
   workspaceOwnership: ['findMutationConflict', 'listArtifactOwners'],
   operatorRecovery: ['getOperatorRecovery', 'prepareOperatorRecovery', 'completeOperatorRecovery', 'withOperatorRecoveryLock'],
   runReplay: ['initializeRunReplay', 'readRunReplay', 'listRunReplays', 'updateRunReplay'],
-  runtimeStateRead: ['getTicket', 'getRun', 'listTickets', 'listTicketPage', 'countTicketsByStatus', 'listRuns', 'listRunsForTicket', 'listRunsForTickets', 'listLatestRunsForTickets', 'getRunAttemptPositions', 'listChildTickets', 'listRunsNeedingTerminalReconciliation', 'listRunEvents', 'listRunTimelineEvents', 'listTicketEvents', 'getRunEvaluation', 'getRunConsequence', 'listRunOperations', 'listTicketOperations', 'countRunMutations'],
+  runtimeStateRead: ['getTicket', 'getRun', 'getTicketAttempt', 'getCurrentTicketAttempt', 'listTicketAttempts', 'countTicketAttempts', 'listTickets', 'listTicketPage', 'countTicketsByStatus', 'listRuns', 'listRunsForTicket', 'listRunsForTickets', 'listLatestRunsForTickets', 'getRunAttemptPositions', 'listChildTickets', 'listRunsNeedingTerminalReconciliation', 'listRunEvents', 'listRunTimelineEvents', 'listTicketEvents', 'getRunEvaluation', 'getRunConsequence', 'listRunOperations', 'listTicketOperations', 'countRunMutations'],
   runRecovery: ['listRecoverableRuns', 'claimRunRecovery', 'resumeRecoveredRun', 'repairRecoveredRunTerminalProjection'],
   runtimeBootstrap: ['acquireRuntimeAuthority', 'prepareRuntimePersistence', 'refreshRuntimeAuthority', 'releaseRuntimeAuthority', 'getMigrationStatus'],
   triage: ['createRunTriage', 'resolveTicketTriage', 'resolveRunTriage', 'getUnresolvedTriageSummary'],

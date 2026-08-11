@@ -1,7 +1,12 @@
 # Primitive Glossary
 
 - **Ticket** — durable work assignment, objective, policy, provenance, and ticket status.
-- **Run** — one lease-fenced execution attempt for a ticket. Retries create new runs.
+- **Run** — one lease-fenced admitted execution member. A singleton Ticket attempt contains one
+  Run; an atomically admitted multi-Run wave is one Ticket attempt with multiple Runs. Retry/rerun
+  creates a new attempt and new Run membership; resume/recovery retains both identities.
+- **Ticket Attempt** — internal kernel admission/lifecycle authority binding one Ticket-scoped
+  immutable identity to an exact atomic Run set and one topology-neutral disposition. It is not a
+  product primitive, plan, DAG, or execution strategy.
 - **Agent** — configured worker identity with a model provider and model.
 - **Authority** — permissions and run-scoped delegation governing allowed operations.
 - **Target Provider** — boundary through which external reads and mutations occur.

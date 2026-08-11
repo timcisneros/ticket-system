@@ -45,6 +45,9 @@
   — representative scenario evidence and the decision to retain Ticket and Workflow as the
   product primitives.
 - [`PRIMITIVE_GLOSSARY.md`](PRIMITIVE_GLOSSARY.md) — runtime terminology.
+- [`TICKET_ATTEMPT_AUTHORITY.md`](TICKET_ATTEMPT_AUTHORITY.md) — topology-neutral internal
+  Ticket-attempt identity, immutable Run membership, historical backfill/refusal, settlement, and
+  canonical Ticket projection authority.
 - [`OPERATIONAL_TRANSPARENCY.md`](OPERATIONAL_TRANSPARENCY.md) — read-only operational surfaces.
 - [`OPERATOR_INBOX.md`](OPERATOR_INBOX.md) and [`BROWSER_ENVIRONMENT.md`](BROWSER_ENVIRONMENT.md) —
   active product surfaces maintained with their implementations.

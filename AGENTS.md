@@ -3,9 +3,10 @@
 ## Purpose
 
 This repository is a server-rendered ticketing system for bounded agent work. A ticket assigns
-responsibility; a run is one execution attempt. Agents may act directly or invoke an enabled
-workflow, but every action remains subject to runtime authority, evidence, replay, recovery,
-evaluation, and consequence contracts.
+responsibility; a run is one admitted execution member. A singleton Ticket attempt contains one
+Run, while one atomically admitted multi-Run wave is one Ticket attempt with exact immutable
+membership. Agents may act directly or invoke an enabled workflow, but every action remains
+subject to runtime authority, evidence, replay, recovery, evaluation, and consequence contracts.
 
 ## Runtime architecture
 

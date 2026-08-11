@@ -7,7 +7,12 @@ This document records the execution model validated by committed milestone work.
 ## Validated Primitives
 
 - Ticket: the unit of requested work. A ticket can invoke a workflow and can be linked to parent/child workflow tickets.
-- Run: one execution attempt for a ticket. A run owns execution evidence, replay snapshots, workflow invocation metadata, and terminal status.
+- Ticket attempt: internal kernel authority for one atomically admitted execution wave. It owns an
+  immutable Ticket-scoped identity, exact Run membership, and one topology-neutral disposition;
+  it is not a product primitive or workflow topology.
+- Run: one admitted execution member. A singleton attempt contains one Run, while a multi-Run
+  admission wave remains one attempt. A Run owns execution evidence, replay snapshots, workflow
+  invocation metadata, and terminal status.
 - Workflow: the work primitive. A workflow carries ordered steps, policy metadata, task guidance, verifier contract metadata, and input constraints.
 - Workspace: the bounded file area containing source materials and produced artifacts. It does not contain policy documents, verifier oracles, or runtime system artifacts beyond fixture manifests used for evaluation.
 - Policy metadata: workflow-scoped policy text with id, version, and replayed hash evidence.
@@ -28,7 +33,8 @@ This document records the execution model validated by committed milestone work.
 
 ```txt
 Ticket
--> Run
+-> Ticket attempt
+-> one or more Runs
 -> Workflow
 -> Policy/Verifier context
 -> Plan proposal

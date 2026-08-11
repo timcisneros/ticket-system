@@ -1,5 +1,37 @@
 # Decision Log
 
+## Make Ticket-attempt identity and membership explicit kernel authority (2026-08-11)
+
+Ticket and Workflow remain the product primitives; no execution-strategy,
+planner, DAG, or orchestration product object is introduced. The kernel now
+owns one Ticket-scoped identity and exact immutable Run set for each atomic
+execution wave. A Run is one admitted member: only a singleton attempt equates
+one Run with one attempt. Retry/rerun/reassess creates a new attempt; recovery,
+replay continuation, lease reclaim and terminal repair preserve the same Run
+and attempt.
+
+Migration 039 adds `ticket_attempts` and the same-Ticket
+`runs.ticket_attempt_id` membership. PostgreSQL enforces unique Ticket ordinal,
+one unsettled attempt per Ticket, immutable non-empty cardinality, immutable Run
+membership, no append after atomic admission, and write-once disposition. The
+store-owned Ticket admission transaction mints all identity/cardinality; callers
+cannot select or reuse it. `maxAttempts`, manual/automatic retry, startup
+convergence, completion admission, attempt numbering and canonical Ticket
+projection consume this durable authority rather than Run count,
+`allocationPlanId`, `ticketOpenedAt`, or `assignmentMode`.
+
+The topology-neutral disposition domain is `completed`, `failed`, `blocked`,
+and `interrupted`, preserving existing multi-Run semantics. The Ticket mapping
+is respectively completed, failed, blocked, and open; an unsettled current
+attempt remains in progress. Triage stays separate.
+
+The source-owned pre-migration verifier maps authoritative historical
+singletons, v1 plan waves and exact hash-valid v2 leaf sets, and refuses every
+ambiguous shape before migration. Backfill changes no immutable Run/evidence,
+plan/binding, replay, consequence, receipt, completion-decision, or revision
+field. Historical v2 topology remains compatibility proof only and cannot
+authorize future admission. Full contract: `docs/TICKET_ATTEMPT_AUTHORITY.md`.
+
 ## Demote first-class structured allocation after Tranche 6 FINAL STOP (2026-08-11)
 
 Tranche 6 is complete. The frozen REAL LIVE-V3 decision is **FINAL STOP** at

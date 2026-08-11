@@ -16,6 +16,10 @@ The structured runtime cutover to PostgreSQL is complete:
 - Operator exports and work-type reads are bounded, cursor-paged database queries.
 - Session cleanup is bounded and periodic; sessions survive process restarts and can be shared by
   server instances.
+- PostgreSQL owns explicit Ticket attempts. One atomic Run-admission wave is one Ticket-scoped
+  attempt with immutable membership; retry/rerun creates another attempt, while recovery/resume
+  continues the same Run and attempt. Ticket projection and `maxAttempts` consume this authority
+  without inferring membership from allocation topology, timestamps, or assignment mode.
 
 ## Structured-allocation product boundary
 

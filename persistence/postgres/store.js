@@ -126,6 +126,14 @@ const {
   emptyGeneratedTicketCounts
 } = require('../process-template-projection');
 const {
+  inspectTicketAttemptBackfill
+} = require('./ticket-attempt-backfill');
+const {
+  deriveTicketAttemptDisposition,
+  normalizeTicketAttempt,
+  ticketStatusForAttemptDisposition
+} = require('../../runtime/ticket-attempt-contract');
+const {
   ProcessTemplateConflictError,
   computeNextRunAt,
   scheduleHasReusableInterval,
@@ -755,6 +763,7 @@ function runFromRow(row) {
     ...(row.body || {}),
     id: positiveSafeInteger(row.id, 'run.id'),
     ticketId: positiveSafeInteger(row.ticket_id, 'run.ticketId'),
+    ticketAttemptId: positiveSafeInteger(row.ticket_attempt_id, 'run.ticketAttemptId'),
     agentId: positiveSafeInteger(row.agent_id, 'run.agentId'),
     status: row.status,
     executionMode: row.execution_mode,
@@ -773,6 +782,19 @@ function runFromRow(row) {
   // covers every read in the store with one rule.
   assertRunGovernedExecutionPairing(run, `run ${run.id} governed execution`);
   return run;
+}
+
+function ticketAttemptFromRow(row) {
+  return normalizeTicketAttempt({
+    id: row.id,
+    ticketId: row.ticket_id,
+    ordinal: row.ordinal,
+    memberCount: row.member_count,
+    disposition: row.disposition,
+    admittedAt: rowTimestamp(row.admitted_at),
+    settledAt: rowTimestamp(row.settled_at),
+    revision: row.revision
+  });
 }
 
 function evaluationFromRow(row) {
@@ -1201,6 +1223,7 @@ class PostgresRuntimeStore {
       }
       const requiredRelations = [
         'tickets',
+        'ticket_attempts',
         'runs',
         'run_event_chain_tips',
         'events',
@@ -1263,7 +1286,10 @@ class PostgresRuntimeStore {
       const requiredTriggers = [
         ['events', 'events_append_only'],
         ['tickets', 'tickets_revision_guard'],
+        ['ticket_attempts', 'ticket_attempts_revision_guard'],
+        ['ticket_attempts', 'ticket_attempt_membership_complete_from_attempt'],
         ['runs', 'runs_revision_guard'],
+        ['runs', 'runs_ticket_attempt_membership_guard'],
         ['run_evaluations', 'run_evaluations_append_only'],
         ['run_consequences', 'run_consequences_append_only'],
         ['operation_receipts', 'operation_receipts_append_only'],
@@ -1337,6 +1363,10 @@ class PostgresRuntimeStore {
         );
       }
       const requiredConstraints = [
+        ['ticket_attempts', 'ticket_attempts_id_ticket_unique'],
+        ['ticket_attempts', 'ticket_attempts_ticket_ordinal_unique'],
+        ['ticket_attempts', 'ticket_attempts_settlement_shape'],
+        ['runs', 'runs_ticket_attempt_ticket_fk'],
         ['runs', 'runs_lease_complete'],
         ['runs', 'runs_current_phase_check'],
         ['runs', 'runs_terminal_phase_shape'],
@@ -1896,6 +1926,12 @@ class PostgresRuntimeStore {
             [version]
           );
           if (existing.rowCount === 0) {
+            if (version === '039_ticket_attempt_authority.sql') {
+              // Hash-aware, read-only classification before the SQL backfill.
+              // The migration transaction rolls back in full on any ambiguous
+              // historical Run/plan/evidence shape; membership is never guessed.
+              await inspectTicketAttemptBackfill(this, { client });
+            }
             await client.query(fs.readFileSync(path.join(MIGRATIONS_DIR, version), 'utf8'));
             await client.query(
               `INSERT INTO ${this.table('schema_migrations')} (version) VALUES ($1)`,
@@ -2725,11 +2761,15 @@ class PostgresRuntimeStore {
   // EVERY ticket. Returns null when this ticket simply holds no planner-admitted
   // v2 plan (no plan, a historical v1 plan, or a v2 plan with no provenance);
   // a plan that IS planner-admitted but no longer verifies still fails closed.
-  async _findLockedPlannerAdmittedPlan(connection, ticketId) {
+  async _findLockedPlannerAdmittedPlan(connection, ticketId, { allocationPlanId = null } = {}) {
+    const planId = allocationPlanId === null || allocationPlanId === undefined
+      ? null
+      : positiveSafeInteger(allocationPlanId, 'allocationPlanId');
     const result = await connection.query(
       `SELECT * FROM ${this.table('allocation_plans')}
-       WHERE ticket_id = $1 ORDER BY id FOR UPDATE`,
-      [ticketId]
+       WHERE ticket_id = $1 AND ($2::bigint IS NULL OR id = $2)
+       ORDER BY id FOR UPDATE`,
+      [ticketId, planId]
     );
     if (result.rowCount !== 1) return null;
     const plan = allocationPlanFromRow(result.rows[0]);
@@ -5804,7 +5844,99 @@ class PostgresRuntimeStore {
     });
   }
 
-  async createRun(record, { client = null, reservedId = null } = {}) {
+  async _createTicketAttempt(connection, { ticketId, memberCount, admittedAt = null }) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const count = positiveSafeInteger(memberCount, 'memberCount');
+    const existing = await connection.query(
+      `SELECT * FROM ${this.table('ticket_attempts')}
+       WHERE ticket_id = $1 AND disposition IS NULL
+       FOR UPDATE`,
+      [id]
+    );
+    if (existing.rowCount > 0) {
+      const error = new StateTransitionConflictError(
+        'ticket_attempt',
+        positiveSafeInteger(existing.rows[0].id, 'attempt.id'),
+        ['no unsettled attempt for this Ticket'],
+        ticketAttemptFromRow(existing.rows[0])
+      );
+      error.code = 'TICKET_ATTEMPT_UNSETTLED';
+      throw error;
+    }
+    const result = await connection.query(
+      `INSERT INTO ${this.table('ticket_attempts')}
+         (ticket_id, ordinal, member_count, admitted_at)
+       SELECT $1, COALESCE(MAX(ordinal), 0) + 1, $2,
+              COALESCE($3::timestamptz, clock_timestamp())
+       FROM ${this.table('ticket_attempts')}
+       WHERE ticket_id = $1
+       RETURNING *`,
+      [id, count, admittedAt]
+    );
+    return ticketAttemptFromRow(result.rows[0]);
+  }
+
+  async getTicketAttempt(attemptId) {
+    const id = positiveSafeInteger(attemptId, 'attemptId');
+    const result = await this.pool.query(
+      `SELECT * FROM ${this.table('ticket_attempts')} WHERE id = $1`,
+      [id]
+    );
+    return result.rowCount === 0 ? null : ticketAttemptFromRow(result.rows[0]);
+  }
+
+  async getCurrentTicketAttempt(ticketId, { client = null, forUpdate = false } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const execute = async connection => {
+      const result = await connection.query(
+        `SELECT * FROM ${this.table('ticket_attempts')}
+         WHERE ticket_id = $1 ORDER BY ordinal DESC LIMIT 1${forUpdate ? ' FOR UPDATE' : ''}`,
+        [id]
+      );
+      return result.rowCount === 0 ? null : ticketAttemptFromRow(result.rows[0]);
+    };
+    return client ? execute(client) : execute(this.pool);
+  }
+
+  async listTicketAttempts({ ticketId, afterOrdinal = 0, limit = 100 } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const cursor = nonNegativeSafeInteger(afterOrdinal, 'afterOrdinal');
+    const boundedLimit = positiveSafeInteger(limit, 'limit');
+    if (boundedLimit > this.maxQueryRows) {
+      throw new RangeError(`limit exceeds the configured maximum of ${this.maxQueryRows}`);
+    }
+    const result = await this.pool.query(
+      `SELECT * FROM ${this.table('ticket_attempts')}
+       WHERE ticket_id = $1 AND ordinal > $2
+       ORDER BY ordinal LIMIT $3`,
+      [id, cursor, boundedLimit + 1]
+    );
+    const attempts = result.rows.slice(0, boundedLimit).map(ticketAttemptFromRow);
+    const last = attempts[attempts.length - 1] || null;
+    return {
+      attempts,
+      nextAfterOrdinal: result.rowCount > boundedLimit && last ? last.ordinal : null
+    };
+  }
+
+  async countTicketAttempts(ticketId, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const execute = async connection => {
+      const result = await connection.query(
+        `SELECT count(*)::bigint AS count
+         FROM ${this.table('ticket_attempts')} WHERE ticket_id = $1`,
+        [id]
+      );
+      const count = Number(result.rows[0].count);
+      if (!Number.isSafeInteger(count) || count < 0) {
+        throw new RangeError('ticket attempt count exceeds safe integer range');
+      }
+      return count;
+    };
+    return client ? execute(client) : execute(this.pool);
+  }
+
+  async createRun(record, { client = null, reservedId = null, ticketAttemptId = null } = {}) {
     const run = this.assertJsonRecord(record, 'run');
     assertRunDeclaredCompletionAuthority(run, 'run declared/completion authority');
     assertRunGovernedExecutionPairing(run, 'run governed execution');
@@ -5821,6 +5953,23 @@ class PostgresRuntimeStore {
       error.code = 'RUN_IDENTITY_NOT_CALLER_OWNED';
       throw error;
     }
+    // Ticket-attempt identity, ordinal and membership cardinality are kernel
+    // authority. They may never arrive in a Run draft/body, even if the value
+    // happens to agree with the store-owned admission transaction. Internal
+    // composition passes the attempt id only through the transaction-scoped
+    // option below.
+    for (const field of [
+      'ticketAttemptId',
+      'ticketAttemptOrdinal',
+      'ticketAttemptMemberCount',
+      'ticketAttemptDisposition'
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(run, field)) {
+        const error = new TypeError(`run.${field} is assigned only by kernel admission authority`);
+        error.code = 'TICKET_ATTEMPT_IDENTITY_NOT_CALLER_OWNED';
+        throw error;
+      }
+    }
     // The one exception is transaction-scoped and arrives through the OPTIONS
     // argument, never through the record: structured leaf admission reserves
     // identities from the runs sequence and must insert exactly those, because
@@ -5833,13 +5982,20 @@ class PostgresRuntimeStore {
     if (reserved !== null && client === null) {
       throw new TypeError('A reserved run identity requires the reserving transaction');
     }
+    const suppliedAttemptId = ticketAttemptId === null || ticketAttemptId === undefined
+      ? null
+      : positiveSafeInteger(ticketAttemptId, 'ticketAttemptId');
+    if (suppliedAttemptId !== null && client === null) {
+      throw new TypeError('A Ticket-attempt identity is assigned only inside its admission transaction');
+    }
     const runBody = { ...run };
     delete runBody.currentPhase;
     delete runBody.id;
     const leaseOwner = typeof run.leaseOwner === 'string' && run.leaseOwner.trim() ? run.leaseOwner.trim() : null;
     const leaseExpiresAt = leaseOwner ? isoTimestamp(run.leaseExpiresAt, 'run.leaseExpiresAt') : null;
+    const runTicketId = positiveSafeInteger(run.ticketId, 'run.ticketId');
     const values = [
-      positiveSafeInteger(run.ticketId, 'run.ticketId'),
+      runTicketId,
       positiveSafeInteger(run.agentId, 'run.agentId'),
       status,
       run.executionMode === 'workflow' ? 'workflow' : 'agent',
@@ -5850,22 +6006,43 @@ class PostgresRuntimeStore {
       runBody
     ];
     const execute = async connection => {
+      let authoritativeAttemptId = suppliedAttemptId;
+      if (authoritativeAttemptId === null) {
+        // `createRun` is retained as a low-level persistence/test seam. Product
+        // admission uses createRunsAndStartTicket, but even this seam may no
+        // longer create an unbound Run: the store mints a singleton attempt
+        // while holding the owning Ticket lock.
+        const ticketResult = await connection.query(
+          `SELECT id FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+          [runTicketId]
+        );
+        if (ticketResult.rowCount === 0) {
+          const error = new Error(`ticket ${runTicketId} was not found`);
+          error.code = 'POSTGRES_RECORD_NOT_FOUND';
+          throw error;
+        }
+        authoritativeAttemptId = (await this._createTicketAttempt(connection, {
+          ticketId: runTicketId,
+          memberCount: 1,
+          admittedAt: run.createdAt || null
+        })).id;
+      }
       const result = reserved === null
         ? await connection.query(
           `INSERT INTO ${this.table('runs')}
-            (ticket_id, agent_id, status, execution_mode, lease_owner, lease_expires_at,
+            (ticket_id, ticket_attempt_id, agent_id, status, execution_mode, lease_owner, lease_expires_at,
              last_heartbeat_at, current_phase, body)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+           VALUES ($1, $10, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
            RETURNING *`,
-          values
+          [...values, authoritativeAttemptId]
         )
         : await connection.query(
           `INSERT INTO ${this.table('runs')}
-            (ticket_id, agent_id, status, execution_mode, lease_owner, lease_expires_at,
+            (ticket_id, ticket_attempt_id, agent_id, status, execution_mode, lease_owner, lease_expires_at,
              last_heartbeat_at, current_phase, body, id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
+           VALUES ($1, $11, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
            RETURNING *`,
-          [...values, reserved]
+          [...values, reserved, authoritativeAttemptId]
         );
       const created = runFromRow(result.rows[0]);
       if (reserved !== null && created.id !== reserved) {
@@ -5990,23 +6167,15 @@ class PostgresRuntimeStore {
           throw error;
         }
         const admitted = await connection.query(
-          `SELECT COUNT(DISTINCT CASE
-             WHEN NULLIF(body->>'allocationPlanId', '') IS NOT NULL
-               THEN 'allocation:' || (body->>'allocationPlanId')
-             ELSE 'run:' || id::text
-           END)::bigint AS count
-           FROM ${this.table('runs')}
+          `SELECT COUNT(*)::bigint AS count
+           FROM ${this.table('ticket_attempts')}
            WHERE ticket_id = $1`,
           [id]
         );
         const admittedCount = Number(admitted.rows[0].count);
-        const requestedAttemptCount = new Set(drafts.map((draft, index) => {
-          const allocationPlanId = draft && draft.allocationPlanId;
-          return allocationPlanId === null || allocationPlanId === undefined ||
-            String(allocationPlanId).trim() === ''
-            ? `draft:${index}`
-            : `allocation:${String(allocationPlanId).trim()}`;
-        })).size;
+        // One atomic admission wave is exactly one Ticket attempt regardless
+        // of whether it contains one Run or many Runs.
+        const requestedAttemptCount = 1;
         const maxAttempts = effectiveAttemptLimits[0];
         if (!Number.isSafeInteger(admittedCount) ||
             admittedCount + requestedAttemptCount > maxAttempts) {
@@ -6052,12 +6221,41 @@ class PostgresRuntimeStore {
             predecessor || { status: 'missing' }
           );
         }
+        const predecessorAttempt = await this.getCurrentTicketAttempt(id, {
+          client: connection,
+          forUpdate: true
+        });
+        if (!predecessorAttempt || predecessor.ticketAttemptId !== predecessorAttempt.id ||
+            predecessorAttempt.disposition === null) {
+          const error = new StateTransitionConflictError(
+            'ticket_attempt',
+            predecessorAttempt ? predecessorAttempt.id : predecessor.ticketAttemptId,
+            ['settled current attempt containing the terminal predecessor'],
+            predecessorAttempt || { disposition: 'missing' }
+          );
+          error.code = 'TICKET_ATTEMPT_PREDECESSOR_UNSETTLED';
+          throw error;
+        }
       }
 
       const clock = await connection.query('SELECT clock_timestamp() AS ts');
       const now = isoTimestamp(clock.rows[0].ts, 'run creation clock');
+      const attempt = await this._createTicketAttempt(connection, {
+        ticketId: id,
+        memberCount: drafts.length,
+        admittedAt: now
+      });
       const runs = [];
-      const events = [];
+      const events = [await this._appendEvent(connection, {
+        type: 'ticket.attempt_admitted',
+        ticketId: id,
+        payload: {
+          ticketAttemptId: attempt.id,
+          ticketAttemptOrdinal: attempt.ordinal,
+          ticketAttemptMemberCount: attempt.memberCount,
+          admittedAt: attempt.admittedAt
+        }
+      })];
       for (const [draftIndex, draft] of drafts.entries()) {
         const run = await this.createRun({
           ...draft,
@@ -6070,7 +6268,8 @@ class PostgresRuntimeStore {
           updatedAt: now
         }, {
           client: connection,
-          reservedId: reserved === null ? null : reserved[draftIndex]
+          reservedId: reserved === null ? null : reserved[draftIndex],
+          ticketAttemptId: attempt.id
         });
         runs.push(run);
         const payload = this.assertJsonRecord(runEventPayload(run), `run ${run.id} event payload`);
@@ -6078,7 +6277,13 @@ class PostgresRuntimeStore {
           type: 'run.created',
           ticketId: id,
           runId: run.id,
-          payload: { ...payload, status: run.status, createdAt: run.createdAt }
+          payload: {
+            ...payload,
+            status: run.status,
+            createdAt: run.createdAt,
+            ticketAttemptId: attempt.id,
+            ticketAttemptOrdinal: attempt.ordinal
+          }
         }));
         if (run.runtimeBudgetSnapshot) {
           events.push(await this._appendEvent(connection, {
@@ -6100,11 +6305,18 @@ class PostgresRuntimeStore {
         expectedRevision: ticket.revision,
         fromStatuses: ['open'],
         toStatus: 'in_progress',
-        eventPayload: callerTicketPayload
+        eventPayload: {
+          ...callerTicketPayload,
+          ticketAttemptId: attempt.id,
+          ticketAttemptOrdinal: attempt.ordinal,
+          ticketAttemptDisposition: null,
+          ticketAttemptMemberCount: attempt.memberCount
+        }
       }, { client: connection });
       events.push(transitioned.event);
       return {
         ticket: transitioned.ticket,
+        attempt,
         runs,
         events,
         previousStatus: transitioned.previousStatus
@@ -8274,12 +8486,15 @@ class PostgresRuntimeStore {
     const result = await this.pool.query(
       `SELECT
          target.id AS run_id,
-         COUNT(sibling.id)::bigint AS attempt_count,
-         COUNT(sibling.id) FILTER (WHERE sibling.id <= target.id)::bigint AS attempt_number
+         attempt.ordinal AS attempt_number,
+         (SELECT COUNT(*)::bigint
+          FROM ${this.table('ticket_attempts')} AS counted
+          WHERE counted.ticket_id = target.ticket_id) AS attempt_count
        FROM ${this.table('runs')} AS target
-       JOIN ${this.table('runs')} AS sibling ON sibling.ticket_id = target.ticket_id
+       JOIN ${this.table('ticket_attempts')} AS attempt
+         ON attempt.id = target.ticket_attempt_id
+        AND attempt.ticket_id = target.ticket_id
        WHERE target.id = ANY($1::bigint[])
-       GROUP BY target.id
        ORDER BY target.id`,
       [ids]
     );
@@ -8898,7 +9113,9 @@ class PostgresRuntimeStore {
       // so the run is read once WITHOUT a lock purely to route; every value that
       // decides anything is re-read under lock below.
       const routing = await connection.query(
-        `SELECT ticket_id FROM ${this.table('runs')} WHERE id = $1`,
+        `SELECT ticket_id, ticket_attempt_id,
+                NULLIF(body->>'allocationPlanId', '') AS allocation_plan_id
+         FROM ${this.table('runs')} WHERE id = $1`,
         [id]
       );
       if (routing.rowCount === 0) {
@@ -8906,10 +9123,28 @@ class PostgresRuntimeStore {
         error.code = 'POSTGRES_RECORD_NOT_FOUND';
         throw error;
       }
-      const leafPlan = await this._findLockedPlannerAdmittedPlan(
-        connection,
-        positiveSafeInteger(routing.rows[0].ticket_id, 'run.ticketId')
-      );
+      // Historical structured v2 is a compatibility input, never the generic
+      // attempt router. Only an attempt member whose immutable body identifies
+      // that plan can select its compatibility proof. Missing leaf bindings are
+      // then refused by reconciliation. A later direct retry on the same Ticket
+      // does not carry the old plan id and cannot be gated merely because the
+      // plan row remains reconstructable.
+      const historicalPlanReference = routing.rows[0].allocation_plan_id;
+      // A body field is not compatibility authority by itself. Only the
+      // repository's historical positive-integer plan identity can route to a
+      // retained v2 proof; arbitrary future/topology-local metadata is ignored
+      // by canonical Ticket projection.
+      const historicalLeafPlanId = typeof historicalPlanReference === 'string' &&
+        /^[1-9]\d*$/.test(historicalPlanReference)
+        ? positiveSafeInteger(historicalPlanReference, 'run.allocationPlanId')
+        : null;
+      const leafPlan = historicalLeafPlanId === null
+        ? null
+        : await this._findLockedPlannerAdmittedPlan(
+          connection,
+          positiveSafeInteger(routing.rows[0].ticket_id, 'run.ticketId'),
+          { allocationPlanId: historicalLeafPlanId }
+        );
       const runResult = await connection.query(
         `SELECT * FROM ${this.table('runs')} WHERE id = $1 FOR UPDATE`,
         [id]
@@ -8923,14 +9158,33 @@ class PostgresRuntimeStore {
       if (!TERMINAL_RUN_STATUSES.has(run.status)) {
         throw new StateTransitionConflictError('run', id, [...TERMINAL_RUN_STATUSES], run);
       }
+      const attemptResult = await connection.query(
+        `SELECT * FROM ${this.table('ticket_attempts')}
+         WHERE id = $1 AND ticket_id = $2 FOR UPDATE`,
+        [run.ticketAttemptId, run.ticketId]
+      );
+      if (attemptResult.rowCount === 0) {
+        const error = new Error(`run ${id} has no same-Ticket attempt authority`);
+        error.code = 'TICKET_ATTEMPT_MEMBERSHIP_MISSING';
+        throw error;
+      }
+      let attempt = ticketAttemptFromRow(attemptResult.rows[0]);
       const batchResult = await connection.query(
         `SELECT * FROM ${this.table('runs')}
-         WHERE ticket_id = $1 AND body->>'ticketOpenedAt' = $2
+         WHERE ticket_attempt_id = $1
          ORDER BY id
          FOR UPDATE`,
-        [run.ticketId, run.ticketOpenedAt]
+        [attempt.id]
       );
       const batchRuns = batchResult.rows.map(runFromRow);
+      if (batchRuns.length !== attempt.memberCount ||
+          !batchRuns.some(member => member.id === run.id) ||
+          batchRuns.some(member => member.ticketId !== attempt.ticketId ||
+            member.ticketAttemptId !== attempt.id)) {
+        const error = new Error(`Ticket attempt ${attempt.id} membership is incomplete or contradictory`);
+        error.code = 'TICKET_ATTEMPT_MEMBERSHIP_INVALID';
+        throw error;
+      }
       const ticketResult = await connection.query(
         `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
         [run.ticketId]
@@ -8941,10 +9195,36 @@ class PostgresRuntimeStore {
         throw error;
       }
       const ticket = ticketFromRow(ticketResult.rows[0]);
+      const currentAttempt = await this.getCurrentTicketAttempt(ticket.id, {
+        client: connection,
+        forUpdate: true
+      });
+      if (!currentAttempt || currentAttempt.id !== attempt.id) {
+        return {
+          ticket,
+          attempt,
+          event: null,
+          previousStatus: ticket.status,
+          changed: false,
+          aggregateDecision: null
+        };
+      }
+      if (batchRuns.some(member => !TERMINAL_RUN_STATUSES.has(member.status))) {
+        return {
+          ticket,
+          attempt,
+          event: null,
+          previousStatus: ticket.status,
+          changed: false,
+          aggregateDecision: null
+        };
+      }
       const decisionResult = await connection.query(
-        `SELECT run_id, consequence
-         FROM ${this.table('run_consequences')}
-         WHERE run_id = ANY($1::bigint[])`,
+        `SELECT member.id AS run_id, consequence.consequence
+         FROM ${this.table('runs')} AS member
+         LEFT JOIN ${this.table('run_consequences')} AS consequence
+           ON consequence.run_id = member.id
+         WHERE member.id = ANY($1::bigint[])`,
         [batchRuns.map(item => item.id)]
       );
       const completionDecisionByRunId = new Map(decisionResult.rows.map(row => {
@@ -8953,8 +9233,12 @@ class PostgresRuntimeStore {
           : null;
         return [positiveSafeInteger(row.run_id, 'runConsequence.runId'), decision];
       }));
-      const projectedStatus = item => {
-        if (!item.completionAuthoritySnapshot) return item.status;
+      const projectedDisposition = item => {
+        if (!item.completionAuthoritySnapshot) {
+          return item.status === 'completed' ? 'completed'
+            : item.status === 'interrupted' ? 'interrupted'
+              : 'failed';
+        }
 
         const decision = completionDecisionByRunId.get(item.id);
 
@@ -9002,25 +9286,8 @@ class PostgresRuntimeStore {
         if (decision.completionDisposition === 'blocked') return 'blocked';
         return item.status === 'interrupted' ? 'interrupted' : 'failed';
       };
-      const projectedBatchStatuses = batchRuns.map(projectedStatus);
-      const projectedRunStatus = projectedStatus(run);
-      const ownedScope = ticket.assignmentTargetType === 'group' &&
-        ['allocated', 'dynamic'].includes(ticket.assignmentMode);
-      let targetStatus = null;
-      if (projectedRunStatus === 'interrupted') {
-        if (ticket.status === 'in_progress' &&
-            !batchRuns.some(item => ['pending', 'running'].includes(item.status))) {
-          targetStatus = 'open';
-        }
-      } else if (!ownedScope) {
-        targetStatus = projectedRunStatus;
-      } else if (projectedRunStatus === 'blocked' || projectedBatchStatuses.includes('blocked')) {
-        targetStatus = 'blocked';
-      } else if (projectedRunStatus === 'failed' || projectedBatchStatuses.includes('failed')) {
-        targetStatus = 'failed';
-      } else if (batchRuns.length > 0 && projectedBatchStatuses.every(status => status === 'completed')) {
-        targetStatus = 'completed';
-      }
+      const memberDispositions = batchRuns.map(projectedDisposition);
+      const disposition = deriveTicketAttemptDisposition(memberDispositions);
 
       // ── Tranche 3: the aggregate decision is the completion proof ──────────
       //
@@ -9055,9 +9322,9 @@ class PostgresRuntimeStore {
         // This does NOT re-map anything. The canonical logic above still chooses
         // blocked versus failed, and its choice is used verbatim; the aggregate
         // only decides whether ANY terminal outcome is provable yet.
-        if (TERMINAL_TICKET_STATUSES.has(targetStatus)) {
+        if (disposition !== 'interrupted') {
           const provenTerminal = leafDecision !== null && (
-            targetStatus === 'completed'
+            disposition === 'completed'
               ? leafDecision.aggregateStatus === 'completed'
               : leafDecision.aggregateStatus === 'failed'
           );
@@ -9068,20 +9335,76 @@ class PostgresRuntimeStore {
           // aggregate never reaches here at all — allocationPlanFromRow and
           // normalizeAggregatePlanDecision reject it on read, aborting this
           // transaction before any transition.
-          if (!provenTerminal) targetStatus = null;
+          if (!provenTerminal) {
+            return {
+              ticket,
+              attempt,
+              event: null,
+              previousStatus: ticket.status,
+              changed: false,
+              aggregateDecision: leafDecision
+            };
+          }
+        } else if (!leafDecision || leafDecision.aggregateStatus !== 'interrupted') {
+          return {
+            ticket,
+            attempt,
+            event: null,
+            previousStatus: ticket.status,
+            changed: false,
+            aggregateDecision: leafDecision
+          };
         }
       }
 
-      if (!targetStatus || ticket.status === targetStatus) {
+      let attemptEvent = null;
+      if (attempt.disposition === null) {
+        const settled = await connection.query(
+          `UPDATE ${this.table('ticket_attempts')}
+           SET disposition = $2,
+               settled_at = clock_timestamp(),
+               revision = revision + 1
+           WHERE id = $1 AND revision = $3 AND disposition IS NULL
+           RETURNING *`,
+          [attempt.id, disposition, attempt.revision]
+        );
+        if (settled.rowCount === 0) {
+          throw new StateTransitionConflictError(
+            'ticket_attempt', attempt.id, ['unsettled at the expected revision'], attempt);
+        }
+        attempt = ticketAttemptFromRow(settled.rows[0]);
+        attemptEvent = await this._appendEvent(connection, {
+          type: 'ticket.attempt_settled',
+          ticketId: ticket.id,
+          payload: {
+            ticketAttemptId: attempt.id,
+            ticketAttemptOrdinal: attempt.ordinal,
+            ticketAttemptDisposition: attempt.disposition,
+            ticketAttemptMemberCount: attempt.memberCount,
+            settledAt: attempt.settledAt
+          }
+        });
+      } else if (attempt.disposition !== disposition) {
+        const error = new Error(
+          `Ticket attempt ${attempt.id} disposition ${attempt.disposition} conflicts with durable members ${disposition}`
+        );
+        error.code = 'TICKET_ATTEMPT_DISPOSITION_CONFLICT';
+        throw error;
+      }
+
+      const targetStatus = ticketStatusForAttemptDisposition(attempt.disposition);
+      if (ticket.status === targetStatus) {
         return {
           ticket,
+          attempt,
+          attemptEvent,
           event: null,
           previousStatus: ticket.status,
           changed: false,
           aggregateDecision: leafDecision
         };
       }
-      const patch = ['completed', 'failed', 'interrupted'].includes(targetStatus)
+      const patch = ['completed', 'failed', 'open'].includes(targetStatus)
         ? { rerunMode: null }
         : {};
       const transitioned = await this.transitionTicket({
@@ -9092,14 +9415,26 @@ class PostgresRuntimeStore {
         patch,
         // The parent outcome names the plan and the exact aggregate decision that
         // authorized it, so a completed parent is traceable to its proof.
-        eventPayload: leafDecision === null ? {} : {
-          allocationPlanId: leafPlanId,
-          planHash: leafDecision.planHash,
-          aggregateStatus: leafDecision.aggregateStatus,
-          aggregateDecisionHash: leafDecision.decisionHash
+        eventPayload: {
+          ticketAttemptId: attempt.id,
+          ticketAttemptOrdinal: attempt.ordinal,
+          ticketAttemptDisposition: attempt.disposition,
+          ticketAttemptMemberCount: attempt.memberCount,
+          ...(leafDecision === null ? {} : {
+            allocationPlanId: leafPlanId,
+            planHash: leafDecision.planHash,
+            aggregateStatus: leafDecision.aggregateStatus,
+            aggregateDecisionHash: leafDecision.decisionHash
+          })
         }
       }, { client: connection });
-      return { ...transitioned, changed: true, aggregateDecision: leafDecision };
+      return {
+        ...transitioned,
+        attempt,
+        attemptEvent,
+        changed: true,
+        aggregateDecision: leafDecision
+      };
     };
     return client ? execute(client) : this.withTransaction(execute);
   }
@@ -9107,6 +9442,14 @@ class PostgresRuntimeStore {
   async reopenTicket({ ticketId, rerunMode = null }, { client = null } = {}) {
     const id = positiveSafeInteger(ticketId, 'ticketId');
     const execute = async connection => {
+      // Final settlement takes the current attempt before the Ticket. Reopen
+      // follows the same order so a retry racing legitimate finalization
+      // refuses on unsettled authority rather than forming an attempt/Ticket
+      // lock cycle.
+      const currentAttempt = await this.getCurrentTicketAttempt(id, {
+        client: connection,
+        forUpdate: true
+      });
       const result = await connection.query(
         `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
         [id]
@@ -9116,6 +9459,12 @@ class PostgresRuntimeStore {
       if (ticket.triage && ticket.triage.required === true && !ticket.triage.resolvedAt) {
         const error = new Error('Cannot rerun: unresolved ticket-level triage exists on this ticket. Resolve triage first.');
         error.code = 'TICKET_TRIAGE_REQUIRED';
+        throw error;
+      }
+      if (currentAttempt && currentAttempt.disposition === null) {
+        const error = new StateTransitionConflictError(
+          'ticket_attempt', currentAttempt.id, ['settled before Ticket reopen'], currentAttempt);
+        error.code = 'TICKET_ATTEMPT_UNSETTLED';
         throw error;
       }
       return this.transitionTicket({
