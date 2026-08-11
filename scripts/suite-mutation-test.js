@@ -46,6 +46,15 @@ if (!process.env.TEST_DATABASE_URL && !process.env.DATABASE_URL) {
 // in the file, so a mutation can never land somewhere other than where it was aimed.
 const MUTATIONS = Object.freeze([
   {
+    name: 'terminal-log-left-unsettled',
+    suite: 'evaluation-reader-quiescence-postgres-test.js',
+    file: 'server.js',
+    contract: 'a terminal Ticket is projected only after its terminal audit log settles',
+    find: "  await appendRunLog(failedRun, autoRetry.retried ? 'run:failed_auto_retried' : 'run:failed',",
+    replace: "  appendRunLog(failedRun, autoRetry.retried ? 'run:failed_auto_retried' : 'run:failed',",
+    expect: 'the evaluator observes quiescence while a legitimate terminal-log writer is pending'
+  },
+  {
     name: 'startup-fails-open',
     suite: 'startup-data-integrity-test.js',
     file: 'server.js',

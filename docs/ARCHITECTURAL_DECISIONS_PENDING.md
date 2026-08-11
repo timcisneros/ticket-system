@@ -7750,6 +7750,43 @@ declared-work evidence. A source-level gate requires two typed folder facts for
 every v2 scenario, and focused PostgreSQL diagnostics prove both B and C admit
 and execute leaf Runs in all four required families.
 
+## Evaluation Reader Quiescence After Terminal Logs (recorded and closed 2026-08-11)
+
+**Status:** closed at the terminal evidence-settlement owner. The completed REAL
+LIVE-v3 result and its `FINAL STOP` decision are unchanged.
+
+The post-result checkpoint reached owner 109 with 108/226 owners passed, then
+`evaluation-live-artifact-domain-postgres-test.js` observed its durable
+fingerprint move across the read-only Ticket report. The report path itself is
+SELECT-only. Its filesystem production owner writes only the designated
+write-once JSON, Markdown and hash artifacts after scoring an already-complete
+corpus.
+
+A PostgreSQL advisory-lock reproduction at the exact successor trial class
+(`03-013-family-5_5A-B`) held the post-terminal `run:failed` diagnostic INSERTs.
+The old quiescence reader returned true with three legitimate writers still in
+flight. Calling the report left every fingerprint field unchanged; releasing
+the writers changed only `diagnostic_logs`, from 24 to 27 rows, by committing
+one redundant `run:failed` echo for each terminal leaf. No report projection
+changed. The retained checkpoint streams do not contain the thrown error's
+in-memory before/between/after detail, and its harness schema was correctly
+dropped, so the historical row values are not reconstructed or overstated.
+
+The ordering defect was that best-effort described both failure semantics and,
+accidentally, settlement semantics. The terminal echoes are legitimately
+best-effort—failure to write one cannot overturn the authoritative terminal
+bundle—but a successful write may not remain pending after the parent Ticket is
+projected terminal, because that Ticket projection is the evaluator's durable
+quiescence authority. Terminal callers now await the contained log promise
+before projecting the Ticket. This does not make a log failure authoritative;
+it only settles success or contained failure before quiescence becomes visible.
+
+The deterministic regression drives the actual REAL runner through the captured
+production boundary, gates the terminal log, proves the Ticket remains
+non-quiescent and no artifact is accepted, then releases the writer and proves
+two report reads are stable. A focused mutation removes the await from the
+historically exercised failed-run owner and must kill that regression.
+
 
 ---
 

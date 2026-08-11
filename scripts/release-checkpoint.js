@@ -162,6 +162,9 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // Tranche 6 — actual runner-produced failure shapes mixed into the complete
   // production scoring/report command. Controlled boundary, zero provider.
   'evaluation-live-artifact-domain-postgres-test.js',
+  // Tranche 6 post-result release validation: a terminal Ticket may not make
+  // the evaluator observe quiescence while its child evidence writer is live.
+  'evaluation-reader-quiescence-postgres-test.js',
   'evaluation-live-credential-postgres-test.js',
   // Tranche 6 — the durable provider-transport observation, on both production
   // transports and all three roles. Replaces the final hop; zero external calls.

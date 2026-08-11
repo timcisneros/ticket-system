@@ -5729,6 +5729,10 @@ function isValidIsoTimestamp(value) {
 // This is the ONLY post-terminal exception, and it is explicit. Any other required
 // log that fails post-terminal still marks its run and must be settled at the
 // caller's boundary.
+// Best-effort describes FAILURE semantics, not settlement semantics. Terminal
+// callers still await these contained writes before projecting the parent Ticket:
+// the Ticket's terminal state is the evaluator's durable quiescence authority and
+// must not become visible while a legitimate child evidence writer remains active.
 const BEST_EFFORT_RUN_LOG_TYPES = new Set([
   'run:completed',
   'run:verification_failed',
@@ -15531,7 +15535,7 @@ async function interruptAgentRunUnlocked(run, reason, options = {}) {
       payload: { triage }
     }] : []
   });
-  appendRunLog(interruptedRun, 'run:interrupted', `${reason}${allocationLogSuffix(interruptedRun)}`, null, {
+  await appendRunLog(interruptedRun, 'run:interrupted', `${reason}${allocationLogSuffix(interruptedRun)}`, null, {
     allocationPlanId: interruptedRun.allocationPlanId || null,
     allocationItemId: interruptedRun.allocationItemId || null,
     phase,
@@ -15989,7 +15993,7 @@ async function failAgentRunUnlocked(run, error, workspaceAction = null) {
     const persistedTriage = await persistRunTriage(failedRun.id, triage);
     failedRun = { ...failedRun, triage: persistedTriage };
   }
-  appendRunLog(failedRun, autoRetry.retried ? 'run:failed_auto_retried' : 'run:failed', `${message}${allocationLogSuffix(failedRun)}`, workspaceAction, {
+  await appendRunLog(failedRun, autoRetry.retried ? 'run:failed_auto_retried' : 'run:failed', `${message}${allocationLogSuffix(failedRun)}`, workspaceAction, {
     allocationPlanId: failedRun.allocationPlanId || null,
     allocationItemId: failedRun.allocationItemId || null,
     failure,
@@ -16048,7 +16052,7 @@ async function completeAgentRunUnlocked(run) {
         payload: { triage }
       }]
     });
-    appendRunLog(failedRun, 'run:verification_failed', `${message}${allocationLogSuffix(failedRun)}`, null, {
+    await appendRunLog(failedRun, 'run:verification_failed', `${message}${allocationLogSuffix(failedRun)}`, null, {
       allocationPlanId: failedRun.allocationPlanId || null,
       allocationItemId: failedRun.allocationItemId || null,
       failure
@@ -16076,7 +16080,7 @@ async function completeAgentRunUnlocked(run) {
     mutationCount: null,
     beforeReplayEvents: verificationEvents
   });
-  appendRunLog(completedRun, 'run:completed', `Agent run completed${allocationLogSuffix(completedRun)}`, null, {
+  await appendRunLog(completedRun, 'run:completed', `Agent run completed${allocationLogSuffix(completedRun)}`, null, {
     allocationPlanId: completedRun.allocationPlanId || null,
     allocationItemId: completedRun.allocationItemId || null
   });
