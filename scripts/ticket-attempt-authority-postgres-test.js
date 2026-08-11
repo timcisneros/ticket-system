@@ -233,6 +233,20 @@ async function main() {
       'existing multi-Run precedence projects failed over interrupted');
     equal(settledMulti.ticket.status, 'failed',
       'Ticket projection consumes only the settled attempt disposition');
+    await store.createRunTriage({
+      runId: firstFailed.id,
+      triage: {
+        required: true,
+        reasonCode: 'review',
+        requiredDecision: 'operator_review',
+        allowedActions: ['review'],
+        prohibitedActions: []
+      }
+    });
+    equal((await store.getCurrentTicketAttempt(multiTicket.id)).disposition, 'failed',
+      'operator-attention evidence does not rewrite attempt disposition');
+    equal((await store.getTicket(multiTicket.id)).status, 'failed',
+      'triage remains a separate projection from canonical Ticket lifecycle');
     await refuses(() => store.pool.query(
       `UPDATE ${store.table('ticket_attempts')}
        SET disposition = 'completed', settled_at = clock_timestamp(), revision = revision + 1
