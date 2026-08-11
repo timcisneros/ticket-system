@@ -207,14 +207,11 @@ async function main() {
         const ticketAfter = (await store.pool.query(
           `SELECT status FROM ${store.table('tickets')} WHERE id = $1`,
           [leaf.ticketId])).rows[0].status;
-        // THE EXACT PROJECTED STATUS, not merely "not completed".
-        //
-        // `projectedStatus` decides what a terminal non-success Run
-        // contributes, and the Ticket target is derived from it: a failed Run
-        // projects `failed`, an interrupted Run reopens rather than completing.
-        // Asserting only inequality left the branch unowned — sibling Runs kept
-        // the Ticket off `completed` no matter what this Run projected.
-        const expectedTicket = status === 'failed' ? 'failed' : 'in_progress';
+        // Exact attempt membership is now the lifecycle boundary. This member
+        // truthfully contributes failed/interrupted, but its still-active
+        // sibling prevents an attempt disposition, so neither outcome may
+        // project the Ticket early.
+        const expectedTicket = 'in_progress';
         assertThat(ticketAfter === expectedTicket,
           `${label} projects the Ticket ${expectedTicket} (${ticketAfter})`);
         assertThat(ticketAfter !== 'completed',

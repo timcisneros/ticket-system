@@ -9209,16 +9209,6 @@ class PostgresRuntimeStore {
           aggregateDecision: null
         };
       }
-      if (batchRuns.some(member => !TERMINAL_RUN_STATUSES.has(member.status))) {
-        return {
-          ticket,
-          attempt,
-          event: null,
-          previousStatus: ticket.status,
-          changed: false,
-          aggregateDecision: null
-        };
-      }
       const decisionResult = await connection.query(
         `SELECT member.id AS run_id, consequence.consequence
          FROM ${this.table('runs')} AS member
@@ -9286,6 +9276,21 @@ class PostgresRuntimeStore {
         if (decision.completionDisposition === 'blocked') return 'blocked';
         return item.status === 'interrupted' ? 'interrupted' : 'failed';
       };
+      // Waiting for the rest of an exact attempt must not turn a malformed
+      // success claim into a silent no-op. Validate the routed terminal member
+      // against its own admitted completion authority first; non-success
+      // members remain self-describing and create no synthetic decision.
+      projectedDisposition(run);
+      if (batchRuns.some(member => !TERMINAL_RUN_STATUSES.has(member.status))) {
+        return {
+          ticket,
+          attempt,
+          event: null,
+          previousStatus: ticket.status,
+          changed: false,
+          aggregateDecision: null
+        };
+      }
       const memberDispositions = batchRuns.map(projectedDisposition);
       const disposition = deriveTicketAttemptDisposition(memberDispositions);
 

@@ -160,6 +160,15 @@ const MUTATIONS = Object.freeze([
     expect: 'the routing Run status overrides the exact multi-member disposition'
   },
   {
+    name: 'attempt-wait-swallows-malformed-completion',
+    suite: 'malformed-completion-projection-postgres-test.js',
+    file: 'persistence/postgres/store.js',
+    contract: 'a routed completed member is evidence-validated even while exact siblings are active',
+    find: '      projectedDisposition(run);',
+    replace: '      // mutation: skip routed-member completion evidence validation',
+    expect: 'a malformed success claim becomes a silent unsettled-attempt no-op'
+  },
+  {
     name: 'manual-completion-bypasses-current-attempt',
     suite: 'completion-admission-test.js',
     file: 'server.js',
