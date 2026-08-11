@@ -27529,10 +27529,9 @@ fastify.post('/api/tickets/:id/simulate-plan', {
 // Every other policy field is preserved. This edits no runs and creates no runs — it
 // only updates the ticket override used for future admission. A null value inherits
 // the current runtime default; admitted runs keep their already-resolved snapshot.
-// No domain event is appended: executionPolicy is not part of the event-sourced ticket
-// projection (ticket.created payloads omit it and the rebuilder never reconstructs it),
-// The PostgreSQL ticket row is authoritative for policy. The optimistic ticket update and
-// diagnostic audit remain on the normal repository path.
+// The PostgreSQL ticket row is authoritative for policy. Status finalization is a
+// separate authority, so the narrow repository writer may rebase over a status-only
+// revision change while still rejecting a genuinely concurrent policy edit.
 fastify.post('/api/tickets/:id/execution-policy/max-attempts', {
   preHandler: fastify.requireAuth,
   config: { mutationAdmission: true }
@@ -27553,14 +27552,14 @@ fastify.post('/api/tickets/:id/execution-policy/max-attempts', {
   if (raw === null || raw === '' || (typeof raw === 'string' && raw.trim().toLowerCase() === 'clear')) {
     nextValue = null; // clear → runtime default
   } else if (typeof raw === 'number') {
-    if (!Number.isInteger(raw) || raw <= 0) {
+    if (!Number.isSafeInteger(raw) || raw <= 0) {
       reply.code(400);
       return { error: 'maxAttempts must be a positive integer, or empty/clear for the runtime default' };
     }
     nextValue = raw;
   } else if (typeof raw === 'string' && /^\d+$/.test(raw.trim())) {
     const parsed = parseInt(raw.trim(), 10);
-    if (!Number.isInteger(parsed) || parsed <= 0) {
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) {
       reply.code(400);
       return { error: 'maxAttempts must be a positive integer, or empty/clear for the runtime default' };
     }
@@ -27577,20 +27576,28 @@ fastify.post('/api/tickets/:id/execution-policy/max-attempts', {
   }
 
   const changedBy = request.user ? request.user.username : String(request.session.userId);
-  const previousValue = currentTicket.executionPolicy ? currentTicket.executionPolicy.maxAttempts : null;
-  const result = await getTicketRunLifecycleRepository().transitionTicketState({
-    ticketId,
-    fromStatuses: [currentTicket.status],
-    toStatus: currentTicket.status,
-    patch: {
-      executionPolicy: { ...currentTicket.executionPolicy, maxAttempts: nextValue },
+  let result;
+  try {
+    result = await getTicketRunLifecycleRepository().updateTicketMaxAttempts({
+      ticketId,
+      expectedRevision: currentTicket.revision,
+      expectedExecutionPolicy: currentTicket.executionPolicy || null,
+      maxAttempts: nextValue,
       changedBy,
-      changedAt: new Date().toISOString()
-    },
-    eventType: 'ticket.execution_policy_updated',
-    eventPayload: { changedBy, fromMaxAttempts: previousValue, toMaxAttempts: nextValue }
-  });
+      eventType: 'ticket.execution_policy_updated'
+    });
+  } catch (error) {
+    if (error && error.code === 'OPTIMISTIC_CONCURRENCY_CONFLICT') {
+      reply.code(409);
+      return {
+        error: 'Ticket execution policy changed concurrently; reload and retry',
+        code: error.code
+      };
+    }
+    throw error;
+  }
   const ticket = result.ticket;
+  const previousValue = result.previousMaxAttempts;
   broadcastTicketChange();
   await appendSystemLog('ticket:max_attempts_change', `Ticket #${ticketId} maxAttempts changed from ${previousValue === null ? 'runtime default' : previousValue} to ${nextValue === null ? 'runtime default' : nextValue} by ${changedBy}`, null, {
     ticketId,

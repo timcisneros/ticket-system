@@ -339,6 +339,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // may start new work after a run stops: unresolved ticket triage and the attempt
   // ceiling, on the rerun, retry and reopen paths.
   'rerun-admission-gate-test.js',
+  // maxAttempts is a future-admission policy, independent of the parent Ticket's
+  // terminal status projection. Force finalization between the route's read and
+  // write so that independence is proved without a timing race.
+  'max-attempts-finalization-race-test.js',
   // A24 — the provider-input privacy boundary: workspace-relative paths leave this
   // machine, host filesystem locations do not, and the durable record keeps both.
   'provider-input-privacy-test.js',

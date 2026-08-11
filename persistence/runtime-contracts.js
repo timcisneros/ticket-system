@@ -9,7 +9,7 @@ const CONTRACTS = Object.freeze({
   runLease: ['getRun', 'verifyRunLease', 'listPendingRuns', 'listExpiredRunningRuns', 'claimPendingRun', 'startClaimedRun', 'heartbeatRunLease', 'releaseRunLease', 'persistRunWorkflowStep', 'recoverExpiredRun'],
   runPhase: ['advanceRunPhase'],
   runTerminalization: ['terminalizeRun', 'repairRunTerminalization'],
-  ticketRunLifecycle: ['createTicketWithEvent', 'transitionTicketState', 'reassignTicket', 'createRunsAndStartTicket', 'transitionTicketAfterRun', 'reopenTicket', 'createRetryRun'],
+  ticketRunLifecycle: ['createTicketWithEvent', 'transitionTicketState', 'reassignTicket', 'updateTicketMaxAttempts', 'createRunsAndStartTicket', 'transitionTicketAfterRun', 'reopenTicket', 'createRetryRun'],
   structuredAllocationPlanning: ['writeStructuredAllocationPlanningAttempt', 'admitStructuredAllocationPlan', 'getAllocationPlanForTicket'],
   structuredAllocationLeafExecution: ['admitStructuredAllocationLeafRuns', 'reconcileStructuredAllocationLeafItems', 'getAllocationPlanForTicket'],
   governedEconomicsRead: ['readTicketGovernedEconomics', 'getEconomicReservation'],

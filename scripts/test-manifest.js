@@ -140,6 +140,7 @@ const TESTS = Object.freeze([
   { file: "dynamic-regression-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "workspace-error-containment-test.js", status: "required" },
   { file: "rerun-admission-gate-test.js", status: "required" },
+  { file: "max-attempts-finalization-race-test.js", status: "required" },
   { file: "provider-input-privacy-test.js", status: "required" },
   { file: "auto-retry-bounds-test.js", status: "required" },
   { file: "run-mutation-evidence-test.js", status: "required" },

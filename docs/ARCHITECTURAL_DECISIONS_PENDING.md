@@ -5339,6 +5339,32 @@ and the first time the surviving layer was materially *worse* than the one remov
 | ceiling edit preserves other policy fields, creates no run | scenario 4 |
 | the rerun guard reads the updated ceiling | scenario 3 |
 
+#### maxAttempts edit / Ticket-finalization concurrency defect (resolved 2026-08-10)
+
+A later canonical checkpoint failed scenario 2 while setting `maxAttempts` to the
+two attempts already consumed. That historical result established neither a product
+nor a harness cause because its `/tmp` evidence did not survive the resumed forensic
+session. The contract is nevertheless unambiguous: setting the ceiling to attempts
+already consumed is legal, creates no Run, and closes the next admission at
+`attemptCount >= maxAttempts`.
+
+A provider-free controlled regression then forced the exact disputed ordering. It
+terminalized Run 2, stopped before the parent Ticket projection, let the policy route
+read Ticket revision 5 as `in_progress`, finalized the Ticket to revision 6 / `failed`,
+and continued the policy write. The route returned HTTP 500 with
+`STATE_TRANSITION_CONFLICT` (`ticket 1 is failed; expected in_progress`). Both existing
+Run snapshots and the Run count remained unchanged. This proves a production
+concurrency defect, not a settlement prerequisite: the public maxAttempts control is
+not status-gated, but it used a same-status transition merely to persist a policy field.
+
+`updateTicketMaxAttempts` is now the narrow authority. Under the Ticket row lock it
+rebases over revision changes when the complete execution policy is unchanged, preserves
+the current authoritative status and all other policy fields, and rejects a stale
+policy snapshot with `OPTIMISTIC_CONCURRENCY_CONFLICT`. The controlled regression also
+forces two policy writes from one snapshot and proves exactly one commits. Admitted Run
+snapshots are never rewritten, no Run is created by the edit, and the next rerun remains
+refused at 2/2. The `>=` admission guard is unchanged.
+
 **Improved rather than ported literally.** The retired ceiling suite compared the policy
 against a hard-coded field list, which silently stops covering any field the policy
 gains. The replacement snapshots the policy **as the runtime normalized and stored it**

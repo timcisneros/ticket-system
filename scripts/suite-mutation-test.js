@@ -678,13 +678,13 @@ const MUTATIONS = Object.freeze([
   {
     name: 'ceiling-edit-drops-other-policy-fields',
     suite: 'rerun-admission-gate-test.js',
-    file: 'server.js',
+    file: 'persistence/postgres/store.js',
     contract: 'editing maxAttempts changes only maxAttempts',
     // The ceiling still lands correctly, so an operator editing it sees exactly what
     // they asked for while the rest of the execution policy is silently reset to its
     // defaults. Nothing in the response reveals it.
-    find: '      executionPolicy: { ...currentTicket.executionPolicy, maxAttempts: nextValue },',
-    replace: '      executionPolicy: { maxAttempts: nextValue },',
+    find: '      const nextExecutionPolicy = { ...(currentPolicy || {}), maxAttempts: nextMaxAttempts };',
+    replace: '      const nextExecutionPolicy = { maxAttempts: nextMaxAttempts };',
     expect: 'setting the ceiling resets every other execution-policy field'
   },
   {

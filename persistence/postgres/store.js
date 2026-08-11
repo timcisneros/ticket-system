@@ -8738,6 +8738,103 @@ class PostgresRuntimeStore {
     return client ? execute(client) : this.withTransaction(execute);
   }
 
+  // Update only the future-admission maxAttempts override.
+  //
+  // Ticket finalization and this operator control are independent authorities:
+  // finalization owns the Ticket status, while this writer owns one field in the
+  // execution policy. A caller may therefore rebase over a newer Ticket revision
+  // when the policy itself is unchanged. The complete expected policy is compared
+  // under the row lock so a genuine concurrent policy writer is never overwritten.
+  // Existing Runs are intentionally outside this transaction; their admitted
+  // execution-policy and runtime-budget snapshots are immutable authority.
+  async updateTicketMaxAttempts({
+    ticketId,
+    expectedRevision,
+    expectedExecutionPolicy,
+    maxAttempts,
+    changedBy,
+    eventType = 'ticket.execution_policy_updated',
+    eventPayload = {}
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const revision = positiveSafeInteger(expectedRevision, 'expectedRevision');
+    const expectedPolicy = expectedExecutionPolicy == null
+      ? null
+      : this.assertJsonRecord(expectedExecutionPolicy, 'expectedExecutionPolicy');
+    const nextMaxAttempts = maxAttempts == null
+      ? null
+      : positiveSafeInteger(maxAttempts, 'maxAttempts');
+    const actor = requiredString(changedBy, 'changedBy');
+    const type = requiredString(eventType, 'eventType');
+    const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
+
+    const execute = async connection => {
+      const currentResult = await connection.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (currentResult.rowCount === 0) {
+        const error = new Error(`ticket ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+
+      const before = ticketFromRow(currentResult.rows[0]);
+      const currentPolicy = before.executionPolicy == null
+        ? null
+        : this.assertJsonRecord(before.executionPolicy, 'ticket executionPolicy');
+      if (before.revision < revision || canonicalJson(currentPolicy) !== canonicalJson(expectedPolicy)) {
+        throw new OptimisticConcurrencyError('ticket execution policy', id, revision, before);
+      }
+
+      const previousMaxAttempts = currentPolicy && currentPolicy.maxAttempts != null
+        ? positiveSafeInteger(currentPolicy.maxAttempts, 'ticket executionPolicy.maxAttempts')
+        : null;
+      const nextExecutionPolicy = { ...(currentPolicy || {}), maxAttempts: nextMaxAttempts };
+      const clock = await connection.query('SELECT clock_timestamp() AS ts');
+      const changedAt = isoTimestamp(clock.rows[0].ts, 'ticket execution policy clock');
+      const bodyPatch = {
+        executionPolicy: nextExecutionPolicy,
+        changedBy: actor,
+        changedAt
+      };
+      const updated = await connection.query(
+        `UPDATE ${this.table('tickets')}
+         SET body = body || $2::jsonb,
+             revision = revision + 1,
+             updated_at = clock_timestamp()
+         WHERE id = $1 AND revision = $3
+         RETURNING *`,
+        [id, bodyPatch, before.revision]
+      );
+      if (updated.rowCount === 0) {
+        throw new OptimisticConcurrencyError('ticket execution policy', id, before.revision);
+      }
+
+      const ticket = ticketFromRow(updated.rows[0]);
+      const event = await this._appendEvent(connection, {
+        type,
+        ticketId: ticket.id,
+        payload: {
+          ...callerPayload,
+          changedBy: actor,
+          fromMaxAttempts: previousMaxAttempts,
+          toMaxAttempts: nextMaxAttempts,
+          status: ticket.status,
+          revision: ticket.revision,
+          updatedAt: ticket.updatedAt
+        }
+      });
+      return {
+        ticket,
+        event,
+        previousMaxAttempts,
+        nextMaxAttempts
+      };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
   async transitionTicketState({
     ticketId,
     fromStatuses,
