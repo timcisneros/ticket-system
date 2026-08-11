@@ -143,6 +143,69 @@ function workerInspectionAnswer(body) {
   });
 }
 
+function ownedRootOf(body) {
+  const envelope = runtimeEnvelopeOf(body) || {};
+  return Array.isArray(envelope.ownedOutputPaths) && envelope.ownedOutputPaths[0]
+    ? String(envelope.ownedOutputPaths[0]) : '';
+}
+
+function sameOwnedRoot(left, right) {
+  return String(left || '').replace(/\/+$/, '') === String(right || '').replace(/\/+$/, '');
+}
+
+let terminalFailureOwnedRoot = null;
+let terminalBlockingOwnedRoot = null;
+
+function controlledSiblingReadAnswer() {
+  return JSON.stringify({
+    message: 'Independently exercising the declared sibling-read authority boundary.',
+    actions: [{ operation: 'listDirectory', args: { path: terminalFailureOwnedRoot } }],
+    complete: false
+  });
+}
+
+function terminalBeforeProgressBlockAnswer(body, spec) {
+  if (isPlannerRequest(body)) return plannerProposal(body);
+  const owned = ownedRootOf(body);
+  if (sameOwnedRoot(owned, terminalFailureOwnedRoot)) {
+    return JSON.stringify({
+      message: 'Attempting one independently controlled out-of-scope mutation.',
+      actions: [{ operation: 'createFolder', args: { path: spec.failureTarget } }],
+      complete: true
+    });
+  }
+  if (sameOwnedRoot(owned, terminalBlockingOwnedRoot)) {
+    return controlledSiblingReadAnswer();
+  }
+  return workerAnswer(body);
+}
+
+function responseGateFor(body) {
+  const spec = responseSpec();
+  if (spec.kind !== 'role-aware-terminal-before-progress-block' || isPlannerRequest(body)) {
+    return null;
+  }
+  if (terminalFailureOwnedRoot === null) {
+    terminalFailureOwnedRoot = ownedRootOf(body);
+    return null;
+  }
+  if (sameOwnedRoot(ownedRootOf(body), terminalFailureOwnedRoot)) return null;
+  if (terminalBlockingOwnedRoot === null) terminalBlockingOwnedRoot = ownedRootOf(body);
+  return spec.gatePath;
+}
+
+function afterResponseGate(gatePath, callback) {
+  if (!gatePath || fs.existsSync(gatePath)) {
+    queueMicrotask(callback);
+    return;
+  }
+  fs.watchFile(gatePath, { interval: 5 }, () => {
+    if (!fs.existsSync(gatePath)) return;
+    fs.unwatchFile(gatePath);
+    callback();
+  });
+}
+
 function responseSpec() {
   return JSON.parse(fs.readFileSync(RESPONSE_PATH, 'utf8'));
 }
@@ -179,6 +242,9 @@ function modelTextFor(body) {
       actions: [],
       complete: true
     });
+  }
+  if (spec.kind === 'role-aware-terminal-before-progress-block') {
+    return terminalBeforeProgressBlockAnswer(body, spec);
   }
   if (spec.kind === 'one-action-createFolder-by-owned-root') {
     const envelope = runtimeEnvelopeOf(body) || {};
@@ -311,17 +377,19 @@ globalThis.fetch = async function observedFetch(input, init) {
         else init.signal.addEventListener('abort', abort, { once: true });
       }
     });
-    const payload = realShapedResponse(body);
-    // The real platform Response, for the same reason: production consumes
-    // more of this interface than a hand-written stub tends to provide.
-    return new Response(payload, {
-      status: 200,
-      statusText: 'OK',
-      headers: {
-        'x-request-id': 'req_boundary_controlled',
-        'content-type': 'application/json'
-      }
-    });
+    return new Promise(resolve => afterResponseGate(responseGateFor(body), () => {
+      const payload = realShapedResponse(body);
+      // The real platform Response, for the same reason: production consumes
+      // more of this interface than a hand-written stub tends to provide.
+      resolve(new Response(payload, {
+        status: 200,
+        statusText: 'OK',
+        headers: {
+          'x-request-id': 'req_boundary_controlled',
+          'content-type': 'application/json'
+        }
+      }));
+    }));
   }
   // STOP BEFORE THE NETWORK. No response is synthesized: the product must not
   // continue on an answer this seam invented.
@@ -368,13 +436,15 @@ https.request = function observedHttpsRequest(options, onResponse) {
       });
       if (RESPONSE_PATH) {
         if (shouldHang(body)) return request;
-        response.statusCode = 200;
-        response.headers = {
-          'x-request-id': 'req_boundary_controlled',
-          'content-type': 'application/json'
-        };
-        onResponse(response);
-        response.end(realShapedResponse(body));
+        afterResponseGate(responseGateFor(body), () => {
+          response.statusCode = 200;
+          response.headers = {
+            'x-request-id': 'req_boundary_controlled',
+            'content-type': 'application/json'
+          };
+          onResponse(response);
+          response.end(realShapedResponse(body));
+        });
         return request;
       }
       const error = new Error(BOUNDARY_REFUSAL);

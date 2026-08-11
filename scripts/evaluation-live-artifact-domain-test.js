@@ -244,9 +244,14 @@ function main() {
        persisted.label === DIAGNOSTIC_LABEL &&
        persisted.acceptedProductEvidence === false &&
        persisted.infrastructureExclusion === false &&
+       persisted.refusal.metrics?.normalizedCost?.defined === false &&
+       persisted.refusal.metrics?.normalizedCost?.reasonCode ===
+         'LIVE_NORMALIZED_COST_INPUT_MISSING' &&
+       persisted.refusal.metrics?.normalizedCost?.missingFields.includes(
+         'requestPricingAuthority') &&
        (fs.statSync(diagnosticRoot).mode & 0o777) === 0o700 &&
        (fs.statSync(target).mode & 0o777) === 0o600,
-    'metric refusal persists a hashed non-decision diagnostic readable by a fresh process');
+    'metric refusal persists its exact reason in a hashed diagnostic readable by a fresh process');
   } finally {
     fs.rmSync(diagnosticRoot, { recursive: true, force: true });
   }

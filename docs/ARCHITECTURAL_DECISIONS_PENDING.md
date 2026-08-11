@@ -1,7 +1,8 @@
 ## REAL LIVE-V3 still reaches an undefined five-metric candidate (2026-08-11)
 
-**Status: OPEN — the run is permanently `ABORTED — NOT DECISION EVIDENCE` and
-the diagnostic must not be interpreted to patch or resume it.**
+**Status: RESOLVED IN SOURCE — the run remains permanently
+`ABORTED — NOT DECISION EVIDENCE`; the authorized diagnostic was used only for
+structural classification and never to patch, score, or resume that run.**
 
 The newly authorized REAL LIVE-V3 run used exact executable source
 `e3a4a23c4a4d84e38e553fa8e63c2ba3958627bd`, manifest hash
@@ -25,14 +26,36 @@ and internal record hash
 It remains outside the corpus and exclusion domains. Its per-metric detail was
 not interpreted under this authorization.
 
-The immediate integrity owner is now demonstrated, not inferred: the supposedly
-closed runner-produced candidate domain still admits at least one REAL-reachable
-shape that `projectLiveMetricDomain` refuses. A future source-only audit must
-reconstruct that shape from the diagnostic, determine whether the defect is an
-existing-contract projection error, an early-acceptance error, or a frozen
-protocol gap, and add a controlled runner-produced regression before any new
-paid authorization. It must not use the 36 accepted outcomes to choose
-semantics.
+The later source-only authorization verified both hashes before reading the
+complete diagnostic. Exactly one metric was undefined: latency, reason
+`LIVE_LATENCY_INPUT_MISSING`, missing field `withheldMs`. The candidate was a
+quiescent `product_blocked` Ticket with terminal Runs `completed, failed,
+failed`, raw-state oracle pass, unavailable capture observation, false-negative
+completion claim, four durable governed-worker responses, one persisted
+progress block, no recovery/interruption, and otherwise defined allocation,
+truthfulness, normalized-cost and churn inputs. Its projected `withheldMs` was
+`-3556`.
+
+This is **A. PROJECTION IMPLEMENTATION DEFECT**. Section 5.3 of the frozen
+protocol already defines withheld time as persisted progress block to the next
+authorized request, and the frozen metric table already defines null as the
+unavailable/non-applicable duration. `deriveLatency` instead subtracted the
+first terminal parent-Ticket event. Structured leaves settle independently, so
+one leaf can terminalize the parent before a later sibling persists its progress
+block; the parent status event is neither a request nor a valid interval end.
+The corrected projection uses the earliest subsequent
+`provider.request.persisted` or `ticket.economic_request_started`, otherwise
+null, and refuses negative/invalid timestamp arithmetic.
+
+The previous rehearsal varied broad terminal classes but not the cross-leaf
+temporal order of parent Ticket terminalization, later sibling progress block,
+and next-request existence. The replacement proof binds a source-owned
+reachability registry to actual `runTrial` cases, expands every finite/nullable
+metric input into meaningful equivalence classes, and independently forces the
+parent-terminal-before-later-block class through PostgreSQL and the production
+report path. Unknown future states still fail closed and persist their exact
+metric reason before refusal. LIVE-V3 semantics and bytes are unchanged; v4 is
+not required.
 
 Persistent quarantine:
 `.local-artifacts/structured-allocation-live-v3/real-e3a4a23-20260811-oXmXm0n7`;

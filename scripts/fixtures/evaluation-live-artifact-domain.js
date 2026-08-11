@@ -25,6 +25,30 @@ const TRUTHFULNESS_CLASSES = Object.freeze([
   'false_positive_completion', 'true_positive_completion',
   'false_negative_completion', 'true_negative_completion', 'oracle_refused'
 ]);
+const LATENCY_FIELDS = Object.freeze([
+  'planningMs', 'timeToFirstExecutionMs', 'endToEndMs', 'recoveryMs', 'withheldMs'
+]);
+
+// Reachability classes that have distinct source production paths or metric
+// authority. The actual-runner PostgreSQL proof must cover every entry; the
+// pure totality proof then expands the finite/nullable inputs each class feeds
+// into this projection. Keeping the list beside the classifier makes a new
+// class a release-contract change rather than an untracked test choice.
+const LIVE_RUNNER_REACHABILITY_CLASSES = Object.freeze([
+  'successful_completion',
+  'truthful_product_failure',
+  'provider_refusal',
+  'malformed_response',
+  'action_authority_refusal',
+  'coupling_oracle_refusal',
+  'budget_limited_termination',
+  'governed_no_progress',
+  'unsupported_completion_claim',
+  'runtime_timeout',
+  'delivery_uncertainty',
+  'interrupted_recoverable',
+  'terminal_ticket_before_later_progress_block'
+]);
 
 class LiveArtifactDomainError extends Error {
   constructor(message, detail = {}) {
@@ -155,7 +179,7 @@ function checkChurn(artifact) {
 function checkLatency(artifact) {
   const latency = artifact.latency;
   if (!latency || typeof latency !== 'object') return ['latency'];
-  return ['planningMs', 'timeToFirstExecutionMs', 'endToEndMs', 'recoveryMs', 'withheldMs']
+  return LATENCY_FIELDS
     .filter(field => !Object.prototype.hasOwnProperty.call(latency, field) ||
       !validNullableDuration(latency[field]));
 }
@@ -311,10 +335,13 @@ function assertLiveProductArtifactScorable(input) {
 
 module.exports = {
   LIVE_ARTIFACT_DOMAIN_VERSION,
+  LIVE_RUNNER_REACHABILITY_CLASSES,
+  LATENCY_FIELDS,
   LiveArtifactDomainError,
   OBSERVATION_COMPLETENESS,
   ORACLE_VERDICTS,
   PRODUCT_TERMINAL_STATUSES,
+  TRUTHFULNESS_CLASSES,
   REFUSE_BEFORE_PRODUCT_EVIDENCE,
   SCORABLE_PRODUCT_EVIDENCE,
   assertLiveProductArtifactScorable,

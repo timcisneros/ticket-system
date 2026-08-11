@@ -2938,3 +2938,94 @@ corpora remain independently unchanged.
 source-only audit may read the diagnostic to classify the remaining metric
 projection gap. This authorization permits neither that correction nor another
 provider call.
+
+## 20. Source-only closure of the repeated metric-domain abort (2026-08-11)
+
+The later source-only authorization verified the diagnostic file SHA-256
+`5b32cc58c5b4673a330cfbf50d193295d37413549eb67ca50a3320b3e017030a`
+and internal record hash
+`455289b93dfa9305159da3fd88b2a6c8d4aa8a505f0bbc3e61f94a3c0c10805e`
+before interpreting it. No accepted prefix artifact was read to choose a
+semantic, and neither aborted run was resumed, imported, retransmitted, or
+scored.
+
+The diagnostic names exactly one missing metric input:
+
+| Metric | Defined | Reason | Missing field |
+|---|---:|---|---|
+| allocation quality | yes | `DEFINED_BY_FROZEN_CONTRACT` | none |
+| completion truthfulness | yes | `DEFINED_BY_FROZEN_CONTRACT` | none |
+| latency | **no** | `LIVE_LATENCY_INPUT_MISSING` | `withheldMs` |
+| normalized cost | yes | `DEFINED_BY_FROZEN_CONTRACT` | none |
+| churn | yes | `DEFINED_BY_FROZEN_CONTRACT` | none |
+
+Structurally, it was a quiescent `product_blocked` candidate: parent Ticket
+`blocked`; Runs `completed, failed, failed`; independent raw-state oracle
+`pass`; capture observation `unavailable`; product completion claim false and
+truthfulness `false_negative_completion`; five invoked transports and four
+durable governed-worker responses; no recovery or interruption; one persisted
+progress block; three committed folder receipts. Allocation and normalized cost
+were complete, including one planner plus four worker requests and 1,448
+micro-USD normalized cost. The invalid latency projection was
+`withheldMs:-3556`; the other four latency fields were defined.
+
+### Classification and frozen authority
+
+Classification is **A. PROJECTION IMPLEMENTATION DEFECT**. Frozen section 5.3
+already defines time lost to withholding as the interval between a persisted
+progress block and the next authorized request. The later metric-domain table
+already defines a nullable duration: null means unavailable/non-applicable and
+never means zero. No frozen rule makes the parent Ticket transition an interval
+endpoint.
+
+The former `deriveLatency` nevertheless used the first terminal parent-Ticket
+event. Structured leaves can settle independently: one legitimate failure can
+terminalize the parent while another already-running sibling later persists a
+progress block. Subtracting the later block from the earlier parent event
+manufactured a negative duration and converted a legitimate candidate into an
+undefined one. The corrected owner finds the earliest subsequent canonical
+request authority (`provider.request.persisted` for a Run or
+`ticket.economic_request_started` for planning); when no subsequent request
+exists it projects the already-frozen null. It also refuses to manufacture a
+duration from reversed timestamps.
+
+`PREVIOUS CLOSURE GAP = cross-leaf temporal ordering between the first terminal
+parent Ticket transition and a later persisted run.progress_blocked event,
+including whether a next authorized request exists.` The earlier rehearsal
+varied terminal labels and broad failure classes but not that ordering created
+by asymmetric leaf response/action outcomes.
+
+### Stronger source-derived proof
+
+The closed-domain owner now exports the source-owned reachable candidate-class
+registry. The actual PostgreSQL runner suite must drive every registry entry
+through `runTrial`; a separate totality suite expands the finite/nullable inputs
+actually consumed by each metric owner: terminal/open-interrupted/timeout
+classes, claim × oracle × observation authority, every latency field and
+ordering boundary, direct/legacy/structured allocation inputs, metered/bounded
+planner-worker economics, and governed/non-governed transport/response/churn
+cardinalities. Every source-valid equivalence class must be scorable or reach an
+existing pre-candidate refusal; unsupported terminal values, missing or negative
+durations, response-without-attempt authority, and other future contradictions
+remain fail closed.
+
+An independent captured boundary (not the REAL response bytes) makes whichever
+governed worker arrives first produce an owned-scope failure, gates its siblings
+until PostgreSQL proves the parent Ticket terminal, then releases a sibling to
+produce the later progress block. The artifact projects either the non-negative
+interval to a subsequent authorized request or the frozen defined-null when no
+such request exists; it is accepted by the shared domain, enters the complete
+120-slot corpus, and is consumed by the actual production report command.
+Focused mutations recreate
+the negative subtraction, drop either canonical request endpoint, collapse the
+new temporal equivalence class, bypass corpus/scorer gates, or drop the exact
+diagnostic reason; each must die at its smallest owner.
+
+This correction changes projection implementation, not metric meaning,
+thresholds, topology, or evidence membership. LIVE-V3 therefore remains
+byte-identical and no v4 is required. The latest run header
+`2965176eb1742f7e59678c7972a43f23c45d3483bdfbd76b53f7e096fe0e87ce`
+and the earlier header
+`7297f3dd7d3ec98e563c1474a6163fc14d06612824091b7ac76838cfc364e47f`
+remain permanently quarantined. This source correction authorizes no provider
+contact or new REAL evaluation.

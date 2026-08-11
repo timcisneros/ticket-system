@@ -18,7 +18,8 @@ const { ARMS } = require('./fixtures/evaluation-arms');
 const { getScenario } = require('./fixtures/evaluation-scenarios');
 const { runTrial } = require('./structured-allocation-evaluation-runner');
 const {
-  LIVE_ARTIFACT_DOMAIN_VERSION, SCORABLE_PRODUCT_EVIDENCE,
+  LIVE_ARTIFACT_DOMAIN_VERSION, LIVE_RUNNER_REACHABILITY_CLASSES,
+  SCORABLE_PRODUCT_EVIDENCE,
   assertLiveProductArtifactScorable, evaluateLiveArtifactDisposition
 } = require('./fixtures/evaluation-live-artifact-domain');
 const {
@@ -137,6 +138,48 @@ async function stopAfterTransportInvocation(input) {
     `controlled interruption route failed: ${stopped.body}`);
 }
 
+async function releaseWorkersAfterTerminalTicket({ ticketId, store, gatePath, trace }) {
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    const result = await store.pool.query(
+      `SELECT ticket.status,
+              (SELECT MIN(event.ts) FROM ${store.table('events')} AS event
+                WHERE event.ticket_id = ticket.id AND event.run_id IS NULL
+                  AND event.type = 'ticket.updated'
+                  AND event.payload->>'status' IN ('completed', 'failed', 'blocked'))
+                AS terminal_ticket_at,
+              (SELECT COUNT(*)::int FROM ${store.table('events')} AS event
+                WHERE event.ticket_id = ticket.id
+                  AND event.type = 'run.progress_blocked') AS progress_blocks
+         FROM ${store.table('tickets')} AS ticket WHERE ticket.id = $1`, [ticketId]);
+    const row = result.rows[0];
+    if (row && ['completed', 'failed', 'blocked'].includes(row.status) &&
+        row.terminal_ticket_at && Number(row.progress_blocks) === 0) {
+      // Keep the runner proof independent of JavaScript Date millisecond
+      // truncation: release the sibling only after PostgreSQL's own clock has
+      // crossed a distinct timestamp boundary following terminalization. This
+      // is an authoritative condition wait, not a race won by a fixed sleep.
+      const clock = (await store.pool.query(
+        `SELECT clock_timestamp() >= $1::timestamptz + interval '5 milliseconds' AS ready`,
+        [row.terminal_ticket_at])).rows[0];
+      if (clock.ready !== true) {
+        await new Promise(resolve => setTimeout(resolve, 1));
+        continue;
+      }
+      trace.ticketStatusBeforeGate = row.status;
+      trace.terminalTicketAt = new Date(row.terminal_ticket_at).toISOString();
+      fs.writeFileSync(gatePath, 'terminal ticket observed before later workers\n', {
+        mode: 0o600, flag: 'wx'
+      });
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error('controlled temporal class never reached terminal Ticket before a progress block');
+    }
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+}
+
 async function main() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'live-artifact-domain-pg-'));
   const corpusRoot = path.join(root, 'mixed-corpus');
@@ -172,11 +215,13 @@ async function main() {
         const cases = [
           {
             name: 'normal-success',
+            reachabilityClass: 'successful_completion',
             slot: slotOf({ scenarioId: 'family-2-cleanly-separable', armId: 'A' }),
             spec: { kind: 'objective-folders' }
           },
           {
             name: 'truthful-product-failure',
+            reachabilityClass: 'truthful_product_failure',
             slot: slotOf({ scenarioId: 'family-2-cleanly-separable-alt', armId: 'A' }),
             spec: { kind: 'literal', text: JSON.stringify({
               message: 'Unable to complete the declared work.', actions: [], complete: false
@@ -184,16 +229,19 @@ async function main() {
           },
           {
             name: 'provider-refusal',
+            reachabilityClass: 'provider_refusal',
             slot: slotOf({ scenarioId: 'family-5-ownership-known', armId: 'A' }),
             spec: { kind: 'provider-refusal' }
           },
           {
             name: 'malformed-output',
+            reachabilityClass: 'malformed_response',
             slot: slotOf({ scenarioId: 'family-5-ownership-known-alt', armId: 'A' }),
             spec: { kind: 'literal', text: 'controlled malformed output' }
           },
           {
             name: 'action-authority-refusal',
+            reachabilityClass: 'action_authority_refusal',
             slot: slotOf({ scenarioId: 'family-6-ownership-unknown', armId: 'A' }),
             spec: { kind: 'literal', text: JSON.stringify({
               message: 'Four controlled mutations.', complete: true,
@@ -204,11 +252,13 @@ async function main() {
           },
           {
             name: 'coupling-oracle-refusal',
+            reachabilityClass: 'coupling_oracle_refusal',
             slot: slotOf({ scenarioId: 'family-3-sibling-dependency', armId: 'A' }),
             spec: { kind: 'objective-folders' }
           },
           {
             name: 'budget-limited-no-progress',
+            reachabilityClass: 'budget_limited_termination',
             slot: slotOf({ scenarioId: 'family-2-cleanly-separable', armId: 'A2a', repetition: 2 }),
             spec: { kind: 'literal', text: JSON.stringify({
               message: 'No declared fact advanced.', actions: [], complete: false
@@ -216,23 +266,27 @@ async function main() {
           },
           {
             name: 'governed-no-progress',
+            reachabilityClass: 'governed_no_progress',
             slot: slotOf({ scenarioId: 'family-5-ownership-known', armId: 'B', repetition: 2 }),
             spec: { kind: 'role-aware-structured-inspection' }
           },
           {
             name: 'unsupported-completion-claim',
+            reachabilityClass: 'unsupported_completion_claim',
             slot: slotOf({ scenarioId: 'family-5-ownership-known-alt', armId: 'C',
               repetition: 2 }),
             spec: { kind: 'role-aware-structured-no-evidence-completion' }
           },
           {
             name: 'product-timeout',
+            reachabilityClass: 'runtime_timeout',
             slot: slotOf({ scenarioId: 'family-2-cleanly-separable-alt', armId: 'A', repetition: 3 }),
             spec: { kind: 'hang' },
             quiescenceTimeoutMs: 100
           },
           {
             name: 'governed-delivery-uncertainty-timeout',
+            reachabilityClass: 'delivery_uncertainty',
             slot: slotOf({ scenarioId: 'family-2-cleanly-separable-alt', armId: 'B',
               repetition: 3 }),
             spec: { kind: 'role-aware-planner-success-worker-hang' },
@@ -241,12 +295,36 @@ async function main() {
           },
           {
             name: 'interrupted-recoverable',
+            reachabilityClass: 'interrupted_recoverable',
             slot: slotOf({ scenarioId: 'family-6-ownership-unknown-alt', armId: 'A',
               repetition: 3 }),
             spec: { kind: 'hang' },
             afterTicketCreated: stopAfterTransportInvocation
+          },
+          {
+            name: 'terminal-ticket-before-later-leaf-block',
+            reachabilityClass: 'terminal_ticket_before_later_progress_block',
+            slot: slotOf({ scenarioId: 'family-2-cleanly-separable', armId: 'C',
+              repetition: 1 }),
+            temporalTrace: {},
+            gatePath: path.join(root, 'terminal-before-block.gate'),
+            spec: {
+              kind: 'role-aware-terminal-before-progress-block',
+              failureTarget: 'controlled-outside-all-owned-roots/refusal'
+            }
           }
         ];
+        const temporalCase = cases.find(entry =>
+          entry.name === 'terminal-ticket-before-later-leaf-block');
+        temporalCase.spec.gatePath = temporalCase.gatePath;
+        temporalCase.afterTicketCreated = input => releaseWorkersAfterTerminalTicket({
+          ...input, gatePath: temporalCase.gatePath, trace: temporalCase.temporalTrace
+        });
+        assertThat(new Set(cases.map(entry => entry.reachabilityClass)).size ===
+          LIVE_RUNNER_REACHABILITY_CLASSES.length &&
+          LIVE_RUNNER_REACHABILITY_CLASSES.every(required =>
+            cases.some(entry => entry.reachabilityClass === required)),
+        'actual-runner cases cover every source-owned reachable candidate class');
 
         const controlledByTrial = new Map(cases.map(entry =>
           [trialIdForLiveAssignment(entry.slot), entry]));
@@ -363,6 +441,50 @@ async function main() {
               artifact.ticketReport.terminalRunStatuses.every(status => status === 'interrupted') &&
               result.detail.terminalClass === 'interrupted_recoverable',
             'interruption: normal stop route produces a scorable recoverable-open Ticket shape');
+          }
+          if (entry.name === 'terminal-ticket-before-later-leaf-block') {
+            const ordering = (await store.pool.query(
+              `SELECT
+                 (SELECT MIN(event.ts) FROM ${store.table('events')} AS event
+                   WHERE event.ticket_id = $1 AND event.run_id IS NULL
+                     AND event.type = 'ticket.updated'
+                     AND event.payload->>'status' IN ('completed', 'failed', 'blocked'))
+                   AS terminal_ticket_at,
+                 (SELECT MIN(event.ts) FROM ${store.table('events')} AS event
+                   WHERE event.ticket_id = $1
+                     AND event.type = 'run.progress_blocked') AS progress_block_at,
+                 (SELECT MIN(event.position) FROM ${store.table('events')} AS event
+                   WHERE event.ticket_id = $1 AND event.run_id IS NULL
+                     AND event.type = 'ticket.updated'
+                     AND event.payload->>'status' IN ('completed', 'failed', 'blocked'))
+                   AS terminal_ticket_position,
+                 (SELECT MIN(event.position) FROM ${store.table('events')} AS event
+                   WHERE event.ticket_id = $1
+                     AND event.type = 'run.progress_blocked') AS progress_block_position,
+                 (SELECT MIN(event.ts) FROM ${store.table('events')} AS event
+                   WHERE event.ticket_id = $1 AND event.run_id IS NULL
+                     AND event.type = 'ticket.updated'
+                     AND event.payload->>'status' IN ('completed', 'failed', 'blocked'))
+                   <=
+                 (SELECT MIN(event.ts) FROM ${store.table('events')} AS event
+                   WHERE event.ticket_id = $1
+                     AND event.type = 'run.progress_blocked') AS terminal_not_after_block`,
+              [artifact.ticketReport.ticketId])).rows[0];
+            const ordered = ordering.terminal_ticket_at && ordering.progress_block_at &&
+              ordering.terminal_not_after_block === true &&
+              BigInt(ordering.terminal_ticket_position) < BigInt(ordering.progress_block_position);
+            assertThat(ordered,
+              'temporal class: authoritative parent terminalization precedes the later leaf block');
+            assertThat(entry.temporalTrace.ticketStatusBeforeGate &&
+              artifact.churn.progressBlocks >= 1 &&
+              (artifact.latency.withheldMs === null ||
+                (Number.isFinite(artifact.latency.withheldMs) &&
+                  artifact.latency.withheldMs >= 0)) &&
+              result.detail.metricValidity.latency === true,
+            'temporal class: next-request or defined-null withheld authority remains scorable ' +
+              JSON.stringify({ trace: entry.temporalTrace, progressBlocks: artifact.churn.progressBlocks,
+                withheldMs: artifact.latency.withheldMs,
+                latencyDefined: result.detail.metricValidity.latency }));
           }
           const rows = boundaryRows(observationPath);
           assertThat(rows.every(row => row.hostname === 'api.openai.com'),

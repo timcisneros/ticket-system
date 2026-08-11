@@ -423,6 +423,35 @@ const ok = (condition, message) => {
   });
   ok(terminalLatency.endToEndMs === 2000,
   '4 latency: the first terminal Ticket transition supplies end-to-end duration');
+  const terminalBeforeLeafBlock = deriveLatency({
+    ticket: { created_at: '2026-01-01T00:00:00.000Z', status: 'blocked' },
+    receipts: [],
+    events: [
+      { type: 'ticket.updated', run_id: null,
+        ts: '2026-01-01T00:00:02.000Z', payload: { status: 'blocked' } },
+      { type: 'run.progress_blocked', run_id: 3,
+        ts: '2026-01-01T00:00:05.000Z', payload: { reason: 'verified_progress_exhausted' } }
+    ]
+  });
+  ok(terminalBeforeLeafBlock.endToEndMs === 2000 &&
+     terminalBeforeLeafBlock.withheldMs === null,
+  '4 latency: a later leaf block does not subtract from an earlier terminal Ticket transition');
+  const requestAfterBlock = deriveLatency({
+    ticket: { created_at: '2026-01-01T00:00:00.000Z', status: 'blocked' },
+    receipts: [],
+    events: [
+      { type: 'provider.request.persisted', run_id: 2,
+        ts: '2026-01-01T00:00:01.000Z', payload: {} },
+      { type: 'run.progress_blocked', run_id: 1,
+        ts: '2026-01-01T00:00:05.000Z', payload: {} },
+      { type: 'ticket.updated', run_id: null,
+        ts: '2026-01-01T00:00:02.000Z', payload: { status: 'blocked' } },
+      { type: 'ticket.economic_request_started', run_id: 3,
+        ts: '2026-01-01T00:00:08.000Z', payload: {} }
+    ]
+  });
+  ok(requestAfterBlock.withheldMs === 3000,
+  '4 latency: withheld time ends at the next authorized request, never at the parent status');
   assert.throws(() => deriveCanonicalRequests(facts([
     plannerReservation(), plannerReservation({ id: 9 })
   ]), pricingInputs), error => error instanceof EvaluationReaderError &&

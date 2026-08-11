@@ -55,6 +55,9 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   // Tranche 6 — every accepted REAL product artifact has a frozen scoring,
   // exclusion, or pre-acceptance refusal disposition.
   'evaluation-live-artifact-domain-test.js',
+  // Tranche 6 — source-derived equivalence classes for every metric-affecting
+  // candidate dimension, separate from the runner's mixed examples.
+  'evaluation-live-candidate-domain-totality-test.js',
   // Tranche 6 — actual live topology reaches RETAIN/REVISE/STOP without a provider.
   'evaluation-live-decision-topology-test.js',
   // Tranche 6 — the frozen live manifest and its guards. No provider call.

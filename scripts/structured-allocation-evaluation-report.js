@@ -154,24 +154,42 @@ function deriveProductCompletionClaim(facts) {
 
 function deriveLatency(facts) {
   const at = row => (row && row.ts ? new Date(row.ts).getTime() : null);
+  const earliest = values => values.reduce((minimum, value) =>
+    (Number.isFinite(value) && (!Number.isFinite(minimum) || value < minimum)
+      ? value : minimum), null);
+  const earliestEvent = predicate => earliest(
+    facts.events.filter(predicate).map(at));
   const ticketCreated = facts.ticket && facts.ticket.created_at
     ? new Date(facts.ticket.created_at).getTime() : null;
-  const firstReceipt = facts.receipts.length > 0
-    ? new Date(facts.receipts[0].recorded_at).getTime() : null;
-  const terminalTicketEvent = facts.events.find(event =>
+  const firstReceipt = earliest(facts.receipts.map(receipt =>
+    new Date(receipt.recorded_at).getTime()));
+  const terminalTicketAt = earliestEvent(event =>
     event.type === 'ticket.updated' && event.run_id === null &&
-    ['completed', 'failed', 'blocked'].includes(event.payload && event.payload.status)) || null;
-  const planAdmitted = facts.events.find(e => String(e.type).includes('plan_admitted')) || null;
-  const blockEvent = facts.events.find(e => e.type === 'run.progress_blocked') || null;
+    ['completed', 'failed', 'blocked'].includes(event.payload && event.payload.status));
+  const planAdmittedAt = earliestEvent(event => String(event.type).includes('plan_admitted'));
+  const firstBlockAt = earliestEvent(event => event.type === 'run.progress_blocked');
 
-  const delta = (from, to) => (Number.isFinite(from) && Number.isFinite(to) ? to - from : null);
+  // The frozen withheld-time contract is block -> NEXT authorized request.
+  // A terminal parent transition is not a request and may legally precede a
+  // later leaf's progress block when several structured leaves settle
+  // independently. Using that parent transition as the endpoint manufactured
+  // a negative duration for a valid product candidate. Both canonical request
+  // authorities are included: provider.request.persisted owns Run requests,
+  // while ticket.economic_request_started also covers the planning request.
+  const nextAuthorizedRequestAt = Number.isFinite(firstBlockAt)
+    ? earliestEvent(event =>
+      ['provider.request.persisted', 'ticket.economic_request_started'].includes(event.type) &&
+      Number.isFinite(at(event)) && at(event) >= firstBlockAt)
+    : null;
+
+  const delta = (from, to) => (Number.isFinite(from) && Number.isFinite(to) && to >= from
+    ? to - from : null);
   return {
-    planningMs: delta(ticketCreated, at(planAdmitted)),
+    planningMs: delta(ticketCreated, planAdmittedAt),
     timeToFirstExecutionMs: delta(ticketCreated, firstReceipt),
-    endToEndMs: delta(ticketCreated, at(terminalTicketEvent)),
+    endToEndMs: delta(ticketCreated, terminalTicketAt),
     recoveryMs: null,
-    withheldMs: blockEvent && terminalTicketEvent
-      ? delta(at(blockEvent), at(terminalTicketEvent)) : null
+    withheldMs: delta(firstBlockAt, nextAuthorizedRequestAt)
   };
 }
 

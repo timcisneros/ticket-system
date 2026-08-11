@@ -44,6 +44,31 @@ const MUTATIONS = Object.freeze([
     failure: 'unmetered planner settlement carries its captured authorized maximum'
   }),
   Object.freeze({
+    name: 'live-withheld-time-reuses-parent-terminal',
+    file: 'scripts/structured-allocation-evaluation-report.js',
+    suite: 'structured-allocation-evaluation-test.js',
+    find: 'withheldMs: delta(firstBlockAt, nextAuthorizedRequestAt)',
+    replace: 'withheldMs: Number.isFinite(firstBlockAt) && Number.isFinite(terminalTicketAt) ' +
+      '? terminalTicketAt - firstBlockAt : null',
+    failure: 'a later leaf block does not subtract from an earlier terminal Ticket transition'
+  }),
+  Object.freeze({
+    name: 'live-withheld-time-drops-planner-request-authority',
+    file: 'scripts/structured-allocation-evaluation-report.js',
+    suite: 'evaluation-live-candidate-domain-totality-test.js',
+    find: "['provider.request.persisted', 'ticket.economic_request_started'].includes(event.type)",
+    replace: "['provider.request.persisted'].includes(event.type)",
+    failure: 'withheld temporal class planning request after block projects 3000'
+  }),
+  Object.freeze({
+    name: 'live-later-leaf-temporal-class-collapsed',
+    file: 'scripts/fixtures/evaluation-live-artifact-domain.js',
+    suite: 'evaluation-live-candidate-domain-totality-test.js',
+    find: "'terminal_ticket_before_later_progress_block'",
+    replace: "'governed_no_progress'",
+    failure: 'every source-owned reachable class is bound to the actual runner proof'
+  }),
+  Object.freeze({
     name: 'family-false-positive-disabled',
     file: 'scripts/structured-allocation-evaluation-scorer.js',
     suite: 'structured-allocation-scored-evaluation-test.js',
@@ -425,6 +450,14 @@ const MUTATIONS = Object.freeze([
     find: 'persistRejectedLiveCandidate(input);',
     replace: 'void input;',
     failure: 'diagnostic persistence precedes the fail-closed metric-domain throw'
+  }),
+  Object.freeze({
+    name: 'live-diagnostic-metric-reason-dropped',
+    file: 'scripts/fixtures/evaluation-live-rejected-candidate-diagnostic.js',
+    suite: 'evaluation-live-artifact-domain-test.js',
+    find: 'metrics: disposition.detail?.metrics || null',
+    replace: 'metrics: null',
+    failure: 'metric refusal persists its exact reason in a hashed diagnostic readable by a fresh process'
   }),
   Object.freeze({
     name: 'live-corpus-metric-gate-bypassed',

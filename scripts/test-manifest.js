@@ -213,6 +213,7 @@ const TESTS = Object.freeze([
   { file: "evaluation-live-scoring-dress-rehearsal-test.js", status: "required" },
   { file: "evaluation-live-production-closure-test.js", status: "required" },
   { file: "evaluation-live-artifact-domain-test.js", status: "required" },
+  { file: "evaluation-live-candidate-domain-totality-test.js", status: "required" },
   { file: "evaluation-live-artifact-domain-postgres-test.js", status: "required" },
   { file: "evaluation-live-decision-topology-test.js", status: "required" },
   { file: "evaluation-live-manifest-test.js", status: "required" },
