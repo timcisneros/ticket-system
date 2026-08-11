@@ -159,9 +159,17 @@ async function main() {
         'the Ticket has at most one unsettled attempt after the race');
       equal(await store.countRunsForTicket(raceTicket.id), 1,
         'the losing admission creates no partial Run');
-      await refuses(() => store.pool.query(
-        `INSERT INTO ${store.table('ticket_attempts')} (ticket_id, ordinal, member_count)
-         VALUES ($1, 2, 1)`, [raceTicket.id]),
+      await refuses(() => store.withTransaction(async client => {
+        const inserted = await client.query(
+          `INSERT INTO ${store.table('ticket_attempts')} (ticket_id, ordinal, member_count)
+           VALUES ($1, 2, 1) RETURNING id`,
+          [raceTicket.id]
+        );
+        await store.createRun(draft(raceTicket.id), {
+          client,
+          ticketAttemptId: Number(inserted.rows[0].id)
+        });
+      }),
       /duplicate key|one_unsettled/i,
       'PostgreSQL independently refuses a second unsettled attempt');
     } finally {
