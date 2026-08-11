@@ -30,7 +30,9 @@ const { spawnSync } = require('node:child_process');
 const { withHarness, createAsserter } = require('./postgres-test-harness');
 const { ARMS } = require('./fixtures/evaluation-arms');
 const { getScenario } = require('./fixtures/evaluation-scenarios');
-const { runTrial } = require('./structured-allocation-evaluation-runner');
+const {
+  runHistoricalStructuredDispatchRehearsal
+} = require('./structured-allocation-evaluation-runner');
 const {
   LiveBudgetError, reconstructCommittedLiability
 } = require('./fixtures/evaluation-live-budget-ledger');
@@ -98,7 +100,7 @@ async function main() {
       for (const cell of cells) {
         const capturePath = path.join(root, `capture-${cell.armId}.jsonl`);
         try {
-          await runTrial({
+          await runHistoricalStructuredDispatchRehearsal({
             store, startServer, workspaceRoot,
             scenario: getScenario(cell.scenarioId), arm: ARMS[cell.armId],
             repetition: 1, seed: `live-dispatch-${cell.armId}`,
@@ -186,6 +188,11 @@ async function main() {
       assertThat(runs.rows[0].n >= 1,
         'the captured planner answer was parsed and persisted as real leaf Runs ' +
         `(${runs.rows[0].n})`);
+      const persistedTickets = (await store.listTickets({ limit: 500 })).tickets;
+      const persistedTicketBytes = JSON.stringify(persistedTickets);
+      assertThat(!persistedTicketBytes.includes('EVALUATION_FIXTURE_NAMESPACE') &&
+        !persistedTicketBytes.includes(path.join(root, 'ns')),
+      'historical namespace authority remains ephemeral and never enters Ticket activation policy');
 
       // ── THE GLOBAL CEILING WAS ENFORCED BEFORE THE BYTES LEFT ───────────
       const expected = boundFor('A').trialWorstCaseMicroUsd +
@@ -216,7 +223,7 @@ async function main() {
       const exhaustedCapture = path.join(root, 'capture-exhausted.jsonl');
       let refusal = null;
       try {
-        await runTrial({
+        await runHistoricalStructuredDispatchRehearsal({
           store, startServer, workspaceRoot,
           scenario: getScenario('family-1-simple'), arm: ARMS.A,
           repetition: 1, seed: 'live-dispatch-exhausted',
@@ -243,7 +250,7 @@ async function main() {
       // A LIVE TRIAL WITHOUT AN EXPLICIT CEILING IS REFUSED ENTIRELY.
       let unbounded = null;
       try {
-        await runTrial({
+        await runHistoricalStructuredDispatchRehearsal({
           store, startServer, workspaceRoot,
           scenario: getScenario('family-1-simple'), arm: ARMS.A,
           repetition: 1, seed: 'live-dispatch-unbounded',

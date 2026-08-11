@@ -37,7 +37,9 @@ const assert = require('node:assert/strict');
 const { withHarness, createAsserter } = require('./postgres-test-harness');
 const { ARMS } = require('./fixtures/evaluation-arms');
 const { getScenario } = require('./fixtures/evaluation-scenarios');
-const { runTrial } = require('./structured-allocation-evaluation-runner');
+const {
+  runHistoricalStructuredDispatchRehearsal
+} = require('./structured-allocation-evaluation-runner');
 const { ROLE_ECONOMICS } = require('./fixtures/governed-role-policy-container');
 const {
   FORBIDDEN_PAYLOAD_KEYS,
@@ -228,7 +230,7 @@ async function durablePart(assertThat, { store, workspaceRoot, startServer }) {
     const before = Number((await store.pool.query(
       `SELECT COALESCE(max(id), 0) AS id FROM ${store.table('tickets')}`)).rows[0].id);
     try {
-      await runTrial({
+      await runHistoricalStructuredDispatchRehearsal({
         store, startServer, workspaceRoot,
         scenario: getScenario('family-1-simple'), arm: ARMS[armId],
         repetition: 1, seed: `transport-observation-${label}`,

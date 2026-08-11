@@ -13,7 +13,10 @@
 //
 // So this suite runs the REAL live matrix executor over the REAL frozen 120
 // assigned slots, and replaces ONLY the final network hop. It is not fixture
-// mode: no hermetic preload, no staged response table, no fixture namespace.
+// mode: no hermetic preload and no staged response table. After retirement it
+// receives a per-run historical namespace solely through the scored runner's
+// explicit synthetic-rehearsal owner, so structured B/C can be reconstructed;
+// a generic capture does not receive that authority.
 // The path is
 //
 //   live manifest -> live matrix executor -> journal -> global reservation

@@ -31,7 +31,10 @@ const { getScenario, PROTOCOL_VERSION } = require('./fixtures/evaluation-scenari
 const {
   assertRuntimeMatchesManifest, hashCanonical
 } = require('./fixtures/evaluation-scored-manifest');
-const { runTrial } = require('./structured-allocation-evaluation-runner');
+const {
+  runHistoricalStructuredDispatchRehearsal,
+  runTrial
+} = require('./structured-allocation-evaluation-runner');
 const {
   assertDispatchWithinGlobalCeiling, releaseUndispatchedReservation
 } = require('./fixtures/evaluation-live-budget-ledger');
@@ -602,7 +605,10 @@ async function executeLiveRun({
         let artifact = null;
         let failure = null;
         try {
-          artifact = await runTrial({
+          const executeTrial = syntheticTransportCapture
+            ? runHistoricalStructuredDispatchRehearsal
+            : runTrial;
+          artifact = await executeTrial({
             store, startServer, workspaceRoot,
             scenario: getScenario(slot.scenarioId),
             arm: ARMS[slot.armId],

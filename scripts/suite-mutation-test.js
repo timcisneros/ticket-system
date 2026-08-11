@@ -66,6 +66,40 @@ const MUTATIONS = Object.freeze([
     expect: 'the retired planner-designation request is accepted as an ordinary group edit'
   },
   {
+    name: 'historical-structured-dispatch-authority-dropped',
+    suite: 'structured-allocation-live-dispatch-postgres-test.js',
+    file: 'scripts/structured-allocation-evaluation-runner.js',
+    contract: 'the named final-hop historical rehearsal receives isolated reconstruction authority',
+    find: '      ...(!isLive || (liveProviderBoundaryObservation && liveProviderBoundaryResponse) ||\n' +
+      '          historicalStructuredDispatchRehearsal\n' +
+      '        ? { EVALUATION_FIXTURE_NAMESPACE: namespace.dir }',
+    replace: '      ...(!isLive || (liveProviderBoundaryObservation && liveProviderBoundaryResponse)\n' +
+      '        ? { EVALUATION_FIXTURE_NAMESPACE: namespace.dir }',
+    expect: 'the historical structured role-dispatch proof is refused before planner transport'
+  },
+  {
+    name: 'generic-capture-mints-historical-structured-authority',
+    suite: 'evaluation-live-credential-postgres-test.js',
+    file: 'scripts/structured-allocation-evaluation-runner.js',
+    contract: 'a generic transport capture is insufficient historical activation authority',
+    find: '      ...(!isLive || (liveProviderBoundaryObservation && liveProviderBoundaryResponse) ||\n' +
+      '          historicalStructuredDispatchRehearsal\n' +
+      '        ? { EVALUATION_FIXTURE_NAMESPACE: namespace.dir }',
+    replace: '      ...(!isLive || (liveProviderBoundaryObservation && liveProviderBoundaryResponse) ||\n' +
+      '          Boolean(liveTransportCapture)\n' +
+      '        ? { EVALUATION_FIXTURE_NAMESPACE: namespace.dir }',
+    expect: 'an arbitrary captured live caller can mint retired structured product authority'
+  },
+  {
+    name: 'ambient-historical-namespace-inherited',
+    suite: 'evaluation-live-credential-postgres-test.js',
+    file: 'scripts/postgres-test-harness.js',
+    contract: 'ordinary test servers strip ambient historical reconstruction authority',
+    find: '  delete inheritedEnv.EVALUATION_FIXTURE_NAMESPACE;',
+    replace: '  // ambient historical namespace is inherited',
+    expect: 'an ordinary server inherits retired structured activation authority from its parent'
+  },
+  {
     name: 'terminal-log-left-unsettled',
     suite: 'evaluation-reader-quiescence-postgres-test.js',
     file: 'server.js',

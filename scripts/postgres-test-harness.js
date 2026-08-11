@@ -265,6 +265,11 @@ async function spawnTestServer({
   ]) {
     delete inheritedEnv[credentialKey];
   }
+  // Historical structured reconstruction is test-owner authority, not ambient
+  // process authority. Only an explicit repository-owned runner configuration
+  // may restore this key below; an ordinary server never inherits it merely
+  // because its parent happened to run an evaluation earlier.
+  delete inheritedEnv.EVALUATION_FIXTURE_NAMESPACE;
 
   // THE EXACT ENVIRONMENT THE CHILD WILL RECEIVE. Built before spawning so the
   // spawn-boundary observer below can inspect the real thing rather than a

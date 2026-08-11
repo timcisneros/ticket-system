@@ -85,6 +85,11 @@ const { buildPricingCatalog } = require('../runtime/model-pricing-catalog');
 const SUPPORTED_MODES = Object.freeze(['fixture', 'live']);
 const NO_STAGED_RESPONSES = Object.freeze([]);
 const QUIESCENCE_TIMEOUT_MS = 180_000;
+// Not exported. A generic caller cannot turn a transport-capture filename into
+// retired structured activation authority by adding another option. The named
+// historical rehearsal below is the sole source of this identity.
+const HISTORICAL_STRUCTURED_DISPATCH_REHEARSAL_AUTHORITY =
+  Symbol('historical-structured-dispatch-rehearsal-authority');
 
 class EvaluationRunnerError extends Error {
   constructor(message, detail = {}) {
@@ -693,9 +698,23 @@ async function runTrial({
   // Scored REAL candidates that fail the shared domain are retained outside
   // the corpus in repository-associated, ignored diagnostic storage. A caller
   // may redirect this only for controlled tests.
-  diagnosticRoot = null
+  diagnosticRoot = null,
+  // PRIVATE named-wrapper authority. It is intentionally absent from every
+  // public/scored option contract and cannot be reconstructed from request
+  // fields, an environment variable or a generic capture path.
+  historicalStructuredDispatchRehearsalAuthority = null
 }) {
   assertMode(mode);
+  if (historicalStructuredDispatchRehearsalAuthority !== null &&
+      historicalStructuredDispatchRehearsalAuthority !==
+        HISTORICAL_STRUCTURED_DISPATCH_REHEARSAL_AUTHORITY) {
+    throw new EvaluationRunnerError(
+      'historical structured dispatch authority must come from the named rehearsal owner',
+      { code: 'HISTORICAL_STRUCTURED_DISPATCH_AUTHORITY_INVALID' });
+  }
+  const historicalStructuredDispatchRehearsal =
+    historicalStructuredDispatchRehearsalAuthority ===
+      HISTORICAL_STRUCTURED_DISPATCH_REHEARSAL_AUTHORITY;
   // FAIL BEFORE ANY TRIAL STATE IS CREATED. A real run without resolved
   // credential authority is a configuration failure, not product data. The
   // resulting projection is held only until the child is spawned and is never
@@ -1049,7 +1068,8 @@ async function runTrial({
       // has retired.  The latter reaches the live adapter but intercepts and
       // answers the final provider hop; an actual REAL run has neither of
       // these test-only paths and therefore cannot acquire this authority.
-      ...(!isLive || (liveProviderBoundaryObservation && liveProviderBoundaryResponse)
+      ...(!isLive || (liveProviderBoundaryObservation && liveProviderBoundaryResponse) ||
+          historicalStructuredDispatchRehearsal
         ? { EVALUATION_FIXTURE_NAMESPACE: namespace.dir }
         : {}),
       // ONE immutable descriptor, carried as a single serialized value. Every
@@ -1390,6 +1410,38 @@ async function runTrial({
   return artifact;
 }
 
+// Provider-free reproduction of the retired B/C dispatch topology. This is a
+// repository-owned historical test seam, not a product or REAL-live option:
+// it requires the runner's final-hop interceptor and refuses any resolved real
+// credential authority. The namespace it grants is a per-invocation child
+// environment value; it is neither an HTTP field nor persisted activation
+// policy.
+async function runHistoricalStructuredDispatchRehearsal(options) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new EvaluationRunnerError(
+      'historical structured dispatch rehearsal requires an options object',
+      { code: 'HISTORICAL_STRUCTURED_DISPATCH_OPTIONS_REQUIRED' });
+  }
+  if (options.mode !== 'live' ||
+      typeof options.liveTransportCapture !== 'string' ||
+      options.liveTransportCapture.trim().length === 0) {
+    throw new EvaluationRunnerError(
+      'historical structured dispatch rehearsal requires live mode with final-hop transport capture',
+      { code: 'HISTORICAL_STRUCTURED_DISPATCH_CAPTURE_REQUIRED' });
+  }
+  if (options.resolvedLiveCredentialAuthority !== null &&
+      options.resolvedLiveCredentialAuthority !== undefined) {
+    throw new EvaluationRunnerError(
+      'historical structured dispatch rehearsal cannot receive REAL credential authority',
+      { code: 'HISTORICAL_STRUCTURED_DISPATCH_REAL_AUTHORITY_FORBIDDEN' });
+  }
+  return runTrial({
+    ...options,
+    historicalStructuredDispatchRehearsalAuthority:
+      HISTORICAL_STRUCTURED_DISPATCH_REHEARSAL_AUTHORITY
+  });
+}
+
 module.exports = {
   sameParentPolicyRevisionOf,
   stageResponsesForMode,
@@ -1402,6 +1454,7 @@ module.exports = {
   buildTicketForm,
   proveDurablePath,
   waitForQuiescence,
+  runHistoricalStructuredDispatchRehearsal,
   runTrial
 };
 

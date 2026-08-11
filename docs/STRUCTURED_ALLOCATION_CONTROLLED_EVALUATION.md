@@ -3147,6 +3147,9 @@ remain immutable and reconstructable. Provider-free fixture execution and the
 final-hop-captured REAL-path rehearsal are retained only to reproduce
 repository-owned historical evaluation/test authority; they are not
 user/operator activation surfaces and cannot authorize an uncaptured REAL run.
+The latter is entered only through the evaluation runner's named historical
+dispatch-rehearsal owner: an arbitrary transport capture receives no historical
+namespace, and the owner refuses resolved REAL credential authority.
 
 The operational PostgreSQL census at this decision contained zero structured
 Tickets, v2 plans, structured Runs or planner-designated groups, including zero

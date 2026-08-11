@@ -15,7 +15,11 @@ const path = require('node:path');
 const { withHarness, createAsserter } = require('./postgres-test-harness');
 const { ARMS } = require('./fixtures/evaluation-arms');
 const { getScenario } = require('./fixtures/evaluation-scenarios');
-const { runTrial } = require('./structured-allocation-evaluation-runner');
+const {
+  EvaluationRunnerError,
+  runHistoricalStructuredDispatchRehearsal,
+  runTrial
+} = require('./structured-allocation-evaluation-runner');
 const {
   executeAuthorizedLiveRun,
   executeLiveRun
@@ -268,14 +272,26 @@ async function main() {
 
       // ── THE HARNESS STRIPS AMBIENT PARENT CREDENTIALS ─────────────────
       const ambientBefore = process.env.OPENAI_API_KEY;
+      const ambientNamespaceBefore = process.env.EVALUATION_FIXTURE_NAMESPACE;
       process.env.OPENAI_API_KEY = DUMMY_OTHER_CREDENTIAL;
-      const ordinaryEnv = await captureSpawn(() => startServer({
-        spawnEnvObserver: childEnv => { throw new SpawnBoundaryReached(childEnv); }
-      }));
-      if (ambientBefore === undefined) delete process.env.OPENAI_API_KEY;
-      else process.env.OPENAI_API_KEY = ambientBefore;
-      assertThat(ordinaryEnv && ordinaryEnv.OPENAI_API_KEY === undefined,
-        'an ordinary server spawn strips the ambient parent credential');
+      process.env.EVALUATION_FIXTURE_NAMESPACE = 'ambient-authority-must-not-propagate';
+      let ordinaryEnv = null;
+      try {
+        ordinaryEnv = await captureSpawn(() => startServer({
+          spawnEnvObserver: childEnv => { throw new SpawnBoundaryReached(childEnv); }
+        }));
+      } finally {
+        if (ambientBefore === undefined) delete process.env.OPENAI_API_KEY;
+        else process.env.OPENAI_API_KEY = ambientBefore;
+        if (ambientNamespaceBefore === undefined) {
+          delete process.env.EVALUATION_FIXTURE_NAMESPACE;
+        } else {
+          process.env.EVALUATION_FIXTURE_NAMESPACE = ambientNamespaceBefore;
+        }
+      }
+      assertThat(ordinaryEnv && ordinaryEnv.OPENAI_API_KEY === undefined &&
+        ordinaryEnv.EVALUATION_FIXTURE_NAMESPACE === undefined,
+      'an ordinary server spawn strips ambient credential and historical namespace authority');
 
       // ── TEMPORARY AGENT MODE BEHAVIOUR AT SPAWN ──────────────────────
       const liveBefore = await maxConfiguredAgentId(store);
@@ -320,6 +336,82 @@ async function main() {
         String(capturedChildEnv.NODE_OPTIONS || '').includes('live-transport-capture-preload') &&
         capturedChildEnv.EVALUATION_FIXTURE_NAMESPACE === undefined,
       'transport-captured live retains the sentinel without historical structured activation authority');
+
+      const historicalNamespaceRoot = path.join(root, 'ns-historical-captured-spawn');
+      const historicalCapturedChildEnv = await captureSpawn(() =>
+        runHistoricalStructuredDispatchRehearsal({
+          store, startServer, workspaceRoot,
+          scenario: getScenario('family-1-simple'), arm: ARMS.B,
+          repetition: 1, seed: 'historical-captured-authority-spawn',
+          outputPath: path.join(root, 'out', 'historical-captured-spawn.json'),
+          commit: 'credential-proof', smokeRoot: root,
+          namespaceRoot: historicalNamespaceRoot,
+          mode: 'live',
+          liveTransportCapture: path.join(root, 'historical-captured-spawn.jsonl'),
+          liveRequestControls: CONTROLS,
+          liveBudget: budget(path.join(root, 'budget-historical-captured-spawn')),
+          spawnEnvObserver: childEnv => { throw new SpawnBoundaryReached(childEnv); }
+        }));
+      assertThat(historicalCapturedChildEnv &&
+        historicalCapturedChildEnv.OPENAI_API_KEY === SENTINEL_CREDENTIAL &&
+        String(historicalCapturedChildEnv.NODE_OPTIONS || '')
+          .includes('live-transport-capture-preload') &&
+        typeof historicalCapturedChildEnv.EVALUATION_FIXTURE_NAMESPACE === 'string' &&
+        historicalCapturedChildEnv.EVALUATION_FIXTURE_NAMESPACE
+          .startsWith(`${historicalNamespaceRoot}${path.sep}`),
+      'the named provider-free historical rehearsal alone receives its isolated namespace');
+
+      let historicalWithoutCapture = null;
+      let historicalServerStarted = false;
+      try {
+        await runHistoricalStructuredDispatchRehearsal({
+          store,
+          startServer: async () => {
+            historicalServerStarted = true;
+            throw new Error('unreachable');
+          },
+          workspaceRoot,
+          scenario: getScenario('family-1-simple'), arm: ARMS.B,
+          repetition: 1, seed: 'historical-without-capture',
+          outputPath: path.join(root, 'out', 'historical-without-capture.json'),
+          commit: 'credential-proof', smokeRoot: root,
+          namespaceRoot: path.join(root, 'ns-historical-without-capture'),
+          mode: 'live', liveTransportCapture: null,
+          liveRequestControls: CONTROLS,
+          liveBudget: budget(path.join(root, 'budget-historical-without-capture'))
+        });
+      } catch (error) { historicalWithoutCapture = error; }
+      assertThat(historicalWithoutCapture instanceof EvaluationRunnerError &&
+        historicalWithoutCapture.detail.code ===
+          'HISTORICAL_STRUCTURED_DISPATCH_CAPTURE_REQUIRED' &&
+        historicalServerStarted === false,
+      'the historical rehearsal cannot authorize an uncaptured REAL provider run');
+
+      let historicalWithRealAuthority = null;
+      try {
+        await runHistoricalStructuredDispatchRehearsal({
+          mode: 'live',
+          liveTransportCapture: path.join(root, 'forbidden-real-authority-capture.jsonl'),
+          resolvedLiveCredentialAuthority: resolved
+        });
+      } catch (error) { historicalWithRealAuthority = error; }
+      assertThat(historicalWithRealAuthority instanceof EvaluationRunnerError &&
+        historicalWithRealAuthority.detail.code ===
+          'HISTORICAL_STRUCTURED_DISPATCH_REAL_AUTHORITY_FORBIDDEN',
+      'the historical rehearsal refuses resolved REAL credential authority');
+
+      let forgedHistoricalAuthority = null;
+      try {
+        await runTrial({
+          mode: 'live',
+          liveTransportCapture: path.join(root, 'forged-authority-capture.jsonl'),
+          historicalStructuredDispatchRehearsalAuthority: Symbol('forged')
+        });
+      } catch (error) { forgedHistoricalAuthority = error; }
+      assertThat(forgedHistoricalAuthority instanceof EvaluationRunnerError &&
+        forgedHistoricalAuthority.detail.code ===
+          'HISTORICAL_STRUCTURED_DISPATCH_AUTHORITY_INVALID',
+      'a generic runner caller cannot forge the named historical authority');
 
       const fixtureChildEnv = await captureSpawn(() => runTrial({
         store, startServer, workspaceRoot,
