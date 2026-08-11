@@ -55,6 +55,15 @@ const PERMANENTLY_ABORTED_RUNS = Object.freeze([
       'production report owner had no repository-owned immutable fixture input; ' +
       'source freeze made retrofitting provenance invalid and the run is ' +
       'permanently quarantined'
+  }),
+  Object.freeze({
+    runHeaderHash:
+      '7297f3dd7d3ec98e563c1474a6163fc14d06612824091b7ac76838cfc364e47f',
+    reason: 'the authorized real LIVE-V3 run stopped after provider dispatch ' +
+      'when assigned slot 02-027-family-3_3A-C produced a terminal product ' +
+      'shape without mechanically defined input for every frozen metric; source ' +
+      'freeze made patch-and-resume invalid and the partial corpus is permanently ' +
+      'quarantined'
   })
 ]);
 

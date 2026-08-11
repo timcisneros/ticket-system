@@ -2752,3 +2752,59 @@ observation-completeness contract requires a separate source correction,
 exact-source proof, and entirely new live authorization. This completed but
 aborted corpus may never be resumed, patched, scored, imported, pooled, or used
 to tune that correction.
+
+## 18. Authorized REAL LIVE-V3 attempt: metric-domain abort (2026-08-10)
+
+The newly authorized REAL LIVE-V3 evaluation used exact executable source
+`af4edb0beeb6ecd47ed7c018b6ebb836aaeeb404`, manifest v3 hash
+`18508f5a94cd3b7667037e77154f83e7327ed3ca368fe0c4d308e6aa0b9f245c`,
+repository-owned fixture-v2 evidence, and configured-agent credential authority
+ID 1 / revision 2 / provider `openai`. The minimum authenticated preflight used
+`gpt-4o-mini-2024-07-18` through `openai.responses.v1`, used 20 input and 9
+output tokens, and cost 9 micro-USD separately from experiment evidence. The
+new immutable run-header hash is
+`7297f3dd7d3ec98e563c1474a6163fc14d06612824091b7ac76838cfc364e47f`.
+
+The run is permanently:
+
+> **ABORTED — NOT DECISION EVIDENCE**
+
+The first 66 assigned slots were accepted in frozen order with zero
+infrastructure exclusions, replacements, or reused slots. Slot 67,
+`02-027-family-3_3A-C`, reached the product terminal boundary but was refused
+before artifact acceptance because one or more frozen metrics lacked a
+mechanically defined input (`LIVE_SCORING_METRIC_EVIDENCE_MISSING`). That is a
+post-dispatch harness/scoring-domain failure, so source freeze forbids patching,
+resuming, retransmitting the failed slot, or scoring the prefix.
+
+The read-only gates returned `LIVE CORPUS INCONSISTENT` and
+`LIVE SCORING INPUT DOMAIN INCOMPLETE`: 120 assigned, 66 artifacts, 0
+exclusions, and 54 unaccounted slots. The partial-prefix hash is
+`1a60292dc0f8af02470202aefd7102db74e21e68f1f94ecd817ffc9749df1df9`.
+The rejected candidate's per-metric detail was not retained, so the exact
+missing metric owner requires a separately authorized source audit. The
+production report/scorer was not invoked. No A/A2a/A2b/B/C metrics, family
+2/3/5/6 metrics, hard-disqualifier state, ordinary LIVE decision, combined
+decision, or report hash exists. Fixture-v2 remains
+**FIXTURE EVIDENCE SUPPORTS STOP**, but it was not combined with this run.
+
+The durable ledger committed 9,928,494 micro-USD of conservative liability.
+The 66 retained artifacts contain 286 metered provider requests (26 planner and
+260 worker/leaf), 504,950 input and 23,557 output tokens, and an observable
+experiment-cost lower bound of 90,115 micro-USD. Because the failed
+provider-reachable trial retained no artifact/accounting projection, total
+actual experiment spend is **UNKNOWN**. The 90,115 micro-USD prefix-normalized
+cost is not actual billing and is not decision evidence.
+
+Evidence is preserved at
+`/tmp/ticket-system-structured-evaluation-live-v3/real-af4edb0-I2ZoAyEsG3A8`.
+The abort-record hash is
+`bc0a981f29bf0c83411dc3e826193a18a5b745f3a2a9e15428063f70f5e35619`;
+the 71-payload-file aborted-bundle hash is
+`780447943201f976c6406997d2a025ae523fe915cf1a082bcdeee4d632652098`.
+The header identity is permanently quarantined by the repository-owned
+aborted-run registry. Historical aborted corpora remain unchanged.
+
+**Tranche 6 live-model evaluation status: BLOCKED.** No additional provider
+authorization exists. A separate source audit and correction, exact-source
+proof, and entirely new authorization would be required for any future run.

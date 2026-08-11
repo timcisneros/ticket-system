@@ -467,7 +467,8 @@ function main() {
     'b2b59ad2b9d9fafc8ac860838b0530cb8f90bc02907b36a3a230b560bece2eef',
     '986249cebdf2239c93b37ed7340aedbebbb85df5e134f4f848264dd5c1916359',
     '1cb2332d782b9478454d329dfd5ebd95e195acb6289ffd57b9e1255045d95022',
-    'ad677632d187a791f885869f69dbd7232caab1d170ceb9fee7357f515871aed6'
+    'ad677632d187a791f885869f69dbd7232caab1d170ceb9fee7357f515871aed6',
+    '7297f3dd7d3ec98e563c1474a6163fc14d06612824091b7ac76838cfc364e47f'
   ]) {
     ok(refusalCode(() => assertLiveScoringCorpus({
       manifest: liveManifest, projection,

@@ -1,3 +1,65 @@
+## Tranche 6 LIVE-V3 metric-domain refusal loses the rejected shape (2026-08-10)
+
+**Status: OPEN — the authorized run is permanently `ABORTED — NOT DECISION
+EVIDENCE`; do not resume, score, import, adapt, or use its prefix to tune a
+later experiment.**
+
+The authorized REAL LIVE-V3 evaluation ran against exact trial source
+`af4edb0beeb6ecd47ed7c018b6ebb836aaeeb404`, manifest hash
+`18508f5a94cd3b7667037e77154f83e7327ed3ca368fe0c4d308e6aa0b9f245c`,
+the repository-owned fixture-v2 authority, and configured-agent credential
+authority ID 1 / revision 2 / provider `openai`. The one authenticated
+preflight used the pinned `gpt-4o-mini-2024-07-18` Responses contract, used 20
+input and 9 output tokens, and cost 9 micro-USD separately from experiment
+evidence. The immutable real run-header hash is
+`7297f3dd7d3ec98e563c1474a6163fc14d06612824091b7ac76838cfc364e47f`.
+
+The first 66 assigned slots produced accepted artifacts in frozen order with
+zero infrastructure exclusions, replacements, or reused slots. Assigned slot
+67, `02-027-family-3_3A-C`, reached the product-terminal-or-stable boundary but
+produced no accepted artifact. `runTrial` refused the candidate shape with the
+source-owned `LIVE_SCORING_METRIC_EVIDENCE_MISSING` disposition: one or more of
+allocation quality, truthfulness, latency, normalized cost, or churn lacked a
+mechanically defined input. The live executor then correctly stopped because
+that no-artifact outcome was product data rather than an infrastructure
+exclusion.
+
+The rejected candidate and its per-metric validity detail were not persisted,
+and the isolated harness schema was truthfully removed during cleanup. The
+terminal error therefore proves the shared metric-domain refusal but does not
+retain enough evidence to identify which metric projection was absent. This is
+the open diagnostic owner. It must be source-audited separately; the failed
+trial must not be retransmitted to recover the missing detail.
+
+The read-only corpus gate returned `LIVE CORPUS INCONSISTENT` and
+`LIVE SCORING INPUT DOMAIN INCOMPLETE`: 120 assigned, 66 accounted artifacts,
+0 exclusions, and 54 unaccounted slots. Its partial-prefix hash is
+`1a60292dc0f8af02470202aefd7102db74e21e68f1f94ecd817ffc9749df1df9`.
+The production report owner and scorer were not invoked. No five-arm metrics,
+family metrics, hard-disqualifier state, ordinary LIVE decision, combined
+decision, JSON/Markdown report, or report hash exists. Fixture-v2 remains
+unchanged with conclusion **FIXTURE EVIDENCE SUPPORTS STOP**, but it was not
+combined with this aborted prefix.
+
+The ledger committed 9,928,494 micro-USD of maximum liability. The 66 retained
+artifacts account for 286 metered requests (26 planner and 260 worker/leaf),
+504,950 input and 23,557 output tokens, and an observable experiment-cost lower
+bound of 90,115 micro-USD. Trial 67 retained no artifact/accounting projection,
+so total actual experiment spend is **UNKNOWN**. The retained prefix's 90,115
+micro-USD normalized cost is not actual billing and is not decision evidence.
+
+Preserved evidence root:
+`/tmp/ticket-system-structured-evaluation-live-v3/real-af4edb0-I2ZoAyEsG3A8`.
+The abort-record hash is
+`bc0a981f29bf0c83411dc3e826193a18a5b745f3a2a9e15428063f70f5e35619`;
+the 71-payload-file aborted-bundle hash is
+`780447943201f976c6406997d2a025ae523fe915cf1a082bcdeee4d632652098`.
+The run-header identity is now in the permanent aborted-run quarantine owner.
+Every historical aborted corpus remains unchanged and independently
+quarantined.
+
+---
+
 ## TRANCHE 6 LIVE-V3 CORPUS ABORTED BY ACCEPTED/SCORABLE OBSERVATION CONTRADICTION (2026-08-09)
 
 **Status: RESOLVED IN SOURCE 2026-08-09 — the run remains permanently
