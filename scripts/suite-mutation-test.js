@@ -392,15 +392,17 @@ const MUTATIONS = Object.freeze([
   },
   {
     // The highest-stakes reconciliation boundary in the system: startup deciding what a
-    // finished run PROVED. A failed run finalized as completed is a durable lie that no
-    // later step revisits.
+    // finished attempt PROVED. Startup no longer derives Ticket state from a selected
+    // Run; it routes exact membership through the shared Ticket-attempt disposition
+    // owner. Mutate that owner so the startup suite still proves a failed singleton
+    // attempt cannot become a durable completed Ticket.
     name: 'startup-converges-failed-run-to-completed',
     suite: 'startup-state-convergence-test.js',
-    file: 'server.js',
-    contract: 'startup convergence finalizes a stuck ticket to its run\'s ACTUAL terminal status',
-    find: '      updated = await finalizeTicketForRun(latestRun, latestRun.status);',
-    replace: '      updated = await finalizeTicketForRun(latestRun, \'completed\');',
-    expect: 'a ticket whose run failed is converged to completed on startup'
+    file: 'runtime/ticket-attempt-contract.js',
+    contract: 'startup convergence finalizes a stuck ticket from its attempt\'s ACTUAL terminal disposition',
+    find: "  if (normalized.includes('failed')) return 'failed';",
+    replace: "  if (normalized.includes('failed')) return 'completed';",
+    expect: 'a Ticket whose attempt failed is converged to completed on startup'
   },
   {
     // Guards the negative control: convergence must never run while execution could
