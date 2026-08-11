@@ -1,3 +1,51 @@
+## REAL LIVE-V3 still reaches an undefined five-metric candidate (2026-08-11)
+
+**Status: OPEN — the run is permanently `ABORTED — NOT DECISION EVIDENCE` and
+the diagnostic must not be interpreted to patch or resume it.**
+
+The newly authorized REAL LIVE-V3 run used exact executable source
+`e3a4a23c4a4d84e38e553fa8e63c2ba3958627bd`, manifest hash
+`18508f5a94cd3b7667037e77154f83e7327ed3ca368fe0c4d308e6aa0b9f245c`,
+fixture-v2, and configured-agent ID 1 / revision 2 / provider `openai`. Its
+immutable run-header hash is
+`2965176eb1742f7e59678c7972a43f23c45d3483bdfbd76b53f7e096fe0e87ce`.
+
+After 36 artifacts were accepted in frozen order, assigned slot
+`01-037-family-5_5A-C` reached `product_terminal_or_stable` and the shared
+candidate-domain owner returned `LIVE_SCORING_METRIC_EVIDENCE_MISSING` before
+artifact acceptance. There were no infrastructure exclusions. Source freeze
+therefore required whole-run abort; no scorer or production report was invoked.
+
+Unlike the prior abort, diagnostic preservation succeeded. The mode-0600,
+write-once record is labelled `DIAGNOSTIC — NOT ACCEPTED PRODUCT EVIDENCE`, has
+file SHA-256
+`5b32cc58c5b4673a330cfbf50d193295d37413549eb67ca50a3320b3e017030a`,
+and internal record hash
+`455289b93dfa9305159da3fd88b2a6c8d4aa8a505f0bbc3e61f94a3c0c10805e`.
+It remains outside the corpus and exclusion domains. Its per-metric detail was
+not interpreted under this authorization.
+
+The immediate integrity owner is now demonstrated, not inferred: the supposedly
+closed runner-produced candidate domain still admits at least one REAL-reachable
+shape that `projectLiveMetricDomain` refuses. A future source-only audit must
+reconstruct that shape from the diagnostic, determine whether the defect is an
+existing-contract projection error, an early-acceptance error, or a frozen
+protocol gap, and add a controlled runner-produced regression before any new
+paid authorization. It must not use the 36 accepted outcomes to choose
+semantics.
+
+Persistent quarantine:
+`.local-artifacts/structured-allocation-live-v3/real-e3a4a23-20260811-oXmXm0n7`;
+abort-record SHA-256
+`8ce2a7c4842be020adbaf1c8622c13940fdfc132a0965cde806172f66229c991`;
+42-payload bundle hash
+`210239917d6240ee1747763690a662de0d11063d4be4f707f0e281af473bc26b`;
+structural partial-prefix hash
+`1d823933c7240d8b6adb8a2ebf14bad342a0c2013192bcb452aa30c51bf36368`.
+The permanent-abort registry enforces the identity at all three scoring doors.
+
+---
+
 ## Tranche 6 LIVE-V3 metric-domain refusal loses the rejected shape (2026-08-10)
 
 **Status: RESOLVED IN SOURCE — the authorized run remains permanently

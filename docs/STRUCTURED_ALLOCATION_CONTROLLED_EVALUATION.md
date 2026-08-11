@@ -2868,3 +2868,73 @@ header and manifest identities; terminal/oracle/observation state; all five
 metric projections; the safe candidate projection; and its own SHA-256. It is
 outside both corpus artifact directories and cannot satisfy, exclude or score a
 slot.
+
+## 19. Authorized REAL LIVE-V3 attempt: repeated metric-domain abort (2026-08-11)
+
+The explicitly authorized REAL LIVE-V3 evaluation used exact trial source
+`e3a4a23c4a4d84e38e553fa8e63c2ba3958627bd`, byte-identical manifest hash
+`18508f5a94cd3b7667037e77154f83e7327ed3ca368fe0c4d308e6aa0b9f245c`,
+repository-owned fixture-v2 evidence, and configured-agent authority ID 1 /
+revision 2 / provider `openai`. The single authenticated preflight used the
+pinned `gpt-4o-mini-2024-07-18` Responses contract, used 20 input and 9 output
+tokens, and cost 9 micro-USD separately from experiment evidence. The immutable
+REAL run-header hash is
+`2965176eb1742f7e59678c7972a43f23c45d3483bdfbd76b53f7e096fe0e87ce`.
+
+The run is permanently:
+
+> **ABORTED — NOT DECISION EVIDENCE**
+
+The first 36 assigned slots produced accepted artifacts in frozen order with
+zero infrastructure exclusions, replacements, interruptions or resumes. Slot
+37, `01-037-family-5_5A-C`, reached the product-terminal-or-stable boundary but
+was refused before artifact acceptance with
+`LIVE_SCORING_METRIC_EVIDENCE_MISSING`. Under the frozen source contract this is
+a post-dispatch structural defect, so the entire run stopped. It may never be
+resumed, retransmitted, scored, imported, pooled or used for outcome-driven
+tuning.
+
+The new diagnostic owner worked: one mode-0600 record was durably written under
+`.local-artifacts/structured-allocation-live-diagnostics/2965176eb1742f7e59678c7972a43f23c45d3483bdfbd76b53f7e096fe0e87ce/`.
+Its file SHA-256 is
+`5b32cc58c5b4673a330cfbf50d193295d37413549eb67ca50a3320b3e017030a`
+and its internal diagnostic-record hash is
+`455289b93dfa9305159da3fd88b2a6c8d4aa8a505f0bbc3e61f94a3c0c10805e`.
+It is labelled `DIAGNOSTIC — NOT ACCEPTED PRODUCT EVIDENCE`, satisfied no
+slot, and was not treated as an exclusion. Its per-metric contents were not
+interpreted under this run authorization; doing so to patch and resume would
+violate source freeze.
+
+The quarantined prefix has 120 assigned slots, 37 started/product-boundary
+slots, 36 accepted artifacts, 0 exclusions and 84 unaccounted slots. Its
+structural partial-prefix hash is
+`1d823933c7240d8b6adb8a2ebf14bad342a0c2013192bcb452aa30c51bf36368`.
+The production scorer was not invoked. No five-arm metrics, family 2/3/5/6
+results, hard-disqualifier state, ordinary LIVE decision, combined decision,
+JSON/Markdown report or report hash exists. Fixture-v2 remains byte-identical
+with conclusion **FIXTURE EVIDENCE SUPPORTS STOP**, but was not combined with
+this prefix.
+
+The durable ledger committed 5,107,250 micro-USD of conservative maximum
+liability. The 36 accepted artifacts contain 139 canonical metered requests
+(12 planner and 127 worker/leaf), 245,098 input and 11,426 output tokens, and an
+observable experiment-cost lower bound of 43,741 micro-USD. Their normalized
+cost is also 43,741 micro-USD, separately named and not decision evidence. Slot
+37 has no accepted accounting projection, so complete experiment provider
+activity and actual spend are **UNKNOWN**. Including preflight, the observable
+cost lower bound is 43,750 micro-USD.
+
+Persistent evidence root:
+`.local-artifacts/structured-allocation-live-v3/real-e3a4a23-20260811-oXmXm0n7`.
+The 42-payload-file aborted-bundle hash is
+`210239917d6240ee1747763690a662de0d11063d4be4f707f0e281af473bc26b`;
+the abort-record SHA-256 is
+`8ce2a7c4842be020adbaf1c8622c13940fdfc132a0965cde806172f66229c991`.
+The repository-owned permanent-abort registry now refuses this run identity at
+the corpus, scorer and fixture/live-combination doors. Historical aborted
+corpora remain independently unchanged.
+
+**Tranche 6 live-model evaluation status: BLOCKED.** A separately authorized,
+source-only audit may read the diagnostic to classify the remaining metric
+projection gap. This authorization permits neither that correction nor another
+provider call.

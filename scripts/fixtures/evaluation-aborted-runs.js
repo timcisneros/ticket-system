@@ -64,6 +64,15 @@ const PERMANENTLY_ABORTED_RUNS = Object.freeze([
       'shape without mechanically defined input for every frozen metric; source ' +
       'freeze made patch-and-resume invalid and the partial corpus is permanently ' +
       'quarantined'
+  }),
+  Object.freeze({
+    runHeaderHash:
+      '2965176eb1742f7e59678c7972a43f23c45d3483bdfbd76b53f7e096fe0e87ce',
+    reason: 'the authorized real LIVE-V3 run stopped after provider dispatch ' +
+      'when assigned slot 01-037-family-5_5A-C reached the product boundary ' +
+      'without mechanically defined input for every frozen metric; source ' +
+      'freeze forbids interpreting the diagnostic and resuming, so the partial ' +
+      'corpus is permanently quarantined'
   })
 ]);
 
