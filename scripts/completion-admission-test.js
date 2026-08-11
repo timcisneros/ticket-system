@@ -14,8 +14,9 @@
 // durable record. Each refusal must also EXPLAIN itself: an unexplained 409 tells an
 // operator nothing about what to fix.
 //
-// Refused when: no run exists; the latest run failed; the latest run was interrupted;
-// triage is unresolved; or verification was declared and no passing verdict exists.
+// Refused when: no attempt exists; the current attempt failed; the current attempt
+// was interrupted; triage is unresolved; or a terminal-looking member has not yet
+// produced an authoritative attempt disposition.
 //
 // THE POSITIVE CONTROL IS THE WHOLE TEST. Refusals prove nothing on their own — a
 // runtime that refuses every completion satisfies all of them. The sixth case is a
@@ -88,7 +89,9 @@ async function main() {
         ...(error ? { patch: { error, completedAt: now() } } : { patch: { completedAt: now() } }),
         eventPayload: { status: toStatus }
       });
-      return store.getRun(created.id);
+      const terminal = await store.getRun(created.id);
+      await store.transitionTicketAfterRun({ runId: terminal.id });
+      return terminal;
     }
 
     // A completed WORKFLOW run carrying a declared verification contract but no
@@ -151,12 +154,12 @@ async function main() {
     const noRun = await makeTicket('no-run', 'never');
     await refuses('no-run', noRun.id, /run|execution|evidence/i);
 
-    // ── 2. The latest run failed ────────────────────────────────────────────
+    // ── 2. The current attempt failed ───────────────────────────────────────
     const failedTicket = await makeTicket('failed-run', 'never');
     await makeTerminalRun(failedTicket.id, 'failed', 'the run failed');
     await refuses('failed-run', failedTicket.id, /fail/i);
 
-    // ── 3. The latest run was interrupted ───────────────────────────────────
+    // ── 3. The current attempt was interrupted ──────────────────────────────
     const interruptedTicket = await makeTicket('interrupted-run', 'never');
     await makeTerminalRun(interruptedTicket.id, 'interrupted');
     await refuses('interrupted-run', interruptedTicket.id, /interrupt/i);
@@ -164,6 +167,7 @@ async function main() {
     // ── 4. Unresolved triage ────────────────────────────────────────────────
     const triageTicket = await makeTicket('triage', 'never');
     const triageRun = await makeTerminalRun(triageTicket.id, 'completed');
+    await store.reopenTicket({ ticketId: triageTicket.id });
     await store.createRunTriage({
       runId: triageRun.id,
       triage: {
@@ -173,18 +177,13 @@ async function main() {
     });
     await refuses('triage', triageTicket.id, /triage/i);
 
-    // ── 5. Verification required but not passed ─────────────────────────────
-    // RESOLVED by reading `isRunVerificationRequired`, which is narrower than the
-    // policy field alone. Verification is required only when ALL of these hold:
-    //   * the run's policy snapshot says `when_declared` — note `'always'` returns
-    //     FALSE here, which is why an earlier `'always'` fixture was accepted
-    //   * the run is a WORKFLOW run with a workflowId
-    //   * the run captured a verification contract carrying at least one postcondition
-    // With that state and no verified objective-success evidence, completion must be
-    // refused. The historical assertion is real; only the fixture was wrong.
+    // ── 5. A terminal-looking member is not an attempt disposition ──────────
+    // This fixture deliberately stops before the kernel projection. Manual
+    // completion may not rediscover a topology or promote the member on its own;
+    // the current attempt must first carry its authoritative disposition.
     const verifyTicket = await makeTicket('verification', 'when_declared');
     await makeVerificationRun(verifyTicket.id);
-    await refuses('verification', verifyTicket.id, /verif/i);
+    await refuses('unsettled-attempt', verifyTicket.id, /unsettled/i);
 
     // ── 6. POSITIVE CONTROL — a genuinely completed run is accepted ─────────
     // Five refusals prove nothing without this: a runtime refusing every completion
@@ -192,6 +191,7 @@ async function main() {
     scenariosRun += 1;
     const okTicket = await makeTicket('accepted', 'never');
     await makeTerminalRun(okTicket.id, 'completed');
+    await store.reopenTicket({ ticketId: okTicket.id });
     const accepted = await complete(okTicket.id);
     assert(accepted.statusCode === 200,
       `6: a completed, unverified-by-policy run IS accepted (HTTP ${accepted.statusCode}: ${String(accepted.body).slice(0, 160)})`);

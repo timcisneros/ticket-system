@@ -160,6 +160,15 @@ const MUTATIONS = Object.freeze([
     expect: 'the routing Run status overrides the exact multi-member disposition'
   },
   {
+    name: 'manual-completion-bypasses-current-attempt',
+    suite: 'completion-admission-test.js',
+    file: 'server.js',
+    contract: 'manual completion consumes the current Ticket-attempt disposition, not a Run-shaped shortcut',
+    find: "  if (currentAttempt.disposition !== 'completed') {",
+    replace: '  if (false) {',
+    expect: 'manual completion accepts failed, interrupted, or unsettled current attempt authority'
+  },
+  {
     name: 'retired-structured-parent-activation-reenabled',
     suite: 'structured-allocation-activation-retirement-postgres-test.js',
     file: 'server.js',

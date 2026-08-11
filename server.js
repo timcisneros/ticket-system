@@ -15163,6 +15163,20 @@ async function validateManualTicketCompletion(ticket) {
   if (!currentAttempt) {
     return { allowed: false, reason: 'Ticket cannot be completed without supporting runtime evidence.' };
   }
+  const currentMembers = (await readAllRunsForTicket(ticket.id)).filter(run =>
+    run.ticketAttemptId === currentAttempt.id);
+  if (currentMembers.length !== currentAttempt.memberCount) {
+    return {
+      allowed: false,
+      reason: 'Ticket cannot be completed because its current attempt membership is incomplete.'
+    };
+  }
+  if (currentMembers.some(run => run.triage && run.triage.required === true)) {
+    return {
+      allowed: false,
+      reason: 'Ticket cannot be completed while a current-attempt Run requires triage.'
+    };
+  }
   if (currentAttempt.disposition !== 'completed') {
     const state = currentAttempt.disposition || 'unsettled';
     return {
