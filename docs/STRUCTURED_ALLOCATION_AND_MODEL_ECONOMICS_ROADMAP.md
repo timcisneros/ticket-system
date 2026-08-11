@@ -13,6 +13,38 @@ Delegation Contract, Work Primitive entity, universal Target abstraction,
 generic operation language, cross-family router, recursive delegation, or
 second allocation persistence subsystem.
 
+## Post-Tranche-6 product decision — first-class activation demoted
+
+Tranche 6 completed with **FINAL STOP**. That frozen result did not mechanically
+select an activation policy; the post-result product decision is explicit:
+
+> The evaluated first-class structured parent/planner/leaf architecture is not
+> retained for future product activation. General allocation and decomposition
+> remain supported capabilities and may later be expressed as task-appropriate,
+> topology-neutral strategies beneath the existing Ticket/Run contract.
+
+Execution topology is subordinate to the stable product model. Ticket owns the
+objective, canonical lifecycle, authority, completion truth, evidence/consequence
+and operator-attention projection. Direct, Workflow, v1 allocated, process,
+browser, decomposed/multi-agent and future execution strategies must feed that
+same Ticket/Run authority rather than create a parallel lifecycle or status
+vocabulary.
+
+The bounded application disables new structured parent-authority creation and
+new planner designation at the normal product boundary. It does not remove
+Allocation Plan v1, general Allocation Items, role routing, economic authority,
+governed execution primitives, evidence, recovery, process/browser/Workflow
+execution, historical v2 reconstruction or the Tranche 6 evidence. Existing
+structured rows and immutable admitted Run snapshots are never rewritten.
+
+At the decision boundary, the configured operational PostgreSQL schema contained
+zero structured-authority Tickets, zero Allocation Plan v2 records, zero
+structured leaf/governed Runs and zero planner-designated groups. No live
+nonterminal structured state therefore required migration or a newly invented
+finish-versus-block rule. Repository tests may still construct isolated records
+to prove historical reconstruction, integrity and the frozen provider-free
+evaluation; that test-only authority is not a product activation surface.
+
 ## Tranche 1 — Structured Allocation Plan Authority
 
 ### Capability claim
@@ -763,12 +795,16 @@ latency, cost, and churn. Use the evidence to decide whether to retain, revise,
 or stop the structured allocation path. This tranche is not implemented by
 Tranche 1.
 
-**BEGUN 2026-08-05 — protocol design only.** The controlled-evaluation protocol
-is `docs/STRUCTURED_ALLOCATION_CONTROLLED_EVALUATION.md`: comparison arms,
-controlled variables, ten scenario families, metric definitions bound to durable
-authority, repetition requirements and retain/revise/stop thresholds fixed in
-advance. No comparison has been run, no verdict exists, and no production
-behaviour has changed. Six prerequisites are recorded there and block execution.
+**COMPLETE 2026-08-11 — FINAL STOP.** The controlled-evaluation protocol and
+complete immutable result are recorded in
+`docs/STRUCTURED_ALLOCATION_CONTROLLED_EVALUATION.md`. The completed REAL
+LIVE-V3 run used trial source
+`857d7c47d09dab0b137c5e8e8f38262240643ff4`; run header
+`a2a177ff78e1c541616d4339bb573e423bba5ab54edff368fdcf9bf3d592617c`,
+corpus `db76099f7c40a970ca86c1202357b9f517483ffa8c043a31b245c751952f2a5c`
+and report `d2fb6aa83a35028d0bc071a5cb926a12c271b78716831d4d645fcbe4cf282733`
+remain frozen. No further structured evaluation or LIVE-V4 follows from this
+roadmap.
 
 ## Roadmap status
 
@@ -779,6 +815,6 @@ Tranche 2B: COMPLETE
 Tranche 3: COMPLETE
 Tranche 4: COMPLETE
 Tranche 5: COMPLETE
-Tranche 6: IN PROGRESS — protocol and read-only harness; no comparison
-            run, no verdict; blocked on scenario fixtures
+Tranche 6: COMPLETE — FINAL STOP; first-class structured product activation
+            demoted by explicit post-result product decision
 ```

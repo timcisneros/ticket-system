@@ -17,6 +17,23 @@ The structured runtime cutover to PostgreSQL is complete:
 - Session cleanup is bounded and periodic; sessions survive process restarts and can be shared by
   server instances.
 
+## Structured-allocation product boundary
+
+Tranche 6 completed with **FINAL STOP**. The explicit post-result product decision
+demotes the tested first-class structured parent/planner/leaf architecture:
+
+- normal Ticket creation cannot mint new structured parent authority;
+- group administration cannot create or change a structured planner designation;
+- a rejected structured request is not converted silently into v1 allocation;
+- general v1 allocation/decomposition and ordinary Ticket/Run execution remain available;
+- historical structured authority, v2 plans, leaf/governed Run snapshots and evidence remain
+  readable and integrity-checked; no historical row is rewritten.
+
+Ticket and Workflow remain the product primitives. Direct, Workflow, allocated,
+process, browser, decomposed/multi-agent and future strategies use the same
+canonical Ticket lifecycle and completion/evidence authority. Operator attention
+remains a triage/projection concern rather than another Ticket status model.
+
 ## Coordination and scale direction
 
 - Run admission is deployment-wide. PostgreSQL serializes only the short policy decision and uses

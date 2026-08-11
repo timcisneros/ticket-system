@@ -472,29 +472,16 @@ async function main() {
         ownedOutputPaths: JSON.stringify(ownedOutputPaths)
       }
     });
-    assert.equal(liveResponse.statusCode, 302, liveResponse.body.slice(0, 1000));
+    assert.equal(liveResponse.statusCode, 400, liveResponse.body.slice(0, 1000));
+    assert.match(liveResponse.body, /first-class structured planner\/leaf product path is retired/i,
+      'the product boundary names the post-Tranche-6 activation retirement');
     const liveTicket = (await store.listTickets({ limit: 500 })).tickets
       .find(candidate => candidate.objective === liveObjective);
-    assert(liveTicket);
-    assert.equal(liveTicket.structuredAllocationAuthority.structuredAllocationEligibility.eligible, true);
-    assert.equal(liveTicket.structuredAllocationAuthority.planningAuthoritySnapshot.planner.agentId, planner.id);
-    // Tranche 2B changed this deliberately. A ticket holding structured PLANNING
-    // authority no longer falls through to v1 allocation: it enters the planner
-    // path, and any refusal there leaves a blocked ticket with no plan and no
-    // runs. Here the designated planner is an openai agent whose credentials do
-    // not resolve, so invocation readiness refuses before any provider request.
-    const livePlans = (await store.listAllocationPlans({ ticketId: liveTicket.id, limit: 20 })).plans;
-    assert.equal(livePlans.length, 0,
-      'structured planning authority never falls back to v1 allocation');
-    assert.equal((await store.listRunsForTicket({ ticketId: liveTicket.id, limit: 20 })).runs.length, 0,
-      'a structured planning refusal creates zero worker runs');
-    const refusedTicket = await store.getTicket(liveTicket.id);
-    assert.equal(refusedTicket.status, 'blocked',
-      'blocked with no plan and no runs is the canonical truthful refusal state');
-    assert.match(refusedTicket.blockedReason, /invocation_readiness/);
-    assert.equal(refusedTicket.structuredAllocationPlanningAttempt, undefined,
-      'a readiness refusal precedes any planning attempt and issues no provider request');
+    assert.equal(liveTicket, undefined,
+      'retirement refuses before a Ticket or structured authority can be minted');
 
+    // Store-created authority above is retained solely to prove immutable
+    // reconstruction and read-only projection of historical records.
     const api = await server.request('GET', `/api/tickets/${ticket.id}/runtime`, { cookie });
     assert.equal(api.statusCode, 200);
     const apiBody = JSON.parse(api.body);

@@ -1,5 +1,38 @@
 # Decision Log
 
+## Demote first-class structured allocation after Tranche 6 FINAL STOP (2026-08-11)
+
+Tranche 6 is complete. The frozen REAL LIVE-V3 decision is **FINAL STOP** at
+trial source `857d7c47d09dab0b137c5e8e8f38262240643ff4`, run header
+`a2a177ff78e1c541616d4339bb573e423bba5ab54edff368fdcf9bf3d592617c`,
+corpus `db76099f7c40a970ca86c1202357b9f517483ffa8c043a31b245c751952f2a5c`
+and canonical report
+`d2fb6aa83a35028d0bc071a5cb926a12c271b78716831d4d645fcbe4cf282733`.
+The frozen protocol did not mechanically map STOP to an activation policy.
+
+The explicit post-result product decision is to demote the tested first-class
+structured parent/planner/leaf architecture. New product Tickets cannot mint its
+parent authority and group administration cannot designate a new planner. There
+is no silent fallback from a rejected structured request to v1: the Ticket is
+refused before persistence. This applies the product boundary without deleting
+the implementation, persistence contracts, readers or immutable history.
+
+Ticket and Workflow remain the stable product primitives. Execution topology is
+subordinate and must feed the same Ticket/Run lifecycle, completion,
+evidence/consequence and distinct operator-attention projection. General v1
+allocation and Allocation Items, decomposition, multi-agent work, role routing,
+economic authority, governed primitives, leases, budgets, receipts, replay,
+recovery, delivery uncertainty and direct/Workflow/process/browser execution
+remain supported.
+
+The configured operational PostgreSQL schema held zero structured-authority
+Tickets, zero v2 plans, zero structured Runs and zero planner-designated groups
+when the boundary was applied. No nonterminal live state required migration and
+no finish-versus-block rule was invented. Store contracts and isolated fixtures
+remain capable of reconstructing historical structured records and reproducing
+the frozen provider-free evaluation. Historical REAL/fixture/aborted evidence is
+unchanged; no LIVE-V4, rescore or new structured experiment is authorized.
+
 ## Retain fixture-v2 evidence and bind live-v3 to its bytes (2026-08-09)
 
 Historical fixture-v1 retains distinct recorded canonical and serialized-file

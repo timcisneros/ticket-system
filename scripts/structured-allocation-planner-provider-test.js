@@ -156,8 +156,8 @@ async function main() {
       fs.mkdirSync(path.join(workspaceRoot, 'reports', 'planner'), { recursive: true });
       fs.mkdirSync(path.join(workspaceRoot, 'reports', 'worker'), { recursive: true });
 
-      const createTicket = async objective => {
-        const response = await server.request('POST', '/tickets', {
+      const requestStructuredTicket = objective =>
+        server.request('POST', '/tickets', {
           cookie,
           form: {
             objective,
@@ -171,40 +171,12 @@ async function main() {
             ownedOutputPaths: JSON.stringify(ownedOutputPaths)
           }
         });
-        if (response.statusCode !== 302) {
-          const shown = /(rejected|required|missing|invalid|Owned-scope)[^<]{0,300}/i.exec(response.body);
-          assert.fail(`ticket creation failed (${response.statusCode}): ${shown ? shown[0].trim() : response.body.slice(-600)}`);
-        }
-        const ticket = (await store.listTickets({ limit: 500 })).tickets
-          .find(candidate => candidate.objective === objective);
-        assert(ticket, `ticket for ${objective} was created`);
-        return ticket;
-      };
 
-      const plansFor = async ticketId =>
-        (await store.listAllocationPlans({ ticketId, limit: 20 })).plans;
-      const runsFor = async ticketId =>
-        (await store.listRunsForTicket({ ticketId, limit: 20 })).runs;
-
-      // ── Success: the full live orchestration ────────────────────────────
-      // ── Tranche 4 cutover ────────────────────────────────────────────────
-      //
-      // This suite formerly proved the Tranche 2B live path: an Ollama planner
-      // answered a local stub, a v2 plan was admitted, and Tranche 3 turned it
-      // into leaf Runs. That path no longer exists.
-      //
-      // Structured planning now dispatches ONLY through governed capture, and
-      // governed capture requires an immutable dispatch target. Ollama has no
-      // immutable target seam — a tag is a moving reference, not an artifact —
-      // so an Ollama planner can no longer be captured, priced or reserved.
-      // The correct behaviour is therefore ZERO provider contact, and that is
-      // what this suite now proves against the real server.
-      //
-      // The end-to-end HTTP coverage this file used to provide is not replaced
-      // here: reproducing it would require either a real paid OpenAI request or
-      // a configurable OpenAI base URL, and both are forbidden. The equivalent
-      // sequence is proven in-process by
-      // `governed-planner-production-path-postgres-test.js`.
+      // Tranche 6 FINAL STOP retires the product activation boundary before
+      // planner routing. The local provider remains deliberately willing to
+      // answer so zero transport requests proves the boundary, not provider
+      // unavailability. Direct store suites retain historical planner/leaf
+      // reconstruction and integrity coverage.
 
       stub.reset();
       stub.setResponder((req, res) => {
@@ -212,48 +184,22 @@ async function main() {
         respondWithContent(res, JSON.stringify({ version: 1, items: [] }));
       });
 
-      const ticket = await createTicket(`Create cutover planner reports ${STAMP}`);
+      const objective = `Create retired planner reports ${STAMP}`;
+      const response = await requestStructuredTicket(objective);
 
+      assert.equal(response.statusCode, 400,
+        'structured product activation is refused before Ticket creation');
+      assert.match(response.body, /first-class structured planner\/leaf product path is retired/i,
+        'the refusal names the post-Tranche-6 product boundary');
       assert.equal(stub.requests.length, 0,
-        'an ungoverned planner route issues no provider request after the cutover');
-
-      const blocked = await store.getTicket(ticket.id);
-      assert.equal(blocked.status, 'blocked',
-        'the ticket is blocked rather than planned');
-
-      const attempt = blocked.structuredAllocationPlanningAttempt;
-      assert.equal(attempt.state, 'failed', 'the attempt records a truthful failure');
-      assert.equal(attempt.failureReason, 'planner_route_unavailable',
-        'the failure names the governed capture refusal, not a provider error');
-      assert.equal(attempt.responseStatus, null,
-        'no response status is claimed for a request that was never issued');
-      assert.equal(attempt.requestHash, null,
-        'no request hash is recorded because no request was prepared');
-      assert.equal(attempt.governedExecution ?? null, null,
-        'a refused capture attaches no governed state');
-
-      // No fallback of any kind.
-      assert.deepEqual(await plansFor(ticket.id), [],
-        'a refused capture creates no allocation plan');
-      assert.deepEqual(await runsFor(ticket.id), [],
-        'a refused capture creates no Runs and no v1 allocation fallback');
-
-      // No economic side effects: nothing was accounted for a request that was
-      // never prepared.
-      const accounts = await store.pool.query(
-        `SELECT 1 FROM ${store.table('ticket_economic_accounts')} WHERE ticket_id = $1`,
-        [ticket.id]);
-      assert.equal(accounts.rowCount, 0, 'no economic account is admitted');
-      const reservations = await store.pool.query(
-        `SELECT 1 FROM ${store.table('economic_request_reservations')} WHERE ticket_id = $1`,
-        [ticket.id]);
-      assert.equal(reservations.rowCount, 0, 'no reservation is created');
-
-      // Re-driving the ticket must not retry the provider either.
-      stub.reset();
-      await createTicket(`Create cutover planner reports again ${STAMP}`).catch(() => null);
-      assert.equal(stub.requests.length, 0,
-        'a second structured ticket also issues no ungoverned provider request');
+        'retired activation reaches no provider transport');
+      assert.equal((await store.listTickets({ limit: 500 })).tickets
+        .some(candidate => candidate.objective === objective), false,
+      'retired activation mints no Ticket');
+      assert.equal((await store.listAllocationPlans({ limit: 500 })).plans.length, 0,
+        'retired activation admits no plan and performs no v1 fallback');
+      assert.equal((await store.listRuns({ limit: 500 })).runs.length, 0,
+        'retired activation admits no planner or leaf Run');
     });
   } finally {
     await stub.close();

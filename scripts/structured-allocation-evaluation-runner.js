@@ -1044,7 +1044,14 @@ async function runTrial({
     ...(spawnEnvObserver ? { spawnEnvObserver } : {}),
     env: {
       ...(preload ? { NODE_OPTIONS: `--require ${preload}` } : {}),
-      ...(isLive ? {} : { EVALUATION_FIXTURE_NAMESPACE: namespace.dir }),
+      // Historical fixture execution and the provider-free REAL-path closure
+      // both need to reconstruct the structured arms after product activation
+      // has retired.  The latter reaches the live adapter but intercepts and
+      // answers the final provider hop; an actual REAL run has neither of
+      // these test-only paths and therefore cannot acquire this authority.
+      ...(!isLive || (liveProviderBoundaryObservation && liveProviderBoundaryResponse)
+        ? { EVALUATION_FIXTURE_NAMESPACE: namespace.dir }
+        : {}),
       // ONE immutable descriptor, carried as a single serialized value. Every
       // observation the spawned server writes names this exact trial, so two
       // trials can never be averaged into one set of streams.

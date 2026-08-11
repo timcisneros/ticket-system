@@ -1,8 +1,9 @@
 # Structured Allocation — Controlled Evaluation Protocol
 
-Tranche 6. **Protocol design, then prerequisite resolution and the read-only
-evaluation harness.** No production behaviour changed in either session. The
-scored evaluation has NOT been run and no RETAIN / REVISE / STOP verdict exists.
+Tranche 6. **Protocol design, prerequisite resolution, controlled evaluation and
+completed product decision.** The protocol below retains its frozen pre-result
+semantics. The completed REAL result and later explicit activation decision are
+recorded at the end; neither rewrites the scoring contract.
 
 Harness modules, all read-only:
 
@@ -3117,3 +3118,37 @@ and
 remain permanently quarantined and were not resumed, imported, scored,
 retransmitted or pooled. This completed evaluation authorizes no further
 provider contact and does not begin another tranche.
+
+## 22. Explicit post-evaluation product decision (2026-08-11)
+
+The frozen experiment mechanically produced **FINAL STOP** but did not map STOP
+to one of §7's candidate activation policies. The following is therefore an
+explicit product decision made after accepting the immutable result, not an
+interpretation inserted into the frozen scorer:
+
+```text
+Activation policy recommended:
+  demote the tested first-class structured parent/planner/leaf architecture;
+  disable future product activation of that path;
+  preserve general allocation/decomposition beneath Ticket/Run
+```
+
+Ticket and Workflow remain the product primitives and execution topology remains
+subordinate. General v1 allocation, decomposition, multi-agent execution, role
+routing, economics, evidence, recovery, process/browser/Workflow execution and
+shared governance primitives are not rejected. The completed result rejects the
+tested integrated bundle's first-class product-architecture status.
+
+Normal Ticket creation no longer accepts the structured parent-authority input,
+and group administration no longer permits planner designation. Historical
+structured authority, planning attempts, v2 plans, leaf bindings, governed Run
+snapshots, aggregate decisions, events, receipts, evidence and terminal state
+remain immutable and reconstructable. Provider-free fixture execution and the
+final-hop-captured REAL-path rehearsal are retained only to reproduce
+repository-owned historical evaluation/test authority; they are not
+user/operator activation surfaces and cannot authorize an uncaptured REAL run.
+
+The operational PostgreSQL census at this decision contained zero structured
+Tickets, v2 plans, structured Runs or planner-designated groups, including zero
+nonterminal records. Consequently no historical row was migrated and no
+finish-versus-block policy was invented for nonexistent live work.

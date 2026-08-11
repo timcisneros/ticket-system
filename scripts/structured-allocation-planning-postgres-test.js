@@ -748,6 +748,9 @@ async function main() {
     fs.mkdirSync(path.join(workspaceRoot, 'reports', 'worker'), { recursive: true });
 
     const liveObjective = `Create structured review reports ${STAMP}`;
+    const beforeTicketCount = (await store.listTickets({ limit: 500 })).tickets.length;
+    const beforePlanCount = (await store.listAllocationPlans({ limit: 500 })).plans.length;
+    const beforeRunCount = (await store.listRuns({ limit: 500 })).runs.length;
     const created = await server.request('POST', '/tickets', {
       cookie,
       form: {
@@ -762,39 +765,19 @@ async function main() {
         ownedOutputPaths: JSON.stringify(ownedOutputPaths)
       }
     });
-    assert.equal(created.statusCode, 302, created.body.slice(0, 1000));
+    assert.equal(created.statusCode, 400, created.body.slice(0, 1000));
+    assert.match(created.body, /first-class structured planner\/leaf product path is retired/i,
+      'the normal product boundary no longer admits structured parent authority');
     const liveTicket = (await store.listTickets({ limit: 500 })).tickets
       .find(candidate => candidate.objective === liveObjective);
-    assert(liveTicket);
-    assert.equal(liveTicket.status, 'blocked',
-      'blocked with no plan and no runs is the canonical truthful refusal state');
-    assert.match(liveTicket.blockedReason, /invocation_readiness/);
-    assert.deepEqual((await store.listAllocationPlans({ ticketId: liveTicket.id, limit: 20 })).plans, [],
-      'a refusal admits no plan and never falls back to v1 allocation');
-    assert.deepEqual((await store.listRunsForTicket({ ticketId: liveTicket.id, limit: 20 })).runs, [],
-      'a refusal creates zero worker runs');
-    assert.equal(liveTicket.blockedReason.includes('apiKey'), false,
-      'refusal evidence never exposes credentials');
-
-    // Rerun, reopen and status-change containment: still no v1 allocation.
-    for (const [label, action] of [
-      ['reopen', () => server.request('PATCH', `/api/tickets/${liveTicket.id}/status`, {
-        cookie, json: { status: 'open' }
-      })],
-      ['rerun', () => server.request('POST', `/api/tickets/${liveTicket.id}/rerun`, {
-        cookie, json: {}
-      })]
-    ]) {
-      await action();
-      assert.deepEqual(
-        (await store.listAllocationPlans({ ticketId: liveTicket.id, limit: 20 })).plans, [],
-        `${label} must never create v1 allocation for a structured ticket`
-      );
-      assert.deepEqual(
-        (await store.listRunsForTicket({ ticketId: liveTicket.id, limit: 20 })).runs, [],
-        `${label} must create no worker runs for a structured ticket`
-      );
-    }
+    assert.equal(liveTicket, undefined,
+      'the refusal occurs before Ticket creation rather than creating a new blocked topology');
+    assert.equal((await store.listTickets({ limit: 500 })).tickets.length, beforeTicketCount,
+      'the refusal creates no Ticket');
+    assert.equal((await store.listAllocationPlans({ limit: 500 })).plans.length, beforePlanCount,
+      'the refusal creates no v2 plan and does not fall back to v1');
+    assert.equal((await store.listRuns({ limit: 500 })).runs.length, beforeRunCount,
+      'the refusal creates no planner or leaf Run');
 
     // Projections tell the truth about the admitted plan. Tranche 3 landed, so
     // leaf-run admission is reported as available — but this suite drives the

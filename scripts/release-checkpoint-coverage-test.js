@@ -59,7 +59,8 @@ for (const allocationPlanV2Gate of [
 
 for (const prerequisiteGate of [
   'structured-allocation-prerequisites-contract-test.js',
-  'structured-allocation-prerequisites-postgres-test.js'
+  'structured-allocation-prerequisites-postgres-test.js',
+  'structured-allocation-activation-retirement-postgres-test.js'
 ]) {
   assert.equal(all.includes(prerequisiteGate), true,
     `structured allocation planning prerequisites must include ${prerequisiteGate}`);

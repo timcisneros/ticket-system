@@ -46,6 +46,26 @@ if (!process.env.TEST_DATABASE_URL && !process.env.DATABASE_URL) {
 // in the file, so a mutation can never land somewhere other than where it was aimed.
 const MUTATIONS = Object.freeze([
   {
+    name: 'retired-structured-parent-activation-reenabled',
+    suite: 'structured-allocation-activation-retirement-postgres-test.js',
+    file: 'server.js',
+    contract: 'the product Ticket boundary refuses new structured parent authority',
+    find: '  if (structuredParentActivationRequested(input && input.declaredWork) &&\n' +
+      '      !historicalStructuredEvaluationActivationAllowed()) {',
+    replace: '  if (false && structuredParentActivationRequested(input && input.declaredWork) &&\n' +
+      '      !historicalStructuredEvaluationActivationAllowed()) {',
+    expect: 'a normal product request can mint the retired structured Ticket authority'
+  },
+  {
+    name: 'retired-planner-designation-control-reenabled',
+    suite: 'structured-allocation-activation-retirement-postgres-test.js',
+    file: 'server.js',
+    contract: 'the admin product boundary refuses the retired planner-designation field',
+    find: "  if (Object.prototype.hasOwnProperty.call(request.body, 'plannerAgentId')) {",
+    replace: '  if (false) {',
+    expect: 'the retired planner-designation request is accepted as an ordinary group edit'
+  },
+  {
     name: 'terminal-log-left-unsettled',
     suite: 'evaluation-reader-quiescence-postgres-test.js',
     file: 'server.js',

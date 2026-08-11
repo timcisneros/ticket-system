@@ -9,10 +9,9 @@
   open integrity defects, deferred work, and pending architectural decisions. Read before starting
   work that touches runtime enforcement, feasibility, recovery, or objective interpretation.
 - [`STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md`](STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md)
-  — structured allocation and governed model economics through Tranche 5 (COMPLETE; Tranche 6 NOT
-  STARTED), including the verified progress authority chain, the coordination boundaries that were
-  deliberately NOT built, and the precise scope of the A3 closure (governed structured leaf
-  execution only).
+  — completed structured allocation and governed model economics roadmap through Tranche 6. The
+  frozen evaluation ended FINAL STOP; the explicit post-result decision demotes future first-class
+  structured activation while preserving general allocation/decomposition and historical readers.
 - [`GOVERNED_REQUIRED_PERSISTENCE_MATRIX.md`](GOVERNED_REQUIRED_PERSISTENCE_MATRIX.md) — every
   durable write in the governed leaf lifecycle, its classification, what happens when it does not
   commit, and which partial states PostgreSQL makes structurally impossible.
@@ -37,7 +36,7 @@
 - [`STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md`](STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md)
   — authoritative roadmap for structured Allocation Plan authority, the 2A parent-work/planning-principal
   prerequisite, later 2B planner admission, leaf execution, bounded economics, coordination controls,
-  and product evaluation. Tranches 1-4 are COMPLETE; the Tranche 4 section is the reference for
+  and the completed FINAL STOP product evaluation. All six tranches are COMPLETE; the Tranche 4 section is the reference for
   role-aware routing, immutable execution targets, bounded economics, the request lifecycle, the
   active-versus-abandoned lease rule, the formal fallback boundary, and the provider-support table.
 - [`decision-memo-work-definition-and-typed-evidence.md`](decision-memo-work-definition-and-typed-evidence.md)

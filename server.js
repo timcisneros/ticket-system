@@ -11364,7 +11364,6 @@ async function renderAdminGroupForm(reply, request, options = {}) {
   return reply.view('admin/group-form.ejs', viewData({
     user: request.user,
     editGroup,
-    groupAgents: editGroup ? await getAgentsInGroup(editGroup.id) : [],
     allPermissions: await listAccessPermissions(),
     groupPermissions,
     error: options.error || null
@@ -16573,6 +16572,33 @@ async function createAgentRun(ticket, agent, allocationItem = null, allocationPl
 // atomically admit one Allocation Plan v2. It never creates a worker Run, never
 // calls prepareAgentRunDraft, and never makes anything scheduler-visible —
 // leaf-run admission is Tranche 3.
+
+const STRUCTURED_ALLOCATION_ACTIVATION_RETIRED =
+  'STRUCTURED_ALLOCATION_ACTIVATION_RETIRED';
+const STRUCTURED_ALLOCATION_ACTIVATION_RETIRED_MESSAGE =
+  'The first-class structured planner/leaf product path is retired after ' +
+  'Tranche 6 FINAL STOP; explicit parent structured authority is no longer accepted.';
+const STRUCTURED_ALLOCATION_PLANNER_DESIGNATION_RETIRED_MESSAGE =
+  'Structured-allocation planner designation is retired and cannot be changed.';
+
+function structuredParentActivationRequested(value) {
+  if (value === null || value === undefined) return false;
+  return typeof value !== 'string' || value.trim().length > 0;
+}
+
+// The completed evaluation remains reproducible provider-free through its
+// repository-owned captured runner. This seam is deliberately narrower than
+// NODE_ENV=test: only a fixture trial or provider-free final-hop rehearsal
+// carrying its own isolated namespace can reconstruct the historical product
+// path. Uncaptured REAL/live execution supplies no fixture namespace and
+// therefore reaches the same retirement boundary as every product caller. The
+// seam mints no production authority and is never rendered as a user/operator
+// control.
+function historicalStructuredEvaluationActivationAllowed() {
+  return process.env.NODE_ENV === 'test' &&
+    typeof process.env.EVALUATION_FIXTURE_NAMESPACE === 'string' &&
+    process.env.EVALUATION_FIXTURE_NAMESPACE.trim().length > 0;
+}
 
 const STRUCTURED_PLANNING_EVENT_TYPES = Object.freeze({
   started: 'ticket.structured_planning_started',
@@ -24911,6 +24937,15 @@ fastify.get('/', { preHandler: fastify.requireAuth }, async (request, reply) => 
 // transport-level JSON parsing stays in the HTTP layer. Returns { ok, ticket, runs }
 // or { ok: false, error } so each caller can shape its own response.
 async function createTicketFromInput(input, actor, options = {}) {
+  if (structuredParentActivationRequested(input && input.declaredWork) &&
+      !historicalStructuredEvaluationActivationAllowed()) {
+    return {
+      ok: false,
+      code: STRUCTURED_ALLOCATION_ACTIVATION_RETIRED,
+      error: STRUCTURED_ALLOCATION_ACTIVATION_RETIRED_MESSAGE
+    };
+  }
+
   const objective = typeof input.objective === 'string' ? input.objective.trim() : '';
   const assignmentTargetType = input.assignmentTargetType;
 
@@ -30726,24 +30761,24 @@ fastify.post('/admin/groups/:id', { preHandler: fastify.requireAuth }, async (re
   }
 
   const groupId = parseInt(request.params.id);
-  const { name, permissions, canReceiveTickets, plannerAgentId, revision } = request.body;
+  const { name, permissions, canReceiveTickets, revision } = request.body;
   const expectedRevision = parseInt(revision, 10);
-  const normalizedPlannerAgentId = plannerAgentId === undefined || plannerAgentId === ''
-    ? null
-    : parseInt(plannerAgentId, 10);
   if (!Number.isSafeInteger(expectedRevision) || expectedRevision <= 0) {
     reply.code(400);
     return 'Invalid group revision';
-  }
-  if (normalizedPlannerAgentId !== null &&
-      (!Number.isSafeInteger(normalizedPlannerAgentId) || normalizedPlannerAgentId <= 0)) {
-    reply.code(400);
-    return 'Invalid planner agent';
   }
   const ticketAssignable = canReceiveTickets === 'on';
 
   const existingGroup = await getAccessCatalogRepository().getGroupById(groupId);
   if (!existingGroup) return reply.redirect('/admin');
+
+  if (Object.prototype.hasOwnProperty.call(request.body, 'plannerAgentId')) {
+    reply.code(400);
+    return renderAdminGroupForm(reply, request, {
+      editGroup: existingGroup,
+      error: STRUCTURED_ALLOCATION_PLANNER_DESIGNATION_RETIRED_MESSAGE
+    });
+  }
 
   if (!name) {
     return renderAdminGroupForm(reply, request, {
@@ -30775,7 +30810,10 @@ fastify.post('/admin/groups/:id', { preHandler: fastify.requireAuth }, async (re
         name: name.trim(),
         permissions: normalizedPermissions,
         canReceiveTickets: ticketAssignable,
-        plannerAgentId: normalizedPlannerAgentId
+        // Preserve any historical designation on unrelated group edits. It is
+        // reconstruction/catalog evidence only: the control that could change it
+        // is gone and new Tickets cannot mint structured parent authority.
+        plannerAgentId: existingGroup.plannerAgentId
       },
       changedBy
     });

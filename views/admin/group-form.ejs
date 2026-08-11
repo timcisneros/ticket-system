@@ -17,17 +17,10 @@
   </label>
 
   <div class="form-group">
-    <label for="plannerAgentId">Structured-allocation planner</label>
-    <% if (editGroup) { %>
-      <select id="plannerAgentId" name="plannerAgentId">
-        <option value="">No planner designated</option>
-        <% groupAgents.forEach(function(agent) { %>
-          <option value="<%= agent.id %>" <%= editGroup.plannerAgentId === agent.id ? 'selected' : '' %>><%= agent.name %> — <%= agent.provider %>/<%= agent.model || 'model not configured' %></option>
-        <% }); %>
-      </select>
-      <p class="form-hint">The planner must remain a current group member. Provider and model come from this configured agent and are snapshotted when explicit parent work is admitted.</p>
-    <% } else { %>
-      <p class="form-hint">Create the group, add an agent member, then edit the group to designate its planner. No member is selected implicitly.</p>
+    <label>Structured-allocation planner</label>
+    <p class="form-hint">New planner designation is unavailable after the Tranche 6 FINAL STOP product decision. General group allocation remains available.</p>
+    <% if (editGroup && editGroup.plannerAgentId != null) { %>
+      <p class="form-hint">Historical designation: configured agent #<%= editGroup.plannerAgentId %> (read-only).</p>
     <% } %>
   </div>
 

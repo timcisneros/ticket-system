@@ -295,8 +295,9 @@ async function main() {
       const realTrialAgents = await configuredAgentsAfter(store, liveBefore);
       assertThat(liveChildEnv &&
         liveChildEnv.OPENAI_API_KEY === DUMMY_LIVE_CREDENTIAL &&
-        !String(liveChildEnv.NODE_OPTIONS || '').includes('live-transport-capture-preload'),
-      'real uncaptured trial projects the selected credential without loading capture');
+        !String(liveChildEnv.NODE_OPTIONS || '').includes('live-transport-capture-preload') &&
+        liveChildEnv.EVALUATION_FIXTURE_NAMESPACE === undefined,
+      'real uncaptured trial projects the selected credential without capture or historical activation authority');
       assertThat(realTrialAgents.length >= 2 &&
         realTrialAgents.every(row => row.has_credential === false),
       'real temporary trial-agent rows persist no credential and cannot shadow projection');
@@ -316,8 +317,9 @@ async function main() {
       }));
       assertThat(capturedChildEnv &&
         capturedChildEnv.OPENAI_API_KEY === SENTINEL_CREDENTIAL &&
-        String(capturedChildEnv.NODE_OPTIONS || '').includes('live-transport-capture-preload'),
-      'captured live retains the sentinel and final-hop capture');
+        String(capturedChildEnv.NODE_OPTIONS || '').includes('live-transport-capture-preload') &&
+        capturedChildEnv.EVALUATION_FIXTURE_NAMESPACE === undefined,
+      'transport-captured live retains the sentinel without historical structured activation authority');
 
       const fixtureChildEnv = await captureSpawn(() => runTrial({
         store, startServer, workspaceRoot,
@@ -330,8 +332,9 @@ async function main() {
       }));
       assertThat(fixtureChildEnv &&
         fixtureChildEnv.OPENAI_API_KEY === SENTINEL_CREDENTIAL &&
-        String(fixtureChildEnv.NODE_OPTIONS || '').includes('evaluation-preload'),
-      'fixture mode retains the sentinel and hermetic response preload');
+        String(fixtureChildEnv.NODE_OPTIONS || '').includes('evaluation-preload') &&
+        typeof fixtureChildEnv.EVALUATION_FIXTURE_NAMESPACE === 'string',
+      'fixture mode retains the sentinel, hermetic response preload and historical reconstruction authority');
 
       // ── EVERY PROVIDER-BEARING ROLE ──────────────────────────────────
       const roleProof = {};

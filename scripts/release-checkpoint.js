@@ -199,6 +199,7 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'declared-work-postgres-test.js',
   'allocation-plan-v2-postgres-test.js',
   'structured-allocation-prerequisites-postgres-test.js',
+  'structured-allocation-activation-retirement-postgres-test.js',
   'structured-allocation-planning-postgres-test.js',
   'structured-allocation-planner-provider-test.js',
   'structured-allocation-leaf-run-postgres-test.js',
