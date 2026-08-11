@@ -405,15 +405,17 @@ const MUTATIONS = Object.freeze([
     expect: 'a Ticket whose attempt failed is converged to completed on startup'
   },
   {
-    // Guards the negative control: convergence must never run while execution could
-    // still be in flight, or startup terminalizes work the scheduler is about to do.
-    name: 'startup-finalizes-ticket-with-live-run',
-    suite: 'startup-state-convergence-test.js',
-    file: 'server.js',
-    contract: 'a ticket with a pending or running run is never finalized by startup convergence',
-    find: "    if (ticketRuns.some(run => ['pending', 'running'].includes(run.status))) continue;",
-    replace: '    if (false) continue;',
-    expect: 'a ticket with live in-flight work is finalized from a sibling terminal run'
+    // Guards the shared settlement boundary: startup may route a terminal member, but
+    // the kernel must not settle its attempt while another exact member can still be
+    // in flight. The server has an early guard too; the store check is authoritative
+    // for every caller and is therefore the mutation owner.
+    name: 'ticket-attempt-settles-with-live-member',
+    suite: 'ticket-attempt-authority-postgres-test.js',
+    file: 'persistence/postgres/store.js',
+    contract: 'a Ticket attempt with a pending or running exact member cannot settle',
+    find: '      if (batchRuns.some(member => !TERMINAL_RUN_STATUSES.has(member.status))) {',
+    replace: '      if (false) {',
+    expect: 'a Ticket is finalized while one exact current-attempt member remains live'
   },
   {
     // Proves the verification refusal is falsifiable. The historical assertion was
