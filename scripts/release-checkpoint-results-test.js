@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const {
+  DEFAULT_RESULT_PARENT,
   FIRST_FAILURE_FILE,
   REGISTRY_FILE,
   TERMINAL_FILE,
@@ -264,6 +265,115 @@ function interruptionScenario(directory, ownersDirectory, head) {
     'orchestrator interruption is not misreported as an owner failure');
 }
 
+function persistentDefaultLocationScenario(directory, ownersDirectory, head) {
+  const relativeParent = path.relative(ROOT, DEFAULT_RESULT_PARENT);
+  check(!DEFAULT_RESULT_PARENT.startsWith(`${path.resolve(os.tmpdir())}${path.sep}`),
+    'default checkpoint result parent is outside the temporary directory');
+  equal(relativeParent, path.join('.local-artifacts', 'release-checkpoint-results'),
+    'default checkpoint result parent uses the repository local-artifact convention');
+
+  const ignored = spawnSync('git', ['check-ignore', '--quiet', DEFAULT_RESULT_PARENT], {
+    cwd: ROOT,
+    encoding: 'utf8'
+  });
+  equal(ignored.status, 0, 'default checkpoint result parent is excluded from Git');
+
+  const spec = {
+    owner: 'persistent-default-syntax.js',
+    category: 'syntax',
+    stdout: 'persistent stdout line 1\npersistent stdout line 2\n',
+    stderr: 'persistent stderr line\n'
+  };
+  spec.sourcePath = writeOwner(ownersDirectory, spec.owner, spec);
+  const runIdentity = `persistent-default-${crypto.randomBytes(8).toString('hex')}`;
+  const harnessPath = path.join(directory, 'persistent-default-harness.js');
+  fs.writeFileSync(harnessPath, [
+    "'use strict';",
+    `const { executeCheckpoint } = require(${JSON.stringify(RECORDER)});`,
+    `const root = ${JSON.stringify(ROOT)};`,
+    `const sourcePath = ${JSON.stringify(spec.sourcePath)};`,
+    'executeCheckpoint({',
+    '  root,',
+    '  checks: [{',
+    `    owner: ${JSON.stringify(spec.owner)},`,
+    `    category: ${JSON.stringify(spec.category)},`,
+    '    sourcePath,',
+    '    command: process.execPath,',
+    '    args: [sourcePath],',
+    '    cwd: root',
+    '  }],',
+    `  runIdentity: ${JSON.stringify(runIdentity)},`,
+    '  mirrorOutput: false',
+    '}).then(result => { process.exitCode = result.exitCode; }).catch(error => {',
+    '  process.stderr.write(`${error.stack || error.message}\\n`);',
+    '  process.exitCode = 99;',
+    '});',
+    ''
+  ].join('\n'));
+
+  const producer = spawnSync(process.execPath, [harnessPath], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    maxBuffer: 10 * 1024 * 1024
+  });
+  equal(producer.status, 0, 'default-location producer exits successfully');
+  const matches = fs.readdirSync(DEFAULT_RESULT_PARENT)
+    .filter(entry => entry.endsWith(`-${runIdentity}`));
+  equal(matches.length, 1, 'default location contains exactly one produced result root');
+  const runRoot = path.join(DEFAULT_RESULT_PARENT, matches[0]);
+
+  try {
+    const freshReaderPath = path.join(directory, 'persistent-default-reader.js');
+    fs.writeFileSync(freshReaderPath, [
+      "'use strict';",
+      "const crypto = require('node:crypto');",
+      "const fs = require('node:fs');",
+      "const path = require('node:path');",
+      `const runRoot = ${JSON.stringify(runRoot)};`,
+      `const ownerRoot = path.join(runRoot, 'owners', ${JSON.stringify(`001-${spec.owner}`)});`,
+      "const stdout = fs.readFileSync(path.join(ownerRoot, 'stdout.log'));",
+      "const stderr = fs.readFileSync(path.join(ownerRoot, 'stderr.log'));",
+      "const result = JSON.parse(fs.readFileSync(path.join(ownerRoot, 'owner-result.json'), 'utf8'));",
+      "const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');",
+      'process.stdout.write(JSON.stringify({',
+      '  stdout: stdout.toString(\'utf8\'),',
+      '  stderr: stderr.toString(\'utf8\'),',
+      '  stdoutHash: hash(stdout),',
+      '  stderrHash: hash(stderr),',
+      '  recordedStdoutHash: result.stdoutRawSha256,',
+      '  recordedStderrHash: result.stderrRawSha256,',
+      '  repositoryCommit: JSON.parse(fs.readFileSync(path.join(runRoot, \'checkpoint-started.json\'), \'utf8\')).repositoryCommit',
+      '}));',
+      ''
+    ].join('\n'));
+    const freshReader = spawnSync(process.execPath, [freshReaderPath], {
+      cwd: ROOT,
+      encoding: 'utf8'
+    });
+    equal(freshReader.status, 0,
+      'fresh process reads checkpoint evidence after the producer exits');
+    const observed = JSON.parse(freshReader.stdout);
+    equal(observed.stdout, spec.stdout, 'fresh process reads complete persistent stdout');
+    equal(observed.stderr, spec.stderr, 'fresh process reads complete persistent stderr');
+    equal(observed.stdoutHash, observed.recordedStdoutHash,
+      'fresh process reproduces the persistent stdout hash');
+    equal(observed.stderrHash, observed.recordedStderrHash,
+      'fresh process reproduces the persistent stderr hash');
+    equal(observed.repositoryCommit, head,
+      'persistent default result remains bound to the producing repository HEAD');
+
+    const gitStatus = spawnSync(
+      'git',
+      ['status', '--porcelain=v2', '--untracked-files=all', '--', runRoot],
+      { cwd: ROOT, encoding: 'utf8' }
+    );
+    equal(gitStatus.status, 0, 'Git can inspect the generated persistent result path');
+    equal(gitStatus.stdout, '', 'Git does not see generated persistent result artifacts');
+  } finally {
+    fs.rmSync(runRoot, { recursive: true, force: true });
+  }
+}
+
 function main() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'release-checkpoint-results-test-'));
   const ownersDirectory = path.join(directory, 'owners');
@@ -273,6 +383,7 @@ function main() {
     failureScenario(directory, ownersDirectory, head);
     successScenario(directory, ownersDirectory, head);
     interruptionScenario(directory, ownersDirectory, head);
+    persistentDefaultLocationScenario(directory, ownersDirectory, head);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

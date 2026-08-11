@@ -10,13 +10,17 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
 const CHECKPOINT_RESULT_VERSION = 1;
 const CHECKPOINT_REGISTRY_VERSION = 1;
-const DEFAULT_RESULT_PARENT = path.join(os.tmpdir(), 'ticket-system-release-checkpoint-results');
+const DEFAULT_RESULT_PARENT = path.resolve(
+  __dirname,
+  '..',
+  '.local-artifacts',
+  'release-checkpoint-results'
+);
 const TERMINAL_FILE = 'checkpoint-terminal.json';
 const FIRST_FAILURE_FILE = 'first-failure.json';
 const STARTED_FILE = 'checkpoint-started.json';
