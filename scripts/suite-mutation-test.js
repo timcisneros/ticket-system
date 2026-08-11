@@ -169,6 +169,11 @@ const MUTATIONS = Object.freeze([
     expect: 'a malformed success claim becomes a silent unsettled-attempt no-op'
   },
   {
+    // Supersedes the old `completion-ignores-required-verification` mutation.
+    // Manual completion no longer selects one latest Run and re-evaluates its
+    // verification topology. The shared settlement owner validates member
+    // completion evidence; this boundary may consume only the resulting current
+    // attempt disposition.
     name: 'manual-completion-bypasses-current-attempt',
     suite: 'completion-admission-test.js',
     file: 'server.js',
@@ -416,17 +421,6 @@ const MUTATIONS = Object.freeze([
     find: '      if (batchRuns.some(member => !TERMINAL_RUN_STATUSES.has(member.status))) {',
     replace: '      if (false) {',
     expect: 'a Ticket is finalized while one exact current-attempt member remains live'
-  },
-  {
-    // Proves the verification refusal is falsifiable. The historical assertion was
-    // twice mis-fixtured before the gate was read properly, so it earns a mutation.
-    name: 'completion-ignores-required-verification',
-    suite: 'completion-admission-test.js',
-    file: 'server.js',
-    contract: 'a run with a declared verification contract needs a passing verdict before completion',
-    find: '  if (isRunVerificationRequired(latestRun)) {',
-    replace: '  if (false) {',
-    expect: 'a ticket completes with declared verification and no passing verdict'
   },
   {
     // The core of the whole cluster: verification must read the run's captured
