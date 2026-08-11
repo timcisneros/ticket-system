@@ -46,6 +46,120 @@ if (!process.env.TEST_DATABASE_URL && !process.env.DATABASE_URL) {
 // in the file, so a mutation can never land somewhere other than where it was aimed.
 const MUTATIONS = Object.freeze([
   {
+    name: 'ticket-attempt-count-reconstructed-from-plan-topology',
+    suite: 'ticket-attempt-authority-postgres-test.js',
+    file: 'persistence/postgres/store.js',
+    contract: 'committed Ticket-attempt rows, not allocationPlanId or Run count, own attempt counting',
+    find: "        `SELECT count(*)::bigint AS count\n" +
+      "         FROM ${this.table('ticket_attempts')} WHERE ticket_id = $1`,",
+    replace: "        `SELECT count(DISTINCT CASE\n" +
+      "           WHEN NULLIF(body->>'allocationPlanId', '') IS NOT NULL\n" +
+      "             THEN 'plan:' || body->>'allocationPlanId'\n" +
+      "           ELSE 'run:' || id::text END)::bigint AS count\n" +
+      "         FROM ${this.table('runs')} WHERE ticket_id = $1`,",
+    expect: 'an atomic non-plan multi-Run wave is counted as multiple attempts'
+  },
+  {
+    name: 'ticket-opened-at-restores-ambiguous-membership',
+    suite: 'ticket-attempt-backfill-postgres-test.js',
+    file: 'persistence/postgres/ticket-attempt-backfill.js',
+    contract: 'ticketOpenedAt can verify history but cannot supply missing multi-Run membership identity',
+    find: '  for (const [batchKey, memberIds] of nonPlanBatchKeys) {\n' +
+      '    if (memberIds.length > 1) {',
+    replace: '  for (const [batchKey, memberIds] of nonPlanBatchKeys) {\n' +
+      '    if (false) {',
+    expect: 'the hash-aware preflight stops refusing an ambiguous non-plan wave'
+  },
+  {
+    name: 'assignment-mode-controls-attempt-cardinality',
+    suite: 'auto-retry-attempt-ceiling-test.js',
+    file: 'persistence/postgres/store.js',
+    contract: 'one atomic admission wave consumes one attempt regardless of assignmentMode',
+    find: '        const requestedAttemptCount = 1;',
+    replace: "        const requestedAttemptCount = (ticket.assignmentMode || 'individual') === 'individual'\n" +
+      '          ? drafts.length\n' +
+      '          : 1;',
+    expect: 'an individual-mode two-Run atomic wave consumes two attempt slots'
+  },
+  {
+    name: 'overlapping-unsettled-attempt-index-removed',
+    suite: 'ticket-attempt-authority-postgres-test.js',
+    file: 'persistence/postgres/migrations/039_ticket_attempt_authority.sql',
+    contract: 'PostgreSQL permits at most one unsettled attempt for a Ticket',
+    find: 'CREATE UNIQUE INDEX ticket_attempts_one_unsettled_per_ticket',
+    replace: 'CREATE INDEX ticket_attempts_one_unsettled_per_ticket',
+    expect: 'the database no longer rejects a second unsettled Ticket attempt at its identity boundary'
+  },
+  {
+    name: 'run-attempt-membership-mutable',
+    suite: 'ticket-attempt-authority-postgres-test.js',
+    file: 'persistence/postgres/migrations/039_ticket_attempt_authority.sql',
+    contract: 'a Run cannot move to another same-Ticket attempt',
+    find: '    IF NEW.ticket_attempt_id <> OLD.ticket_attempt_id THEN',
+    replace: '    IF false THEN',
+    expect: 'a retry Run can be rebound to its predecessor attempt'
+  },
+  {
+    name: 'ticket-attempt-member-append-enabled',
+    suite: 'ticket-attempt-authority-postgres-test.js',
+    file: 'persistence/postgres/migrations/039_ticket_attempt_authority.sql',
+    contract: 'no Run may be appended after atomic attempt admission',
+    find: '  IF actual_members >= expected_members THEN',
+    replace: '  IF false THEN',
+    expect: 'a complete attempt accepts a later Run member'
+  },
+  {
+    name: 'retry-reuses-predecessor-attempt',
+    suite: 'ticket-attempt-authority-postgres-test.js',
+    file: 'persistence/postgres/store.js',
+    contract: 'retry mints a new attempt rather than appending to its predecessor',
+    find: '      const created = await this.createRunsAndStartTicket({\n' +
+      '        ticketId: id,\n' +
+      "        runDrafts: [{ ...draft, rerunMode: 'auto_retry' }],\n" +
+      '        afterTerminalRunId: predecessorId,\n' +
+      '        runEventPayload,\n' +
+      "        ticketEventPayload: { rerunMode: 'auto_retry', predecessorRunId: predecessorId }\n" +
+      '      }, { client });',
+    replace: '      const predecessor = await this.getRun(predecessorId);\n' +
+      '      const reused = await this.createRun(\n' +
+      "        { ...draft, rerunMode: 'auto_retry' },\n" +
+      '        { client, ticketAttemptId: predecessor.ticketAttemptId }\n' +
+      '      );\n' +
+      '      const created = {\n' +
+      '        runs: [reused],\n' +
+      '        attempt: await this.getTicketAttempt(predecessor.ticketAttemptId)\n' +
+      '      };',
+    expect: 'retry attempts to append membership to the already settled predecessor'
+  },
+  {
+    name: 'resume-mints-ticket-attempt',
+    suite: 'ticket-attempt-authority-postgres-test.js',
+    file: 'persistence/postgres/store.js',
+    contract: 'recovery resume retains the same Run and Ticket-attempt identity',
+    find: '  async resumeRecoveredRun({ runId, recoveryOwner, eventPayload = {} }) {\n' +
+      "    const id = positiveSafeInteger(runId, 'runId');\n" +
+      "    const owner = requiredString(recoveryOwner, 'recoveryOwner');\n" +
+      "    const callerPayload = this.assertJsonRecord(eventPayload, 'resume event payload');\n\n" +
+      '    return this.withTransaction(async client => {',
+    replace: '  async resumeRecoveredRun({ runId, recoveryOwner, eventPayload = {} }) {\n' +
+      "    const id = positiveSafeInteger(runId, 'runId');\n" +
+      "    const owner = requiredString(recoveryOwner, 'recoveryOwner');\n" +
+      "    const callerPayload = this.assertJsonRecord(eventPayload, 'resume event payload');\n\n" +
+      '    return this.withTransaction(async client => {\n' +
+      '      const recovered = await this.getRun(id);\n' +
+      '      await this._createTicketAttempt(client, { ticketId: recovered.ticketId, memberCount: 1 });',
+    expect: 'resume attempts to create a second overlapping attempt'
+  },
+  {
+    name: 'ticket-projection-bypasses-attempt-disposition',
+    suite: 'ticket-attempt-authority-postgres-test.js',
+    file: 'persistence/postgres/store.js',
+    contract: 'canonical Ticket status consumes the settled attempt disposition',
+    find: '      const targetStatus = ticketStatusForAttemptDisposition(attempt.disposition);',
+    replace: "      const targetStatus = run.status === 'interrupted' ? 'open' : run.status;",
+    expect: 'the routing Run status overrides the exact multi-member disposition'
+  },
+  {
     name: 'retired-structured-parent-activation-reenabled',
     suite: 'structured-allocation-activation-retirement-postgres-test.js',
     file: 'server.js',

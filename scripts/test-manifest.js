@@ -125,6 +125,8 @@ const TESTS = Object.freeze([
   { file: "operational-summary-readonly-test.js", status: "required" },
   { file: "carried-evidence-preservation-test.js", status: "required" },
   { file: "timeline-receipt-projection-test.js", status: "required" },
+  { file: "ticket-attempt-authority-postgres-test.js", status: "required" },
+  { file: "ticket-attempt-backfill-postgres-test.js", status: "required" },
   { file: "action-batch-preflight-test.js", status: "required" },
   { file: "event-append-lock-order-test.js", status: "required" },
   { file: "complete-flag-truncation-guard-test.js", status: "orphaned", reason: "cutover-orphan" },

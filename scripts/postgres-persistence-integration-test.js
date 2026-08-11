@@ -103,12 +103,12 @@ async function main() {
     assert.equal(await store.health(), true);
     assert.equal((await store.acquireRuntimeAuthority()).mode, 'shared_transactional');
     const emptyRuntimeIntegrity = await store.prepareRuntimePersistence();
-    // 45 relations and 210 integrity artifacts since Tranche 5 added
-    // `governed_postcondition_evidence` (migration 035) with its batch-boundary
-    // and baseline constraints. These counts are deliberately exact: a relation
-    // appearing or vanishing unnoticed is precisely what they exist to catch.
-    assert.equal(emptyRuntimeIntegrity.checkedRelationCount, 45);
-    assert.equal(emptyRuntimeIntegrity.checkedIntegrityArtifactCount, 210);
+    // 46 relations and 218 integrity artifacts after kernel-owned Ticket-attempt
+    // authority added one relation plus its membership/revision/FK guards. These
+    // counts are deliberately exact: a relation appearing or vanishing
+    // unnoticed is precisely what they exist to catch.
+    assert.equal(emptyRuntimeIntegrity.checkedRelationCount, 46);
+    assert.equal(emptyRuntimeIntegrity.checkedIntegrityArtifactCount, 218);
     assert.equal(emptyRuntimeIntegrity.integrityMode, 'transactional_constraints');
 
     const initialRuntimeLimits = await store.getRuntimeLimitsConfig();
@@ -1392,8 +1392,14 @@ async function main() {
     assert.equal(childTicketRace.filter(result => result.created).length, 1,
       'workflow child idempotency must survive multi-process creation races');
 
-    const runOne = await store.createRun({ ticketId: ticketOne.id, agentId: 1, status: 'pending' });
-    const runTwo = await store.createRun({ ticketId: ticketOne.id, agentId: 1, status: 'pending' });
+    const ticketOneAttempt = await store.createRunsAndStartTicket({
+      ticketId: ticketOne.id,
+      runDrafts: [
+        { ticketId: ticketOne.id, agentId: 1, status: 'pending' },
+        { ticketId: ticketOne.id, agentId: 1, status: 'pending' }
+      ]
+    });
+    const [runOne, runTwo] = ticketOneAttempt.runs;
     assert.equal(await store.countRunsForTicket(ticketOne.id), 2);
     const populatedContextRuntimeSummary = await store.getWorkContextRuntimeSummary({
       workContextId: legalContext.workContext.id,
@@ -1477,12 +1483,16 @@ async function main() {
       /append-only/
     );
     const lifecycleRun = await store.createRun({ ticketId: lifecycleTicket.id, agentId: 3, status: 'pending' });
-    const rollbackRun = await store.createRun({ ticketId: rollbackTicket.id, agentId: 4, status: 'pending' });
-    const startRollbackRun = await store.createRun({
-      ticketId: rollbackTicket.id, agentId: 4, status: 'pending'
+    const rollbackAttempt = await store.createRunsAndStartTicket({
+      ticketId: rollbackTicket.id,
+      runDrafts: Array.from({ length: 4 }, () => ({
+        ticketId: rollbackTicket.id,
+        agentId: 4,
+        status: 'pending'
+      }))
     });
-    const replayIntegrityRun = await store.createRun({ ticketId: rollbackTicket.id, agentId: 4, status: 'pending' });
-    const replayBoundaryRun = await store.createRun({ ticketId: rollbackTicket.id, agentId: 4, status: 'pending' });
+    const [rollbackRun, startRollbackRun, replayIntegrityRun, replayBoundaryRun] =
+      rollbackAttempt.runs;
     const composedRun = await store.createRun({ ticketId: composedTicket.id, agentId: 5, status: 'pending' });
     const composedRollbackRun = await store.createRun({
       ticketId: composedRollbackTicket.id, agentId: 6, status: 'pending'
@@ -1566,8 +1576,8 @@ async function main() {
       [runTwo.id, runThree.id]
     );
     assert.deepEqual(await store.getRunAttemptPositions({ runIds: [runOne.id, runTwo.id, runThree.id] }), [
-      { runId: runOne.id, attemptNumber: 1, attemptCount: 2 },
-      { runId: runTwo.id, attemptNumber: 2, attemptCount: 2 },
+      { runId: runOne.id, attemptNumber: 1, attemptCount: 1 },
+      { runId: runTwo.id, attemptNumber: 1, attemptCount: 1 },
       { runId: runThree.id, attemptNumber: 1, attemptCount: 1 }
     ]);
 
@@ -2086,7 +2096,9 @@ async function main() {
     assert.equal(lifecycleBatch.ticket.status, 'in_progress');
     assert.equal(lifecycleBatch.ticket.revision, 2);
     assert.equal(lifecycleBatch.runs.length, 2);
-    assert.deepEqual(lifecycleBatch.events.map(event => event.type), ['run.created', 'run.created', 'ticket.updated']);
+    assert.deepEqual(lifecycleBatch.events.map(event => event.type), [
+      'ticket.attempt_admitted', 'run.created', 'run.created', 'ticket.updated'
+    ]);
     assert.ok(lifecycleBatch.runs.every(run => run.ticketOpenedAt === lifecycleBoundaryTicket.ticket.updatedAt));
     const failedAllocationMember = await store.transitionRun({
       runId: lifecycleBatch.runs[0].id,
@@ -2097,8 +2109,21 @@ async function main() {
       eventPayload: { source: 'lifecycle settlement integration' }
     });
     const failedAllocationSettlement = await store.transitionTicketAfterRun({ runId: failedAllocationMember.run.id });
-    assert.equal(failedAllocationSettlement.changed, true);
-    assert.equal(failedAllocationSettlement.ticket.status, 'failed');
+    assert.equal(failedAllocationSettlement.changed, false,
+      'one terminal member cannot settle a multi-Run attempt');
+    const interruptedAllocationMember = await store.transitionRun({
+      runId: lifecycleBatch.runs[1].id,
+      expectedRevision: lifecycleBatch.runs[1].revision,
+      fromStatuses: ['pending'],
+      toStatus: 'interrupted',
+      eventType: 'run.execution_failed',
+      eventPayload: { source: 'lifecycle settlement integration' }
+    });
+    const completeAllocationSettlement = await store.transitionTicketAfterRun({
+      runId: interruptedAllocationMember.run.id
+    });
+    assert.equal(completeAllocationSettlement.changed, true);
+    assert.equal(completeAllocationSettlement.ticket.status, 'failed');
 
     const lifecycleCreationRace = await Promise.allSettled([
       store.createRunsAndStartTicket({
@@ -2129,6 +2154,7 @@ async function main() {
       eventType: 'run.execution_failed',
       eventPayload: { reason: 'retryable integration failure' }
     });
+    await store.transitionTicketAfterRun({ runId: retryFailed.run.id });
     await assert.rejects(
       smallRecordStore.createRetryRun({
         ticketId: retryBoundaryTicket.id,
@@ -2138,7 +2164,7 @@ async function main() {
       }),
       error => error && error.code === 'POSTGRES_RECORD_TOO_LARGE'
     );
-    assert.equal((await store.getTicket(retryBoundaryTicket.id)).status, 'in_progress',
+    assert.equal((await store.getTicket(retryBoundaryTicket.id)).status, 'failed',
       'failed retry evidence must roll back ticket reopen');
     const retryCountAfterRollback = await store.pool.query(
       `SELECT count(*)::int AS count FROM ${store.table('runs')} WHERE ticket_id = $1`,
@@ -3154,7 +3180,7 @@ async function main() {
       peer.appendEvent({ type: 'run.observed', ticketId: ticketOne.id, runId: runOne.id, payload: { writer: 'two' } })
     ]);
     let runOneEvents = await store.listRunEvents(runOne.id);
-    assert.equal(runOneEvents.length, 2);
+    assert.equal(runOneEvents.length, 3);
     assert.equal(verifyCurrentRunEventChain(runOneEvents).chainValid, true);
 
     await assert.rejects(
@@ -3164,7 +3190,7 @@ async function main() {
     const afterRollback = await store.appendEvent({
       type: 'run.after_rollback', ticketId: ticketOne.id, runId: runOne.id, payload: {}
     });
-    assert.equal(afterRollback.seq, 2, 'failed append must roll back the chain-tip reservation');
+    assert.equal(afterRollback.seq, 3, 'failed append must roll back the chain-tip reservation');
     runOneEvents = await store.listRunEvents(runOne.id);
     assert.equal(verifyCurrentRunEventChain(runOneEvents).chainValid, true);
 
@@ -3245,8 +3271,8 @@ async function main() {
     await parentWaiter;
 
     const populatedRuntimeIntegrity = await store.prepareRuntimePersistence();
-    assert.equal(populatedRuntimeIntegrity.checkedRelationCount, 45);
-    assert.equal(populatedRuntimeIntegrity.checkedIntegrityArtifactCount, 210);
+    assert.equal(populatedRuntimeIntegrity.checkedRelationCount, 46);
+    assert.equal(populatedRuntimeIntegrity.checkedIntegrityArtifactCount, 218);
     assert.equal(populatedRuntimeIntegrity.integrityMode, 'transactional_constraints');
     assert.equal(await store.releaseRuntimeAuthority(), true);
 

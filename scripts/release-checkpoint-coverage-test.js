@@ -57,6 +57,14 @@ for (const allocationPlanV2Gate of [
     `structured allocation plan v2 releases must include ${allocationPlanV2Gate}`);
 }
 
+for (const ticketAttemptGate of [
+  'ticket-attempt-authority-postgres-test.js',
+  'ticket-attempt-backfill-postgres-test.js'
+]) {
+  assert.equal(all.includes(ticketAttemptGate), true,
+    `Ticket-attempt authority releases must include ${ticketAttemptGate}`);
+}
+
 for (const prerequisiteGate of [
   'structured-allocation-prerequisites-contract-test.js',
   'structured-allocation-prerequisites-postgres-test.js',

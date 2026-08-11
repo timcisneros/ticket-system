@@ -172,6 +172,11 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // Tranche 6 — the ungoverned pipeline against the REAL Responses envelope:
   // one valid action to a receipt, four over the cap to a product refusal.
   'ungoverned-real-envelope-pipeline-postgres-test.js',
+  // Kernel-owned topology-neutral attempt identity, atomic membership,
+  // settlement/projection, retry/resume, and database constraints.
+  'ticket-attempt-authority-postgres-test.js',
+  // Real pre-039 schema plus source-owned v1/v2/singleton backfill/refusal.
+  'ticket-attempt-backfill-postgres-test.js',
   'postgres-persistence-integration-test.js',
   'postgres-runtime-cutover-test.js',
   'page-render-regression-test.js',
