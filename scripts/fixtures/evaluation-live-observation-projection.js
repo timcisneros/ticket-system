@@ -94,7 +94,7 @@ function tally(values) {
 // rows. Nothing else is read, and none of it is written.
 
 function projectLiveDurableObservation({
-  events = [], receipts = [], reservations = []
+  events = [], receipts = [], reservations = [], runs = []
 } = {}) {
   const requestPersisted = byType(events, 'provider.request.persisted');
   const economicStarted = byType(events, 'ticket.economic_request_started');
@@ -158,11 +158,28 @@ function projectLiveDurableObservation({
   const providerRequestIds = [...new Set(responsePersisted
     .map(event => payloadOf(event).requestId)
     .filter(value => typeof value === 'string' && value.length > 0))];
+  const governedRunIds = new Set(runs
+    .filter(run => run && run.governed_leaf === true)
+    .map(run => Number(run.id)));
+  const responseRoles = Object.fromEntries(
+    TRANSPORT_INVOCATION_ROLES.map(role => [role, 0]));
+  for (const event of responsePersisted) {
+    const payload = payloadOf(event);
+    let role = TRANSPORT_INVOCATION_ROLES.includes(payload.role) ? payload.role : null;
+    if (role === null && event.run_id === null && payload.governed === true) {
+      role = 'structured_planner';
+    } else if (role === null && event.run_id !== null) {
+      role = governedRunIds.has(Number(event.run_id))
+        ? 'governed_leaf_worker' : 'ungoverned_worker';
+    }
+    if (role !== null) responseRoles[role] += 1;
+  }
   const response = Object.freeze({
     state: responsePersisted.length > 0 ? 'PERSISTED' : UNKNOWN,
     count: responsePersisted.length,
     succeeded: succeededResponses.length,
     failed: failedResponses.length,
+    byRole: Object.freeze(responseRoles),
     failureCodes: tally(failedResponses.map(event => payloadOf(event).code)),
     httpStatuses: tally(responsePersisted.map(event => payloadOf(event).status)),
     // Non-secret provider correlation identity, retained because it is the only

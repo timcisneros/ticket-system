@@ -62,6 +62,9 @@ const {
   LIVE_ARTIFACT_DOMAIN_VERSION,
   assertLiveProductArtifactScorable
 } = require('./fixtures/evaluation-live-artifact-domain');
+const {
+  persistentDiagnosticRootFor
+} = require('./fixtures/evaluation-live-rejected-candidate-diagnostic');
 
 const SCORED_RUNNER_VERSION = 1;
 const SCORED_ARTIFACT_LABEL = 'SCORED FIXTURE TRIAL — FROZEN PROTOCOL V1';
@@ -506,6 +509,10 @@ async function executeLiveRun({
 
   const bind = { runHeaderHash: header.runHeaderHash, manifestHash: header.manifestHash };
   const alreadyAccepted = acceptedSlots(outputRoot);
+  const diagnosticRoot = persistentDiagnosticRootFor(header);
+  fs.mkdirSync(diagnosticRoot, { recursive: true, mode: 0o700 });
+  fs.chmodSync(diagnosticRoot, 0o700);
+  console.log(`Rejected-candidate diagnostics: ${diagnosticRoot}`);
   const assigned = manifest.slots;
   const plan = limit === null ? assigned : assigned.slice(0, limit);
 
@@ -623,6 +630,7 @@ async function executeLiveRun({
             // The reservation is already committed for this slot; runTrial must
             // not take a second one.
             liveReservationAlreadyCommitted: true,
+            diagnosticRoot,
             scoredIdentity: {
               label: header.syntheticAcceptance
                 ? SYNTHETIC_ACCEPTANCE_LABEL : REAL_LIVE_ARTIFACT_LABEL,

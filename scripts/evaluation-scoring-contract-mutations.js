@@ -364,8 +364,8 @@ const MUTATIONS = Object.freeze([
     name: 'unknown-product-terminal-accepted',
     file: 'scripts/fixtures/evaluation-live-artifact-domain.js',
     suite: 'evaluation-live-artifact-domain-test.js',
-    find: 'if (!timedOut && !PRODUCT_TERMINAL_STATUSES.includes(',
-    replace: 'if (false && !PRODUCT_TERMINAL_STATUSES.includes(',
+    find: 'if (!timedOut && terminalClass === null) {',
+    replace: 'if (false) {',
     failure: 'a new terminal artifact type fails until its scoring disposition is defined'
   }),
   Object.freeze({
@@ -375,6 +375,72 @@ const MUTATIONS = Object.freeze([
     find: "facts.evidenceAuthority !== 'durable_ticket_report_v1' ||",
     replace: 'false ||',
     failure: 'REAL churn cannot be supplied by the fixture-only observation sink'
+  }),
+  Object.freeze({
+    name: 'live-allocation-metric-projection-disabled',
+    file: 'scripts/fixtures/evaluation-live-artifact-domain.js',
+    suite: 'evaluation-live-artifact-domain-test.js',
+    find: "allocationQuality: metricProjection('allocationQuality', checkAllocation(artifact)),",
+    replace: "allocationQuality: metricProjection('allocationQuality', []),",
+    failure: 'allocationQuality projection mutation dies at its named metric owner'
+  }),
+  Object.freeze({
+    name: 'live-truthfulness-metric-projection-disabled',
+    file: 'scripts/fixtures/evaluation-live-artifact-domain.js',
+    suite: 'evaluation-live-artifact-domain-test.js',
+    find: "TRUTHFULNESS_CLASSES.includes(artifact.truthfulness) ? [] : ['truthfulness']),",
+    replace: "[]),",
+    failure: 'completionTruthfulness projection mutation dies at its named metric owner'
+  }),
+  Object.freeze({
+    name: 'live-latency-metric-projection-disabled',
+    file: 'scripts/fixtures/evaluation-live-artifact-domain.js',
+    suite: 'evaluation-live-artifact-domain-test.js',
+    find: "latency: metricProjection('latency', checkLatency(artifact)),",
+    replace: "latency: metricProjection('latency', []),",
+    failure: 'latency projection mutation dies at its named metric owner'
+  }),
+  Object.freeze({
+    name: 'live-cost-metric-projection-disabled',
+    file: 'scripts/fixtures/evaluation-live-artifact-domain.js',
+    suite: 'evaluation-live-artifact-domain-test.js',
+    find: "normalizedCost: metricProjection('normalizedCost', checkNormalizedCost(artifact, manifest)),",
+    replace: "normalizedCost: metricProjection('normalizedCost', []),",
+    failure: 'normalizedCost projection mutation dies at its named metric owner'
+  }),
+  Object.freeze({
+    name: 'live-churn-metric-projection-disabled',
+    file: 'scripts/fixtures/evaluation-live-artifact-domain.js',
+    suite: 'evaluation-live-artifact-domain-test.js',
+    find: 'if (!Number.isSafeInteger(worker.attemptedTransports) ||\n' +
+      '      worker.attemptedTransports < 0) missing.push(\'worker.attemptedTransports\');',
+    replace: 'if (false && (!Number.isSafeInteger(worker.attemptedTransports) ||\n' +
+      '      worker.attemptedTransports < 0)) missing.push(\'worker.attemptedTransports\');',
+    failure: 'churn projection mutation dies at its named metric owner'
+  }),
+  Object.freeze({
+    name: 'live-diagnostic-persistence-bypassed',
+    file: 'scripts/fixtures/evaluation-live-rejected-candidate-diagnostic.js',
+    suite: 'evaluation-live-artifact-domain-test.js',
+    find: 'persistRejectedLiveCandidate(input);',
+    replace: 'void input;',
+    failure: 'diagnostic persistence precedes the fail-closed metric-domain throw'
+  }),
+  Object.freeze({
+    name: 'live-corpus-metric-gate-bypassed',
+    file: 'scripts/fixtures/evaluation-live-corpus-integrity.js',
+    suite: 'evaluation-live-matrix-contract-test.js',
+    find: 'assertLiveProductArtifactScorable({',
+    replace: 'void ({',
+    failure: 'the corpus gate refuses a candidate with an undefined frozen metric'
+  }),
+  Object.freeze({
+    name: 'live-scorer-metric-gate-bypassed',
+    file: 'scripts/fixtures/evaluation-live-scoring.js',
+    suite: 'evaluation-live-matrix-contract-test.js',
+    find: 'assertLiveProductArtifactScorable({ artifact, trial, manifest });',
+    replace: 'void ({ artifact, trial, manifest });',
+    failure: 'the production scorer cannot bypass the shared REAL metric-domain authority'
   }),
   Object.freeze({
     name: 'oracle-refusal-treated-as-ordinary-false',

@@ -74,7 +74,8 @@ async function collectTicketFacts(store, ticketId) {
   const reservations = await readOnly(store,
     `SELECT id, ticket_id, planning_attempt_id, run_id, role, state,
             model_request_ordinal, logical_source_identity, exact_request_hash,
-            settled_micro_usd, settlement_receipt,
+            settled_micro_usd, settlement_receipt, reserved_max_micro_usd,
+            economic_authority, prepared_request,
             settlement_receipt IS NOT NULL AS settled
        FROM ${store.table('economic_request_reservations')}
       WHERE ticket_id = $1 ORDER BY id`, [ticketId]);
@@ -157,7 +158,9 @@ function deriveLatency(facts) {
     ? new Date(facts.ticket.created_at).getTime() : null;
   const firstReceipt = facts.receipts.length > 0
     ? new Date(facts.receipts[0].recorded_at).getTime() : null;
-  const terminalEvent = facts.events.filter(e => e.type === 'run.terminalized').pop() || null;
+  const terminalTicketEvent = facts.events.find(event =>
+    event.type === 'ticket.updated' && event.run_id === null &&
+    ['completed', 'failed', 'blocked'].includes(event.payload && event.payload.status)) || null;
   const planAdmitted = facts.events.find(e => String(e.type).includes('plan_admitted')) || null;
   const blockEvent = facts.events.find(e => e.type === 'run.progress_blocked') || null;
 
@@ -165,10 +168,10 @@ function deriveLatency(facts) {
   return {
     planningMs: delta(ticketCreated, at(planAdmitted)),
     timeToFirstExecutionMs: delta(ticketCreated, firstReceipt),
-    endToEndMs: delta(ticketCreated, at(terminalEvent)),
+    endToEndMs: delta(ticketCreated, at(terminalTicketEvent)),
     recoveryMs: null,
-    withheldMs: blockEvent && terminalEvent
-      ? delta(at(blockEvent), at(terminalEvent)) : null
+    withheldMs: blockEvent && terminalTicketEvent
+      ? delta(at(blockEvent), at(terminalTicketEvent)) : null
   };
 }
 
@@ -256,17 +259,10 @@ function deriveCanonicalRequests(facts, { provider, model, authorizedOutputToken
       throw new EvaluationReaderError(
         `economic reservation ${reservation.id} belongs to another Ticket`);
     }
-    if (reservation.state === 'released') continue;
-    if (reservation.state !== 'settled' || !reservation.settlement_receipt) {
+    if (reservation.state === 'released' || reservation.state === 'reserved') continue;
+    if (!['request_started', 'response_persisted', 'settled'].includes(reservation.state)) {
       throw new EvaluationReaderError(
-        `economic reservation ${reservation.id} is ${reservation.state} and has no ` +
-        'complete settlement authority; normalized cost refuses to guess');
-    }
-    const receipt = reservation.settlement_receipt;
-    if (Number(receipt.ticketId) !== Number(reservation.ticket_id) ||
-        receipt.role !== reservation.role || receipt.requestCount !== 1) {
-      throw new EvaluationReaderError(
-        `economic reservation ${reservation.id} settlement identity is inconsistent`);
+        `economic reservation ${reservation.id} has unsupported state ${reservation.state}`);
     }
     const planner = reservation.role === GOVERNED_PLANNER_ROLE;
     const worker = reservation.role === GOVERNED_WORKER_ROLE;
@@ -293,6 +289,34 @@ function deriveCanonicalRequests(facts, { provider, model, authorizedOutputToken
         `${Number(reservation.run_id)}:${reservation.logical_source_identity}`);
     }
     const common = { role: planner ? 'planner' : 'worker', provider, model };
+    // A started request with no complete settlement is still a provider-bearing
+    // logical request. The frozen normalized-cost method prices it at the
+    // CAPTURED authorized maximum; dropping it (or guessing zero) would erase
+    // exactly the delivery-uncertainty product state the protocol retains.
+    if (reservation.state !== 'settled') {
+      const prepared = reservation.prepared_request;
+      const authority = reservation.economic_authority;
+      if (!prepared || !authority || authority.provider !== provider ||
+          authority.dispatchTarget !== model ||
+          !Number.isSafeInteger(prepared.authorizedOutputTokens) ||
+          prepared.authorizedOutputTokens <= 0 ||
+          !Number.isSafeInteger(authority.contextWindowTokens) ||
+          authority.contextWindowTokens <= 0) {
+        throw new EvaluationReaderError(
+          `economic reservation ${reservation.id} lacks captured authorized-maximum authority`);
+      }
+      governed.push({ ...common,
+        authorizedOutputTokens: prepared.authorizedOutputTokens,
+        boundInputTokens: authority.contextWindowTokens });
+      continue;
+    }
+
+    const receipt = reservation.settlement_receipt;
+    if (!receipt || Number(receipt.ticketId) !== Number(reservation.ticket_id) ||
+        receipt.role !== reservation.role || receipt.requestCount !== 1) {
+      throw new EvaluationReaderError(
+        `economic reservation ${reservation.id} settlement identity is inconsistent`);
+    }
     if (receipt.usageSource === 'provider_reported') {
       if (!Number.isSafeInteger(receipt.inputTokens) || receipt.inputTokens < 0 ||
           !Number.isSafeInteger(receipt.outputTokens) || receipt.outputTokens < 0) {
@@ -382,7 +406,8 @@ async function collectTrialObservations(store, { ticketId, armId, pricingInputs 
     durableObservation: projectLiveDurableObservation({
       events: facts.events,
       receipts: facts.receipts,
-      reservations: facts.reservations
+      reservations: facts.reservations,
+      runs: facts.runs
     }),
     terminalRunStatuses: facts.runs.map(run => run.status),
     terminalTicketStatus: facts.ticket ? facts.ticket.status : null,

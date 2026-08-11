@@ -7,11 +7,18 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const {
   PRODUCT_TERMINAL_STATUSES, REFUSE_BEFORE_PRODUCT_EVIDENCE,
-  SCORABLE_PRODUCT_EVIDENCE, evaluateLiveArtifactDisposition
+  SCORABLE_PRODUCT_EVIDENCE, classifyLiveTerminalCandidate,
+  evaluateLiveArtifactDisposition, projectLiveMetricDomain
 } = require('./fixtures/evaluation-live-artifact-domain');
+const {
+  DIAGNOSTIC_LABEL, persistRejectedLiveCandidateBeforeRefusal,
+  persistentDiagnosticRootFor, readRejectedLiveCandidate
+} = require('./fixtures/evaluation-live-rejected-candidate-diagnostic');
 const {
   classifyLiveFailure
 } = require('./fixtures/evaluation-live-failure-classifier');
@@ -155,6 +162,95 @@ function main() {
       SCORABLE_PRODUCT_EVIDENCE;
   }), 'every controlled live-v3 assignment lies in one shared scoring-input domain');
 
+  // Each frozen metric has its own smallest projection owner and reason code.
+  // Mutating one cannot be hidden by another metric remaining valid.
+  const metricBase = artifactFor(liveManifest.slots[0], HEADER);
+  const metricMutants = [
+    ['allocationQuality', value => { delete value.pathProof.runCount; }],
+    ['completionTruthfulness', value => { value.truthfulness = 'unknown'; }],
+    ['latency', value => { delete value.latency.endToEndMs; }],
+    ['normalizedCost', value => { value.normalizedCost.requests[0].microUsd = -1; }],
+    ['churn', value => { delete value.churnFacts.worker.attemptedTransports; }]
+  ];
+  for (const [metric, mutate] of metricMutants) {
+    const value = structuredClone(metricBase);
+    mutate(value);
+    const projected = projectLiveMetricDomain({ artifact: value, manifest: liveManifest });
+    ok(projected.allDefined === false &&
+       projected.projections[metric].defined === false &&
+       projected.projections[metric].reasonCode.endsWith('_INPUT_MISSING'),
+    `${metric} projection mutation dies at its named metric owner`);
+  }
+
+  const interrupted = structuredClone(metricBase);
+  interrupted.pathProof.ticketResultStatus = 'open';
+  interrupted.ticketReport.terminalTicketStatus = 'open';
+  interrupted.ticketReport.authority.ticketStatus = 'open';
+  interrupted.ticketReport.terminalRunStatuses = ['interrupted'];
+  interrupted.ticketReport.productClaimsCompleted = false;
+  interrupted.truthfulness = truthfulness(false, interrupted.oracleResult.verdict);
+  ok(classifyLiveTerminalCandidate(interrupted) === 'interrupted_recoverable' &&
+     disposition(interrupted, rawTrial).disposition === SCORABLE_PRODUCT_EVIDENCE,
+  'an interrupted Run with the authoritative recoverable open Ticket has a frozen disposition');
+
+  // A rejected candidate is durably diagnosable but cannot satisfy a corpus
+  // slot. Read it in a fresh process to prove the producing process owns no
+  // hidden in-memory state required for verification.
+  const defaultDiagnosticRoot = persistentDiagnosticRootFor({
+    runHeaderHash: 'a'.repeat(64)
+  });
+  const ignoreProbe = spawnSync('git', ['check-ignore', '-q',
+    path.join(defaultDiagnosticRoot, 'probe.json')], {
+    cwd: path.resolve(__dirname, '..'), encoding: 'utf8'
+  });
+  ok(defaultDiagnosticRoot.startsWith(path.join(path.resolve(__dirname, '..'),
+    '.local-artifacts') + path.sep) &&
+     !defaultDiagnosticRoot.startsWith(`${path.resolve(os.tmpdir())}${path.sep}`) &&
+     ignoreProbe.status === 0,
+  'default rejected-candidate diagnostics are persistent repository-associated ignored state');
+  const diagnosticRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'live-domain-diagnostic-'));
+  try {
+    const rejected = structuredClone(metricBase);
+    rejected.normalizedCost.requests[0].microUsd = -1;
+    const refused = disposition(rejected, rawTrial);
+    let refusalObserved = false;
+    try {
+      persistRejectedLiveCandidateBeforeRefusal({
+        root: diagnosticRoot,
+        artifact: rejected,
+        trial: { trialId: rejected.trialId, expectedOracleAuthority: 'raw_state',
+          expectedQuiescence: 'quiescent' },
+        disposition: refused,
+        terminalClass: classifyLiveTerminalCandidate(rejected)
+      }, () => {
+        const error = new Error('controlled metric refusal');
+        error.code = refused.code;
+        throw error;
+      });
+    } catch (error) {
+      refusalObserved = error.code === 'LIVE_SCORING_METRIC_EVIDENCE_MISSING';
+    }
+    const target = path.join(diagnosticRoot, `${rejected.trialId}.json`);
+    ok(refusalObserved && fs.existsSync(target),
+    'diagnostic persistence precedes the fail-closed metric-domain throw');
+    const persisted = readRejectedLiveCandidate(target);
+    const child = spawnSync(process.execPath, ['-e',
+      "const m=require('./scripts/fixtures/evaluation-live-rejected-candidate-diagnostic');" +
+      'const r=m.readRejectedLiveCandidate(process.argv[1]);' +
+      'process.stdout.write(r.diagnosticRecordHash);', target],
+    { cwd: path.resolve(__dirname, '..'), encoding: 'utf8' });
+    ok(child.status === 0 &&
+       child.stdout === persisted.diagnosticRecordHash &&
+       persisted.label === DIAGNOSTIC_LABEL &&
+       persisted.acceptedProductEvidence === false &&
+       persisted.infrastructureExclusion === false &&
+       (fs.statSync(diagnosticRoot).mode & 0o777) === 0o700 &&
+       (fs.statSync(target).mode & 0o777) === 0o600,
+    'metric refusal persists a hashed non-decision diagnostic readable by a fresh process');
+  } finally {
+    fs.rmSync(diagnosticRoot, { recursive: true, force: true });
+  }
+
   const runnerSource = fs.readFileSync(path.join(__dirname,
     'structured-allocation-evaluation-runner.js'), 'utf8');
   const executorSource = fs.readFileSync(path.join(__dirname,
@@ -164,10 +260,15 @@ function main() {
   const scoringSource = fs.readFileSync(path.join(__dirname, 'fixtures',
     'evaluation-live-scoring.js'), 'utf8');
   const runnerDomainBoundary =
-    runnerSource.indexOf('assertLiveProductArtifactScorable({');
+    runnerSource.indexOf('evaluateLiveArtifactDisposition(authority)');
   ok(runnerDomainBoundary >= 0 &&
      runnerDomainBoundary < runnerSource.indexOf('writeTrialArtifact(outputPath, artifact);'),
   'the REAL trial refuses outside-domain evidence before artifact acceptance');
+  ok(runnerSource.indexOf('persistRejectedLiveCandidateBeforeRefusal({', runnerDomainBoundary) >
+       runnerDomainBoundary &&
+     runnerSource.indexOf('persistRejectedLiveCandidateBeforeRefusal({', runnerDomainBoundary) <
+       runnerSource.indexOf('assertLiveProductArtifactScorable(authority);', runnerDomainBoundary),
+  'the REAL runner invokes the diagnostic-before-refusal owner at the acceptance boundary');
   ok(executorSource.split('assertLiveProductArtifactScorable({').length - 1 === 2,
     'new and crash-recovered artifacts both pass the domain before slot acceptance');
   ok(corpusSource.includes('assertLiveProductArtifactScorable({') &&

@@ -31,8 +31,13 @@ const {
 const { assertCorpusIntegrity } = require('./structured-allocation-evaluation-scorer');
 const { trialIdFor } = require('./structured-allocation-evaluation-scored-runner');
 const {
+  ARTIFACTS: SCORING_ARTIFACTS, HEADER: SCORING_HEADER,
   artifactFor, rehashArtifact
 } = require('./evaluation-live-scoring-dress-rehearsal-test');
+const {
+  assertLiveScoringCorpus, projectLiveManifestToScoring
+} = require('./fixtures/evaluation-live-scoring');
+const protocol = require('../config/structured-allocation-evaluation-v1.json');
 
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config',
   'structured-allocation-evaluation-live-v3.json'), 'utf8'));
@@ -115,6 +120,21 @@ function main() {
     fs.rmSync(root, { recursive: true, force: true });
   }
 
+  {
+    const projection = projectLiveManifestToScoring({ manifest, protocol });
+    const invalid = rehashArtifact({
+      ...SCORING_ARTIFACTS[0],
+      churnFacts: { ...SCORING_ARTIFACTS[0].churnFacts,
+        evidenceAuthority: 'fixture_sink' }
+    });
+    const refusal = refuses(() => assertLiveScoringCorpus({
+      manifest, projection, header: SCORING_HEADER,
+      artifacts: [invalid, ...SCORING_ARTIFACTS.slice(1)], exclusions: []
+    }));
+    ok(refusal && refusal.code === 'LIVE_SCORING_METRIC_EVIDENCE_MISSING',
+    'the production scorer cannot bypass the shared REAL metric-domain authority');
+  }
+
   // A reservation with no acceptance is visible, so recovery can resolve it
   // through the canonical contract rather than guessing.
   {
@@ -140,6 +160,16 @@ function main() {
       '120 assigned, 120 accounted for');
     ok(assertScorableLiveCorpus(audit) === true,
       'and a product corpus that is complete may be scored');
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+
+  {
+    const root = freshRoot();
+    seedCorpus(root, manifest.slots.length, { latency: null });
+    const audit = auditLiveCorpus({ manifest, header: HEADER, outputRoot: root, trialIdFor });
+    ok(audit.complete === false && audit.failures.some(failure =>
+      failure.code === 'LIVE_SCORING_METRIC_EVIDENCE_MISSING'),
+    'the corpus gate refuses a candidate with an undefined frozen metric');
     fs.rmSync(root, { recursive: true, force: true });
   }
 

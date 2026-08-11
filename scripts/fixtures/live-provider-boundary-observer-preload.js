@@ -167,8 +167,18 @@ function modelTextFor(body) {
   if (spec.kind === 'role-aware-structured-success') {
     return isPlannerRequest(body) ? plannerProposal(body) : workerAnswer(body);
   }
+  if (spec.kind === 'role-aware-planner-success-worker-hang') {
+    return isPlannerRequest(body) ? plannerProposal(body) : workerAnswer(body);
+  }
   if (spec.kind === 'role-aware-structured-inspection') {
     return isPlannerRequest(body) ? plannerProposal(body) : workerInspectionAnswer(body);
+  }
+  if (spec.kind === 'role-aware-structured-no-evidence-completion') {
+    return isPlannerRequest(body) ? plannerProposal(body) : JSON.stringify({
+      message: 'Claiming completion without producing the declared output.',
+      actions: [],
+      complete: true
+    });
   }
   if (spec.kind === 'one-action-createFolder-by-owned-root') {
     const envelope = runtimeEnvelopeOf(body) || {};
@@ -188,6 +198,12 @@ function modelTextFor(body) {
     });
   }
   throw new Error(`unsupported boundary response kind: ${String(spec.kind)}`);
+}
+
+function shouldHang(body) {
+  const kind = responseSpec().kind;
+  return kind === 'hang' ||
+    (kind === 'role-aware-planner-success-worker-hang' && !isPlannerRequest(body));
 }
 
 function realShapedResponse(body) {
@@ -283,7 +299,18 @@ globalThis.fetch = async function observedFetch(input, init) {
     body
   });
   if (RESPONSE_PATH) {
-    if (responseSpec().kind === 'hang') return new Promise(() => {});
+    if (shouldHang(body)) return new Promise((resolve, reject) => {
+      void resolve;
+      const abort = () => {
+        const error = new Error('controlled provider boundary aborted');
+        error.name = 'AbortError';
+        reject(error);
+      };
+      if (init && init.signal) {
+        if (init.signal.aborted) abort();
+        else init.signal.addEventListener('abort', abort, { once: true });
+      }
+    });
     const payload = realShapedResponse(body);
     // The real platform Response, for the same reason: production consumes
     // more of this interface than a hand-written stub tends to provide.
@@ -312,10 +339,16 @@ https.request = function observedHttpsRequest(options, onResponse) {
 
   const chunks = [];
   const response = new PassThrough();
+  const listeners = new Map();
   const request = {
-    on() { return request; },
+    on(name, listener) { listeners.set(name, listener); return request; },
     setTimeout() { return request; },
-    destroy() { return request; },
+    destroy(error = null) {
+      const listener = listeners.get('error');
+      if (listener) queueMicrotask(() => listener(error ||
+        new Error('controlled provider boundary destroyed')));
+      return request;
+    },
     write(chunk) { chunks.push(Buffer.from(chunk)); return true; },
     end(chunk) {
       if (chunk) chunks.push(Buffer.from(chunk));
@@ -334,7 +367,7 @@ https.request = function observedHttpsRequest(options, onResponse) {
         body
       });
       if (RESPONSE_PATH) {
-        if (responseSpec().kind === 'hang') return request;
+        if (shouldHang(body)) return request;
         response.statusCode = 200;
         response.headers = {
           'x-request-id': 'req_boundary_controlled',

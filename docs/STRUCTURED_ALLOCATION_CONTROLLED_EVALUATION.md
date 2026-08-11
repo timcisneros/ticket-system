@@ -2808,3 +2808,63 @@ aborted-run registry. Historical aborted corpora remain unchanged.
 **Tranche 6 live-model evaluation status: BLOCKED.** No additional provider
 authorization exists. A separate source audit and correction, exact-source
 proof, and entirely new authorization would be required for any future run.
+
+## 17. LIVE candidate metric-domain closure (2026-08-10)
+
+The aborted run above remains unscorable. Its bytes were copied without reading
+outcomes into the ignored forensic root
+`.local-artifacts/aborted-live-v3-forensics/7297f3dd7d3ec98e563c1474a6163fc14d06612824091b7ac76838cfc364e47f/`.
+The source audit used no prefix outcome to choose a metric disposition.
+
+### Five metric inputs
+
+| Metric | Required materialized fields | Durable/source owner | Frozen absent-value rule |
+|---|---|---|---|
+| allocation quality | `pathProof.observedPath`, `runCount`; structured paths also require `governedLeafRunCount`, `executableItemCount`, `governedLeafExecutionObserved` | admitted plan, planning events, Runs and receipts through `proveDurablePath` | no fallback; a missing path fact refuses |
+| completion truthfulness | boolean `ticketReport.productClaimsCompleted`, frozen oracle authority/verdict, exactly reproduced `truthfulness` class | Ticket/consequence projection plus independent raw-state or coupling oracle | coupling pass/fail requires complete access observation; oracle refusal maps to `oracle_refused` |
+| latency | `planningMs`, `timeToFirstExecutionMs`, `endToEndMs`, `recoveryMs`, `withheldMs` | database event/receipt timestamps | each duration is nullable; null is a defined unavailable/non-applicable value, never zero |
+| normalized cost | canonical planner/worker requests, request counts, provider/model, per-request price and role/total sums | immutable governed reservations or committed ungoverned request charges plus frozen pricing snapshot | a started unmetered request uses its captured output/context maximum; a never-started reservation is not a request |
+| churn | durable-report authority/completeness, worker attempted transports/durable responses, governed `noProgressStreak` | progress blocks, committed charges, `provider.transport_invoked` and persisted responses | non-governed streak is null; an unanswered request is reported but is not an evaluated churn window |
+
+`projectLiveMetricDomain` owns this table mechanically. It emits a defined flag,
+missing-field list and stable reason code for each metric. The runner, disk
+corpus gate and production scorer all call the same artifact-domain owner.
+
+### Runner terminal candidate domain
+
+| Source-reachable class | Candidate boundary | Oracle/observation disposition | Five-metric disposition | Classification |
+|---|---|---|---|---|
+| successful or claimed completion | quiescent Ticket `completed` | raw pass/fail/refusal; coupling pass/fail only with complete access observation | scorable | existing contract |
+| truthful product failure, provider/model refusal, malformed/unusable response, action-authority refusal | quiescent Ticket `failed` | independent oracle still decides or refuses by its own authority | scorable | existing contract |
+| product block, budget/no-progress termination | quiescent Ticket `blocked` or `failed` | independent oracle rules unchanged | scorable; governed progress streak comes only from a persisted block | existing contract |
+| runtime timeout | non-quiescent + `timedOut:true` | oracle must refuse; pre-timeout guesses refuse | scorable with nullable latency and all provider-bearing requests costed | existing contract |
+| delivery uncertainty / no durable response | normally timeout or terminal product failure | no response is not an oracle or churn fact | scorable; captured authorized-maximum cost, attempted/durable counts kept separate | A — projection implementation defect corrected |
+| operator/runtime interruption | all Runs `interrupted`, parent Ticket recoverably `open` | oracle follows the same raw/coupling rule after stable state | scorable; terminal-Ticket latency stays null | A — terminal classifier implementation defect corrected |
+| recovery-produced terminal state | the same completed/failed/blocked stable boundary after recovery | oracle applies only after stable/quiescent observation | scorable; the current live projection materializes `recoveryMs:null`, the frozen defined-unavailable value | existing contract |
+| coupling observation incomplete/unavailable | candidate may otherwise be stable | coupling oracle must be `refused`; a pass/fail claim refuses | scorable only with `oracle_refused` | existing contract |
+| explicit 429/5xx with no model result, proven pre-delivery connection failure, local infrastructure failure | no accepted product candidate | frozen infrastructure exclusion | never scored as product evidence | source-authorized exclusion |
+| auth/account/model configuration failure | run-level pre-candidate boundary | fatal configuration | aborts the run, no slot evidence | source-authorized refusal |
+| unknown terminal status, contradictory oracle/observation, or a future undefined metric shape | refusal before acceptance | diagnostic retains the rejected projection | `LIVE_SCORING_METRIC_EVIDENCE_MISSING` or the narrower domain code | fail closed |
+
+There is no frozen protocol gap in these classes. The formerly undefined
+shapes were projection defects: the protocol already supplied the nullable,
+authorized-maximum, interruption and no-churn semantics. LIVE-V3 therefore
+remains byte-identical; a new manifest version would falsely describe an
+implementation repair as a changed experiment.
+
+For actual `mode:'live'` execution the fixture access observer is deliberately
+absent, so observation completeness is `unavailable`: raw-state oracles can
+still pass/fail/refuse, while a coupling oracle must refuse. The complete and
+incomplete access-observation rows remain closed-domain inputs for controlled
+capture and validation, but are not claimed as REAL LIVE-V3 runner output.
+The exact metric missing from the historical aborted slot remains UNKNOWN;
+the source audit classified independently reachable projection gaps without
+using that slot to select one.
+
+Rejected candidates are written mode 0600, write once, beneath
+`.local-artifacts/structured-allocation-live-diagnostics/<run-header-hash>/` as
+`DIAGNOSTIC — NOT ACCEPTED PRODUCT EVIDENCE`. The record binds trial, source,
+header and manifest identities; terminal/oracle/observation state; all five
+metric projections; the safe candidate projection; and its own SHA-256. It is
+outside both corpus artifact directories and cannot satisfy, exclude or score a
+slot.

@@ -190,7 +190,7 @@ function artifactFor(slot, header = HEADER) {
     },
     durableGovernedCost: structured ? total : null,
     latency: { endToEndMs: structured ? 120 : 100, planningMs: structured ? 20 : null,
-      timeToFirstExecutionMs: 50 },
+      timeToFirstExecutionMs: 50, recoveryMs: null, withheldMs: null },
     churn: null,
     observationSinkVersion: 1,
     observationCompleteness: cell.expectedOracleAuthority === 'raw_state'
@@ -433,6 +433,14 @@ function main() {
     artifacts: [missingLatency, ...ARTIFACTS.slice(1)]
   })) === 'LIVE_SCORING_METRIC_EVIDENCE_MISSING',
   'an artifact omitting one of the five metric inputs refuses before aggregation');
+  const wrongChurnAuthority = rehashArtifact({
+    ...ARTIFACTS[0],
+    churnFacts: { ...ARTIFACTS[0].churnFacts, evidenceAuthority: 'fixture_sink' }
+  });
+  ok(refusalCode(() => score({
+    artifacts: [wrongChurnAuthority, ...ARTIFACTS.slice(1)]
+  })) === 'LIVE_SCORING_METRIC_EVIDENCE_MISSING',
+  'the production scorer cannot bypass the shared REAL metric-domain authority');
   const omittedPlanner = rehashArtifact({
     ...ARTIFACTS.find(artifact => artifact.armId === 'B'),
     normalizedCost: {

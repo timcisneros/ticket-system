@@ -19,7 +19,7 @@ const OBSERVATION_COMPLETENESS = Object.freeze([
 ]);
 const ORACLE_VERDICTS = Object.freeze(['pass', 'fail', 'refused']);
 const PRODUCT_TERMINAL_STATUSES = Object.freeze([
-  'completed', 'failed', 'interrupted', 'cancelled', 'blocked'
+  'completed', 'failed', 'blocked'
 ]);
 const TRUTHFULNESS_CLASSES = Object.freeze([
   'false_positive_completion', 'true_positive_completion',
@@ -67,52 +67,143 @@ function validNullableDuration(value) {
   return value === null || (Number.isFinite(value) && value >= 0);
 }
 
-function validateNormalizedCost(artifact, manifest) {
+const METRIC_SOURCE_OWNERS = Object.freeze({
+  allocationQuality: 'pathProof from durable plans, Runs, receipts and planning events',
+  completionTruthfulness: 'product completion claim + independent oracle classifier',
+  latency: 'Ticket event and operation-receipt database timestamps',
+  normalizedCost: 'canonical provider requests + frozen pricing snapshot',
+  churn: 'durable progress blocks, transport/response evidence and committed charges'
+});
+
+function checkNormalizedCost(artifact, manifest) {
   const cost = artifact.normalizedCost;
   const requests = cost && Array.isArray(cost.requests) ? cost.requests : [];
   const planner = requests.filter(request => request.role === 'planner');
   const worker = requests.filter(request => request.role === 'worker');
   const sum = rows => rows.reduce((total, request) => total + request.microUsd, 0);
-  return Boolean(cost && Number.isSafeInteger(cost.totalNormalizedMicroUsd) &&
-    cost.totalNormalizedMicroUsd >= 0 &&
-    Number.isSafeInteger(cost.plannerRequestCount) &&
-    Number.isSafeInteger(cost.workerRequestCount) &&
-    planner.length === cost.plannerRequestCount &&
-    worker.length === cost.workerRequestCount &&
-    requests.length === cost.plannerRequestCount + cost.workerRequestCount &&
-    requests.every(request => Number.isSafeInteger(request.microUsd) &&
+  const missing = [];
+  if (!cost || typeof cost !== 'object') missing.push('normalizedCost');
+  if (!Number.isSafeInteger(cost?.totalNormalizedMicroUsd) ||
+      cost.totalNormalizedMicroUsd < 0) missing.push('totalNormalizedMicroUsd');
+  if (!Number.isSafeInteger(cost?.plannerRequestCount)) missing.push('plannerRequestCount');
+  if (!Number.isSafeInteger(cost?.workerRequestCount)) missing.push('workerRequestCount');
+  if (!Array.isArray(cost?.requests)) missing.push('requests');
+  if (planner.length !== cost?.plannerRequestCount ||
+      worker.length !== cost?.workerRequestCount ||
+      requests.length !== (cost?.plannerRequestCount || 0) +
+        (cost?.workerRequestCount || 0)) missing.push('requestRoleCounts');
+  if (!requests.every(request => Number.isSafeInteger(request.microUsd) &&
       request.microUsd >= 0 && request.provider === manifest.provider &&
-      request.model === manifest.model) &&
-    sum(planner) === cost.plannerMicroUsd &&
-    sum(worker) === cost.workerMicroUsd &&
-    sum(requests) === cost.totalNormalizedMicroUsd);
+      request.model === manifest.model)) missing.push('requestPricingAuthority');
+  if (sum(planner) !== cost?.plannerMicroUsd || sum(worker) !== cost?.workerMicroUsd ||
+      sum(requests) !== cost?.totalNormalizedMicroUsd) missing.push('requestSums');
+  return missing;
 }
 
-function validateAllocation(artifact) {
+function checkAllocation(artifact) {
   const proof = artifact.pathProof;
+  const missing = [];
   if (!proof || typeof proof.observedPath !== 'string' ||
-      !Number.isSafeInteger(proof.runCount)) return false;
-  if (proof.observedPath !== 'structured_v2') return true;
-  return Number.isSafeInteger(proof.governedLeafRunCount) &&
-    Number.isSafeInteger(proof.executableItemCount) &&
-    typeof proof.governedLeafExecutionObserved === 'boolean';
+      !Number.isSafeInteger(proof.runCount)) {
+    if (!proof) missing.push('pathProof');
+    if (typeof proof?.observedPath !== 'string') missing.push('observedPath');
+    if (!Number.isSafeInteger(proof?.runCount)) missing.push('runCount');
+    return missing;
+  }
+  if (proof.observedPath !== 'structured_v2') return missing;
+  if (!Number.isSafeInteger(proof.governedLeafRunCount)) missing.push('governedLeafRunCount');
+  if (!Number.isSafeInteger(proof.executableItemCount)) missing.push('executableItemCount');
+  if (typeof proof.governedLeafExecutionObserved !== 'boolean') {
+    missing.push('governedLeafExecutionObserved');
+  }
+  return missing;
 }
 
-function validateChurn(artifact) {
+function checkChurn(artifact) {
   const governed = artifact.armId === 'B' || artifact.armId === 'C';
   const facts = artifact.churnFacts;
+  const missing = [];
   if (!facts || facts.evidenceAuthority !== 'durable_ticket_report_v1' ||
-      facts.observationCompleteness !== 'complete') return false;
+      facts.observationCompleteness !== 'complete') {
+    if (!facts) missing.push('churnFacts');
+    if (facts?.evidenceAuthority !== 'durable_ticket_report_v1') {
+      missing.push('evidenceAuthority');
+    }
+    if (facts?.observationCompleteness !== 'complete') {
+      missing.push('observationCompleteness');
+    }
+    return missing;
+  }
   if (governed) {
     if (!Number.isSafeInteger(facts.noProgressStreak) ||
-        facts.noProgressStreak < 0) return false;
-  } else if (facts.noProgressStreak !== null) return false;
+        facts.noProgressStreak < 0) missing.push('noProgressStreak');
+  } else if (facts.noProgressStreak !== null) missing.push('noProgressStreakNonApplicable');
   const worker = facts.worker;
-  return Boolean(worker && Number.isSafeInteger(worker.attemptedTransports) &&
-    worker.attemptedTransports >= 0 &&
-    Number.isSafeInteger(worker.durableResponses) &&
-    worker.durableResponses >= 0 &&
-    worker.durableResponses <= worker.attemptedTransports);
+  if (!worker) return [...missing, 'worker'];
+  if (!Number.isSafeInteger(worker.attemptedTransports) ||
+      worker.attemptedTransports < 0) missing.push('worker.attemptedTransports');
+  if (!Number.isSafeInteger(worker.durableResponses) ||
+      worker.durableResponses < 0) missing.push('worker.durableResponses');
+  if (Number.isSafeInteger(worker.attemptedTransports) &&
+      Number.isSafeInteger(worker.durableResponses) &&
+      worker.durableResponses > worker.attemptedTransports) {
+    missing.push('worker.responseWithoutAttemptAuthority');
+  }
+  return missing;
+}
+
+function checkLatency(artifact) {
+  const latency = artifact.latency;
+  if (!latency || typeof latency !== 'object') return ['latency'];
+  return ['planningMs', 'timeToFirstExecutionMs', 'endToEndMs', 'recoveryMs', 'withheldMs']
+    .filter(field => !Object.prototype.hasOwnProperty.call(latency, field) ||
+      !validNullableDuration(latency[field]));
+}
+
+function metricProjection(name, missing) {
+  return Object.freeze({
+    defined: missing.length === 0,
+    reasonCode: missing.length === 0 ? 'DEFINED_BY_FROZEN_CONTRACT'
+      : `LIVE_${name.replace(/[A-Z]/g, value => `_${value}`).toUpperCase()}_INPUT_MISSING`,
+    missingFields: Object.freeze([...missing]),
+    sourceOwner: METRIC_SOURCE_OWNERS[name]
+  });
+}
+
+function projectLiveMetricDomain({ artifact, manifest }) {
+  const projections = Object.freeze({
+    allocationQuality: metricProjection('allocationQuality', checkAllocation(artifact)),
+    completionTruthfulness: metricProjection('completionTruthfulness',
+      TRUTHFULNESS_CLASSES.includes(artifact.truthfulness) ? [] : ['truthfulness']),
+    latency: metricProjection('latency', checkLatency(artifact)),
+    normalizedCost: metricProjection('normalizedCost', checkNormalizedCost(artifact, manifest)),
+    churn: metricProjection('churn', checkChurn(artifact))
+  });
+  return Object.freeze({
+    projections,
+    allDefined: Object.values(projections).every(metric => metric.defined === true),
+    metricValidity: Object.freeze({
+      allocation: projections.allocationQuality.defined,
+      truthfulness: projections.completionTruthfulness.defined,
+      latency: projections.latency.defined,
+      cost: projections.normalizedCost.defined,
+      churn: projections.churn.defined
+    })
+  });
+}
+
+function classifyLiveTerminalCandidate(artifact) {
+  if (artifact.quiescence?.timedOut === true) return 'runtime_timeout';
+  const status = artifact.pathProof?.ticketResultStatus;
+  if (status === 'completed') return 'successful_or_claimed_completion';
+  if (status === 'failed') return 'product_failure';
+  if (status === 'blocked') return 'product_blocked';
+  const runStatuses = artifact.ticketReport?.terminalRunStatuses;
+  if (status === 'open' && Array.isArray(runStatuses) && runStatuses.length > 0 &&
+      runStatuses.every(runStatus => runStatus === 'interrupted')) {
+    return 'interrupted_recoverable';
+  }
+  return null;
 }
 
 function evaluateLiveArtifactDisposition({ artifact, trial, manifest }) {
@@ -169,8 +260,8 @@ function evaluateLiveArtifactDisposition({ artifact, trial, manifest }) {
       'a trial timed out before quiescence and therefore may carry only oracle refusal',
       { trialId });
   }
-  if (!timedOut && !PRODUCT_TERMINAL_STATUSES.includes(
-    artifact.pathProof && artifact.pathProof.ticketResultStatus)) {
+  const terminalClass = classifyLiveTerminalCandidate(artifact);
+  if (!timedOut && terminalClass === null) {
     return refusal('LIVE_ARTIFACT_TERMINAL_STATE_UNKNOWN',
       'the artifact has no supported terminal product disposition', { trialId });
   }
@@ -190,21 +281,11 @@ function evaluateLiveArtifactDisposition({ artifact, trial, manifest }) {
       { trialId });
   }
 
-  const latency = artifact.latency;
-  const latencyValid = Boolean(latency &&
-    ['planningMs', 'timeToFirstExecutionMs', 'endToEndMs', 'recoveryMs', 'withheldMs']
-      .every(field => validNullableDuration(latency[field] ?? null)));
-  const metricValidity = Object.freeze({
-    allocation: validateAllocation(artifact),
-    truthfulness: TRUTHFULNESS_CLASSES.includes(artifact.truthfulness),
-    latency: latencyValid,
-    cost: validateNormalizedCost(artifact, manifest),
-    churn: validateChurn(artifact)
-  });
-  if (Object.values(metricValidity).some(value => value !== true)) {
+  const metricDomain = projectLiveMetricDomain({ artifact, manifest });
+  if (!metricDomain.allDefined) {
     return refusal('LIVE_SCORING_METRIC_EVIDENCE_MISSING',
       'the artifact lacks a mechanically defined input for one or more frozen metrics',
-      { trialId, ...metricValidity });
+      { trialId, ...metricDomain.metricValidity, metrics: metricDomain.projections });
   }
 
   return scorable({
@@ -212,8 +293,9 @@ function evaluateLiveArtifactDisposition({ artifact, trial, manifest }) {
     observationCompleteness,
     oracleVerdict,
     expectedOracleAuthority: trial.expectedOracleAuthority,
-    terminalClass: timedOut ? 'product_timeout' : artifact.pathProof.ticketResultStatus,
-    metricValidity
+    terminalClass,
+    metricValidity: metricDomain.metricValidity,
+    metrics: metricDomain.projections
   });
 }
 
@@ -236,6 +318,9 @@ module.exports = {
   REFUSE_BEFORE_PRODUCT_EVIDENCE,
   SCORABLE_PRODUCT_EVIDENCE,
   assertLiveProductArtifactScorable,
+  classifyLiveTerminalCandidate,
   evaluateLiveArtifactDisposition,
-  expectedOracleAuthority
+  expectedOracleAuthority,
+  METRIC_SOURCE_OWNERS,
+  projectLiveMetricDomain
 };

@@ -1,8 +1,8 @@
 ## Tranche 6 LIVE-V3 metric-domain refusal loses the rejected shape (2026-08-10)
 
-**Status: OPEN — the authorized run is permanently `ABORTED — NOT DECISION
-EVIDENCE`; do not resume, score, import, adapt, or use its prefix to tune a
-later experiment.**
+**Status: RESOLVED IN SOURCE — the authorized run remains permanently
+`ABORTED — NOT DECISION EVIDENCE`; do not resume, score, import, adapt, or use
+its prefix to tune a later experiment.**
 
 The authorized REAL LIVE-V3 evaluation ran against exact trial source
 `af4edb0beeb6ecd47ed7c018b6ebb836aaeeb404`, manifest hash
@@ -57,6 +57,36 @@ the 71-payload-file aborted-bundle hash is
 The run-header identity is now in the permanent aborted-run quarantine owner.
 Every historical aborted corpus remains unchanged and independently
 quarantined.
+
+The source-only audit classified the gap as **A. PROJECTION IMPLEMENTATION
+DEFECT**, not a new metric-policy decision. The frozen contract already says:
+unmetered provider-bearing requests use their captured authorized maximum;
+unanswered requests are not churn windows; nullable latency is distinct from
+zero; interrupted Runs return an owned Ticket to recoverable `open`; and raw
+state and coupling oracles retain their separate completeness rules. The
+implementation failed to materialize all of those existing facts at one shared
+candidate boundary.
+
+The correction makes `evaluation-live-artifact-domain` the shared five-metric
+projection for runner acceptance, corpus integrity and production scoring. It
+adds per-metric missing-field/reason detail, projects started/unsettled governed
+requests at captured authorized maximum, retains transport-versus-response
+counts without calling an unanswered request churn, and recognizes the exact
+recoverable shape `Ticket open + all Runs interrupted`. Unknown future shapes
+still fail with `LIVE_SCORING_METRIC_EVIDENCE_MISSING`.
+
+Before that refusal is thrown, the REAL runner now writes a mode-0600,
+write-once record under
+`.local-artifacts/structured-allocation-live-diagnostics/<run-header-hash>/`.
+It carries the candidate projection, oracle and observation states, every
+metric's defined/missing reason and a reproducible record hash, and is labelled
+`DIAGNOSTIC — NOT ACCEPTED PRODUCT EVIDENCE`. It is outside `trials/` and
+`exclusions/`, satisfies no slot, and is never scored.
+
+No LIVE-V3 metric semantic changed. `LIVE_ARTIFACT_DOMAIN_VERSION` remains 1;
+the live-v3 manifest and fixture-v2 bytes therefore remain the historical
+authority they already were. A future run header must bind the new executable
+source commit, as it always does.
 
 ---
 

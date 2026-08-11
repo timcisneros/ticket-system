@@ -55,8 +55,15 @@ const {
 } = require('./fixtures/evaluation-observation-sink');
 const { evaluateScenarioOutcome, classifyTruthfulness } = require('./fixtures/evaluation-oracle');
 const {
-  assertLiveProductArtifactScorable
+  REFUSE_BEFORE_PRODUCT_EVIDENCE,
+  assertLiveProductArtifactScorable,
+  classifyLiveTerminalCandidate,
+  evaluateLiveArtifactDisposition
 } = require('./fixtures/evaluation-live-artifact-domain');
+const {
+  persistRejectedLiveCandidateBeforeRefusal,
+  persistentDiagnosticRootFor
+} = require('./fixtures/evaluation-live-rejected-candidate-diagnostic');
 const {
   observeQuiescence, buildTrialArtifact, writeTrialArtifact, assertMode
 } = require('./fixtures/evaluation-quiescence');
@@ -250,20 +257,30 @@ function buildChurnFacts(report, observations, mode = 'fixture') {
     const delivered = governed && report.churn &&
       Number.isSafeInteger(report.churn.deliveredResponses)
       ? report.churn.deliveredResponses : 0;
-    const planner = report.durableObservation?.transport?.byRole?.structured_planner;
+    const transportRoles = report.durableObservation?.transport?.byRole || {};
+    const responseRoles = report.durableObservation?.response?.byRole || {};
+    const plannerDurable = Number.isSafeInteger(responseRoles.structured_planner)
+      ? responseRoles.structured_planner : 0;
+    const plannerObserved = Number.isSafeInteger(transportRoles.structured_planner)
+      ? transportRoles.structured_planner : 0;
+    const workerRole = governed ? 'governed_leaf_worker' : 'ungoverned_worker';
+    const workerDurable = Number.isSafeInteger(responseRoles[workerRole])
+      ? responseRoles[workerRole] : 0;
+    const workerObserved = Number.isSafeInteger(transportRoles[workerRole])
+      ? transportRoles[workerRole] : 0;
     return Object.freeze({
       evidenceAuthority: 'durable_ticket_report_v1',
       observationCompleteness: 'complete',
       planner: Object.freeze({
-        attemptedTransports: Number.isSafeInteger(planner) ? planner : 0,
-        // The durable projection currently has no per-role response count.
-        // `canonicalRequests` includes authorized-maximum fallback rows and is
-        // therefore cost authority, not evidence that a response was durable.
-        durableResponses: null
+        // A durable response proves at least one transport even if the
+        // after-invocation observation fell in its documented crash/write-loss
+        // window. Taking the maximum preserves that one-way evidence rule.
+        attemptedTransports: Math.max(plannerObserved, plannerDurable),
+        durableResponses: plannerDurable
       }),
       worker: Object.freeze({
-        attemptedTransports: delivered,
-        durableResponses: delivered
+        attemptedTransports: Math.max(workerObserved, workerDurable),
+        durableResponses: workerDurable
       }),
       durableResponses: delivered,
       refusedTransports: null,
@@ -667,7 +684,16 @@ async function runTrial({
   // TEST-ONLY. Arms a fault at the store method that writes the durable
   // transport observation, so a suite can prove that an observation which does
   // not persist changes nothing about the provider request it observes.
-  liveProviderTransportObservationFault = null
+  liveProviderTransportObservationFault = null,
+  // TEST-ONLY deterministic terminal-state seam. It runs after the real ticket
+  // form commits and receives only the already-authenticated harness client and
+  // durable identities, allowing tests to invoke normal public interruption or
+  // recovery routes without sleeps or direct state fabrication.
+  afterTicketCreated = null,
+  // Scored REAL candidates that fail the shared domain are retained outside
+  // the corpus in repository-associated, ignored diagnostic storage. A caller
+  // may redirect this only for controlled tests.
+  diagnosticRoot = null
 }) {
   assertMode(mode);
   // FAIL BEFORE ANY TRIAL STATE IS CREATED. A real run without resolved
@@ -1155,6 +1181,13 @@ async function runTrial({
     }
     const ticketId = ticketRows[0].id;
 
+    if (afterTicketCreated !== null) {
+      if (typeof afterTicketCreated !== 'function') {
+        throw new EvaluationRunnerError('afterTicketCreated must be a test callback');
+      }
+      await afterTicketCreated({ server, cookieHeader, ticketId, store });
+    }
+
     if (!Number.isSafeInteger(quiescenceTimeoutMs) || quiescenceTimeoutMs <= 0) {
       throw new EvaluationRunnerError('quiescenceTimeoutMs must be a positive integer');
     }
@@ -1312,7 +1345,7 @@ async function runTrial({
     // is the earliest boundary at which all durable Ticket facts, oracle facts
     // and metric inputs coexist.
     if (mode === 'live' && scoredIdentity) {
-      assertLiveProductArtifactScorable({
+      const authority = {
         artifact,
         manifest: {
           provider: envelope.provider,
@@ -1324,7 +1357,18 @@ async function runTrial({
             ? 'coupling_raw_state_and_fixture_access_log' : 'raw_state',
           expectedQuiescence: 'quiescent'
         }
-      });
+      };
+      const disposition = evaluateLiveArtifactDisposition(authority);
+      if (disposition.disposition === REFUSE_BEFORE_PRODUCT_EVIDENCE) {
+        persistRejectedLiveCandidateBeforeRefusal({
+          root: diagnosticRoot || persistentDiagnosticRootFor(scoredIdentity),
+          artifact,
+          trial: authority.trial,
+          disposition,
+          terminalClass: classifyLiveTerminalCandidate(artifact)
+        }, () => assertLiveProductArtifactScorable(authority));
+      }
+      assertLiveProductArtifactScorable(authority);
     }
     writeTrialArtifact(outputPath, artifact);
   } finally {

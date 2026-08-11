@@ -40,7 +40,7 @@ const {
 } = require('./fixtures/evaluation-trial-record');
 const { buildPricingCatalog } = require('../runtime/model-pricing-catalog');
 const {
-  deriveCanonicalRequests, deriveChurn, EvaluationReaderError
+  deriveCanonicalRequests, deriveChurn, deriveLatency, EvaluationReaderError
 } = require('./structured-allocation-evaluation-report');
 
 async function main() {
@@ -345,6 +345,11 @@ const ok = (condition, message) => {
     id: 1, ticket_id: 7, planning_attempt_id: '11111111-1111-4111-8111-111111111111',
     run_id: null, role: 'structured_planner', state: 'settled',
     model_request_ordinal: 1, logical_source_identity: null,
+    prepared_request: { authorizedOutputTokens: 2048 },
+    economic_authority: {
+      provider: 'openai', dispatchTarget: 'gpt-4o-mini-2024-07-18',
+      contextWindowTokens: 128000
+    },
     settlement_receipt: receipt('structured_planner'), ...overrides
   });
   const leafReservation = (overrides = {}) => ({
@@ -387,12 +392,37 @@ const ok = (condition, message) => {
     }))), pricingInputs);
   ok(manyPlanners.length === 60 && manyPlanners.every(item => item.role === 'planner'),
     '4 cost: the controlled 60-planner structural regression includes all 60');
-  assert.throws(() => deriveCanonicalRequests(facts([
+  const unsettled = deriveCanonicalRequests(facts([
     plannerReservation({ state: 'response_persisted', settlement_receipt: null })
-  ]), pricingInputs), error => error instanceof EvaluationReaderError &&
-    /refuses to guess/.test(error.message));
-  passed += 1;
-  console.log('  ok 4 cost: incomplete planner settlement refuses rather than guessing');
+  ]), pricingInputs);
+  ok(unsettled.length === 1 && unsettled[0].authorizedOutputTokens === 2048 &&
+     unsettled[0].boundInputTokens === 128000,
+  '4 cost: a provider-bearing unsettled request uses its captured authorized maximum');
+  const deliveryUncertain = deriveCanonicalRequests(facts([
+    plannerReservation({ state: 'request_started', settlement_receipt: null })
+  ]), pricingInputs);
+  ok(deliveryUncertain.length === 1 && deliveryUncertain[0].role === 'planner',
+  '4 cost: delivery uncertainty remains a canonical provider request rather than disappearing');
+  const interruptedLatency = deriveLatency({
+    ticket: { created_at: '2026-01-01T00:00:00.000Z', status: 'open' },
+    receipts: [],
+    events: [{ type: 'run.terminalized', run_id: 1,
+      ts: '2026-01-01T00:00:01.000Z', payload: { status: 'interrupted' } }]
+  });
+  ok(interruptedLatency.endToEndMs === null,
+  '4 latency: a terminal Run cannot invent a terminal-Ticket end-to-end duration');
+  const terminalLatency = deriveLatency({
+    ticket: { created_at: '2026-01-01T00:00:00.000Z', status: 'failed' },
+    receipts: [],
+    events: [
+      { type: 'ticket.updated', run_id: null,
+        ts: '2026-01-01T00:00:02.000Z', payload: { status: 'failed' } },
+      { type: 'ticket.updated', run_id: null,
+        ts: '2026-01-01T00:00:05.000Z', payload: { status: 'failed' } }
+    ]
+  });
+  ok(terminalLatency.endToEndMs === 2000,
+  '4 latency: the first terminal Ticket transition supplies end-to-end duration');
   assert.throws(() => deriveCanonicalRequests(facts([
     plannerReservation(), plannerReservation({ id: 9 })
   ]), pricingInputs), error => error instanceof EvaluationReaderError &&

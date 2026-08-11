@@ -40,7 +40,7 @@ const {
 const { appendJournal } = require('./fixtures/evaluation-live-run-journal');
 const { hashCanonical } = require('./structured-allocation-evaluation-scorer');
 const {
-  artifactFor, headerFor, liveManifest
+  headerFor, liveManifest
 } = require('./evaluation-live-scoring-dress-rehearsal-test');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -99,6 +99,42 @@ function header() {
 function boundaryRows(file) {
   if (!fs.existsSync(file)) return [];
   return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(JSON.parse);
+}
+
+async function waitForTransportInvocation({ ticketId, store }) {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const result = await store.pool.query(
+      `SELECT run.id, run.status,
+              EXISTS (
+                SELECT 1 FROM ${store.table('events')} AS event
+                 WHERE event.run_id = run.id AND event.type = 'provider.transport_invoked'
+              ) AS transport_invoked
+         FROM ${store.table('runs')} AS run
+        WHERE run.ticket_id = $1
+          AND EXISTS (
+            SELECT 1 FROM ${store.table('events')} AS event
+             WHERE event.run_id = run.id AND event.type = 'provider.transport_invoked'
+          )
+        ORDER BY run.id LIMIT 1`, [ticketId]);
+    const row = result.rows[0];
+    if (row && row.status === 'running' && row.transport_invoked === true) {
+      return Number(row.id);
+    }
+    if (Date.now() >= deadline) {
+      throw new Error('controlled interruption never reached running + transport invoked');
+    }
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+}
+
+async function stopAfterTransportInvocation(input) {
+  const runId = await waitForTransportInvocation(input);
+  const stopped = await input.server.request('POST', `/api/runs/${runId}/stop`, {
+    headers: { Cookie: input.cookieHeader }
+  });
+  assert.equal(stopped.statusCode, 200,
+    `controlled interruption route failed: ${stopped.body}`);
 }
 
 async function main() {
@@ -184,14 +220,48 @@ async function main() {
             spec: { kind: 'role-aware-structured-inspection' }
           },
           {
+            name: 'unsupported-completion-claim',
+            slot: slotOf({ scenarioId: 'family-5-ownership-known-alt', armId: 'C',
+              repetition: 2 }),
+            spec: { kind: 'role-aware-structured-no-evidence-completion' }
+          },
+          {
             name: 'product-timeout',
             slot: slotOf({ scenarioId: 'family-2-cleanly-separable-alt', armId: 'A', repetition: 3 }),
             spec: { kind: 'hang' },
             quiescenceTimeoutMs: 100
+          },
+          {
+            name: 'governed-delivery-uncertainty-timeout',
+            slot: slotOf({ scenarioId: 'family-2-cleanly-separable-alt', armId: 'B',
+              repetition: 3 }),
+            spec: { kind: 'role-aware-planner-success-worker-hang' },
+            quiescenceTimeoutMs: 100,
+            afterTicketCreated: waitForTransportInvocation
+          },
+          {
+            name: 'interrupted-recoverable',
+            slot: slotOf({ scenarioId: 'family-6-ownership-unknown-alt', armId: 'A',
+              repetition: 3 }),
+            spec: { kind: 'hang' },
+            afterTicketCreated: stopAfterTransportInvocation
           }
         ];
 
-        for (const entry of cases) {
+        const controlledByTrial = new Map(cases.map(entry =>
+          [trialIdForLiveAssignment(entry.slot), entry]));
+        const entries = liveManifest.slots.map(slot => {
+          const controlled = controlledByTrial.get(trialIdForLiveAssignment(slot));
+          if (controlled) return controlled;
+          return {
+            name: `ordinary-${trialIdForLiveAssignment(slot)}`,
+            slot,
+            spec: { kind: ['B', 'C'].includes(slot.armId)
+              ? 'role-aware-structured-success' : 'objective-folders' }
+          };
+        });
+
+        for (const entry of entries) {
           const id = trialIdForLiveAssignment(entry.slot);
           const outputPath = path.join(root, 'actual', `${id}.json`);
           const observationPath = path.join(root, `boundary-${entry.name}.jsonl`);
@@ -215,6 +285,7 @@ async function main() {
             liveProviderBoundaryResponse: responsePath,
             liveBudget,
             quiescenceTimeoutMs: entry.quiescenceTimeoutMs,
+            afterTicketCreated: entry.afterTicketCreated,
             scoredIdentity: {
               label: REAL_LIVE_ARTIFACT_LABEL,
               scoredRunHash: runHeader.runHeaderHash,
@@ -269,10 +340,29 @@ async function main() {
             'governed no-progress: repeated product noncompletion stays data while ' +
               'churn remains bound to the absence of a persisted progress block');
           }
+          if (entry.name === 'unsupported-completion-claim') {
+            assertThat(artifact.ticketReport.productClaimsCompleted === false &&
+              ['failed', 'blocked'].includes(artifact.pathProof.ticketResultStatus),
+            'unsupported completion: missing product evidence cannot become a successful claim');
+          }
           if (entry.name === 'product-timeout') {
             assertThat(artifact.quiescence.timedOut === true &&
               artifact.oracleResult.verdict === 'refused',
             'product timeout: retained as product data without a pre-quiescence oracle guess');
+          }
+          if (entry.name === 'governed-delivery-uncertainty-timeout') {
+            assertThat(artifact.quiescence.timedOut === true &&
+              artifact.normalizedCost.unmeteredRequestCount >= 1 &&
+              artifact.churnFacts.planner.attemptedTransports >= 1 &&
+              artifact.churnFacts.worker.durableResponses === 0,
+            'governed delivery uncertainty: started request is costed conservatively and ' +
+              'remains distinct from a durable response or churn window');
+          }
+          if (entry.name === 'interrupted-recoverable') {
+            assertThat(artifact.pathProof.ticketResultStatus === 'open' &&
+              artifact.ticketReport.terminalRunStatuses.every(status => status === 'interrupted') &&
+              result.detail.terminalClass === 'interrupted_recoverable',
+            'interruption: normal stop route produces a scorable recoverable-open Ticket shape');
           }
           const rows = boundaryRows(observationPath);
           assertThat(rows.every(row => row.hostname === 'api.openai.com'),
@@ -281,9 +371,10 @@ async function main() {
         }
       }, { timeoutMs: 20 * 60 * 1000 });
 
-    // Complete the exact live-v3 corpus with controlled artifacts. The nine
-    // actual runner-produced shapes remain byte-for-byte in the production
-    // command's input; they are not converted into hand-built summaries.
+    // Complete the exact live-v3 corpus exclusively with controlled artifacts
+    // produced by runTrial. The representative non-ideal shapes remain
+    // byte-for-byte in the production command's input; no slot is filled by a
+    // hand-built scoring fixture.
     writeJson(path.join(corpusRoot, 'live-run-header.json'), runHeader);
     writeJson(path.join(corpusRoot, 'PROVIDER-FREE-SCORING-DRESS-REHEARSAL.json'), {
       evidenceClass: READINESS_DRESS_REHEARSAL_EVIDENCE_CLASS,
@@ -295,7 +386,8 @@ async function main() {
       manifestHash: liveManifest.manifestHash };
     for (const slot of liveManifest.slots) {
       const id = trialIdForLiveAssignment(slot);
-      const artifact = actual.get(id) || artifactFor(slot, runHeader);
+      const artifact = actual.get(id);
+      assert.ok(artifact, `runner artifact missing for ${id}`);
       writeJson(path.join(corpusRoot, 'trials', `${id}.json`), artifact);
       assertDispatchWithinGlobalCeiling({
         runRoot: corpusRoot,
