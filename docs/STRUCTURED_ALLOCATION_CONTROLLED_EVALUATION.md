@@ -3029,3 +3029,91 @@ and the earlier header
 `7297f3dd7d3ec98e563c1474a6163fc14d06612824091b7ac76838cfc364e47f`
 remain permanently quarantined. This source correction authorizes no provider
 contact or new REAL evaluation.
+
+## 21. Completed REAL LIVE-V3 evaluation (2026-08-11)
+
+The next explicitly authorized evaluation used exact trial source
+`857d7c47d09dab0b137c5e8e8f38262240643ff4`, byte-identical LIVE-V3
+manifest hash
+`18508f5a94cd3b7667037e77154f83e7327ed3ca368fe0c4d308e6aa0b9f245c`,
+the repository-owned fixture-v2 evidence, and configured-agent credential
+authority ID 1 / revision 2 / provider `openai`. It ran in the supported host
+user namespace with ambient umask 022. The single authenticated preflight used
+`openai.responses.v1` with pinned model `gpt-4o-mini-2024-07-18`, temperature
+0, top_p 1, no provider seed and 2,048 maximum output tokens. It used 20 input
+and 9 output tokens and had an observable cost of 9 micro-USD, separate from
+experiment evidence.
+
+The fresh immutable REAL run-header hash is
+`a2a177ff78e1c541616d4339bb573e423bba5ab54edff368fdcf9bf3d592617c`.
+All 120 frozen slots ran in their assigned order and produced 120 accepted
+product artifacts, with zero infrastructure exclusions, replacements,
+unaccounted slots, interruptions, resumes or rejected-candidate diagnostics.
+The complete REAL corpus hash is
+`db76099f7c40a970ca86c1202357b9f517483ffa8c043a31b245c751952f2a5c`.
+
+### Frozen five-metric result
+
+Each arm has 24 trials. Completion truthfulness is shown as true-positive,
+false-positive, false-negative and oracle-refused rates; the remaining
+truthfulness mass is true-negative. A null churn value means the frozen churn
+denominator was empty, not zero.
+
+| Arm | Allocation quality | TP | FP | FN | Oracle refused | Mean latency ms | Mean normalized cost | Churn windows |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| A | 1.0000 | 0.7083 | 0.0000 | 0.0000 | 0.2500 | 7726.42 | 753.96 | null |
+| A2a | 1.0000 | 0.0000 | 0.0000 | 0.0000 | 0.2500 | 6722.71 | 1317.46 | null |
+| A2b | 1.0000 | 0.0000 | 0.0000 | 0.0000 | 0.2500 | 7329.29 | 1548.67 | null |
+| B | 1.0000 | 0.0000 | 0.0000 | 0.7500 | 0.2500 | 9383.25 | 2183.42 | 0.5417 |
+| C | 1.0000 | 0.0000 | 0.0000 | 0.7083 | 0.2500 | 8627.54 | 1420.58 | 0.2917 |
+
+The frozen family comparison was:
+
+| Family | A TP | A2 TP | Structured TP | Gain vs A (points) | Gain vs A2 (points) | Structured/A latency | Repetition consistent |
+|---|---:|---:|---:|---:|---:|---:|---|
+| 2 | 1.0000 | 0.0000 | 0.0000 | -100.0000 | 0.0000 | 1.1087 | yes |
+| 3 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 1.4450 | no |
+| 5 | 1.0000 | 0.0000 | 0.0000 | -100.0000 | 0.0000 | 1.2181 | yes |
+| 6 | 0.8333 | 0.0000 | 0.0000 | -83.3333 | 0.0000 | 0.9669 | no |
+
+The false-positive, authority-violation, uncontrolled-cost and systematic
+churn-misclassification hard disqualifiers did **not** trigger. The frozen
+non-deterministic-recovery disqualifier — identical durable state producing
+different terminal dispositions — **triggered**, with 33 decision-driving
+trials across families 2, 3, 5 and 6. The ordinary LIVE decision is therefore
+**STOP**. Fixture-v2 independently remains **FIXTURE EVIDENCE SUPPORTS STOP**;
+the mechanical combined decision is:
+
+> **FINAL STOP**
+
+The report's strongest competing interpretation is that a STOP may be driven
+by a narrow family or hard evidence boundary rather than uniform
+underperformance; the immutable report preserves the exact driving trial IDs.
+
+The experiment recorded 490 canonical provider requests: 48 planner and 442
+worker requests. Of these, 489 were metered and one was unmetered. Provider
+reported 856,541 input and 40,089 output tokens. Observable experiment spend is
+a 152,949 micro-USD lower bound; including preflight, the observable lower bound
+is 152,958 micro-USD. Normalized scoring cost is 173,378 micro-USD and is not
+billing. Committed matrix liability is 17,160,360 micro-USD and is not spend;
+the 20,000,000 micro-USD global authority was never exceeded.
+
+The production command proved `LIVE CORPUS COMPLETE AND INTERNALLY CONSISTENT`
+and the complete scoring-input domain before scoring. It resolved fixture-v2
+from repository bytes, reproduced the report twice, and wrote immutable JSON,
+Markdown and hash records. The canonical report hash is
+`d2fb6aa83a35028d0bc071a5cb926a12c271b78716831d4d645fcbe4cf282733`;
+the JSON SHA-256 is
+`0972fadb027f5cd20e91102832e97a35c4d2847e6a6265201a7b9a05024614a8`
+and the Markdown SHA-256 is
+`4eb64c197a471a351f77ffec1e4401ebbc36761c6fec0d9a654d5261aadc4db0`.
+The retained evidence root is
+`.local-artifacts/structured-allocation-live-v3/real-857d7c47-20260811T153603Z-cfea54be33ec`.
+
+The earlier REAL run headers
+`7297f3dd7d3ec98e563c1474a6163fc14d06612824091b7ac76838cfc364e47f`
+and
+`2965176eb1742f7e59678c7972a43f23c45d3483bdfbd76b53f7e096fe0e87ce`
+remain permanently quarantined and were not resumed, imported, scored,
+retransmitted or pooled. This completed evaluation authorizes no further
+provider contact and does not begin another tranche.
