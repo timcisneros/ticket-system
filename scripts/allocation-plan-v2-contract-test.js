@@ -164,6 +164,118 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+// Migration 025 deliberately gave both historical v1 and canonical v2 plans
+// one boring storage relation. Later migrations may consult that durable
+// authority, but they may not rewrite or redefine it. This scanner owns that
+// narrower contract. It removes comments and quoted values so prose cannot
+// trigger the guard, preserves dollar-quoted function/DO bodies so indirect
+// writes remain visible, and normalizes quoted identifiers for the repository's
+// migration naming conventions.
+function sqlAuthorityText(source) {
+  const text = String(source);
+  let output = '';
+  let blockCommentDepth = 0;
+  for (let index = 0; index < text.length;) {
+    if (blockCommentDepth > 0) {
+      if (text.startsWith('/*', index)) {
+        blockCommentDepth += 1;
+        index += 2;
+      } else if (text.startsWith('*/', index)) {
+        blockCommentDepth -= 1;
+        index += 2;
+      } else {
+        output += text[index] === '\n' ? '\n' : ' ';
+        index += 1;
+      }
+      continue;
+    }
+    if (text.startsWith('--', index)) {
+      while (index < text.length && text[index] !== '\n') {
+        output += ' ';
+        index += 1;
+      }
+      continue;
+    }
+    if (text.startsWith('/*', index)) {
+      blockCommentDepth = 1;
+      output += '  ';
+      index += 2;
+      continue;
+    }
+    if (text[index] === "'") {
+      output += ' ';
+      index += 1;
+      while (index < text.length) {
+        if (text[index] === "'" && text[index + 1] === "'") {
+          output += '  ';
+          index += 2;
+          continue;
+        }
+        if (text[index] === "'") {
+          output += ' ';
+          index += 1;
+          break;
+        }
+        output += text[index] === '\n' ? '\n' : ' ';
+        index += 1;
+      }
+      continue;
+    }
+    if (text[index] === '"') {
+      index += 1;
+      while (index < text.length) {
+        if (text[index] === '"' && text[index + 1] === '"') {
+          output += '"';
+          index += 2;
+          continue;
+        }
+        if (text[index] === '"') {
+          index += 1;
+          break;
+        }
+        output += text[index].toLowerCase();
+        index += 1;
+      }
+      continue;
+    }
+    output += text[index].toLowerCase();
+    index += 1;
+  }
+  return output;
+}
+
+function allocationPlanStorageMutations(source) {
+  const dynamicStatements = [];
+  const dynamicPattern = /\bexecute\s+(?:format\s*\(\s*)?(?:e\s*)?'((?:''|[^'])*)'/gi;
+  let dynamicMatch;
+  while ((dynamicMatch = dynamicPattern.exec(String(source))) !== null) {
+    dynamicStatements.push(dynamicMatch[1].replace(/''/g, "'"));
+  }
+  const sql = [sqlAuthorityText(source), ...dynamicStatements.map(sqlAuthorityText)].join('\n');
+  const relation = '(?:[a-z_][a-z0-9_$]*\\s*\\.\\s*)?allocation_plans\\b';
+  const checks = [
+    ['insert', new RegExp(`\\binsert\\s+into\\s+(?:only\\s+)?${relation}`)],
+    ['update', new RegExp(`\\bupdate\\s+(?:only\\s+)?${relation}\\s+(?:as\\s+[a-z_][a-z0-9_$]*\\s+)?set\\b`)],
+    ['delete', new RegExp(`\\bdelete\\s+from\\s+(?:only\\s+)?${relation}`)],
+    ['merge', new RegExp(`\\bmerge\\s+into\\s+(?:only\\s+)?${relation}`)],
+    ['truncate', new RegExp(`\\btruncate\\s+(?:table\\s+)?(?:only\\s+)?${relation}`)],
+    ['copy-from', new RegExp(`\\bcopy\\s+${relation}(?:\\s*\\([^)]*\\))?\\s+from\\b`)],
+    ['create-table', new RegExp(`\\bcreate\\s+(?:(?:global|local)\\s+)?(?:temporary\\s+|temp\\s+|unlogged\\s+)?table\\s+(?:if\\s+not\\s+exists\\s+)?${relation}`)],
+    ['alter-table', new RegExp(`\\balter\\s+table\\s+(?:if\\s+exists\\s+)?(?:only\\s+)?${relation}`)],
+    ['drop-table', new RegExp(`\\bdrop\\s+table\\s+(?:if\\s+exists\\s+)?${relation}`)],
+    ['index', new RegExp(`\\bcreate\\s+(?:unique\\s+)?index\\b[^;]*?\\bon\\s+(?:only\\s+)?${relation}`)],
+    ['index', /\b(?:drop|alter|reindex)\s+index\b[^;]*?\ballocation_plans_[a-z0-9_$]*\b/],
+    ['trigger', new RegExp(`\\bcreate\\s+(?:constraint\\s+)?trigger\\b[^;]*?\\bon\\s+${relation}`)],
+    ['trigger', new RegExp(`\\bdrop\\s+trigger\\b[^;]*?\\bon\\s+${relation}`)],
+    ['rule-or-policy', new RegExp(`\\b(?:create|alter|drop)\\s+(?:rule|policy)\\b[^;]*?\\bon\\s+${relation}`)],
+    ['foreign-key', new RegExp(`\\breferences\\s+${relation}`)],
+    ['sequence-ownership', new RegExp(`\\bowned\\s+by\\s+${relation}\\s*\\.`)],
+    ['ownership-or-privilege', new RegExp(`\\b(?:grant|revoke)\\b[^;]*?\\bon\\s+(?:table\\s+)?${relation}`)],
+    ['table-comment', new RegExp(`\\bcomment\\s+on\\s+(?:table|column)\\s+${relation}`)]
+  ];
+  return checks.filter(([, pattern]) => pattern.test(sql)).map(([kind]) => kind);
+}
+
 function expectInvalid(mutator, pattern = null, code = null) {
   const source = clone(planInput());
   mutator(source);
@@ -718,13 +830,52 @@ for (const forbiddenPath of [
 }
 const migrationDirectory = path.join(__dirname, '..', 'persistence', 'postgres', 'migrations');
 const postTrancheOneMigrations = fs.readdirSync(migrationDirectory)
-  .filter(name => Number(name.slice(0, 3)) > 31);
-assert.equal(
-  postTrancheOneMigrations.some(name => /\ballocation_plans\b/i.test(
+  .filter(name => Number(name.slice(0, 3)) > 31)
+  .sort();
+
+assert.deepEqual(allocationPlanStorageMutations(`
+  SELECT plan.id, plan.ticket_id, plan.status, plan.body, plan.revision
+  FROM allocation_plans AS plan
+  JOIN runs AS run ON run.body->>'allocationPlanId' = plan.id::text
+  WHERE plan.body->>'version' = '2';
+  DO $block$ BEGIN
+    IF EXISTS (SELECT 1 FROM public.allocation_plans WHERE status = 'pending') THEN
+      RAISE NOTICE 'historical plan authority is readable';
+    END IF;
+  END; $block$;
+`), [], 'post-Tranche-1 migrations may read historical Allocation Plan storage');
+
+for (const [kind, source] of [
+  ['insert', `INSERT INTO allocation_plans (ticket_id, status) VALUES (1, 'pending')`],
+  ['update', `UPDATE public.allocation_plans AS plan SET body = '{}'::jsonb`],
+  ['delete', 'DELETE FROM allocation_plans WHERE id = 1'],
+  ['truncate', 'TRUNCATE TABLE ONLY allocation_plans'],
+  ['alter-table', 'ALTER TABLE allocation_plans ADD COLUMN topology JSONB'],
+  ['drop-table', 'DROP TABLE IF EXISTS allocation_plans'],
+  ['index', 'CREATE UNIQUE INDEX later_plan_index ON allocation_plans (ticket_id)'],
+  ['trigger', 'CREATE TRIGGER later_plan_guard BEFORE UPDATE ON allocation_plans FOR EACH ROW EXECUTE FUNCTION guard_plan()'],
+  ['rule-or-policy', 'CREATE POLICY later_plan_policy ON allocation_plans USING (true)'],
+  ['foreign-key', 'ALTER TABLE later_members ADD CONSTRAINT later_plan_fk FOREIGN KEY (plan_id) REFERENCES allocation_plans(id) ON DELETE CASCADE'],
+  ['sequence-ownership', 'ALTER SEQUENCE later_sequence OWNED BY allocation_plans.id'],
+  ['ownership-or-privilege', 'GRANT UPDATE ON TABLE allocation_plans TO public'],
+  ['update', `DO $$ BEGIN EXECUTE 'UPDATE allocation_plans SET revision = revision + 1'; END; $$`]
+]) {
+  assert.equal(
+    allocationPlanStorageMutations(source).includes(kind),
+    true,
+    `post-Tranche-1 Allocation Plan storage guard detects ${kind}`
+  );
+}
+
+const migrationStorageMutations = postTrancheOneMigrations.flatMap(name =>
+  allocationPlanStorageMutations(
     fs.readFileSync(path.join(migrationDirectory, name), 'utf8')
-  )),
-  false,
-  'later prerequisite migrations must not alter Allocation Plan v2 JSONB storage'
+  ).map(kind => ({ migration: name, kind }))
+);
+assert.deepEqual(
+  migrationStorageMutations,
+  [],
+  'later migrations may read historical plans but must not mutate or redefine Allocation Plan v2 storage'
 );
 
 console.log('PASS: Allocation Plan v2 is closed, canonical, immutable, authority-bounded, and status-separated');

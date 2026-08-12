@@ -133,18 +133,111 @@ async function insertHistoricalRun(store, {
 }
 
 async function addMinimalTerminalEvidence(store, { runId, ticketId, at }) {
-  await store.pool.query(
-    `INSERT INTO ${store.table('replay_snapshots')}
-       (run_id, ticket_id, snapshot, snapshot_hash, finalized_at)
-     VALUES ($1, $2, '{}'::jsonb, $3, $4)`,
-    [runId, ticketId, 'a'.repeat(64), at]
-  );
-  await store.pool.query(
-    `INSERT INTO ${store.table('events')}
-       (id, schema_version, ts, type, ticket_id, run_id, seq, prev_hash, hash, payload)
-     VALUES ($1, 1, $2, 'run.terminalized', $3, $4, 0, NULL, $5, '{}'::jsonb)`,
-    [crypto.randomUUID(), at, ticketId, runId, 'b'.repeat(64)]
-  );
+  // Migration 002's trigger functions intentionally resolve sibling helpers
+  // through the runtime schema. Use the store transaction boundary so this
+  // historical fixture remains isolated on a genuinely fresh database rather
+  // than inheriting an unrelated public-schema helper.
+  await store.withTransaction(async client => {
+    await client.query(
+      `INSERT INTO ${store.table('replay_snapshots')}
+         (run_id, ticket_id, snapshot, snapshot_hash, finalized_at)
+       VALUES ($1, $2, '{}'::jsonb, $3, $4)`,
+      [runId, ticketId, 'a'.repeat(64), at]
+    );
+    await client.query(
+      `INSERT INTO ${store.table('events')}
+         (id, schema_version, ts, type, ticket_id, run_id, seq, prev_hash, hash, payload)
+       VALUES ($1, 1, $2, 'run.terminalized', $3, $4, 0, NULL, $5, '{}'::jsonb)`,
+      [crypto.randomUUID(), at, ticketId, runId, 'b'.repeat(64)]
+    );
+  });
+}
+
+async function snapshotAllocationPlanRows(store) {
+  return (await store.pool.query(
+    `SELECT id::text AS id,
+            ticket_id::text AS ticket_id,
+            status,
+            body::text AS body,
+            revision::text AS revision,
+            created_at::text AS created_at,
+            updated_at::text AS updated_at
+     FROM ${store.table('allocation_plans')}
+     ORDER BY id`
+  )).rows;
+}
+
+async function snapshotAllocationPlanStorageContract(store) {
+  const relation = `${store.schema}.allocation_plans`;
+  const [table, columns, constraints, indexes, triggers, identitySequence] = await Promise.all([
+    store.pool.query(
+      `SELECT namespace.nspname AS schema_name,
+              relation.relname AS table_name,
+              relation.relkind,
+              relation.relpersistence,
+              relation.relrowsecurity,
+              relation.relforcerowsecurity,
+              pg_get_userbyid(relation.relowner) AS owner
+       FROM pg_class AS relation
+       JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+       WHERE namespace.nspname = $1 AND relation.relname = 'allocation_plans'`,
+      [store.schema]
+    ),
+    store.pool.query(
+      `SELECT ordinal_position,
+              column_name,
+              data_type,
+              udt_name,
+              is_nullable,
+              column_default,
+              is_identity,
+              identity_generation,
+              is_generated,
+              generation_expression
+       FROM information_schema.columns
+       WHERE table_schema = $1 AND table_name = 'allocation_plans'
+       ORDER BY ordinal_position`,
+      [store.schema]
+    ),
+    store.pool.query(
+      `SELECT constraint_record.conname AS name,
+              constraint_record.contype AS type,
+              constraint_record.condeferrable AS deferrable,
+              constraint_record.condeferred AS initially_deferred,
+              constraint_record.convalidated AS validated,
+              pg_get_constraintdef(constraint_record.oid, true) AS definition
+       FROM pg_constraint AS constraint_record
+       WHERE constraint_record.conrelid = $1::regclass
+       ORDER BY constraint_record.conname`,
+      [relation]
+    ),
+    store.pool.query(
+      `SELECT indexname AS name, indexdef AS definition
+       FROM pg_indexes
+       WHERE schemaname = $1 AND tablename = 'allocation_plans'
+       ORDER BY indexname`,
+      [store.schema]
+    ),
+    store.pool.query(
+      `SELECT trigger_record.tgname AS name,
+              trigger_record.tgenabled AS enabled,
+              pg_get_triggerdef(trigger_record.oid, true) AS definition
+       FROM pg_trigger AS trigger_record
+       WHERE trigger_record.tgrelid = $1::regclass
+         AND NOT trigger_record.tgisinternal
+       ORDER BY trigger_record.tgname`,
+      [relation]
+    ),
+    store.pool.query(`SELECT pg_get_serial_sequence($1, 'id') AS name`, [relation])
+  ]);
+  return {
+    table: table.rows,
+    columns: columns.rows,
+    constraints: constraints.rows,
+    indexes: indexes.rows,
+    triggers: triggers.rows,
+    identitySequence: identitySequence.rows
+  };
 }
 
 async function main() {
@@ -307,6 +400,25 @@ async function main() {
       v2RunIds.push(runId);
     }
 
+    const allocationPlansBefore = await snapshotAllocationPlanRows(store);
+    equal(allocationPlansBefore.length, 2,
+      'the compatibility fixture contains one persisted v1 plan and one persisted v2 plan');
+    equal(allocationPlansBefore.map(row => {
+      const storedBody = JSON.parse(row.body);
+      return {
+        id: row.id,
+        version: Object.prototype.hasOwnProperty.call(storedBody, 'version')
+          ? storedBody.version
+          : 1,
+        hasPlanningProvenance: storedBody.planningProvenance !== undefined,
+        planHash: storedBody.planHash || null
+      };
+    }), [
+      { id: String(v1.id), version: 1, hasPlanningProvenance: false, planHash: null },
+      { id: String(v2.id), version: 2, hasPlanningProvenance: true, planHash: v2.planHash }
+    ], 'the stored rows expose the actual historical v1 and hash-bound v2 authority shapes');
+    const allocationPlanStorageBefore = await snapshotAllocationPlanStorageContract(store);
+
     const before = await inspectTicketAttemptBackfill(store);
     equal(before.runCount, 6, 'preflight classifies all six historical Runs');
     equal(before.attemptCount, 4, 'preflight projects four exact historical attempts');
@@ -329,6 +441,10 @@ async function main() {
     );
     equal(immutableAfter.rows, immutableBefore.rows,
       'backfill changes no immutable Run evidence/body/lifecycle field');
+    equal(await snapshotAllocationPlanRows(store), allocationPlansBefore,
+      'migration 039 reads but does not rewrite any persisted v1/v2 Allocation Plan field');
+    equal(await snapshotAllocationPlanStorageContract(store), allocationPlanStorageBefore,
+      'migration 039 leaves the Allocation Plan table, columns, ownership, constraints, indexes, triggers, and identity authority exact');
 
     const attempts = (await store.pool.query(
       `SELECT id, ticket_id, ordinal, member_count, disposition
