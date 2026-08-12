@@ -581,13 +581,13 @@ const MUTATIONS = Object.freeze([
     name: 'completion-ignores-unresolved-triage',
     suite: 'completion-admission-test.js',
     file: 'server.js',
-    contract: 'a ticket cannot be manually completed while its latest run requires triage',
+    contract: 'a ticket cannot be manually completed while any exact current-attempt member requires triage',
     // Let an operator mark a ticket completed over an unresolved triage flag. The
     // other refusals still fire and the positive control still passes, so only the
     // triage scenario catches a durable "completed" claim over work nobody reviewed.
-    find: '  if (latestRun.triage && latestRun.triage.required) {',
+    find: '  if (currentMembers.some(run => run.triage && run.triage.required === true)) {',
     replace: '  if (false) {',
-    expect: 'a ticket is marked completed while its run still requires triage'
+    expect: 'a ticket is marked completed while a current-attempt member still requires triage'
   },
   {
     name: 'inline-script-escaping-removed',
