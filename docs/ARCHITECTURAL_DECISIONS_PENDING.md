@@ -1,3 +1,36 @@
+## Execution-semantics provenance fixture shared Ticket-attempt authority (2026-08-17)
+
+**Status: RESOLVED IN SOURCE — independent pre-semantics provenance cases now
+use independent current singleton Ticket attempts.**
+
+The canonical checkpoint at exact source `b9bc02b` stopped at owner 134,
+`execution-semantics-persistence-test.js`, when its second `seedLegacyRun` call
+asked the current low-level `createRun` seam to mint another singleton attempt
+for a Ticket whose first pending singleton attempt remained unsettled. The
+retained `TICKET_ATTEMPT_UNSETTLED` message printed the existing attempt's
+status as `undefined` because Ticket attempts expose `disposition`, not
+`status`; the row existed at ordinal 1 with one pending member and null
+disposition/settlement.
+
+History and source classify this as **A. STALE CURRENT-SEMANTICS FIXTURE**.
+Commit `a1143e6` introduced the owner to prove immutable execution-semantics
+snapshot persistence and two explicitly labelled fallback presentations for
+Runs that predate the `runtimeLimitsSnapshot.semantics` field. It does not test
+pre-039 rows, Ticket-attempt migration, retry, resume, or multi-Run grouping.
+The two fallback rows are independent provenance cases—one with a recorded
+runtime envelope and one with no recorded envelope—not one execution wave.
+
+The corrected fixture retains the current `createRun` contract: one low-level
+persistence/test call creates one kernel-owned singleton Ticket attempt. Each
+provenance case now has its own fresh Ticket, singleton attempt, and immutable
+Run identity with its persisted replay record. The original restart assertions
+still falsify any loss of the recorded run-start semantics, substitution of
+changed live defaults for recorded authority, or failure to label unrecorded
+fallback values. No runtime, migration, admission, settlement, retry, resume,
+or projection authority changed.
+
+---
+
 ## PostgreSQL runtime-cutover capacity fixture used overlapping singleton attempts (2026-08-17)
 
 **Status: RESOLVED IN SOURCE — the shared-runtime capacity contract is unchanged;

@@ -330,30 +330,34 @@ async function main() {
         `journal and replay agree on ${key} (${JSON.stringify(journalPayload[key])})`);
     }
 
-    // ── Phase 3: seed legacy runs, then restart with a DIFFERENT live default ─
-    const legacyTicket = (await reloadStore.createTicketWithEvent({
-      ticket: {
-        objective: 'legacy run without recorded semantics', acceptanceCriteria: null,
-        assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual',
-        ownedOutputPaths: null, targetRef: null, executionMode: 'agent',
-        workflowId: null, workflowInput: null,
-        capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null,
-        executionPolicy: {
-          mode: 'assisted', requireVerification: 'when_declared', autoRetry: false,
-          maxAttempts: null, maxRuntimeMs: null, maxModelRequests: null, maxWorkspaceOperations: null,
-          allowWorkspaceWrites: true, allowParallelRuns: false, allowChildTickets: false, workspaceScope: 'shared'
-        },
-        workTypeId: null, workTypeSnapshot: null, workContextId: null, workContextSnapshot: null,
-        status: 'open', createdBy: 'admin', changedBy: 'admin',
-        changedAt: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
-      },
-      eventPayload: { source: 'exec-semantics-test' }
-    })).ticket;
-
+    // ── Phase 3: seed pre-semantics runs, then restart with a DIFFERENT live default ─
     // currentRuntimeLimitsSnapshot() is the pre-existing old-style fixture: no
     // semantics block. Left deliberately untouched so its other consumers keep
-    // exercising backward compatibility.
-    async function seedLegacyRun(runtimeEnvelope) {
+    // exercising backward compatibility. "Legacy" here means only that the Run
+    // predates execution-semantics capture; it is not a pre-Ticket-attempt row.
+    // Each independent provenance case therefore owns one fresh Ticket and one
+    // current singleton attempt. Sharing a Ticket would falsely make the second
+    // case an overlapping attempt, while grouping the cases would falsely claim
+    // they were one execution wave.
+    async function seedPreSemanticsRun({ objective, runtimeEnvelope }) {
+      const legacyTicket = (await reloadStore.createTicketWithEvent({
+        ticket: {
+          objective, acceptanceCriteria: null,
+          assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual',
+          ownedOutputPaths: null, targetRef: null, executionMode: 'agent',
+          workflowId: null, workflowInput: null,
+          capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null,
+          executionPolicy: {
+            mode: 'assisted', requireVerification: 'when_declared', autoRetry: false,
+            maxAttempts: null, maxRuntimeMs: null, maxModelRequests: null, maxWorkspaceOperations: null,
+            allowWorkspaceWrites: true, allowParallelRuns: false, allowChildTickets: false, workspaceScope: 'shared'
+          },
+          workTypeId: null, workTypeSnapshot: null, workContextId: null, workContextSnapshot: null,
+          status: 'open', createdBy: 'admin', changedBy: 'admin',
+          changedAt: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+        },
+        eventPayload: { source: 'exec-semantics-test' }
+      })).ticket;
       const run = await reloadStore.createRun({
         ticketId: legacyTicket.id, agentId: agent.id, agentName: agent.name,
         runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot(),
@@ -369,11 +373,23 @@ async function main() {
           createdAt: new Date().toISOString()
         }
       });
-      return run.id;
+      const attempt = await reloadStore.getTicketAttempt(run.ticketAttemptId);
+      assert(attempt && attempt.ticketId === legacyTicket.id && attempt.memberCount === 1,
+        `pre-semantics provenance case owns one current singleton Ticket attempt (${objective})`);
+      return { runId: run.id, ticketId: legacyTicket.id, attemptId: attempt.id };
     }
 
-    const legacyWithEnvelopeId = await seedLegacyRun({ maxActionsPerResponse: 8, maxMutatingActionsPerResponse: 2 });
-    const legacyBareId = await seedLegacyRun({});
+    const legacyWithEnvelope = await seedPreSemanticsRun({
+      objective: 'pre-semantics run with a recorded runtime envelope',
+      runtimeEnvelope: { maxActionsPerResponse: 8, maxMutatingActionsPerResponse: 2 }
+    });
+    const legacyBare = await seedPreSemanticsRun({
+      objective: 'pre-semantics run without a recorded runtime envelope',
+      runtimeEnvelope: {}
+    });
+    assert(legacyWithEnvelope.ticketId !== legacyBare.ticketId &&
+      legacyWithEnvelope.attemptId !== legacyBare.attemptId,
+      'independent pre-semantics provenance cases do not share Ticket-attempt authority');
     await reloadStore.close();
 
     await stopServer(handle);
@@ -424,7 +440,7 @@ async function main() {
       'a fully recorded run is not described as unreconstructable');
 
     // ── Phase 3b: legacy run WITH a recorded runtimeEnvelope ────────────────
-    const legacyDetail = await request('GET', `/runs/${legacyWithEnvelopeId}`, { cookie });
+    const legacyDetail = await request('GET', `/runs/${legacyWithEnvelope.runId}`, { cookie });
     assert(legacyDetail.statusCode === 200, 'legacy run with an envelope renders');
     const legacyBundle = extractBundle(legacyDetail.body);
     const legacySection = extractSection(legacyBundle, '### Execution semantics (run-start)');
@@ -440,7 +456,7 @@ async function main() {
       'remaining controls are described as not reconstructable rather than inferred');
 
     // ── Phase 3c: legacy run with NOTHING recorded ──────────────────────────
-    const bareDetail = await request('GET', `/runs/${legacyBareId}`, { cookie });
+    const bareDetail = await request('GET', `/runs/${legacyBare.runId}`, { cookie });
     assert(bareDetail.statusCode === 200, 'legacy run without an envelope renders');
     const bareBundle = extractBundle(bareDetail.body);
     const bareSection = extractSection(bareBundle, '### Execution semantics (run-start)');
