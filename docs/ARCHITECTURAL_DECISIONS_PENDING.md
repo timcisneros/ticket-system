@@ -1,3 +1,34 @@
+## PostgreSQL runtime-cutover capacity fixture used overlapping singleton attempts (2026-08-17)
+
+**Status: RESOLVED IN SOURCE — the shared-runtime capacity contract is unchanged;
+its fixture now uses one canonical atomic multi-Run Ticket attempt.**
+
+The canonical checkpoint at exact source `c18c098b` stopped at owner 117,
+`postgres-runtime-cutover-test.js`, when the owner called the low-level
+`createRun` seam twice for one open Ticket. Before Ticket-attempt authority,
+those two independently inserted pending Runs were convenient contenders for
+the deployment-wide and local-provider concurrency checks. They were never a
+JSON import, restart, recovery, retry, or migration-039 fixture.
+
+Current `createRun` correctly mints a singleton attempt under the Ticket lock.
+The first contender therefore leaves one pending member in an unsettled
+attempt; the second call is a request for an overlapping new attempt and is
+refused with `TICKET_ATTEMPT_UNSETTLED`. The generic transition-error formatter
+prints that attempt as status `undefined` because a Ticket attempt exposes a
+`disposition`, not a `status`; the retained error does not mean the row was
+missing. Source reproduction found the exact row at ordinal 1, member count 1,
+null disposition and null settlement, with its sole Run pending and no terminal
+evidence.
+
+History and source classify the failure as **A. STALE PRE-ATTEMPT TEST
+FIXTURE**. The corrected fixture admits each pair of capacity contenders in one
+atomic two-member attempt through `createRunsAndStartTicket`, then retains the
+original cross-store claim, deployment-capacity, provider-capacity, automatic
+reopening, and reset assertions. It neither weakens one-unsettled-attempt
+authority nor changes retry, resume, recovery, settlement, or projection code.
+
+---
+
 ## Ticket-attempt authority retires a pre-cutover evaluation timing class (2026-08-12)
 
 **Status: RESOLVED IN SOURCE — current reachability follows exact Ticket-attempt

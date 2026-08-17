@@ -179,8 +179,17 @@ async function main() {
       changedBy: 'cutover-test'
     });
     const capacityTicket = await store.createTicket({ status: 'open', title: 'Deployment admission' });
-    const capacityRunOne = await store.createRun({ ticketId: capacityTicket.id, agentId: openAiAgent.id, status: 'pending' });
-    const capacityRunTwo = await store.createRun({ ticketId: capacityTicket.id, agentId: openAiAgent.id, status: 'pending' });
+    const capacityAttempt = await store.createRunsAndStartTicket({
+      ticketId: capacityTicket.id,
+      runDrafts: [
+        { ticketId: capacityTicket.id, agentId: openAiAgent.id, status: 'pending' },
+        { ticketId: capacityTicket.id, agentId: openAiAgent.id, status: 'pending' }
+      ]
+    });
+    const [capacityRunOne, capacityRunTwo] = capacityAttempt.runs;
+    assert.equal(capacityAttempt.attempt.memberCount, 2,
+      'deployment capacity contenders must be one atomically admitted current Ticket attempt');
+    assert.equal(capacityRunOne.ticketAttemptId, capacityRunTwo.ticketAttemptId);
     const capacityClaims = await Promise.all([
       store.claimPendingRun({ leaseOwner: 'cutover-a', leaseDurationMs: 30_000, eligibleRunIds: [capacityRunOne.id, capacityRunTwo.id] }),
       peer.claimPendingRun({ leaseOwner: 'cutover-b', leaseDurationMs: 30_000, eligibleRunIds: [capacityRunOne.id, capacityRunTwo.id] })
@@ -200,8 +209,17 @@ async function main() {
     });
     assert.equal(expanded.config.maxActiveRuns, 4);
     const localTicket = await store.createTicket({ status: 'open', title: 'Provider admission' });
-    const localRunOne = await store.createRun({ ticketId: localTicket.id, agentId: localAgent.id, status: 'pending' });
-    const localRunTwo = await store.createRun({ ticketId: localTicket.id, agentId: localAgent.id, status: 'pending' });
+    const localAttempt = await store.createRunsAndStartTicket({
+      ticketId: localTicket.id,
+      runDrafts: [
+        { ticketId: localTicket.id, agentId: localAgent.id, status: 'pending' },
+        { ticketId: localTicket.id, agentId: localAgent.id, status: 'pending' }
+      ]
+    });
+    const [localRunOne, localRunTwo] = localAttempt.runs;
+    assert.equal(localAttempt.attempt.memberCount, 2,
+      'provider capacity contenders must be one atomically admitted current Ticket attempt');
+    assert.equal(localRunOne.ticketAttemptId, localRunTwo.ticketAttemptId);
     const localClaim = await store.claimPendingRun({ leaseOwner: 'local-a', leaseDurationMs: 30_000, eligibleRunIds: [localRunOne.id] });
     assert.ok(localClaim);
     assert.equal(await peer.claimPendingRun({ leaseOwner: 'local-b', leaseDurationMs: 30_000, eligibleRunIds: [localRunTwo.id] }), null,
