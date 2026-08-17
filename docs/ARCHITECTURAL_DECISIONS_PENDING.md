@@ -1,3 +1,46 @@
+## Ticket-attempt authority retires a pre-cutover evaluation timing class (2026-08-12)
+
+**Status: RESOLVED IN SOURCE — current reachability follows exact Ticket-attempt
+membership; frozen Tranche 6 decision evidence and scoring semantics are unchanged.**
+
+The first canonical checkpoint after Ticket-attempt cutover stopped at owner 109,
+`evaluation-live-artifact-domain-postgres-test.js`, because its controlled
+`terminal_ticket_before_later_progress_block` class waited for a terminal parent
+Ticket before releasing two held leaf responses. The retained checkpoint is
+immutable at `.local-artifacts/release-checkpoint-results/`
+`20260812T005441027Z-7e2aeba4-7251-4f7d-b434-5cfe4dabffde`.
+
+Source and provider-free history reconstruction classify this as **A. STALE
+CURRENT-PRODUCT TEMPORAL CLASS**. At exact pre-cutover source `39dd6ad2`, the
+controlled slot `01-033-family-2_2A-C` admitted structured v2 Runs 65–67 under
+plan 25. Run 67 terminalized failed at event position 2550; the topology-aware
+projector set the parent Ticket failed at position 2552 while Runs 65 and 66
+remained pending. Run 66 later persisted `run.progress_blocked` at position
+2578, and the frozen latency reader correctly derived `withheldMs:1710` from
+that block to Run 65's later authorized request. Commit `857d7c47` introduced
+the class to prove that *if* this ordering occurred, the frozen block-to-next-
+request latency metric stayed total. Neither the frozen protocol nor the test
+made premature parent terminalization a required product behavior.
+
+Current Ticket-attempt authority intentionally makes that ordering unreachable:
+the three exact members share one immutable attempt, one failed member leaves
+the attempt unsettled and the Ticket `in_progress`, and only the complete
+terminal member set may produce the attempt disposition and Ticket projection.
+The current runner proof therefore exercises the topology-neutral ordering:
+one member terminalizes; the exact attempt remains unsettled with at least one
+nonterminal member; a later member persists its progress block; all exact
+members terminalize; the attempt settles; then the Ticket projects. The shared
+metric-domain/scorer still accepts only defined nonnegative-or-null latency and
+the frozen `withheldMs` derivation is unchanged.
+
+This reconciliation changes no Ticket-attempt production code, LIVE manifest,
+fixture-v2 bytes, completed REAL corpus/report, scoring rule, metric meaning, or
+historical artifact. Git history remains the explicit compatibility boundary
+for reproducing the old product lifecycle; current product execution cannot
+acquire it.
+
+---
+
 ## REAL LIVE-V3 still reaches an undefined five-metric candidate (2026-08-11)
 
 **Status: RESOLVED IN SOURCE — the run remains permanently

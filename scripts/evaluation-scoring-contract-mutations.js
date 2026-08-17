@@ -61,10 +61,10 @@ const MUTATIONS = Object.freeze([
     failure: 'withheld temporal class planning request after block projects 3000'
   }),
   Object.freeze({
-    name: 'live-later-leaf-temporal-class-collapsed',
+    name: 'live-unsettled-attempt-temporal-class-collapsed',
     file: 'scripts/fixtures/evaluation-live-artifact-domain.js',
     suite: 'evaluation-live-candidate-domain-totality-test.js',
-    find: "'terminal_ticket_before_later_progress_block'",
+    find: "'terminal_member_before_later_progress_block'",
     replace: "'governed_no_progress'",
     failure: 'every source-owned reachable class is bound to the actual runner proof'
   }),

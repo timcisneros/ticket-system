@@ -47,7 +47,7 @@ const LIVE_RUNNER_REACHABILITY_CLASSES = Object.freeze([
   'runtime_timeout',
   'delivery_uncertainty',
   'interrupted_recoverable',
-  'terminal_ticket_before_later_progress_block'
+  'terminal_member_before_later_progress_block'
 ]);
 
 class LiveArtifactDomainError extends Error {

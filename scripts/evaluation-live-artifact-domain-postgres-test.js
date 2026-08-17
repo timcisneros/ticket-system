@@ -138,43 +138,91 @@ async function stopAfterTransportInvocation(input) {
     `controlled interruption route failed: ${stopped.body}`);
 }
 
-async function releaseWorkersAfterTerminalTicket({ ticketId, store, gatePath, trace }) {
+async function releaseWorkersAfterTerminalAttemptMember({ ticketId, store, gatePath, trace }) {
   const deadline = Date.now() + 15_000;
   for (;;) {
     const result = await store.pool.query(
-      `SELECT ticket.status,
+      `SELECT ticket.status AS ticket_status,
+              attempt.id AS attempt_id,
+              attempt.disposition AS attempt_disposition,
+              attempt.member_count,
+              COUNT(member.id)::int AS observed_member_count,
+              COUNT(member.id) FILTER (
+                WHERE member.status IN ('completed', 'failed', 'interrupted'))::int
+                AS terminal_member_count,
+              COUNT(member.id) FILTER (
+                WHERE member.status NOT IN ('completed', 'failed', 'interrupted'))::int
+                AS unsettled_member_count,
+              ARRAY_AGG(member.id ORDER BY member.id) FILTER (
+                WHERE member.status IN ('completed', 'failed', 'interrupted'))
+                AS terminal_member_ids,
+              ARRAY_AGG(member.id ORDER BY member.id) FILTER (
+                WHERE member.status NOT IN ('completed', 'failed', 'interrupted'))
+                AS unsettled_member_ids,
               (SELECT MIN(event.ts) FROM ${store.table('events')} AS event
-                WHERE event.ticket_id = ticket.id AND event.run_id IS NULL
-                  AND event.type = 'ticket.updated'
-                  AND event.payload->>'status' IN ('completed', 'failed', 'blocked'))
-                AS terminal_ticket_at,
+                WHERE event.ticket_id = ticket.id
+                  AND event.type = 'run.terminalized'
+                  AND event.run_id IN (
+                    SELECT exact_member.id FROM ${store.table('runs')} AS exact_member
+                     WHERE exact_member.ticket_attempt_id = attempt.id))
+                AS first_terminal_member_at,
+              (SELECT COUNT(*)::int FROM ${store.table('events')} AS event
+                WHERE event.ticket_id = ticket.id
+                  AND event.type = 'run.terminalized'
+                  AND event.run_id IN (
+                    SELECT exact_member.id FROM ${store.table('runs')} AS exact_member
+                     WHERE exact_member.ticket_attempt_id = attempt.id))
+                AS terminalized_events,
               (SELECT COUNT(*)::int FROM ${store.table('events')} AS event
                 WHERE event.ticket_id = ticket.id
                   AND event.type = 'run.progress_blocked') AS progress_blocks
-         FROM ${store.table('tickets')} AS ticket WHERE ticket.id = $1`, [ticketId]);
+         FROM ${store.table('tickets')} AS ticket
+         JOIN ${store.table('ticket_attempts')} AS attempt
+           ON attempt.ticket_id = ticket.id
+          AND attempt.ordinal = (
+            SELECT MAX(current.ordinal)
+              FROM ${store.table('ticket_attempts')} AS current
+             WHERE current.ticket_id = ticket.id)
+         JOIN ${store.table('runs')} AS member
+           ON member.ticket_attempt_id = attempt.id
+        WHERE ticket.id = $1
+        GROUP BY ticket.id, ticket.status, attempt.id, attempt.disposition,
+                 attempt.member_count`, [ticketId]);
     const row = result.rows[0];
-    if (row && ['completed', 'failed', 'blocked'].includes(row.status) &&
-        row.terminal_ticket_at && Number(row.progress_blocks) === 0) {
-      // Keep the runner proof independent of JavaScript Date millisecond
-      // truncation: release the sibling only after PostgreSQL's own clock has
-      // crossed a distinct timestamp boundary following terminalization. This
-      // is an authoritative condition wait, not a race won by a fixed sleep.
+    if (row && row.ticket_status === 'in_progress' && row.attempt_disposition === null &&
+        Number(row.observed_member_count) === Number(row.member_count) &&
+        Number(row.terminal_member_count) >= 1 && Number(row.unsettled_member_count) >= 1 &&
+        Number(row.terminalized_events) >= 1 && row.first_terminal_member_at &&
+        Number(row.progress_blocks) === 0) {
+      // Exact Ticket-attempt membership is the current lifecycle authority.
+      // Release the siblings only after one member has durably terminalized
+      // while its attempt is still unsettled and its Ticket remains in progress.
+      // PostgreSQL's clock provides a distinct event-order boundary without a
+      // timing-luck sleep.
       const clock = (await store.pool.query(
         `SELECT clock_timestamp() >= $1::timestamptz + interval '5 milliseconds' AS ready`,
-        [row.terminal_ticket_at])).rows[0];
+        [row.first_terminal_member_at])).rows[0];
       if (clock.ready !== true) {
         await new Promise(resolve => setTimeout(resolve, 1));
         continue;
       }
-      trace.ticketStatusBeforeGate = row.status;
-      trace.terminalTicketAt = new Date(row.terminal_ticket_at).toISOString();
-      fs.writeFileSync(gatePath, 'terminal ticket observed before later workers\n', {
+      trace.ticketStatusBeforeGate = row.ticket_status;
+      trace.attemptId = Number(row.attempt_id);
+      trace.attemptDispositionBeforeGate = row.attempt_disposition;
+      trace.attemptMemberCount = Number(row.member_count);
+      trace.terminalMemberCountBeforeGate = Number(row.terminal_member_count);
+      trace.unsettledMemberCountBeforeGate = Number(row.unsettled_member_count);
+      trace.terminalMemberIdsBeforeGate = (row.terminal_member_ids || []).map(Number);
+      trace.unsettledMemberIdsBeforeGate = (row.unsettled_member_ids || []).map(Number);
+      trace.firstTerminalMemberAt = new Date(row.first_terminal_member_at).toISOString();
+      fs.writeFileSync(gatePath, 'terminal attempt member observed before later workers\n', {
         mode: 0o600, flag: 'wx'
       });
       return;
     }
     if (Date.now() >= deadline) {
-      throw new Error('controlled temporal class never reached terminal Ticket before a progress block');
+      throw new Error(
+        'controlled temporal class never reached one terminal member inside an unsettled attempt');
     }
     await new Promise(resolve => setTimeout(resolve, 25));
   }
@@ -302,22 +350,22 @@ async function main() {
             afterTicketCreated: stopAfterTransportInvocation
           },
           {
-            name: 'terminal-ticket-before-later-leaf-block',
-            reachabilityClass: 'terminal_ticket_before_later_progress_block',
+            name: 'terminal-member-before-later-leaf-block',
+            reachabilityClass: 'terminal_member_before_later_progress_block',
             slot: slotOf({ scenarioId: 'family-2-cleanly-separable', armId: 'C',
               repetition: 1 }),
             temporalTrace: {},
-            gatePath: path.join(root, 'terminal-before-block.gate'),
+            gatePath: path.join(root, 'terminal-member-before-block.gate'),
             spec: {
-              kind: 'role-aware-terminal-before-progress-block',
+              kind: 'role-aware-terminal-member-before-progress-block',
               failureTarget: 'controlled-outside-all-owned-roots/refusal'
             }
           }
         ];
         const temporalCase = cases.find(entry =>
-          entry.name === 'terminal-ticket-before-later-leaf-block');
+          entry.name === 'terminal-member-before-later-leaf-block');
         temporalCase.spec.gatePath = temporalCase.gatePath;
-        temporalCase.afterTicketCreated = input => releaseWorkersAfterTerminalTicket({
+        temporalCase.afterTicketCreated = input => releaseWorkersAfterTerminalAttemptMember({
           ...input, gatePath: temporalCase.gatePath, trace: temporalCase.temporalTrace
         });
         assertThat(new Set(cases.map(entry => entry.reachabilityClass)).size ===
@@ -442,9 +490,23 @@ async function main() {
               result.detail.terminalClass === 'interrupted_recoverable',
             'interruption: normal stop route produces a scorable recoverable-open Ticket shape');
           }
-          if (entry.name === 'terminal-ticket-before-later-leaf-block') {
+          if (entry.name === 'terminal-member-before-later-leaf-block') {
             const ordering = (await store.pool.query(
               `SELECT
+                 ticket.status AS ticket_status,
+                 attempt.id AS attempt_id,
+                 attempt.disposition AS attempt_disposition,
+                 attempt.member_count,
+                 attempt.settled_at,
+                 ARRAY_AGG(member.id ORDER BY member.id) AS member_ids,
+                 ARRAY_AGG(member.status ORDER BY member.id) AS member_statuses,
+                 (SELECT MIN(event.position) FROM ${store.table('events')} AS event
+                   WHERE event.ticket_id = $1
+                     AND event.type = 'run.terminalized'
+                     AND event.run_id IN (
+                       SELECT exact_member.id FROM ${store.table('runs')} AS exact_member
+                        WHERE exact_member.ticket_attempt_id = attempt.id))
+                   AS first_terminal_member_position,
                  (SELECT MIN(event.ts) FROM ${store.table('events')} AS event
                    WHERE event.ticket_id = $1 AND event.run_id IS NULL
                      AND event.type = 'ticket.updated'
@@ -461,27 +523,72 @@ async function main() {
                  (SELECT MIN(event.position) FROM ${store.table('events')} AS event
                    WHERE event.ticket_id = $1
                      AND event.type = 'run.progress_blocked') AS progress_block_position,
+                 (SELECT MIN(event.position) FROM ${store.table('events')} AS event
+                   WHERE event.ticket_id = $1 AND event.run_id IS NULL
+                     AND event.type = 'ticket.attempt_settled'
+                     AND (event.payload->>'ticketAttemptId')::bigint = attempt.id)
+                   AS attempt_settled_position,
                  (SELECT MIN(event.ts) FROM ${store.table('events')} AS event
                    WHERE event.ticket_id = $1 AND event.run_id IS NULL
                      AND event.type = 'ticket.updated'
                      AND event.payload->>'status' IN ('completed', 'failed', 'blocked'))
-                   <=
+                   >=
                  (SELECT MIN(event.ts) FROM ${store.table('events')} AS event
                    WHERE event.ticket_id = $1
-                     AND event.type = 'run.progress_blocked') AS terminal_not_after_block`,
+                     AND event.type = 'run.progress_blocked') AS terminal_not_before_block
+                 FROM ${store.table('tickets')} AS ticket
+                 JOIN ${store.table('ticket_attempts')} AS attempt
+                   ON attempt.ticket_id = ticket.id
+                  AND attempt.ordinal = (
+                    SELECT MAX(current.ordinal)
+                      FROM ${store.table('ticket_attempts')} AS current
+                     WHERE current.ticket_id = ticket.id)
+                 JOIN ${store.table('runs')} AS member
+                   ON member.ticket_attempt_id = attempt.id
+                WHERE ticket.id = $1
+                GROUP BY ticket.id, ticket.status, attempt.id, attempt.disposition,
+                         attempt.member_count, attempt.settled_at`,
               [artifact.ticketReport.ticketId])).rows[0];
-            const ordered = ordering.terminal_ticket_at && ordering.progress_block_at &&
-              ordering.terminal_not_after_block === true &&
-              BigInt(ordering.terminal_ticket_position) < BigInt(ordering.progress_block_position);
+            const ordered = ordering.first_terminal_member_position &&
+              ordering.terminal_ticket_at && ordering.progress_block_at &&
+              ordering.attempt_settled_position &&
+              ordering.terminal_not_before_block === true &&
+              BigInt(ordering.first_terminal_member_position) <
+                BigInt(ordering.progress_block_position) &&
+              BigInt(ordering.progress_block_position) <
+                BigInt(ordering.attempt_settled_position) &&
+              BigInt(ordering.attempt_settled_position) <
+                BigInt(ordering.terminal_ticket_position);
             assertThat(ordered,
-              'temporal class: authoritative parent terminalization precedes the later leaf block');
-            assertThat(entry.temporalTrace.ticketStatusBeforeGate &&
+              'temporal class: terminal member precedes the later block, then exact attempt ' +
+                'settlement precedes Ticket projection');
+            assertThat(entry.temporalTrace.ticketStatusBeforeGate === 'in_progress' &&
+              entry.temporalTrace.attemptDispositionBeforeGate === null &&
+              entry.temporalTrace.terminalMemberCountBeforeGate >= 1 &&
+              entry.temporalTrace.unsettledMemberCountBeforeGate >= 1 &&
+              entry.temporalTrace.terminalMemberCountBeforeGate +
+                entry.temporalTrace.unsettledMemberCountBeforeGate ===
+                entry.temporalTrace.attemptMemberCount,
+            'temporal class: one terminal member cannot prematurely terminalize its ' +
+              `still-unsettled exact attempt ${JSON.stringify(entry.temporalTrace)}`);
+            assertThat(ordering.attempt_disposition === 'failed' &&
+              ordering.ticket_status === 'failed' && ordering.settled_at &&
+              Number(ordering.member_count) === ordering.member_ids.length &&
+              ordering.member_statuses.every(status =>
+                ['completed', 'failed', 'interrupted'].includes(status)),
+            'temporal class: all exact members settle one failed attempt before the Ticket ' +
+              `projects ${JSON.stringify({ attemptId: Number(ordering.attempt_id),
+                disposition: ordering.attempt_disposition,
+                memberIds: ordering.member_ids.map(Number),
+                memberStatuses: ordering.member_statuses,
+                ticketStatus: ordering.ticket_status })}`);
+            assertThat(
               artifact.churn.progressBlocks >= 1 &&
               (artifact.latency.withheldMs === null ||
                 (Number.isFinite(artifact.latency.withheldMs) &&
                   artifact.latency.withheldMs >= 0)) &&
               result.detail.metricValidity.latency === true,
-            'temporal class: next-request or defined-null withheld authority remains scorable ' +
+            'temporal class: current next-request or defined-null withheld authority remains scorable ' +
               JSON.stringify({ trace: entry.temporalTrace, progressBlocks: artifact.churn.progressBlocks,
                 withheldMs: artifact.latency.withheldMs,
                 latencyDefined: result.detail.metricValidity.latency }));

@@ -164,7 +164,7 @@ function controlledSiblingReadAnswer() {
   });
 }
 
-function terminalBeforeProgressBlockAnswer(body, spec) {
+function terminalMemberBeforeProgressBlockAnswer(body, spec) {
   if (isPlannerRequest(body)) return plannerProposal(body);
   const owned = ownedRootOf(body);
   if (sameOwnedRoot(owned, terminalFailureOwnedRoot)) {
@@ -182,7 +182,7 @@ function terminalBeforeProgressBlockAnswer(body, spec) {
 
 function responseGateFor(body) {
   const spec = responseSpec();
-  if (spec.kind !== 'role-aware-terminal-before-progress-block' || isPlannerRequest(body)) {
+  if (spec.kind !== 'role-aware-terminal-member-before-progress-block' || isPlannerRequest(body)) {
     return null;
   }
   if (terminalFailureOwnedRoot === null) {
@@ -243,8 +243,8 @@ function modelTextFor(body) {
       complete: true
     });
   }
-  if (spec.kind === 'role-aware-terminal-before-progress-block') {
-    return terminalBeforeProgressBlockAnswer(body, spec);
+  if (spec.kind === 'role-aware-terminal-member-before-progress-block') {
+    return terminalMemberBeforeProgressBlockAnswer(body, spec);
   }
   if (spec.kind === 'one-action-createFolder-by-owned-root') {
     const envelope = runtimeEnvelopeOf(body) || {};
