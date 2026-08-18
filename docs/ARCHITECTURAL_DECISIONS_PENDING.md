@@ -7923,6 +7923,33 @@ same-Ticket attempt. Current admission is not used to manufacture a historical
 absence, no attempt identity crosses Tickets, and no product caller gains an
 attempt-selection seam.
 
+## Economic Schema Sibling Fixture After Ticket Attempts (recorded and closed 2026-08-18)
+
+**Status:** closed at the schema-fixture admission boundary. Economic accounting
+and Ticket-attempt authority are unchanged.
+
+The checkpoint at `938c0e7bc50a3a14280fb3bb27ceaf6e96e79a7d` reached owner 147,
+`economic-accounting-schema-postgres-test.js`, after 146 of 230 owners. That
+Tranche-4 schema owner had created one pending worker Run and later called the
+low-level `createRun` seam again on the same Ticket. Migration 039 correctly
+refused a second singleton attempt while the first was unsettled.
+
+The second Run was not a retry, historical row, or independent schema case. The
+owner's original assertion explicitly models two sibling leaf Runs carrying
+identical serialized request bytes, proving that uniqueness belongs to the
+canonical request source rather than `exact_request_hash`. The pair is therefore
+one logical execution wave and is now admitted once through
+`createRunsAndStartTicket` as an exact two-member attempt. The foreign-Ticket FK
+fixture separately receives its own normal singleton admission.
+
+`planningAttemptId` remains the UUID provenance subject of a planner economic
+request and is not Ticket-attempt identity. Reservations remain bound to either
+one planner provenance identity or one Run; a multi-member Ticket attempt may
+contain Runs with separate economic reservations. No provider pricing,
+reservation lifecycle, settlement, role, or monetary rule moved into the
+Ticket-attempt contract, and no economic record became Ticket lifecycle
+authority.
+
 
 ---
 

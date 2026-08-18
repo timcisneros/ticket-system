@@ -140,14 +140,34 @@ async function main() {
       `SELECT * FROM ${accounts} WHERE ticket_id = $1 AND role = $2`,
       [ticket.id, WORKER])).rows[0];
 
-    // A Run belonging to this ticket, for worker reservations.
+    // Two sibling worker sources belong to one execution wave. Their distinct
+    // Run identities are needed below to prove that identical request bytes do
+    // not collapse distinct canonical economic sources; Ticket-attempt
+    // authority therefore admits the exact pair atomically rather than letting
+    // two independent createRun calls invent overlapping singleton attempts.
     const agent = (await store.createConfiguredAgent({
       value: { name: `Worker ${STAMP}`, provider: 'openai', model: 'gpt-4o-mini-2024-07-18', apiKey: '' },
       groupIds: [], changedBy: ACTOR
     })).agent;
-    const run = await store.createRun({ ticketId: ticket.id, agentId: agent.id, status: 'pending' });
-    const foreignRun = await store.createRun({
-      ticketId: otherTicket.id, agentId: agent.id, status: 'pending' });
+    const workerAdmission = await store.createRunsAndStartTicket({
+      ticketId: ticket.id,
+      runDrafts: [
+        { ticketId: ticket.id, agentId: agent.id, status: 'pending' },
+        { ticketId: ticket.id, agentId: agent.id, status: 'pending' }
+      ]
+    });
+    const [run, secondRun] = workerAdmission.runs;
+    assert.equal(workerAdmission.attempt.memberCount, 2,
+      'the two sibling worker sources are one exact multi-Run Ticket attempt');
+    assert.equal(run.ticketAttemptId, workerAdmission.attempt.id);
+    assert.equal(secondRun.ticketAttemptId, workerAdmission.attempt.id);
+    const foreignAdmission = await store.createRunsAndStartTicket({
+      ticketId: otherTicket.id,
+      runDrafts: [
+        { ticketId: otherTicket.id, agentId: agent.id, status: 'pending' }
+      ]
+    });
+    const [foreignRun] = foreignAdmission.runs;
 
     const reservationColumns = `(account_id, ticket_id, role, planning_attempt_id, run_id,
       model_request_ordinal, exact_request_hash, routing_decision_hash,
@@ -239,8 +259,6 @@ async function main() {
     const firstShared = (await insertReservation({
       seed: 'shared-a', ordinal: 3, requestHash: sharedHash
     })).rows[0];
-    const secondRun = await store.createRun({
-      ticketId: ticket.id, agentId: agent.id, status: 'pending' });
     const secondShared = (await insertReservation({
       seed: 'shared-b', ordinal: 1, runId: secondRun.id, requestHash: sharedHash
     })).rows[0];
