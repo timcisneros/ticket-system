@@ -7894,6 +7894,35 @@ non-quiescent and no artifact is accepted, then releases the writer and proves
 two report reads are stable. A focused mutation removes the await from the
 historically exercised failed-run owner and must kill that regression.
 
+## Declared-Work Historical Fixture After Ticket Attempts (recorded and closed 2026-08-17)
+
+**Status:** closed at the historical fixture boundary. Current Run admission,
+Ticket-attempt membership, and declared-work authority are unchanged.
+
+The canonical checkpoint at
+`d9710cb3473aebec7e3346dc1508eaa0c4a59305` passed 139 of 230 owners and then
+`declared-work-postgres-test.js` tried to insert its pre-declared-work Run into a
+new Ticket without `ticket_attempt_id`. That fixture was introduced by
+`b123ad5f7c16d1cee73580c8aaefc0384c86d8d4`, before migration 039 existed, to
+prove that a Run admitted before `declaredWorkSnapshot` remains readable as
+`historical-unavailable`; it was never a cross-Ticket admission test.
+
+The retained INSERT copied only older Run fields/body from Ticket 1 to Ticket 5.
+It did not copy or supply Ticket 1's attempt identity. At refusal, Ticket 5 was
+open at revision 1 with no attempt and no Run. PostgreSQL's membership trigger
+therefore rejected the null attempt reference with `Run and Ticket attempt must
+belong to the same Ticket` before any declared-work assertion ran.
+
+The compatibility boundary is now explicit and split by owner. The pre-039
+backfill owner proves that a historical non-plan Run deterministically maps to a
+singleton Ticket attempt without rewriting its body. The declared-work owner
+seeds that exact post-migration envelope atomically: it locks the historical
+Ticket, lets kernel authority mint one singleton attempt, inserts the original
+pre-contract body with no `declaredWorkSnapshot`, and binds the Run to that
+same-Ticket attempt. Current admission is not used to manufacture a historical
+absence, no attempt identity crosses Tickets, and no product caller gains an
+attempt-selection seam.
+
 
 ---
 

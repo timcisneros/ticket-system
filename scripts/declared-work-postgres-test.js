@@ -558,21 +558,49 @@ async function main() {
         },
         eventPayload: { source: 'declared-work-postgres-test' }
       })).ticket;
-      // Model an admitted pre-contract run from immutable run authority that already
-      // satisfies the repository's older snapshot contracts. Do not call current
-      // admission and then pretend its missing field is historical.
-      const historicalInsert = await store.pool.query(
-        `INSERT INTO ${store.table('runs')}
-          (ticket_id, agent_id, status, execution_mode, current_phase, body)
-         SELECT $1, agent_id, 'pending', execution_mode, 'planning',
-                body - 'declaredWorkSnapshot'
-           FROM ${store.table('runs')}
-          WHERE id = $2
-         RETURNING id`,
-        [historicalTicket.id, direct.run.id]
-      );
+      // Model the exact post-039 compatibility envelope of an admitted
+      // pre-declared-work singleton. The migration/backfill owner separately
+      // proves that a historical non-plan Run maps to one kernel-owned attempt;
+      // this owner starts from that deterministic result so it can test the
+      // declared-work read contract without inventing a current declaration.
+      // Do not call current admission and then pretend its missing field is
+      // historical, and do not copy an attempt identity from the source Run.
+      const historicalAdmission = await store.withTransaction(async client => {
+        const lockedTicket = await client.query(
+          `SELECT id FROM ${store.table('tickets')} WHERE id = $1 FOR UPDATE`,
+          [historicalTicket.id]
+        );
+        assert.equal(lockedTicket.rowCount, 1);
+        const attempt = await store._createTicketAttempt(client, {
+          ticketId: historicalTicket.id,
+          memberCount: 1
+        });
+        const inserted = await client.query(
+          `INSERT INTO ${store.table('runs')}
+            (ticket_id, ticket_attempt_id, agent_id, status, execution_mode,
+             current_phase, body)
+           SELECT $1, $2, agent_id, 'pending', execution_mode, 'planning',
+                  body - 'declaredWorkSnapshot'
+             FROM ${store.table('runs')}
+            WHERE id = $3
+           RETURNING id, ticket_attempt_id`,
+          [historicalTicket.id, attempt.id, direct.run.id]
+        );
+        return { attempt, inserted };
+      });
+      const historicalInsert = historicalAdmission.inserted;
       assert.equal(historicalInsert.rowCount, 1);
       const historicalRun = await store.getRun(Number(historicalInsert.rows[0].id));
+      assert.equal(historicalAdmission.attempt.ticketId, historicalTicket.id,
+        'the compatibility attempt belongs to the historical Run Ticket');
+      assert.equal(historicalAdmission.attempt.memberCount, 1,
+        'the historical non-plan Run reconstructs as one singleton attempt');
+      assert.equal(historicalRun.ticketAttemptId, historicalAdmission.attempt.id,
+        'the historical Run is bound to its own Ticket attempt');
+      assert.equal(historicalRun.ticketId, historicalTicket.id,
+        'the compatibility Run and attempt share one Ticket');
+      assert.equal(historicalRun.declaredWorkSnapshot, undefined,
+        'the compatibility envelope preserves the historical field absence');
       const historicalState = await first.request(
         'GET',
         `/api/runs/${historicalRun.id}/state`,
