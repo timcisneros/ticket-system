@@ -34,10 +34,13 @@
 // IT ALSO PINS WHEN VERIFICATION IS REQUIRED AT ALL. `isRunVerificationRequired` is
 // governed by the run's captured contract, not by `executionPolicy.requireVerification`
 // — which `normalizeExecutionPolicy` pins to its single supported value and cannot be
-// used to force verification on or off. Scenarios 3-5 prove that a snapshot which is
-// absent, empty, or missing its own `workflowId` leaves verification NOT required, and
-// scenario 6 proves the boundary that stores a raw policy now rejects any other
-// `requireVerification` value instead of silently downgrading it.
+// used to force verification on or off. Scenarios 3-5 read the structured verification
+// requirement projection: a snapshot which is absent, empty, or missing its own
+// `workflowId` leaves verification NOT required. The positive recovery scenario also
+// proves that a required verification failure survives as the canonical completion
+// decision rather than depending on manual-completion prose. Scenario 6 proves the
+// boundary that stores a raw policy rejects any other `requireVerification` value
+// instead of silently downgrading it.
 //
 // Requires TEST_DATABASE_URL (or DATABASE_URL).
 
@@ -198,6 +201,24 @@ async function main() {
         assert(replay && JSON.stringify(replay.snapshot.verificationContractSnapshot) === capturedSnapshot,
           `${label}: the replay snapshot preserved the contract verification used`);
 
+        // Verification causality is a structured completion fact. Manual Ticket
+        // completion now consumes the already-settled Ticket-attempt disposition and
+        // correctly refuses an unsettled attempt before inspecting one member's
+        // verification state. Keep the verification-specific control here, after the
+        // production recovery path has crossed every earlier evidence/settlement gate.
+        const consequenceRecord = await waitFor(async () => {
+          const candidate = await store.getRunConsequence(run.id);
+          return candidate && candidate.consequence && candidate.consequence.completionDecision
+            ? candidate : null;
+        }, 30000, `${label}: canonical completion decision`);
+        const completionDecision = consequenceRecord.consequence.completionDecision;
+        assert(completionDecision.verificationDisposition ===
+          (expected === 'completed' ? 'passed' : 'failed'),
+        `${label}: the completion decision preserves the structured verification disposition`);
+        assert(completionDecision.reasonCode ===
+          (expected === 'completed' ? 'OBJECTIVE_COMPLETED' : 'VERIFICATION_FAILED'),
+        `${label}: the completion decision preserves the structured verification reason`);
+
         try { await second.stop(); } catch (_) { /* best effort */ }
         return run;
       }
@@ -221,10 +242,11 @@ async function main() {
       });
 
       // ── 3-5. When is verification REQUIRED? ───────────────────────────────
-      // Not by policy — by the run's captured contract. These probe the gate through
-      // manual completion, which refuses only while required verification is
-      // unresolved. Each fixture is a completed run with no passing verdict; the only
-      // thing that varies is the SHAPE of the captured contract.
+      // Not by policy — by the run's captured contract. These probe the structured
+      // requirement projection. Each fixture is a completed Run whose Ticket attempt
+      // is deliberately still unsettled; manual completion therefore stops at that
+      // earlier canonical boundary for every shape. The only thing that varies here is
+      // the SHAPE of the captured contract.
       const server = await startServer({ env: { ...env, RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' } });
       const cookie = await server.login();
       const now = () => new Date().toISOString();
@@ -274,6 +296,19 @@ async function main() {
       const completeTicket = ticketId =>
         server.request('PATCH', `/api/tickets/${ticketId}/status`, { cookie, body: { status: 'completed' } });
 
+      const verificationRequirement = async ticketId => {
+        const response = await server.request('GET', `/api/tickets/${ticketId}/timeline`, { cookie });
+        assert(response.statusCode === 200,
+          `verification requirement for ticket ${ticketId} is readable (HTTP ${response.statusCode})`);
+        const body = JSON.parse(response.body);
+        const entries = Array.isArray(body.entries)
+          ? body.entries.filter(entry => entry && entry.type === 'verification.requirement')
+          : [];
+        assert(entries.length === 1,
+          `ticket ${ticketId} has exactly one structured verification requirement`);
+        return entries[0];
+      };
+
       const validContract = label => ({
         workflowId: `wf-gate-${label}-${STAMP}`,
         workflowName: 'Gate fixture',
@@ -282,25 +317,34 @@ async function main() {
       });
 
       // ── 3. A valid captured contract REQUIRES verification ────────────────
-      // The positive control for the whole gate: without it, scenarios 4-5 would be
-      // satisfied by a runtime that never requires verification at all.
+      // The positive control for the requirement projection: without it, scenarios
+      // 4-5 would be satisfied by a runtime that never requires verification at all.
       scenariosRun += 1;
       const requiredTicket = await completedRunWithContract('required', validContract('required'));
+      const requiredProjection = await verificationRequirement(requiredTicket.id);
+      assert(requiredProjection.status === 'required' &&
+        requiredProjection.details && requiredProjection.details.required === true,
+      '3: a captured contract with postconditions projects structured verification authority');
+
+      // This fixture has only `run.execution_completed`; it intentionally lacks the
+      // production consequence/completion/attempt-settlement bundle. Ticket-attempt
+      // authority therefore wins before any verification-specific manual-completion
+      // presentation. That precedence is separate from the structured verification
+      // refusal already proved by the relaxed recovery scenario above.
       const requiredResponse = await completeTicket(requiredTicket.id);
-      assert(requiredResponse.statusCode >= 400 && requiredResponse.statusCode < 500,
-        `3: a captured contract with postconditions REQUIRES verification (HTTP ${requiredResponse.statusCode})`);
-      assert(/verif/i.test(String(requiredResponse.body)),
-        '3: the refusal names verification as the reason');
+      const requiredAttempt = await store.getCurrentTicketAttempt(requiredTicket.id);
+      assert(requiredResponse.statusCode === 409 && requiredAttempt && requiredAttempt.disposition === null,
+        `3: manual completion stops at the earlier unsettled-attempt authority (HTTP ${requiredResponse.statusCode})`);
       assert((await store.getTicket(requiredTicket.id)).status !== 'completed',
-        '3: the ticket is not completed while verification is unresolved');
+        '3: the ticket is not completed while its exact attempt is unsettled');
 
       // ── 4. NEGATIVE CONTROL — no contract, no requirement ─────────────────
       scenariosRun += 1;
       const absentTicket = await completedRunWithContract('absent', null);
-      assert((await completeTicket(absentTicket.id)).statusCode === 200,
-        '4: a run with NO captured contract does not require verification');
-      assert((await store.getTicket(absentTicket.id)).status === 'completed',
-        '4: and the completion actually persisted');
+      const absentProjection = await verificationRequirement(absentTicket.id);
+      assert(absentProjection.status === 'not_required' &&
+        absentProjection.details && absentProjection.details.required === false,
+      '4: a run with NO captured contract projects verification as not required');
 
       // ── 5. NEGATIVE CONTROL — malformed contracts do not require it either ─
       // Both shapes normalize to null: an empty postcondition list declares nothing to
@@ -312,16 +356,18 @@ async function main() {
       const emptyTicket = await completedRunWithContract('empty', {
         ...validContract('empty'), postconditions: []
       });
-      assert((await completeTicket(emptyTicket.id)).statusCode === 200,
-        '5: a captured contract declaring NO postconditions does not require verification');
+      const emptyProjection = await verificationRequirement(emptyTicket.id);
+      assert(emptyProjection.status === 'not_required' &&
+        emptyProjection.details && emptyProjection.details.required === false,
+      '5: a captured contract declaring NO postconditions projects verification as not required');
 
       const anonymousContract = validContract('anonymous');
       delete anonymousContract.workflowId;
       const anonymousTicket = await completedRunWithContract('anonymous', anonymousContract);
-      assert((await completeTicket(anonymousTicket.id)).statusCode === 200,
-        '5: a contract snapshot with no workflow identity of its own does not require verification');
-      assert((await store.getTicket(anonymousTicket.id)).status === 'completed',
-        '5: the identity-less contract is treated as absent, not as a silent failure');
+      const anonymousProjection = await verificationRequirement(anonymousTicket.id);
+      assert(anonymousProjection.status === 'not_required' &&
+        anonymousProjection.details && anonymousProjection.details.required === false,
+      '5: an identity-less contract projects as absent rather than a silent failure');
 
       // ── 6. The raw-policy boundary refuses a misleading configuration ─────
       // `normalizeExecutionPolicy` pins `requireVerification`, so a template author

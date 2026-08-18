@@ -8033,6 +8033,38 @@ prove both that a pre-boundary A2b failure remains a safe trial failure and that
 a reached final hop with a wrong match still dies at the existing A2b credential
 assertion.
 
+## Verification Contract Authority After Ticket Attempts (recorded 2026-08-18)
+
+**Status:** closed at the Owner-215 assertion boundary. Verification,
+completion-decision and Ticket-attempt production authority are unchanged.
+
+The checkpoint at `888b3197acd1f2be2a6ea839560aa9417d219562` reached Owner 215,
+`verification-contract-authority-test.js`, after 214 of 230 owners. Scenario 3
+created a completed Run row carrying a valid captured workflow verification
+contract, but deliberately stopped before replay finalization, consequence,
+completion decision and Ticket-attempt settlement. Its manual-completion request
+was correctly refused because the current attempt was unsettled. The historical
+assertion instead required the refusal prose to name verification.
+
+That assertion belonged to the pre-attempt projector. Before migration 039,
+manual completion selected the latest Run and inspected its verification state;
+after the accepted cutover it consumes the kernel-owned current attempt and its
+settled disposition. An unsettled exact attempt is an earlier authoritative
+refusal, regardless of one member's captured verification-contract shape. No
+verification signal was lost, and no new Ticket reason taxonomy is decided here.
+
+The owner now tests the two authorities separately. Scenarios 3–5 read the
+existing structured `verification.requirement` projection, so valid, absent,
+empty and identity-less captured contracts are distinguished without depending
+on English error text. Scenario 3 also proves that manual completion stops at
+the unsettled-attempt boundary. The relaxed recovery scenario crosses the real
+evidence, consequence and settlement path and now asserts the canonical
+completion decision's `verificationDisposition: failed` and
+`reasonCode: VERIFICATION_FAILED`; its stricter control asserts the corresponding
+passed/objective-completed decision. Thus the owner still fails if structured
+verification causality is removed even when prose contains the word
+“verification.”
+
 
 ---
 
