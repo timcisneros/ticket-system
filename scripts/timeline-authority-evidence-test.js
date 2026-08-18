@@ -113,7 +113,29 @@ async function main() {
           const current = await store.getRun(run.id);
           return current && ['completed', 'failed', 'interrupted'].includes(current.status) ? current : null;
         }, 90000, `${label} terminal run`);
-        return { ticket, run: terminal };
+        // A terminal Run row is committed before the store settles its exact Ticket
+        // attempt and projects that disposition onto the Ticket. The timeline reads
+        // both the Run and current Ticket state, so terminal Run status alone is not
+        // its quiescence boundary. Wait for the canonical Ticket projection before
+        // taking any repeat-read snapshot; otherwise two reads can truthfully consume
+        // different durable source sets.
+        const settledProjection = await waitFor(async () => {
+          const [current, attempt] = await Promise.all([
+            store.getTicket(ticket.id),
+            store.getCurrentTicketAttempt(ticket.id)
+          ]);
+          if (!current || !attempt || !attempt.disposition || !attempt.settledAt) return null;
+          const projectedStatus = attempt.disposition === 'interrupted'
+            ? 'open'
+            : attempt.disposition;
+          return current.status === projectedStatus ? { ticket: current, attempt } : null;
+        }, 30000, `${label} terminal Ticket projection`);
+        assert(settledProjection.ticket.status ===
+          (settledProjection.attempt.disposition === 'interrupted'
+            ? 'open'
+            : settledProjection.attempt.disposition),
+          `${label}: terminal Ticket projection settled (${settledProjection.ticket.status})`);
+        return { ticket: settledProjection.ticket, run: terminal };
       }
 
       const timelineOf = async ticketId => {
@@ -263,8 +285,9 @@ async function main() {
       scenariosRun += 1;
       const runBefore = await store.getRun(denied.run.id);
       const ticketBefore = await store.getTicket(denied.ticket.id);
+      const stableRead = await timelineOf(denied.ticket.id);
       const again = await timelineOf(denied.ticket.id);
-      assert(JSON.stringify(again) === JSON.stringify(deniedEntries),
+      assert(JSON.stringify(again) === JSON.stringify(stableRead),
         '4: projecting the same timeline twice yields identical entries in identical order');
       const runAfter = await store.getRun(denied.run.id);
       const ticketAfter = await store.getTicket(denied.ticket.id);

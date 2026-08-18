@@ -4977,6 +4977,23 @@ that merges evidence from several durable sources is deterministic *given the sa
 inputs*, and its inputs keep arriving. Two failures were needed to state that precisely,
 and both were my assertion being wrong rather than the runtime.
 
+**Follow-up correction (2026-08-18) — the original scenario-4 assertion still crossed
+the unfrozen source boundary.** The two corrections above narrowed the authority-entry
+assertions, but an older byte-equality assertion at the end of the same owner continued
+to compare the first denial projection with a later read. A controlled writer-order
+reproduction held `transitionTicketAfterRun` after the Run terminal bundle. The first
+projection then saw Ticket `in_progress`, an unsettled Ticket attempt, and 18 entries;
+after the legitimate transition settled the attempt, projected the Ticket to `failed`,
+and appended `ticket.updated`, the later projection had 19 entries and a changed
+`ticket:state`. The Run, replay, evaluation, consequence, and receipts did not change.
+
+This is **in-flight evidence / test quiescence**, not projector nondeterminism. The owner
+now waits for the canonical terminal Ticket projection — the source-owned boundary after
+exact attempt settlement — and compares two adjacent reads taken after that boundary.
+It still requires identical canonical entries/order for an unchanged source set and
+still verifies that reading changes neither Run nor Ticket revision. The production
+projector and Ticket-attempt semantics are unchanged.
+
 ### OPEN — model-contract mutating cap resolves to 8 instead of 2 (2026-07-27)
 
 **The armed diagnostics named it on the first recurrence.** `model-contract-violation-test.js`
