@@ -7950,6 +7950,38 @@ reservation lifecycle, settlement, role, or monetary rule moved into the
 Ticket-attempt contract, and no economic record became Ticket lifecycle
 authority.
 
+## Runtime-Budget Serial Wave After Ticket Attempts (recorded and closed 2026-08-18)
+
+**Status:** closed at the runtime-budget fixture admission boundary. Runtime
+budgets, scheduling, and Ticket-attempt authority are unchanged.
+
+The checkpoint at `f5f6edbb55beb42d26f9d6fe885111171264ec0d` reached owner 189,
+`runtime-budget-postgres-test.js`, after 188 of 230 owners. Its serial-policy
+scenario created one pending Run with `allowParallelRuns: false`, then called
+the low-level `createRun` seam again on the same Ticket. Migration 039 correctly
+refused a second singleton attempt while the first was unsettled.
+
+The second Run was not a retry, a later policy admission, or an independent
+budget case. The original Tranche-5 assertion requires two pending Runs on one
+Ticket before either is claimed so that the canonical scheduler can prove the
+second lease is refused while the first is active. Both Runs carry the same
+immutable runtime-budget snapshot. The fixture now admits that complete pair
+once through `createRunsAndStartTicket` as one exact two-member attempt.
+
+Runtime-budget authority remains Run-local: each admitted Run retains its own
+immutable snapshot, while a batch shares only the effective `maxAttempts`
+authority already required by admission. Ticket attempts retain only identity,
+membership, and disposition; they gain no execution-limit, scheduler-capacity,
+or budget-charge semantics.
+
+The same owner also retained a pre-attempt `maxAttempts` fixture that expected a
+first two-Run wave to exceed a ceiling of one. The accepted authority counts
+that wave as one attempt, so it is admissible. The exhaustion proof now admits
+and authoritatively settles one failed predecessor, then uses the real retry
+boundary to prove a second attempt is refused and the transactional reopen
+creates neither a new attempt nor a Run. No unsettled predecessor is bypassed,
+and Run count is not restored as attempt authority.
+
 
 ---
 

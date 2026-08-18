@@ -762,9 +762,30 @@ async function main() {
       const serialSnapshot = budget({
         executionPolicy: { allowParallelRuns: false }
       });
-      const serialOne = await createRun(store, serialTicket, agent, serialSnapshot);
       const otherAgent = await createAgent(store, 'Serial peer');
-      const serialTwo = await createRun(store, serialTicket, otherAgent, serialSnapshot);
+      // These two pending Runs are the complete execution wave used to prove
+      // serial scheduler admission. They share one admitted policy snapshot and
+      // must coexist before either is claimed, so Ticket-attempt authority owns
+      // them as one exact atomic attempt rather than as overlapping singleton
+      // createRun calls.
+      const serialAdmission = await store.createRunsAndStartTicket({
+        ticketId: serialTicket.id,
+        runDrafts: [agent, otherAgent].map(memberAgent => ({
+          ticketId: serialTicket.id,
+          agentId: memberAgent.id,
+          status: 'pending',
+          executionMode: 'agent',
+          runtimeBudgetSnapshot: serialSnapshot
+        }))
+      });
+      const [serialOne, serialTwo] = serialAdmission.runs;
+      check(serialAdmission.attempt.memberCount === 2 &&
+        serialOne.ticketAttemptId === serialAdmission.attempt.id &&
+        serialTwo.ticketAttemptId === serialAdmission.attempt.id,
+      'serial-policy contenders are one exact two-member Ticket attempt');
+      check(serialOne.runtimeBudgetSnapshot.snapshotHash === serialSnapshot.snapshotHash &&
+        serialTwo.runtimeBudgetSnapshot.snapshotHash === serialSnapshot.snapshotHash,
+      'serial-policy attempt members retain the same immutable admitted budget snapshot');
       check(Boolean(await claim(store, serialOne, 'serial-runtime-one')),
         'first serial-policy run acquires its canonical run lease');
       check((await claim(peer, serialTwo, 'serial-runtime-two')) === null,
@@ -799,30 +820,53 @@ async function main() {
         'one atomic allocation wave consumes one attempt for all allocated agents');
 
       const boundedAttemptTicket = await createTicket(store, agent, 'Attempt bound');
-      await assert.rejects(
-        store.createRunsAndStartTicket({
+      const boundedPredecessorAdmission = await store.createRunsAndStartTicket({
+        ticketId: boundedAttemptTicket.id,
+        runDrafts: [{
           ticketId: boundedAttemptTicket.id,
-          runDrafts: [
-            {
-              ticketId: boundedAttemptTicket.id,
-              agentId: agent.id,
-              status: 'pending',
-              runtimeBudgetSnapshot: maxOne
-            },
-            {
-              ticketId: boundedAttemptTicket.id,
-              agentId: otherAgent.id,
-              status: 'pending',
-              runtimeBudgetSnapshot: maxOne
-            }
-          ]
+          agentId: agent.id,
+          status: 'pending',
+          executionMode: 'agent',
+          runtimeBudgetSnapshot: maxOne
+        }]
+      });
+      const boundedPredecessor = (await store.transitionRun({
+        runId: boundedPredecessorAdmission.runs[0].id,
+        expectedRevision: boundedPredecessorAdmission.runs[0].revision,
+        fromStatuses: ['pending'],
+        toStatus: 'failed',
+        patch: {
+          error: 'expected maxAttempts predecessor fixture',
+          completedAt: new Date().toISOString()
+        },
+        eventType: 'run.failed',
+        eventPayload: { source: 'runtime-budget-postgres-test' }
+      })).run;
+      const boundedSettlement = await store.transitionTicketAfterRun({
+        runId: boundedPredecessor.id
+      });
+      check(boundedSettlement.attempt.disposition === 'failed' &&
+        boundedSettlement.ticket.status === 'failed',
+      'maxAttempts predecessor settles before retry admission');
+      await assert.rejects(
+        store.createRetryRun({
+          ticketId: boundedAttemptTicket.id,
+          predecessorRunId: boundedPredecessor.id,
+          runDraft: {
+            ticketId: boundedAttemptTicket.id,
+            agentId: agent.id,
+            status: 'pending',
+            runtimeBudgetSnapshot: maxOne
+          }
         }),
         error => error && error.code === 'RUN_BUDGET_EXHAUSTED'
       );
       check((await store.listRunsForTicket({
         ticketId: boundedAttemptTicket.id
-      })).runs.length === 0,
-        'transactional attempt exhaustion performs no partial run admission');
+      })).runs.length === 1 &&
+        await store.countTicketAttempts(boundedAttemptTicket.id) === 1 &&
+        (await store.getTicket(boundedAttemptTicket.id)).status === 'failed',
+      'transactional retry exhaustion admits no new attempt or Run');
 
       const waitingEvents = (await store.listRunEvents(blockedRun.id))
         .filter(event => event.type === 'capacity.waiting');
