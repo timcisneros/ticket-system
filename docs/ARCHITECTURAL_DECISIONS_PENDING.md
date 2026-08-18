@@ -7982,6 +7982,40 @@ boundary to prove a second attempt is refused and the transactional reopen
 creates neither a new attempt nor a Run. No unsettled predecessor is bypassed,
 and Run count is not restored as attempt authority.
 
+## Live Credential Role Trial Failure Attribution (recorded 2026-08-18)
+
+**Status:** false attribution closed at the Owner-111 harness; the underlying
+one-time pre-boundary stall remains unclassified unless it recurs with the new
+safe diagnostic.
+
+The checkpoint at `24f74362e3c3e6716b58b9a1c110d504d5fff241` reached the REAL-path
+credential owner after 110 of 230 owners. A and A2a both observed only requests
+whose projected configured-Agent credential matched. A2b then retained no
+final-hop observation and no trial artifact, but its trial exception was caught
+and discarded before the owner evaluated one combined observation assertion.
+The resulting message incorrectly attributed a pre-boundary trial failure to
+configured-Agent credential projection.
+
+The immediately preceding checkpoint passed all 48 credential assertions, and
+one focused acquisition at the identical failing source passed all 48 again in
+38 seconds. Owner source, its complete runner/server/preload/manifest closure,
+host classification and provider-variable scrubbing were unchanged. The failed
+owner ran for about 75 minutes, but the discarded exception and cleaned harness
+schema leave no source-owned evidence that distinguishes a blocked HTTP request,
+database operation, child operation or another awaited boundary. No timeout,
+retry or shared runtime behavior is changed without that evidence.
+
+Owner 111 now propagates a failed role trial before reading observations. Its
+diagnostic retains only arm, controlled phase, sanitized error class, sanitized
+repository error code and sanitized repository stage. It never retains the raw
+message, cause, request, header, environment or credential material. A missing
+artifact and a boundary-observation read failure have separate phases; a
+successful trial must explicitly reach the provider boundary before the
+unchanged per-arm credential-match assertion runs. Controlled falsifications
+prove both that a pre-boundary A2b failure remains a safe trial failure and that
+a reached final hop with a wrong match still dies at the existing A2b credential
+assertion.
+
 
 ---
 

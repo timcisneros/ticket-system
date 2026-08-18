@@ -54,6 +54,139 @@ class SpawnBoundaryReached extends Error {
   }
 }
 
+const SAFE_DIAGNOSTIC_TOKEN = /^[A-Za-z][A-Za-z0-9_.:-]{0,79}$/;
+
+function safeDiagnosticToken(value) {
+  return typeof value === 'string' && SAFE_DIAGNOSTIC_TOKEN.test(value)
+    ? value : null;
+}
+
+function safeTrialErrorIdentity(error) {
+  return Object.freeze({
+    errorName: safeDiagnosticToken(error && error.name) || 'Error',
+    errorCode: safeDiagnosticToken(error && (error.code ||
+      (error.detail && error.detail.code))) || null,
+    repositoryStage: safeDiagnosticToken(error && error.detail && error.detail.stage) || null
+  });
+}
+
+class EvaluationCredentialRoleTrialFailure extends Error {
+  constructor({ armId, phase, error }) {
+    const identity = safeTrialErrorIdentity(error);
+    const safeArmId = safeDiagnosticToken(armId) || 'unknown-arm';
+    const suffix = [identity.errorName, identity.errorCode, identity.repositoryStage]
+      .filter(Boolean).join('/');
+    super(`credential role ${safeArmId} failed during ${phase}${suffix ? ` (${suffix})` : ''}`);
+    this.name = 'EvaluationCredentialRoleTrialFailure';
+    this.code = 'EVALUATION_CREDENTIAL_ROLE_TRIAL_FAILED';
+    this.detail = Object.freeze({ armId: safeArmId, phase, ...identity });
+  }
+}
+
+async function runCredentialRoleTrial({
+  armId,
+  runControlledTrial,
+  artifactPresent,
+  readBoundaryObservations
+}) {
+  let artifact;
+  try {
+    artifact = await runControlledTrial();
+  } catch (error) {
+    // Never pass the raw Error through this owner. Provider adapters and child
+    // processes may attach request or environment detail to arbitrary errors;
+    // the owner retains only controlled phase plus bounded repository tokens.
+    throw new EvaluationCredentialRoleTrialFailure({
+      armId, phase: 'child_runner_execution', error
+    });
+  }
+
+  let retainedArtifactPresent = false;
+  try {
+    retainedArtifactPresent = Boolean(artifact) && artifactPresent() === true;
+  } catch (error) {
+    throw new EvaluationCredentialRoleTrialFailure({
+      armId, phase: 'artifact_collection', error
+    });
+  }
+  if (!retainedArtifactPresent) {
+    const error = new Error('artifact absent');
+    error.name = 'ArtifactMissing';
+    error.code = 'EVALUATION_CREDENTIAL_ROLE_ARTIFACT_MISSING';
+    throw new EvaluationCredentialRoleTrialFailure({
+      armId, phase: 'artifact_collection', error
+    });
+  }
+
+  try {
+    const observations = readBoundaryObservations();
+    if (!Array.isArray(observations)) {
+      const error = new TypeError('boundary observations must be an array');
+      error.code = 'EVALUATION_CREDENTIAL_BOUNDARY_OBSERVATIONS_INVALID';
+      throw error;
+    }
+    return Object.freeze({
+      artifact,
+      observations: Object.freeze(observations)
+    });
+  } catch (error) {
+    throw new EvaluationCredentialRoleTrialFailure({
+      armId, phase: 'provider_boundary_interception', error
+    });
+  }
+}
+
+async function proveCredentialRoleFailureAttribution(assertThat) {
+  const untrustedMessage = 'untrusted trial detail must not survive';
+  let preBoundaryFailure = null;
+  try {
+    await runCredentialRoleTrial({
+      armId: 'A2b',
+      runControlledTrial: async () => {
+        const error = new Error(untrustedMessage);
+        error.name = 'ControlledPreBoundaryFailure';
+        error.code = 'CONTROLLED_PRE_BOUNDARY_FAILURE';
+        throw error;
+      },
+      artifactPresent: () => false,
+      readBoundaryObservations: () => []
+    });
+  } catch (error) { preBoundaryFailure = error; }
+  assertThat(preBoundaryFailure instanceof EvaluationCredentialRoleTrialFailure &&
+    preBoundaryFailure.code === 'EVALUATION_CREDENTIAL_ROLE_TRIAL_FAILED' &&
+    preBoundaryFailure.detail.armId === 'A2b' &&
+    preBoundaryFailure.detail.phase === 'child_runner_execution' &&
+    preBoundaryFailure.detail.errorName === 'ControlledPreBoundaryFailure' &&
+    preBoundaryFailure.detail.errorCode === 'CONTROLLED_PRE_BOUNDARY_FAILURE' &&
+    !preBoundaryFailure.message.includes(untrustedMessage) &&
+    !preBoundaryFailure.message.includes('final-hop observations'),
+  'a controlled pre-boundary failure remains a safe trial failure before credential assertions');
+
+  let wrongCredentialObservation = null;
+  try {
+    const result = await runCredentialRoleTrial({
+      armId: 'A2b',
+      runControlledTrial: async () => ({ kind: 'controlled-artifact' }),
+      artifactPresent: () => true,
+      readBoundaryObservations: () => [{
+        hasAuthorization: true,
+        authorizationMatchesProjectedCredential: false
+      }]
+    });
+    if (!(result.observations.length > 0 && result.observations.every(item =>
+      item.hasAuthorization === true &&
+      item.authorizationMatchesProjectedCredential === true))) {
+      throw new Error(
+        'A2b final-hop observations use the projected configured-agent credential');
+    }
+  } catch (error) { wrongCredentialObservation = error; }
+  assertThat(wrongCredentialObservation instanceof Error &&
+    !(wrongCredentialObservation instanceof EvaluationCredentialRoleTrialFailure) &&
+    wrongCredentialObservation.message ===
+      'A2b final-hop observations use the projected configured-agent credential',
+  'a controlled wrong final-hop credential observation still fails the existing credential assertion');
+}
+
 function budget(root) {
   fs.mkdirSync(root, { recursive: true });
   return {
@@ -429,17 +562,19 @@ async function main() {
       'fixture mode retains the sentinel, hermetic response preload and historical reconstruction authority');
 
       // ── EVERY PROVIDER-BEARING ROLE ──────────────────────────────────
+      await proveCredentialRoleFailureAttribution(assertThat);
       const roleProof = {};
       for (const armId of ['A', 'A2a', 'A2b', 'B', 'C']) {
         const observation = path.join(root, `role-${armId}.jsonl`);
+        const outputPath = path.join(root, 'out', `role-${armId}.json`);
         const before = await maxConfiguredAgentId(store);
-        let trialError = null;
-        try {
-          await runTrial({
+        const roleTrial = await runCredentialRoleTrial({
+          armId,
+          runControlledTrial: () => runTrial({
             store, startServer, workspaceRoot,
             scenario: getScenario('family-1-simple'), arm: ARMS[armId],
             repetition: 1, seed: `credential-role-${armId}`,
-            outputPath: path.join(root, 'out', `role-${armId}.json`),
+            outputPath,
             commit: 'credential-proof', smokeRoot: root,
             namespaceRoot: path.join(root, `ns-role-${armId}`),
             mode: 'live', liveTransportCapture: null,
@@ -448,11 +583,15 @@ async function main() {
             liveProviderBoundaryResponse: roleResponse,
             liveRequestControls: CONTROLS,
             liveBudget: budget(path.join(root, `budget-role-${armId}`))
-          });
-        } catch (error) { trialError = error; }
-        const observations = readJsonLines(observation);
+          }),
+          artifactPresent: () => fs.existsSync(outputPath),
+          readBoundaryObservations: () => readJsonLines(observation)
+        });
+        const observations = roleTrial.observations;
         const tempAgents = await configuredAgentsAfter(store, before);
-        roleProof[armId] = { observations, trialError };
+        roleProof[armId] = { observations };
+        assertThat(observations.length > 0,
+          `${armId} reaches provider-boundary interception before credential inspection`);
         assertThat(observations.length > 0 && observations.every(item =>
           item.hasAuthorization === true &&
           item.authorizationMatchesProjectedCredential === true),
