@@ -35,8 +35,12 @@ const {
 } = require('../runtime/structured-allocation-leaf-run-contract');
 const {
   buildCompletionAuthoritySnapshot,
-  buildCompletionDecision
+  buildCompletionDecision,
+  normalizeCompletionDecision
 } = require('../runtime/completion-decision-contract');
+const {
+  evaluateV2CompletionAuthority
+} = require('../runtime/v2-completion-authority-contract');
 const { canonicalJson } = require('../runtime/declared-work-contract');
 const { withHarness } = require('./postgres-test-harness');
 const {
@@ -1156,9 +1160,118 @@ async function main() {
     assert.equal(
       (await store.listTicketEvents(ordering.ticket.id, { limit: 200 })).events
         .filter(event => event.type === 'ticket.allocation_leaf_items_reconciled').length,
-      reconciliationEvents.length,
-      'repeated reconciliation over unchanged facts emits no duplicate event'
+       reconciliationEvents.length,
+       'repeated reconciliation over unchanged facts emits no duplicate event'
     );
+
+    // ── A STALE nonterminal materialization cannot block settlement ────────
+    //
+    // T2 completion-authority regression: reconciliation materializes the
+    // aggregate while item 2's Run is still running (persisted = nonterminal),
+    // the evidence then advances to fully completed, and settlement runs with
+    // NO intermediate reconciliation. The stored materialization is stale and
+    // structurally valid for the same plan; the current durable evidence
+    // deterministically derives completed. Settlement must refresh the
+    // materialization and complete the parent — and the shared pure evaluator,
+    // given the same durable facts, must already answer
+    // completionInevitable=true so a future read-only cancellation consumer
+    // refuses rather than beating the determined completion.
+    const staleMaterialized = await admitPlan(`Stale materialization settlement ${STAMP}`);
+    const staleAdmission = await store.admitStructuredAllocationLeafRuns({
+      ticketId: staleMaterialized.ticket.id,
+      allocationPlanId: staleMaterialized.plan.id,
+      governedLeafCapture: {
+          policySource: LEAF_WORKER_POLICY.source,
+          progressControlPolicy: LEAF_PROGRESS_POLICY
+        },
+      leafDrafts: staleMaterialized.plan.items.map(item => ({
+        allocationItemId: item.allocationItemId,
+        run: leafRunDraft(
+          staleMaterialized.ticket, staleMaterialized.plan, item,
+          agentById.get(item.assignedAgentId),
+          { completionAuthority: verifiedCompletionAuthority(item) }
+        )
+      }))
+    });
+    const staleItems = new Map(
+      staleMaterialized.plan.items.map(item => [item.allocationItemId, item]));
+    const staleFirst = staleAdmission.runs[0];
+    const staleLast = staleAdmission.runs[1];
+    // Item 1 completes durably; item 2 is still running.
+    await terminalizeRunTo(store, staleFirst.id, 'completed');
+    await store.recordRunConsequence({
+      runId: staleFirst.id,
+      consequence: satisfiedConsequence(
+        await store.getRun(staleFirst.id),
+        staleItems.get(staleFirst.allocationItemId)
+      )
+    });
+    const midReconciliation = await store.reconcileStructuredAllocationLeafItems({
+      ticketId: staleMaterialized.ticket.id,
+      allocationPlanId: staleMaterialized.plan.id
+    });
+    assert.equal(midReconciliation.decision.aggregateStatus, 'pending',
+      'the materialized aggregate is nonterminal while a leaf is unresolved');
+    const staleStored = (await store.getAllocationPlan(staleMaterialized.plan.id))
+      .aggregateDecision;
+    assert.equal(staleStored.aggregateStatus, 'pending');
+    // The evidence advances: item 2 terminalizes and records its decision.
+    await terminalizeRunTo(store, staleLast.id, 'completed');
+    await store.recordRunConsequence({
+      runId: staleLast.id,
+      consequence: satisfiedConsequence(
+        await store.getRun(staleLast.id),
+        staleItems.get(staleLast.allocationItemId)
+      )
+    });
+    // No reconciliation is requested: the stored aggregate stays nonterminal
+    // while the current durable evidence derives completed.
+    assert.equal(
+      (await store.getAllocationPlan(staleMaterialized.plan.id)).aggregateDecision
+        .aggregateStatus,
+      'pending',
+      'the materialization is stale before settlement runs'
+    );
+    // The shared pure evaluator over the same durable facts must already
+    // report completion as inevitable — the read-only cancellation contract.
+    const staleRuns = (await store.listRunsForTicket({
+      ticketId: staleMaterialized.ticket.id, limit: 20
+    })).runs;
+    const stalePlanRow = await store.getAllocationPlan(staleMaterialized.plan.id);
+    const staleDecisionsByRunId = new Map();
+    for (const run of staleRuns) {
+      const consequence = await store.getRunConsequence(run.id);
+      staleDecisionsByRunId.set(run.id, consequence
+        ? normalizeCompletionDecision(consequence.consequence.completionDecision)
+        : null);
+    }
+    const authorityView = evaluateV2CompletionAuthority({
+      leafPlan: stalePlanRow,
+      memberRuns: staleRuns,
+      decisionsByRunId: staleDecisionsByRunId,
+      persistedAggregateDecision: staleStored
+    });
+    assert.equal(authorityView.persistedState, 'stale',
+      'the stored nonterminal materialization classifies as stale, not conflicting');
+    assert.equal(authorityView.currentAggregate.aggregateStatus, 'completed');
+    assert.equal(authorityView.completionInevitable, true,
+      'a future cancellation consumer must refuse: completion is already determined');
+    // Settlement refreshes the materialization inside its own transaction and
+    // completes the parent with no new semantic fact.
+    const staleTransition = await store.transitionTicketAfterRun({ runId: staleLast.id });
+    assert.equal(staleTransition.changed, true);
+    assert.equal(staleTransition.ticket.status, 'completed',
+      'settlement completes the parent over a stale nonterminal materialization');
+    const refreshedPlan = await store.getAllocationPlan(staleMaterialized.plan.id);
+    assert.equal(refreshedPlan.aggregateDecision.aggregateStatus, 'completed',
+      'settlement refreshed the materialization to the current derivation');
+    assert.equal(staleTransition.aggregateDecision.decisionHash,
+      refreshedPlan.aggregateDecision.decisionHash,
+      'the completing transition reports exactly the refreshed aggregate proof');
+    normalizeAggregatePlanDecision(refreshedPlan.aggregateDecision, {
+      expectedPlanHash: refreshedPlan.planHash,
+      expectedPlanId: refreshedPlan.id
+    });
 
     // ── A raw completed Run set cannot complete the parent without proof ─────
     //

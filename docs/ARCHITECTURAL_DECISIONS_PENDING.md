@@ -8066,6 +8066,204 @@ verification causality is removed even when prose contains the word
 “verification.”
 
 
+## T2 Leaf-Lineage Closure at the Run Admission Boundary (recorded and corrected 2026-08-18)
+
+**Status:** corrected in the T2 Tranche 1 working tree. The lock-protocol and
+stale-materialization corrections recorded below are untouched; the v2
+terminal-finality premise they rely on is now mechanically enforced instead of
+assumed.
+
+Terminal aggregate finality (a persisted `completed`/`failed` aggregate can
+never legitimately face a differing current derivation) requires LEAF-LINEAGE
+CLOSURE: no NEW Run can later be admitted carrying a `leafRunBinding` to an
+already-admitted plan/item. Binding immutability on an existing Run and
+migration 039's same-attempt membership guard do not prove this — a NEW
+attempt could carry a Run bound to the OLD plan/item, extending the lineage so
+a previously terminal aggregate legitimately derives something else.
+
+FOUND BY FALSIFICATION. scripts/t2-lineage-closure-postgres-test.js rebuilt a
+fully valid binding + governed envelope for a NEW Run identity from durable
+public data only (the next Run identity predicted by READING the runs
+sequence; the binding and envelope are data with self-hashes, no secret) and
+attempted admission through the low-level seam. `store.createRun` ACCEPTED it.
+The Ticket's lineage then held a later bound Run; production reconciliation
+REFRESHED the terminal `completed` aggregate to `pending` (the plan status
+regresses) while the shared pure evaluator classifies the same durable state
+as `terminal_conflict` and refuses — the exact settlement/cancellation
+divergence the terminal rule exists to prevent. The same smuggle was possible
+through `createRunsAndStartTicket` (new attempt after reopen), the real
+`createRetryRun` composition, and a `transitionRun` body patch minting the
+binding post-INSERT.
+
+DIAGNOSED. Every Run INSERT funnels through a single seam — `createRun`
+(the only two `INSERT INTO runs` statements live there; direct calls,
+`createRunsAndStartTicket`, `createRetryRun` and structured leaf admission all
+compose over it) — and that seam, like the `transitionRun` body-patch merge,
+carried no lineage-authority check: a record/patch carrying `leafRunBinding`
+was merely validated for internal consistency, never for minting authority.
+The canonical `admitStructuredAllocationLeafRuns` did refuse second admission
+(its existing-run and plan-status layers), but nothing prevented bypassing it
+through the funnel. (A binding without a governed envelope was already refused
+by the read-time pairing guard — which is why the falsification needed the
+full constructed pair, and why a half-smuggle proves nothing.)
+
+FIXED at the canonical admission authority, mirroring the existing
+caller-owned-identity refusals (RUN_IDENTITY_NOT_CALLER_OWNED,
+TICKET_ATTEMPT_IDENTITY_NOT_CALLER_OWNED):
+
+- `createRun` refuses record-carried `leafRunBinding` unless the canonical
+  structured leaf-admission path holds the module-private
+  `LEAF_LINEAGE_MINT` Symbol capability. The capability is passed only inside
+  the admitting transaction by `admitStructuredAllocationLeafRuns`; it is not
+  the caller-forgeable `leafLineageAdmission: true` option that the
+  falsification exposed. The canonical path re-derives every binding from the
+  LOCKED admitted plan, reserves the Run identity first, and re-verifies the
+  binding off the persisted rows. Error: `RUN_LEAF_LINEAGE_NOT_CALLER_OWNED`.
+- `transitionRun` refuses `leafRunBinding` body patches
+  (`RUN_LEAF_LINEAGE_IMMUTABLE`), mirroring `DECLARED_WORK_SNAPSHOT_IMMUTABLE`.
+- No DB uniqueness constraint was added: the binding lives in the run body
+  JSONB alongside legitimate historical v1/v2 compat shapes (runs may carry
+  `allocationPlanId` with no binding), and a constraint there was not proven
+  compatible with historical reconstruction. The funnel guard is the minimum
+  mechanical correction.
+
+ORIGINAL CONCURRENT SMEUGGLE CASE NOW REFUSED. The falsification suite (26
+assertions) proves every seam refuses before INSERT, the terminal aggregate
+and settled Ticket remain untouched, the refused composed retry rolls back
+its reopen, and the duplicate canonical admission is refused by its own
+`plan_not_pending` layer once the plan has settled. An intermittent
+test-side outcome assumption in the lock suite's settlement-vs-leaf-admission
+case (duplicate admission racing settlement: re-report while the plan is
+pending versus `plan_not_pending` refusal once settlement has committed) was
+also corrected to classify both source-legitimate interleavings with
+exclusive-cause pairings; it was the pre-existing intermittent failure
+observed once during the first correction handoff and not reproduced until
+now. Terminal-finality is re-derived from the enforced closure: a terminal
+aggregate's per-item lineage-current Runs are terminal (immutable statuses,
+write-once decisions, immutable bindings) and can never gain a later member,
+so the current derivation is fixed. `interrupted` remains refreshable.
+
+## T2 v2 Completion-Authority Stale-Materialization Semantics (recorded and corrected 2026-08-18)
+
+**Status:** corrected in the T2 Tranche 1 working tree. The lock-protocol
+correction recorded above is untouched; only the pure v2 evaluator, its test
+and the leaf-run suite's regression inventory changed.
+
+The corrected `evaluateV2CompletionAuthority` first answered "does the
+persisted aggregate equal the fresh aggregate?", so a contract-valid but
+STALE persisted nonterminal aggregate (materialized `running`/`pending`/
+`interrupted` over earlier evidence) versus a current derivation of
+`completed` returned `completionInevitable: false, reason: aggregate_conflict`
+— while production settlement, which reconciles (re-derives and re-persists)
+inside its own transaction and then gates on the refreshed aggregate,
+completed. The same authoritative current evidence therefore gave the future
+read-only cancellation consumer "not inevitable" and settlement "completed",
+violating the frozen T2 invariant that transaction scheduling may serialize
+mutations but may not choose between CANCELED and COMPLETED when pre-existing
+durable evidence already determines completion.
+
+Source-derived classification (proven, not assumed): the persisted
+`aggregateDecision` is a MATERIALIZED PROJECTION written solely by
+`_reconcileLeafItemsLocked` (the only UPDATE on `allocation_plans`); it may
+legitimately go stale because run statuses advance to terminal and
+`run_consequences` rows are insertable at any time after the run is terminal
+(the 002 terminal guard requires terminality, not terminalization-order).
+`normalizeAggregatePlanDecision` proves structure/integrity/binding
+(decisionHash, planHash/planId identity, re-derived projections) but does NOT
+prove freshness; malformed or misbound stored aggregates are integrity
+failures that throw on the production row read (`allocationPlanFromRow`) and
+now throw identically in the evaluator, never falling back to "fresh
+decides". TERMINAL aggregates (`completed`/`failed`) are final by
+construction of their immutable inputs (terminal run statuses have empty
+transition sets; decisions are write-once per run) plus leaf-lineage closure
+— mechanically enforced at the Run admission boundary; see the
+"T2 Leaf-Lineage Closure" entry above, which at the time this entry was
+written was still an unproven premise and was subsequently proven by
+falsification — so a
+structurally valid terminal aggregate conflicting with current evidence is
+an integrity contradiction, unreachable through legitimate channels, and the
+evaluator refuses it (`persistedState: 'terminal_conflict'`,
+`completionInevitable: false`) rather than choosing either side.
+
+Corrected verdict rule: `completionInevitable` is determined by the CURRENT
+derivation from the currently durable authoritative evidence. A stale
+NONTERMINAL materialization never blocks completion; settlement and
+cancellation compute the same verdict from the same current facts
+(settlement refreshes the materialization as a side effect; cancellation is
+read-only and must refuse when completion is already inevitable). Result
+shape exposes `currentAggregate`, `persistedAggregate`, `persistedState`
+(`absent|current|stale|terminal_conflict`) and `materializationRequired`.
+Regression coverage: the pure matrix (20 assertions including the
+settlement/cancellation equivalence proof over every reachable row) plus a
+durable end-to-end regression in
+`scripts/structured-allocation-leaf-run-postgres-test.js` (materialize
+nonterminal, advance evidence to completed, evaluator answers inevitable,
+real `transitionTicketAfterRun` refreshes and completes). The evaluator was
+also corrected to consume the PRODUCTION run shape (runFromRow rows with
+flattened body fields) — the earlier mock-only `run.body.*` reads had never
+accepted real rows, which the durable regression exposed.
+
+## T2 Lock-Protocol Falsification Deadlock (recorded and corrected 2026-08-18)
+
+**Status:** corrected in the T2 Tranche 1 working tree. The frozen Ticket-first
+lock direction was falsified by its own concurrency test and is replaced by
+the Ticket-last direction; the failure history is retained in
+`scripts/t2-lock-protocol-postgres-test.js` and
+`docs/T2_IMPLEMENTATION_TRANCHE_1.md`.
+
+The T2 Tranche 1 handoff froze a Ticket-level lock order of
+`Ticket FOR UPDATE -> attempt FOR UPDATE -> Runs ORDER BY id FOR UPDATE` and
+reordered `transitionTicketAfterRun`, `reopenTicket` and the
+`createRunsAndStartTicket` predecessor path onto it. The handoff's own
+falsification — two members of the same attempt, settled concurrently through
+different member ids — then produced a real PostgreSQL 40P01, and the failing
+test was weakened to sequential settlement instead of being diagnosed.
+
+The observed deadlock graph (PostgreSQL server log, both the original
+handoff run and the independent reproduction) was:
+
+- Process A — settlement `transitionTicketAfterRun` — executing
+  `SELECT * FROM runs WHERE ticket_attempt_id = $1 ORDER BY id FOR UPDATE`,
+  holding `tickets` FOR UPDATE, `ticket_attempts` FOR UPDATE and the first
+  member-run tuple, waiting for the second member-run tuple.
+- Process B — run-level evidence writer (`claimPendingRun` / `startClaimedRun`
+  / `transitionRun` terminalization) — executing
+  `INSERT INTO events (... ticket_id ...)`, holding the second member run
+  FOR UPDATE (its `UPDATE runs` / candidate CTE), waiting for
+  `tickets` FOR KEY SHARE (the `events.ticket_id REFERENCES tickets(id)`
+  foreign-key check), which Process A's FOR UPDATE blocks.
+
+Root cause: the schema's own evidence path mandates `runs -> tickets FOR KEY
+SHARE` (every event INSERT foreign-key check; see the same boundary documented
+at `_appendEvent`, which orders run-row locks before chain-tip locks for the
+identical reason). FOR KEY SHARE conflicts with FOR UPDATE, so any writer
+that holds `tickets` FOR UPDATE while still waiting for a run/attempt lock
+forms a genuine cycle with any concurrent run-evidence writer. The
+application-level `T -> A -> R` graph was acyclic only across the explicit
+SELECT ... FOR UPDATE statements; it ignored the foreign-key/trigger-induced
+locks (events FK, `run_event_chain_tips`, membership-guard attempt locks)
+that the same statements transitively acquire.
+
+Correction (minimal, in the same working tree): the global Ticket-level class
+order is `allocation_plans -> runs (members ORDER BY id) -> ticket_attempts ->
+tickets`, with the Ticket FOR UPDATE always taken LAST.
+`transitionTicketAfterRun` was reordered to routing read (no lock) ->
+allocation-plan lock (restored first, matching leaf admission) -> members
+ORDER BY id (routed run included; no routed-run-first lock) -> current
+attempt (stale-routing revalidation) -> Ticket. `reopenTicket` reverted to
+attempt -> Ticket. The `createRunsAndStartTicket` predecessor path now locks
+predecessor Run -> current attempt before the Ticket gate.
+`createRetryRun` acquires the predecessor Run lock before composing
+`reopenTicket` + admission in one transaction. The deterministic member id
+order and the stale-routing revalidation from the falsified Tranche 1 are
+retained. The original concurrent case now passes repeatedly (30 consecutive
+suite runs plus a 60-iteration staggered reproduction loop with no deadlock),
+and the restored suite covers settlement-vs-settlement (both routing
+directions), settlement-vs-reopen, settlement-vs-predecessor-admission,
+settlement-vs-structured-leaf-admission, and stale-routing under a
+concurrent `createRetryRun` admission.
+
+
 ---
 
 *Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and closed 2026-08-03 (one shared authority, both consumers). Governed Lifecycle Transport-Count Flake recorded and closed 2026-08-03 (fixture arrival counter conflated with canonical ordinal). Intermittent Guard Mutation Limit recorded and closed 2026-08-03 (deterministic correlation contract). Fixture Crash Boundary Arrival Counter recorded and closed 2026-08-03. Parent-Fixture Hash Handshake recorded and closed as NOT REQUIRED 2026-08-03. Concurrent-Duplicate Misclassification regression recorded and closed 2026-08-03 by claim-epoch classification. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*

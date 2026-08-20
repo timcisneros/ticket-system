@@ -134,6 +134,10 @@ const {
   ticketStatusForAttemptDisposition
 } = require('../../runtime/ticket-attempt-contract');
 const {
+  evaluateAttemptCompletionAuthority,
+  validateRoutedMemberProjection
+} = require('../../runtime/ticket-attempt-completion-contract');
+const {
   ProcessTemplateConflictError,
   computeNextRunAt,
   scheduleHasReusableInterval,
@@ -157,6 +161,20 @@ const IDENTIFIER_PATTERN = /^[a-z_][a-z0-9_]*$/;
 const TICKET_STATUSES = new Set(['open', 'in_progress', 'completed', 'failed', 'blocked', 'closed']);
 const RUN_STATUSES = new Set(['pending', 'running', 'completed', 'failed', 'interrupted']);
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'interrupted']);
+// ── Leaf-lineage minting capability ─────────────────────────────────────────
+//
+// Module-private and deliberately NOT exported. Symbol identity is
+// unforgeable outside this module: a caller that passes `true`, a string, an
+// object, or its own identically-described Symbol does not hold THIS
+// identity, so a strict `===` fails and the leafRunBinding is refused. Only
+// code inside this module can pass it — the canonical structured leaf
+// admission, which locks the admitted plan, reserves exact Run identities,
+// re-derives every binding from that plan and re-verifies the persisted rows.
+// A transaction client, reservedRunIds, a governed envelope or a self-hashed
+// binding are FACTS, not authorization; none of them substitutes for this
+// capability. Proven by falsification in
+// scripts/t2-lineage-closure-postgres-test.js (attacks A and F).
+const LEAF_LINEAGE_MINT = Symbol('postgresRuntimeStore.leafLineageMint');
 // The parent Ticket outcomes that END execution. `open` is deliberately absent:
 // returning an interrupted owned-scope ticket to `open` is recovery, not
 // terminalization, and must stay reachable without a leaf completion proof.
@@ -222,6 +240,19 @@ function assertDeclaredWorkAuthorityNotPatched(patch, label) {
   if (!patch || !Object.prototype.hasOwnProperty.call(patch, 'declaredWorkSnapshot')) return;
   const error = new Error(`${label} cannot mutate declaredWorkSnapshot after admission`);
   error.code = 'DECLARED_WORK_SNAPSHOT_IMMUTABLE';
+  throw error;
+}
+
+// Leaf-run lineage identity is canonical structured-admission authority. A
+// body patch is a MINT path for a binding on a Run that never went through
+// leaf admission: without this guard, a caller could bind an ordinary Run of
+// a Ticket holding a settled v2 plan to one of that plan's allocation items,
+// extending a lineage whose terminal aggregate is final. Refused exactly like
+// a declared-work patch: no caller may mint lineage after admission.
+function assertRunLeafLineageNotPatched(patch, label) {
+  if (!patch || !Object.prototype.hasOwnProperty.call(patch, 'leafRunBinding')) return;
+  const error = new Error(`${label} cannot mint a leafRunBinding after admission`);
+  error.code = 'RUN_LEAF_LINEAGE_IMMUTABLE';
   throw error;
 }
 
@@ -3041,7 +3072,11 @@ class PostgresRuntimeStore {
         client: connection,
         // The identities this transaction reserved from the runs sequence, and
         // only those. They travel beside the drafts, never inside them.
-        reservedRunIds: bindings.map(binding => binding.runId)
+        reservedRunIds: bindings.map(binding => binding.runId),
+        // The sole holder of the leaf-lineage minting capability. It is not
+        // exported and not caller-suppliable; createRun refuses
+        // record-carried leafRunBinding for every caller without it.
+        leafLineageMint: LEAF_LINEAGE_MINT
       });
 
       // Re-verify off the persisted rows, not the in-memory drafts, so a
@@ -5936,7 +5971,12 @@ class PostgresRuntimeStore {
     return client ? execute(client) : execute(this.pool);
   }
 
-  async createRun(record, { client = null, reservedId = null, ticketAttemptId = null } = {}) {
+  async createRun(record, {
+    client = null,
+    reservedId = null,
+    ticketAttemptId = null,
+    leafLineageMint = null
+  } = {}) {
     const run = this.assertJsonRecord(record, 'run');
     assertRunDeclaredCompletionAuthority(run, 'run declared/completion authority');
     assertRunGovernedExecutionPairing(run, 'run governed execution');
@@ -5969,6 +6009,36 @@ class PostgresRuntimeStore {
         error.code = 'TICKET_ATTEMPT_IDENTITY_NOT_CALLER_OWNED';
         throw error;
       }
+    }
+    // LEAF-LINEAGE CLOSURE. A leafRunBinding in a caller record is refused
+    // exactly like a caller-owned run id or attempt identity: only the
+    // canonical structured leaf-admission transaction — which re-derives every
+    // binding from the LOCKED admitted plan, reserves the Run identity first,
+    // and re-verifies the binding off the persisted rows — may mint one. That
+    // authority is the module-private LEAF_LINEAGE_MINT capability (see its
+    // definition above): NOT a boolean, NOT any caller-suppliable option
+    // value, and NOT inferable from a transaction client, reserved identities,
+    // a governed envelope or a valid self-hashed binding — those are facts,
+    // not authorization. Without this guard, the low-level seam (or any
+    // wave/retry admission composed over it) could admit a NEW Run bound to an
+    // already-admitted plan/item, extending a lineage whose terminal aggregate
+    // is final. Proven by falsification in
+    // scripts/t2-lineage-closure-postgres-test.js (smuggles A, B, C, F).
+    if (leafLineageMint !== null && leafLineageMint !== LEAF_LINEAGE_MINT) {
+      const error = new TypeError(
+        'leafLineageMint authority is not caller-suppliable');
+      error.code = 'RUN_LEAF_LINEAGE_AUTHORITY_INVALID';
+      throw error;
+    }
+    if (Object.prototype.hasOwnProperty.call(run, 'leafRunBinding') &&
+        leafLineageMint !== LEAF_LINEAGE_MINT) {
+      const error = new TypeError(
+        'run.leafRunBinding is minted only by structured leaf admission authority');
+      error.code = 'RUN_LEAF_LINEAGE_NOT_CALLER_OWNED';
+      throw error;
+    }
+    if (leafLineageMint === LEAF_LINEAGE_MINT && client === null) {
+      throw new TypeError('Leaf-lineage admission requires the admitting transaction');
     }
     // The one exception is transaction-scoped and arrives through the OPTIONS
     // argument, never through the record: structured leaf admission reserves
@@ -6059,10 +6129,23 @@ class PostgresRuntimeStore {
     afterTerminalRunId = null,
     runEventPayload = () => ({}),
     ticketEventPayload = {}
-  }, { client = null, reservedRunIds = null } = {}) {
+  }, { client = null, reservedRunIds = null, leafLineageMint = null } = {}) {
     const id = positiveSafeInteger(ticketId, 'ticketId');
     if (!Array.isArray(runDrafts) || runDrafts.length === 0) {
       throw new TypeError('runDrafts must be a non-empty array');
+    }
+    // Leaf-lineage minting authority is the module-private capability held
+    // only by the canonical structured leaf admission, never a caller-chosen
+    // option value (see LEAF_LINEAGE_MINT). Validated here so a forged value
+    // is refused before any ticket or run work begins.
+    if (leafLineageMint !== null && leafLineageMint !== LEAF_LINEAGE_MINT) {
+      const error = new TypeError(
+        'leafLineageMint authority is not caller-suppliable');
+      error.code = 'RUN_LEAF_LINEAGE_AUTHORITY_INVALID';
+      throw error;
+    }
+    if (leafLineageMint === LEAF_LINEAGE_MINT && client === null) {
+      throw new TypeError('Leaf-lineage admission requires the admitting transaction');
     }
     // Reserved identities are call-site authority, not draft content, and are
     // only meaningful to a caller composing inside the transaction that reserved
@@ -6103,6 +6186,48 @@ class PostgresRuntimeStore {
     }
 
     const execute = async connection => {
+      // Predecessor-based admission locks the terminal predecessor Run and
+      // the current attempt BEFORE the Ticket FOR UPDATE. The Ticket lock is
+      // taken LAST across every Ticket-level writer because run-evidence
+      // writers take runs -> tickets FOR KEY SHARE (events FK); holding the
+      // Ticket FOR UPDATE while waiting for a predecessor-run lock would form
+      // that cycle (createRetryRun composes reopen + this path in one
+      // transaction, so the predecessor lock must precede reopen's Ticket
+      // lock here as well).
+      let predecessor = null;
+      let predecessorAttempt = null;
+      if (predecessorId !== null) {
+        const predecessorResult = await connection.query(
+          `SELECT * FROM ${this.table('runs')} WHERE id = $1 FOR UPDATE`,
+          [predecessorId]
+        );
+        predecessor = predecessorResult.rowCount === 0 ? null : runFromRow(predecessorResult.rows[0]);
+        if (!predecessor || predecessor.ticketId !== id || predecessor.agentId !== drafts[0].agentId ||
+            !TERMINAL_RUN_STATUSES.has(predecessor.status)) {
+          throw new StateTransitionConflictError(
+            'run',
+            predecessorId,
+            ['terminal predecessor for the requested retry'],
+            predecessor || { status: 'missing' }
+          );
+        }
+        predecessorAttempt = await this.getCurrentTicketAttempt(id, {
+          client: connection,
+          forUpdate: true
+        });
+        if (!predecessorAttempt || predecessor.ticketAttemptId !== predecessorAttempt.id ||
+            predecessorAttempt.disposition === null) {
+          const error = new StateTransitionConflictError(
+            'ticket_attempt',
+            predecessorAttempt ? predecessorAttempt.id : predecessor.ticketAttemptId,
+            ['settled current attempt containing the terminal predecessor'],
+            predecessorAttempt || { disposition: 'missing' }
+          );
+          error.code = 'TICKET_ATTEMPT_PREDECESSOR_UNSETTLED';
+          throw error;
+        }
+      }
+
       const ticketResult = await connection.query(
         `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
         [id]
@@ -6206,38 +6331,6 @@ class PostgresRuntimeStore {
         throw new StateTransitionConflictError('run', current.id, ['no active run for this ticket and agent'], current);
       }
 
-      if (predecessorId !== null) {
-        const predecessorResult = await connection.query(
-          `SELECT * FROM ${this.table('runs')} WHERE id = $1 FOR UPDATE`,
-          [predecessorId]
-        );
-        const predecessor = predecessorResult.rowCount === 0 ? null : runFromRow(predecessorResult.rows[0]);
-        if (!predecessor || predecessor.ticketId !== id || predecessor.agentId !== drafts[0].agentId ||
-            !TERMINAL_RUN_STATUSES.has(predecessor.status)) {
-          throw new StateTransitionConflictError(
-            'run',
-            predecessorId,
-            ['terminal predecessor for the requested retry'],
-            predecessor || { status: 'missing' }
-          );
-        }
-        const predecessorAttempt = await this.getCurrentTicketAttempt(id, {
-          client: connection,
-          forUpdate: true
-        });
-        if (!predecessorAttempt || predecessor.ticketAttemptId !== predecessorAttempt.id ||
-            predecessorAttempt.disposition === null) {
-          const error = new StateTransitionConflictError(
-            'ticket_attempt',
-            predecessorAttempt ? predecessorAttempt.id : predecessor.ticketAttemptId,
-            ['settled current attempt containing the terminal predecessor'],
-            predecessorAttempt || { disposition: 'missing' }
-          );
-          error.code = 'TICKET_ATTEMPT_PREDECESSOR_UNSETTLED';
-          throw error;
-        }
-      }
-
       const clock = await connection.query('SELECT clock_timestamp() AS ts');
       const now = isoTimestamp(clock.rows[0].ts, 'run creation clock');
       const attempt = await this._createTicketAttempt(connection, {
@@ -6269,7 +6362,8 @@ class PostgresRuntimeStore {
         }, {
           client: connection,
           reservedId: reserved === null ? null : reserved[draftIndex],
-          ticketAttemptId: attempt.id
+          ticketAttemptId: attempt.id,
+          leafLineageMint
         });
         runs.push(run);
         const payload = this.assertJsonRecord(runEventPayload(run), `run ${run.id} event payload`);
@@ -9097,21 +9191,34 @@ class PostgresRuntimeStore {
   async transitionTicketAfterRun({ runId }, { client = null } = {}) {
     const id = positiveSafeInteger(runId, 'runId');
     const execute = async connection => {
-      // Lock order is allocation_plans -> runs -> tickets.
+      // Ticket-level lock order: allocation_plans -> run members ORDER BY id
+      // FOR UPDATE -> ticket attempt FOR UPDATE -> Ticket FOR UPDATE (LAST).
       //
-      // Runs are still locked before the owning ticket. Required run evidence
-      // takes the run row before its event insert obtains the ticket foreign-key
-      // lock, so the former ticket-first order could deadlock operator
-      // cancellation:
+      // WHY THE TICKET LOCK IS LAST. Every run-evidence writer — claim, start,
+      // terminalization, evidence append — locks its run row first and then
+      // inserts an event, and the events foreign key
+      // (events.ticket_id REFERENCES tickets(id)) takes tickets FOR KEY SHARE
+      // on the owning ticket. FOR KEY SHARE conflicts with FOR UPDATE. A
+      // settlement that held tickets FOR UPDATE while still waiting for a
+      // member-run lock therefore formed a genuine cycle against any
+      // concurrent run-level writer holding that member:
       //
-      //   ticket projection  tickets FOR UPDATE -> runs FOR UPDATE
-      //   process evidence   runs FOR KEY SHARE -> events(ticket FK)
+      //   settlement (ticket-first)   tickets FOR UPDATE -> waits runs FOR UPDATE
+      //   run evidence                runs FOR UPDATE .... -> waits tickets FOR
+      //                               KEY SHARE (events FK)
       //
-      // The allocation plan is taken FIRST because a planner-admitted v2 ticket
-      // is reconciled inside this transaction, and leaf admission takes the same
-      // three locks in the same order. Finding the plan needs the run's ticket,
-      // so the run is read once WITHOUT a lock purely to route; every value that
-      // decides anything is re-read under lock below.
+      // PostgreSQL resolved that cycle with a real 40P01 (reproduced and
+      // captured in scripts/t2-lock-protocol-postgres-test.js history). The
+      // same boundary is documented at _appendEvent: run evidence always takes
+      // the run row before the ticket foreign-key share lock, so Ticket-level
+      // writers must take the Ticket FOR UPDATE only after every plan, run and
+      // attempt lock they will ever request.
+      //
+      // The routing read at step 1 acquires no lock. Stale-routing
+      // revalidation happens under the attempt lock at step 3.
+
+      // STEP 1: routing read (no lock). Reads ticket_id, ticket_attempt_id,
+      // and the historical v2 plan reference (if any).
       const routing = await connection.query(
         `SELECT ticket_id, ticket_attempt_id,
                 NULLIF(body->>'allocationPlanId', '') AS allocation_plan_id
@@ -9123,6 +9230,8 @@ class PostgresRuntimeStore {
         error.code = 'POSTGRES_RECORD_NOT_FOUND';
         throw error;
       }
+      const routedTicketId = positiveSafeInteger(routing.rows[0].ticket_id, 'run.ticketId');
+      const routedAttemptId = positiveSafeInteger(routing.rows[0].ticket_attempt_id, 'run.ticketAttemptId');
       // Historical structured v2 is a compatibility input, never the generic
       // attempt router. Only an attempt member whose immutable body identifies
       // that plan can select its compatibility proof. Missing leaf bindings are
@@ -9130,84 +9239,99 @@ class PostgresRuntimeStore {
       // does not carry the old plan id and cannot be gated merely because the
       // plan row remains reconstructable.
       const historicalPlanReference = routing.rows[0].allocation_plan_id;
-      // A body field is not compatibility authority by itself. Only the
-      // repository's historical positive-integer plan identity can route to a
-      // retained v2 proof; arbitrary future/topology-local metadata is ignored
-      // by canonical Ticket projection.
       const historicalLeafPlanId = typeof historicalPlanReference === 'string' &&
         /^[1-9]\d*$/.test(historicalPlanReference)
         ? positiveSafeInteger(historicalPlanReference, 'run.allocationPlanId')
         : null;
+
+      // STEP 2: lock the v2 allocation plan FIRST when applicable, matching
+      // admitStructuredAllocationLeafRuns (allocation_plans -> runs -> ticket)
+      // and reconcileStructuredAllocationLeafItems (allocation_plans only) so
+      // this transaction cannot form a plan/Ticket cycle against them.
       const leafPlan = historicalLeafPlanId === null
         ? null
         : await this._findLockedPlannerAdmittedPlan(
           connection,
-          positiveSafeInteger(routing.rows[0].ticket_id, 'run.ticketId'),
+          routedTicketId,
           { allocationPlanId: historicalLeafPlanId }
         );
-      const runResult = await connection.query(
-        `SELECT * FROM ${this.table('runs')} WHERE id = $1 FOR UPDATE`,
-        [id]
-      );
-      if (runResult.rowCount === 0) {
-        const error = new Error(`run ${id} was not found`);
-        error.code = 'POSTGRES_RECORD_NOT_FOUND';
-        throw error;
-      }
-      const run = runFromRow(runResult.rows[0]);
-      if (!TERMINAL_RUN_STATUSES.has(run.status)) {
-        throw new StateTransitionConflictError('run', id, [...TERMINAL_RUN_STATUSES], run);
-      }
-      const attemptResult = await connection.query(
-        `SELECT * FROM ${this.table('ticket_attempts')}
-         WHERE id = $1 AND ticket_id = $2 FOR UPDATE`,
-        [run.ticketAttemptId, run.ticketId]
-      );
-      if (attemptResult.rowCount === 0) {
-        const error = new Error(`run ${id} has no same-Ticket attempt authority`);
-        error.code = 'TICKET_ATTEMPT_MEMBERSHIP_MISSING';
-        throw error;
-      }
-      let attempt = ticketAttemptFromRow(attemptResult.rows[0]);
+
+      // STEP 3: lock all members of the routed attempt ORDER BY id FOR UPDATE.
+      // The deterministic id order is shared with every writer that may also
+      // acquire these member locks, so two concurrent settlements — routed
+      // through different members or in either id direction — serialize on the
+      // same first member instead of deadlocking. The routed Run is included
+      // in this lock; no separate routed-Run FOR UPDATE is issued, because
+      // such a lock would acquire the routed Run OUTSIDE the deterministic id
+      // order and reintroduce the settlement-vs-settlement deadlock pair.
+      // Runs.ticket_attempt_id is immutable (migration 039 membership guard),
+      // so locking by the routing read's attempt id is exact.
       const batchResult = await connection.query(
         `SELECT * FROM ${this.table('runs')}
          WHERE ticket_attempt_id = $1
          ORDER BY id
          FOR UPDATE`,
-        [attempt.id]
+        [routedAttemptId]
       );
       const batchRuns = batchResult.rows.map(runFromRow);
-      if (batchRuns.length !== attempt.memberCount ||
-          !batchRuns.some(member => member.id === run.id) ||
-          batchRuns.some(member => member.ticketId !== attempt.ticketId ||
-            member.ticketAttemptId !== attempt.id)) {
-        const error = new Error(`Ticket attempt ${attempt.id} membership is incomplete or contradictory`);
-        error.code = 'TICKET_ATTEMPT_MEMBERSHIP_INVALID';
-        throw error;
+      const run = batchRuns.find(member => member.id === id) || null;
+      if (run === null || !TERMINAL_RUN_STATUSES.has(run.status)) {
+        if (run === null) {
+          const error = new Error(`run ${id} has no same-Ticket attempt authority`);
+          error.code = 'TICKET_ATTEMPT_MEMBERSHIP_MISSING';
+          throw error;
+        }
+        throw new StateTransitionConflictError('run', id, [...TERMINAL_RUN_STATUSES], run);
       }
-      const ticketResult = await connection.query(
-        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
-        [run.ticketId]
-      );
-      if (ticketResult.rowCount === 0) {
-        const error = new Error(`ticket ${run.ticketId} was not found`);
-        error.code = 'POSTGRES_RECORD_NOT_FOUND';
-        throw error;
-      }
-      const ticket = ticketFromRow(ticketResult.rows[0]);
-      const currentAttempt = await this.getCurrentTicketAttempt(ticket.id, {
+
+      // STEP 4: lock the current attempt FOR UPDATE and revalidate routing.
+      // The current attempt is the attempt with the highest ordinal; migration
+      // 039 forbids two unsettled attempts, so if the current attempt is not
+      // the routed attempt, a newer attempt was admitted concurrently and the
+      // canonical Ticket projection must reflect the current attempt, not this
+      // one. Settlement returns without change.
+      const currentAttempt = await this.getCurrentTicketAttempt(routedTicketId, {
         client: connection,
         forUpdate: true
       });
-      if (!currentAttempt || currentAttempt.id !== attempt.id) {
+      if (!currentAttempt || currentAttempt.id !== routedAttemptId) {
+        // STALE ROUTING REVALIDATION. The Ticket lock below waits only on a
+        // class every corrected writer takes last, so this wait cannot form a
+        // cycle with any holder of the Ticket lock.
+        const ticketResult = await connection.query(
+          `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+          [routedTicketId]
+        );
+        const ticket = ticketFromRow(ticketResult.rows[0]);
         return {
           ticket,
-          attempt,
+          attempt: currentAttempt,
           event: null,
           previousStatus: ticket.status,
           changed: false,
           aggregateDecision: null
         };
+      }
+      let attempt = currentAttempt;
+
+      // STEP 5: lock the Ticket LAST. From here on this transaction never
+      // waits for a plan, run or attempt lock.
+      const ticketResult = await connection.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [routedTicketId]
+      );
+      if (ticketResult.rowCount === 0) {
+        const error = new Error(`ticket ${routedTicketId} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const ticket = ticketFromRow(ticketResult.rows[0]);
+      if (batchRuns.length !== attempt.memberCount ||
+          batchRuns.some(member => member.ticketId !== attempt.ticketId ||
+            member.ticketAttemptId !== attempt.id)) {
+        const error = new Error(`Ticket attempt ${attempt.id} membership is incomplete or contradictory`);
+        error.code = 'TICKET_ATTEMPT_MEMBERSHIP_INVALID';
+        throw error;
       }
       const decisionResult = await connection.query(
         `SELECT member.id AS run_id, consequence.consequence
@@ -9223,65 +9347,16 @@ class PostgresRuntimeStore {
           : null;
         return [positiveSafeInteger(row.run_id, 'runConsequence.runId'), decision];
       }));
-      const projectedDisposition = item => {
-        if (!item.completionAuthoritySnapshot) {
-          return item.status === 'completed' ? 'completed'
-            : item.status === 'interrupted' ? 'interrupted'
-              : 'failed';
-        }
-
-        const decision = completionDecisionByRunId.get(item.id);
-
-        // THE SHARED RULE, NOT A SECOND COPY OF IT. `evaluateRunCompletionEvidence`
-        // owns the question "does this Run's claim need a decision, and is that
-        // decision valid" for both allocation reconciliation and this
-        // projection. The two callers still map the answer differently — a full
-        // item disposition there, a projected status or refusal here — but they
-        // no longer decide it separately, which is how they came to disagree.
-        // THE EXPECTED AUTHORITY IS ALREADY IN HAND.
-        //
-        // This passed `null`, which the shared rule reads as "no opinion" so it
-        // never reported `completion_authority_mismatch`. That rule exists for
-        // a caller that genuinely holds no comparable hash — but this one does:
-        // the guard above has just proved `item.completionAuthoritySnapshot`
-        // exists, and allocation reconciliation compares against exactly this
-        // field. A structured leaf could therefore present a decision built
-        // against a DIFFERENT objective contract and be projected `completed`
-        // by the Ticket while reconciliation called it a mismatch.
-        //
-        // A generic Run never reaches this line — the guard returns its status
-        // first — so supplying the hash cannot make an unstructured Run fail
-        // for lacking structured authority.
-        const evidence = evaluateRunCompletionEvidence({
-          runStatus: item.status,
-          runId: item.id,
-          runTicketId: item.ticketId,
-          runCompletionAuthorityHash:
-            item.completionAuthoritySnapshot.objectiveContractHash || null,
-          decision: decision || null
-        });
-        if (evidence.result === 'not_applicable') {
-          // A Run that never claimed success is truthfully itself.
-          return item.status === 'interrupted' ? 'interrupted' : 'failed';
-        }
-        if (evidence.result !== 'valid') {
-          const error = new Error(
-            `Run ${item.id} cannot project its ticket: ${evidence.reason}`);
-          error.code = 'COMPLETION_EVIDENCE_MISSING';
-          error.completionEvidenceResult = evidence.result;
-          error.completionEvidenceReason = evidence.reason;
-          throw error;
-        }
-        if (decision.completionDisposition === 'completed') return 'completed';
-        if (decision.completionDisposition === 'blocked') return 'blocked';
-        return item.status === 'interrupted' ? 'interrupted' : 'failed';
-      };
-      // Waiting for the rest of an exact attempt must not turn a malformed
-      // success claim into a silent no-op. Validate the routed terminal member
-      // against its own admitted completion authority first; non-success
-      // members remain self-describing and create no synthetic decision.
-      projectedDisposition(run);
-      if (batchRuns.some(member => !TERMINAL_RUN_STATUSES.has(member.status))) {
+      // STEP 6: Validate routed terminal member against its own admitted
+      // completion authority. Behavior preserved via the extracted evaluator;
+      // throws COMPLETION_EVIDENCE_MISSING when the routed Run carries a
+      // decision whose objective contract does not match its own.
+      validateRoutedMemberProjection(run, completionDecisionByRunId.get(run.id) || null);
+      // STEP 7: Compute attempt candidate disposition via the extracted
+      // pure evaluator (preserves the inline owner behavior verbatim).
+      const authority = evaluateAttemptCompletionAuthority(batchRuns, completionDecisionByRunId);
+      if (authority === null) {
+        // At least one member is not terminal; settlement must wait.
         return {
           ticket,
           attempt,
@@ -9291,8 +9366,8 @@ class PostgresRuntimeStore {
           aggregateDecision: null
         };
       }
-      const memberDispositions = batchRuns.map(projectedDisposition);
-      const disposition = deriveTicketAttemptDisposition(memberDispositions);
+      const memberDispositions = authority.memberDispositions;
+      const disposition = authority.candidateDisposition;
 
       // ── Tranche 3: the aggregate decision is the completion proof ──────────
       //
@@ -9447,10 +9522,15 @@ class PostgresRuntimeStore {
   async reopenTicket({ ticketId, rerunMode = null }, { client = null } = {}) {
     const id = positiveSafeInteger(ticketId, 'ticketId');
     const execute = async connection => {
-      // Final settlement takes the current attempt before the Ticket. Reopen
-      // follows the same order so a retry racing legitimate finalization
-      // refuses on unsettled authority rather than forming an attempt/Ticket
-      // lock cycle.
+      // Ticket-level lock order: attempt FOR UPDATE -> Ticket FOR UPDATE.
+      // The Ticket FOR UPDATE is taken LAST (after every attempt lock this
+      // transaction will request) because run-evidence writers take
+      // runs -> tickets FOR KEY SHARE (events FK); a writer holding the
+      // Ticket FOR UPDATE while waiting for an attempt/run lock would cycle
+      // against them. Reopen follows the same direction as settlement
+      // (members -> attempt -> Ticket), so a retry racing legitimate
+      // finalization refuses on unsettled authority rather than forming an
+      // attempt/Ticket lock cycle.
       const currentAttempt = await this.getCurrentTicketAttempt(id, {
         client: connection,
         forUpdate: true
@@ -9493,6 +9573,25 @@ class PostgresRuntimeStore {
     const predecessorId = positiveSafeInteger(predecessorRunId, 'predecessorRunId');
     const draft = this.assertJsonRecord(runDraft, 'runDraft');
     return this.withTransaction(async client => {
+      // The predecessor Run lock precedes reopenTicket's attempt/Ticket locks.
+      // reopenTicket ends by taking tickets FOR UPDATE, and run-evidence
+      // writers on the terminal predecessor take runs -> tickets FOR KEY SHARE
+      // (events FK); waiting for the predecessor lock while holding the Ticket
+      // lock would recreate that cycle inside this composed transaction. The
+      // full predecessor validation still happens inside
+      // createRunsAndStartTicket, which re-locks both rows as no-ops.
+      const predecessorLock = await client.query(
+        `SELECT * FROM ${this.table('runs')} WHERE id = $1 FOR UPDATE`,
+        [predecessorId]
+      );
+      if (predecessorLock.rowCount === 0) {
+        throw new StateTransitionConflictError(
+          'run',
+          predecessorId,
+          ['terminal predecessor for the requested retry'],
+          { status: 'missing' }
+        );
+      }
       const reopened = await this.reopenTicket({ ticketId: id, rerunMode: 'auto_retry' }, { client });
       if (!reopened) return null;
       const created = await this.createRunsAndStartTicket({
@@ -9536,6 +9635,7 @@ class PostgresRuntimeStore {
     }
     const requestedPatch = this.assertJsonRecord(patch, 'run patch');
     assertDeclaredWorkAuthorityNotPatched(requestedPatch, 'run patch');
+    assertRunLeafLineageNotPatched(requestedPatch, 'run patch');
     const requestedPhase = Object.prototype.hasOwnProperty.call(requestedPatch, 'currentPhase')
       ? normalizeRunPhase(requestedPatch.currentPhase, 'patch.currentPhase')
       : null;
