@@ -138,6 +138,15 @@ const {
   validateRoutedMemberProjection
 } = require('../../runtime/ticket-attempt-completion-contract');
 const {
+  buildCancellationAuthority,
+  cancellationAuthoritySemanticallyEqual,
+  normalizeCancellationAuthority
+} = require('../../runtime/ticket-cancellation-authority-contract');
+const { projectTicketLifecycle } = require('../../runtime/ticket-lifecycle-contract');
+const {
+  evaluateV2CompletionAuthority
+} = require('../../runtime/v2-completion-authority-contract');
+const {
   ProcessTemplateConflictError,
   computeNextRunAt,
   scheduleHasReusableInterval,
@@ -276,6 +285,25 @@ function assertStructuredAllocationPlanningAttemptNotPatched(patch, label) {
   );
   error.code = 'STRUCTURED_ALLOCATION_PLANNING_ATTEMPT_IMMUTABLE';
   throw error;
+}
+
+function ticketCancellationCommittedError(ticket, label = 'Ticket') {
+  const id = ticket && ticket.id ? ticket.id : 'unknown';
+  const error = new StateTransitionConflictError(
+    'ticket',
+    id,
+    ['Ticket without committed cancellation authority'],
+    ticket || { status: 'missing' }
+  );
+  error.message = `${label} ${id} has a committed cancellation authority`;
+  error.code = 'TICKET_CANCELLATION_ALREADY_COMMITTED';
+  return error;
+}
+
+function assertTicketCancellationNotCommitted(ticket, label = 'Ticket') {
+  if (ticket && ticket.cancellationAuthority) {
+    throw ticketCancellationCommittedError(ticket, label);
+  }
 }
 
 function assertRunDeclaredCompletionAuthority(run, label) {
@@ -784,6 +812,11 @@ function ticketFromRow(row) {
       ticket.structuredAllocationPlanningAttempt,
       { expectedTicketId: id }
     );
+  }
+  if (Object.prototype.hasOwnProperty.call(row, 'cancellation_authority')) {
+    ticket.cancellationAuthority = row.cancellation_authority === null
+      ? null
+      : normalizeCancellationAuthority(row.cancellation_authority, { expectedTicketId: id });
   }
 
   return ticket;
@@ -2504,6 +2537,7 @@ class PostgresRuntimeStore {
         throw error;
       }
       const ticket = ticketFromRow(ticketResult.rows[0]);
+      assertTicketCancellationNotCommitted(ticket, 'Structured plan admission Ticket');
       const authority = ticket.structuredAllocationAuthority || null;
       if (!authority || !authority.planningAuthoritySnapshot) {
         conflict(`ticket ${id} has no admitted structured planning authority`);
@@ -2885,6 +2919,7 @@ class PostgresRuntimeStore {
         throw error;
       }
       const ticket = ticketFromRow(ticketResult.rows[0]);
+      assertTicketCancellationNotCommitted(ticket, 'Structured leaf admission Ticket');
 
       // Re-derived from the LOCKED ticket, not from the caller's preflight.
       // Plan admission already re-evaluates both in its own transaction; leaf
@@ -6076,21 +6111,25 @@ class PostgresRuntimeStore {
       runBody
     ];
     const execute = async connection => {
+      const ticketResult = await connection.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [runTicketId]
+      );
+      if (ticketResult.rowCount === 0) {
+        const error = new Error(`ticket ${runTicketId} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      assertTicketCancellationNotCommitted(
+        ticketFromRow(ticketResult.rows[0]),
+        'Run admission Ticket'
+      );
       let authoritativeAttemptId = suppliedAttemptId;
       if (authoritativeAttemptId === null) {
         // `createRun` is retained as a low-level persistence/test seam. Product
         // admission uses createRunsAndStartTicket, but even this seam may no
         // longer create an unbound Run: the store mints a singleton attempt
         // while holding the owning Ticket lock.
-        const ticketResult = await connection.query(
-          `SELECT id FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
-          [runTicketId]
-        );
-        if (ticketResult.rowCount === 0) {
-          const error = new Error(`ticket ${runTicketId} was not found`);
-          error.code = 'POSTGRES_RECORD_NOT_FOUND';
-          throw error;
-        }
         authoritativeAttemptId = (await this._createTicketAttempt(connection, {
           ticketId: runTicketId,
           memberCount: 1,
@@ -6238,6 +6277,7 @@ class PostgresRuntimeStore {
         throw error;
       }
       const ticket = ticketFromRow(ticketResult.rows[0]);
+      assertTicketCancellationNotCommitted(ticket, 'Run admission Ticket');
       if (ticket.status !== 'open') {
         throw new StateTransitionConflictError('ticket', id, ['open'], ticket);
       }
@@ -8846,21 +8886,25 @@ class PostgresRuntimeStore {
     const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
 
     const execute = async connection => {
+      const currentResult = await connection.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (currentResult.rowCount === 0) {
+        const error = new Error(`ticket ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const current = ticketFromRow(currentResult.rows[0]);
+      assertTicketCancellationNotCommitted(current, 'Ticket transition');
       if (Object.prototype.hasOwnProperty.call(bodyPatch, 'objective')) {
-        const currentResult = await connection.query(
-          `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
-          [id]
-        );
-        if (currentResult.rowCount > 0) {
-          const current = ticketFromRow(currentResult.rows[0]);
-          if (current.structuredAllocationAuthority &&
-              bodyPatch.objective !== current.objective) {
-            const error = new Error(
-              'Ticket objective cannot change after structured-allocation authority admission'
-            );
-            error.code = 'STRUCTURED_ALLOCATION_OBJECTIVE_IMMUTABLE';
-            throw error;
-          }
+        if (current.structuredAllocationAuthority &&
+            bodyPatch.objective !== current.objective) {
+          const error = new Error(
+            'Ticket objective cannot change after structured-allocation authority admission'
+          );
+          error.code = 'STRUCTURED_ALLOCATION_OBJECTIVE_IMMUTABLE';
+          throw error;
         }
       }
       const result = await connection.query(
@@ -9326,6 +9370,17 @@ class PostgresRuntimeStore {
         throw error;
       }
       const ticket = ticketFromRow(ticketResult.rows[0]);
+      if (ticket.cancellationAuthority) {
+        return {
+          ticket,
+          attempt,
+          event: null,
+          previousStatus: ticket.status,
+          changed: false,
+          cancellationAuthority: ticket.cancellationAuthority,
+          aggregateDecision: null
+        };
+      }
       if (batchRuns.length !== attempt.memberCount ||
           batchRuns.some(member => member.ticketId !== attempt.ticketId ||
             member.ticketAttemptId !== attempt.id)) {
@@ -9519,6 +9574,291 @@ class PostgresRuntimeStore {
     return client ? execute(client) : this.withTransaction(execute);
   }
 
+  // Ticket-owned cancellation authority. This deliberately does not write the
+  // historical Ticket status column: migration 001/009 still enforce the old
+  // six-state vocabulary, and materialized `canceled` belongs to the atomic
+  // five-state cutover. The durable authority and lifecycle projection are
+  // nevertheless committed/reported together here.
+  async cancelTicket({
+    ticketId,
+    requestedBy,
+    reason,
+    authoritySource = 'operator',
+    eventType = 'ticket.cancellation_committed',
+    eventPayload = {}
+  } = {}, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const requestedAuthority = buildCancellationAuthority({
+      ticketId: id,
+      authoritySource,
+      requestedBy,
+      reason,
+      committedAt: new Date().toISOString()
+    });
+    const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
+    const type = requiredString(eventType, 'eventType');
+
+    const refusal = (code, message, current = null) => {
+      const error = new Error(message);
+      error.code = code;
+      error.current = current;
+      throw error;
+    };
+
+    const execute = async connection => {
+      // Route without a lock, then acquire the proven Ticket-level classes in
+      // order: allocation plan -> attempt members -> attempt -> Ticket.
+      // Revalidation after the locks prevents a stale route from choosing the
+      // wrong attempt while still avoiding the rejected Ticket-first order.
+      const routeTicketResult = await connection.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1`,
+        [id]
+      );
+      if (routeTicketResult.rowCount === 0) {
+        const error = new Error(`ticket ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const routedTicket = ticketFromRow(routeTicketResult.rows[0]);
+      const routeAttemptResult = await connection.query(
+        `SELECT id FROM ${this.table('ticket_attempts')}
+         WHERE ticket_id = $1 ORDER BY ordinal DESC LIMIT 1`,
+        [id]
+      );
+      const routedAttemptId = routeAttemptResult.rowCount === 0
+        ? null
+        : positiveSafeInteger(routeAttemptResult.rows[0].id, 'ticketAttempt.id');
+
+      let routedPlanId = null;
+      if (routedAttemptId !== null) {
+        const routeRuns = await connection.query(
+          `SELECT NULLIF(body->>'allocationPlanId', '') AS allocation_plan_id
+           FROM ${this.table('runs')}
+           WHERE ticket_attempt_id = $1 ORDER BY id`,
+          [routedAttemptId]
+        );
+        const references = [...new Set(routeRuns.rows
+          .map(row => row.allocation_plan_id)
+          .filter(value => value !== null))];
+        if (references.length > 1 || (references.length === 1 &&
+            !/^[1-9]\d*$/.test(references[0]))) {
+          refusal(
+            'TICKET_CANCELLATION_V2_AUTHORITY_INVALID',
+            `ticket ${id} has malformed v2 allocation-plan routing`
+          );
+        }
+        routedPlanId = references.length === 1
+          ? positiveSafeInteger(references[0], 'run.allocationPlanId')
+          : null;
+      }
+
+      const leafPlan = routedPlanId === null
+        ? null
+        : await this._findLockedPlannerAdmittedPlan(connection, id, {
+          allocationPlanId: routedPlanId
+        });
+      if (routedPlanId !== null && leafPlan === null) {
+        refusal(
+          'TICKET_CANCELLATION_V2_AUTHORITY_UNAVAILABLE',
+          `ticket ${id} has no valid admitted v2 allocation plan for its current attempt`
+        );
+      }
+
+      const batchResult = routedAttemptId === null
+        ? { rows: [] }
+        : await connection.query(
+          `SELECT * FROM ${this.table('runs')}
+           WHERE ticket_attempt_id = $1 ORDER BY id FOR UPDATE`,
+          [routedAttemptId]
+        );
+      const batchRuns = batchResult.rows.map(runFromRow);
+      const currentAttempt = await this.getCurrentTicketAttempt(id, {
+        client: connection,
+        forUpdate: true
+      });
+      if ((currentAttempt ? currentAttempt.id : null) !== routedAttemptId) {
+        refusal(
+          'TICKET_CANCELLATION_STALE_ATTEMPT',
+          `ticket ${id} current attempt changed while cancellation was being admitted`,
+          currentAttempt
+        );
+      }
+
+      const ticketResult = await connection.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (ticketResult.rowCount === 0) {
+        const error = new Error(`ticket ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const ticket = ticketFromRow(ticketResult.rows[0]);
+
+      if (ticket.cancellationAuthority) {
+        if (!cancellationAuthoritySemanticallyEqual(
+          ticket.cancellationAuthority,
+          requestedAuthority
+        )) {
+          refusal(
+            'TICKET_CANCELLATION_AUTHORITY_CONFLICT',
+            `ticket ${id} already has a different cancellation authority`,
+            ticket.cancellationAuthority
+          );
+        }
+        return {
+          ticket,
+          attempt: currentAttempt,
+          cancellationAuthority: ticket.cancellationAuthority,
+          lifecycle: projectTicketLifecycle({
+            cancellationAuthority: ticket.cancellationAuthority,
+            currentAttempt
+          }),
+          event: null,
+          changed: false,
+          idempotent: true,
+          completionAuthority: null
+        };
+      }
+      if (ticket.status === 'completed') {
+        refusal(
+          'TICKET_CANCELLATION_COMPLETED',
+          `ticket ${id} is already completed`,
+          ticket
+        );
+      }
+      // Do not reinterpret historical `closed` as a new cancellation decision.
+      if (ticket.status === 'closed') {
+        refusal(
+          'TICKET_CANCELLATION_HISTORICAL_CLOSED',
+          `ticket ${id} has historical closed status and requires migration classification`,
+          ticket
+        );
+      }
+      if (batchRuns.length > 0 &&
+          (batchRuns.length !== currentAttempt.memberCount ||
+           batchRuns.some(member => member.ticketId !== id ||
+             member.ticketAttemptId !== currentAttempt.id))) {
+        refusal(
+          'TICKET_CANCELLATION_ATTEMPT_MEMBERSHIP_INVALID',
+          `ticket attempt ${currentAttempt.id} membership is incomplete or contradictory`,
+          currentAttempt
+        );
+      }
+
+      const decisionResult = batchRuns.length === 0
+        ? { rows: [] }
+        : await connection.query(
+          `SELECT member.id AS run_id, consequence.consequence
+           FROM ${this.table('runs')} AS member
+           LEFT JOIN ${this.table('run_consequences')} AS consequence
+             ON consequence.run_id = member.id
+           WHERE member.id = ANY($1::bigint[])`,
+          [batchRuns.map(run => run.id)]
+        );
+      const completionDecisionByRunId = new Map(decisionResult.rows.map(row => {
+        const decision = row.consequence && row.consequence.completionDecision
+          ? normalizeCompletionDecision(row.consequence.completionDecision)
+          : null;
+        return [positiveSafeInteger(row.run_id, 'runConsequence.runId'), decision];
+      }));
+
+      let v2Authority = null;
+      if (leafPlan) {
+        v2Authority = evaluateV2CompletionAuthority({
+          leafPlan,
+          memberRuns: batchRuns,
+          decisionsByRunId: completionDecisionByRunId,
+          persistedAggregateDecision: leafPlan.aggregateDecision
+        });
+        if (v2Authority.persistedState === 'terminal_conflict') {
+          refusal(
+            'TICKET_CANCELLATION_V2_AUTHORITY_CONFLICT',
+            `ticket ${id} has a terminal v2 aggregate conflicting with current evidence`,
+            v2Authority
+          );
+        }
+        if (v2Authority.completionInevitable) {
+          refusal(
+            'TICKET_CANCELLATION_COMPLETION_INEVITABLE',
+            `ticket ${id} completion is already established by v2 evidence`,
+            v2Authority
+          );
+        }
+      }
+
+      let attemptAuthority = null;
+      if (currentAttempt) {
+        attemptAuthority = evaluateAttemptCompletionAuthority(
+          batchRuns,
+          completionDecisionByRunId
+        );
+        if (attemptAuthority && attemptAuthority.candidateDisposition === 'completed') {
+          refusal(
+            'TICKET_CANCELLATION_COMPLETION_INEVITABLE',
+            `ticket ${id} completion is already established by its current attempt`,
+            attemptAuthority
+          );
+        }
+      }
+
+      const clock = await connection.query('SELECT clock_timestamp() AS ts');
+      const authority = buildCancellationAuthority({
+        ticketId: id,
+        authoritySource: requestedAuthority.authoritySource,
+        requestedBy: requestedAuthority.requestedBy,
+        reason: requestedAuthority.reason,
+        committedAt: clock.rows[0].ts
+      });
+      const updated = await connection.query(
+        `UPDATE ${this.table('tickets')}
+         SET cancellation_authority = $2::jsonb,
+             revision = revision + 1,
+             updated_at = clock_timestamp()
+         WHERE id = $1 AND cancellation_authority IS NULL
+         RETURNING *`,
+        [id, authority]
+      );
+      if (updated.rowCount === 0) {
+        throw new StateTransitionConflictError(
+          'ticket',
+          id,
+          ['without committed cancellation authority'],
+          ticket
+        );
+      }
+      const committedTicket = ticketFromRow(updated.rows[0]);
+      const event = await this._appendEvent(connection, {
+        type,
+        ticketId: id,
+        payload: {
+          ...callerPayload,
+          cancellationAuthority: authority,
+          status: committedTicket.status,
+          revision: committedTicket.revision,
+          committedAt: authority.committedAt
+        }
+      });
+      return {
+        ticket: committedTicket,
+        attempt: currentAttempt,
+        cancellationAuthority: authority,
+        lifecycle: projectTicketLifecycle({
+          cancellationAuthority: authority,
+          currentAttempt
+        }),
+        event,
+        changed: true,
+        idempotent: false,
+        completionAuthority: {
+          attempt: attemptAuthority,
+          v2: v2Authority
+        }
+      };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
   async reopenTicket({ ticketId, rerunMode = null }, { client = null } = {}) {
     const id = positiveSafeInteger(ticketId, 'ticketId');
     const execute = async connection => {
@@ -9541,6 +9881,7 @@ class PostgresRuntimeStore {
       );
       if (result.rowCount === 0) return null;
       const ticket = ticketFromRow(result.rows[0]);
+      assertTicketCancellationNotCommitted(ticket, 'Reopen Ticket');
       if (ticket.triage && ticket.triage.required === true && !ticket.triage.resolvedAt) {
         const error = new Error('Cannot rerun: unresolved ticket-level triage exists on this ticket. Resolve triage first.');
         error.code = 'TICKET_TRIAGE_REQUIRED';

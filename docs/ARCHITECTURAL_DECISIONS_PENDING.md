@@ -8264,6 +8264,65 @@ settlement-vs-structured-leaf-admission, and stale-routing under a
 concurrent `createRetryRun` admission.
 
 
+## T2 Durable Cancellation Authority Substrate (recorded 2026-08-20)
+
+**Status:** Tranche 2 authority substrate proven; materialized `canceled`
+status intentionally deferred to the atomic five-state cutover.
+
+Migration `040_ticket_cancellation_authority.sql` adds a nullable,
+Ticket-owned `tickets.cancellation_authority` JSONB value. PostgreSQL checks
+its exact six-key shape, version, Ticket identity, attribution, reason and
+timestamp semantics; a PL/pgSQL helper parses `committedAt` as `timestamptz` so
+an ISO-shaped impossible date cannot pass. A write-once trigger rejects any
+replacement after first commit. The normalized runtime contract is
+`runtime/ticket-cancellation-authority-contract.js`.
+
+`PostgresRuntimeStore.cancelTicket` is the store-level writer. It routes without
+a lock and then acquires the proven Tranche 1 order
+`allocation_plans -> Run members ORDER BY id -> ticket_attempts -> tickets`,
+revalidates the current attempt, evaluates the shared attempt completion and v2
+completion authorities, and commits the authority plus
+`ticket.cancellation_committed` provenance event atomically. The event is not
+the source of current cancellation state. Exact semantic repeats are
+idempotent; changed authority input, completed Tickets, historical `closed`
+Tickets, malformed/misbound v2 authority and completion-inevitable evidence
+refuse. Existing Run cancellation-shaped evidence does not create Ticket
+cancellation authority.
+
+The frozen lifecycle projector reports `canceled` from the durable authority,
+but `tickets.status` remains in the historical six-state vocabulary because
+`canceled` is not accepted by migrations 001/009. No historical `closed` row is
+reinterpreted. Later attempt admission, reopen, generic Ticket transitions and
+settlement cannot bypass an already committed authority.
+
+The PostgreSQL shape rule is NULL-safe and exact-key: a PL/pgSQL CHECK helper
+returns false for missing/null required fields, wrong JSON scalar types, wrong
+Ticket binding, unsupported versions and unsupported extra fields. Direct SQL
+falsification covers every such malformed shape, one valid first write and a
+subsequent rewrite refusal.
+
+Focused falsification: `scripts/t2-cancellation-authority-postgres-test.js`
+passes 76 assertions, including direct SQL impossible-timestamp rejection,
+completion/cancellation serialization, the
+pre-existing-completion race, forced cancellation-first and completion-first
+orderings, an actual not-yet-inevitable writer race, stale v2 materialization,
+malformed v2 refusal, idempotence and PostgreSQL rewrite refusal. The pure
+authority contract passes 10 assertions.
+
+The race results are not collapsed into "one terminal authority." If
+completion is already durable before the writers race, cancellation refuses
+regardless of scheduling and settlement retains `COMPLETED`. If completion is
+not yet inevitable at the serialization point, cancellation-first commits the
+authority and blocks later settlement, while completion-first commits
+`COMPLETED` and cancellation refuses. Every concurrent Promise result is
+inspected and paired with its exact cause.
+
+This is the durable cancellation authority substrate only. Public cancellation
+activation and active-Run interruption/recovery integration remain prerequisites
+before cancellation is exposed as final product behavior; neither is
+implemented here.
+
+
 ---
 
 *Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and closed 2026-08-03 (one shared authority, both consumers). Governed Lifecycle Transport-Count Flake recorded and closed 2026-08-03 (fixture arrival counter conflated with canonical ordinal). Intermittent Guard Mutation Limit recorded and closed 2026-08-03 (deterministic correlation contract). Fixture Crash Boundary Arrival Counter recorded and closed 2026-08-03. Parent-Fixture Hash Handshake recorded and closed as NOT REQUIRED 2026-08-03. Concurrent-Duplicate Misclassification regression recorded and closed 2026-08-03 by claim-epoch classification. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
