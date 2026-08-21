@@ -8323,6 +8323,62 @@ before cancellation is exposed as final product behavior; neither is
 implemented here.
 
 
+## T2 Tranche 3 Five-State Cutover Source Preflight (recorded 2026-08-20)
+
+**Status:** source contract reconciled; operational row preflight remains
+required before any migration 041 implementation or execution.
+
+The legacy close writer was traced from `PATCH /api/tickets/:id/status` through
+`transitionTicketState`/`transitionTicket`: the Ticket row and `ticket.updated`
+event commit `previousStatus`, status, revision, `changedBy`, and `changedAt`
+together. The separate `ticket:status_change` diagnostic log records explicit
+`fromStatus`/`toStatus`, actor and timestamp after that transaction. Active
+Runs are then interrupted in separate operations using the exact reason
+`<changedBy> closed ticket #<ticketId>`, with Run terminal events and logs. This
+sequence is reconstructably ordered but not one transaction and carries no
+close event id into interruption evidence.
+
+The earlier CLOSED classifier was partially wrong because it used legacy
+`previousStatus` as semantic authority. The corrected classifier reconstructs
+the frozen lifecycle from all durable authority established immediately before
+`closeAt`, excluding the close operation and its consequences. Thus a completed
+attempt followed by legacy `open` during manual rerun remains PROVEN NOT
+CANCELED. FAILED is demoted first and then follows the ordinary OPEN, BLOCKED,
+IN_PROGRESS, or COMPLETED matrix row; it has no special close semantics.
+`open -> closed` is PROVEN CANCELED only with matching product close evidence
+and no contradiction. `in_progress -> closed` additionally requires every
+active Run's exact closure interruption consequence. Missing or conflicting
+evidence and `blocked -> closed` remain AMBIGUOUS.
+
+The pre-close authority ordering uses attempt admission/settlement timestamps,
+Run terminal/evidence timestamps, blocker/triage creation and resolution
+timestamps, and close event position/timestamp. `aggregateDecision.decidedAt`
+and `allocation_plans.updated_at` describe only the current mutable v2
+projection; they do not preserve prior aggregate values. Reconciliation events
+preserve status/hash/changed-item observations but not a complete prior
+aggregate. Historical v2 completion is therefore reconstructed from immutable
+leaf membership and append-only per-Run evidence as-of close. Any required
+immutable plan/evidence fact that cannot be ordered is AMBIGUOUS.
+
+Historical PROVEN CANCELED authority reconstruction uses durable Ticket id,
+operator identity, close timestamp, and the deterministic source
+`historical_operator_closure`; the reason is a factual migration-owned
+statement, never a fabricated user reason. Missing semantic facts abort the
+transaction.
+
+The deterministic migration matrix includes completed-plus-intermediate-open,
+all FAILED demotion variants, normal OPEN close, complete versus partial
+IN_PROGRESS interruption, BLOCKED close, completed close, and post-close
+evidence exclusion.
+
+The eventual release requires stopping all old readers and writers before the
+zero-ambiguity read-only preflight and atomic five-state migration, then
+deploying the five-state runtime before reopening traffic. No mixed old/new
+runtime/database interval is permitted. Manual rerun still requires an atomic
+new-attempt writer; blocker rows without reconstructable current authority must
+refuse rather than absorb blocker supersession work.
+
+
 ---
 
 *Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and closed 2026-08-03 (one shared authority, both consumers). Governed Lifecycle Transport-Count Flake recorded and closed 2026-08-03 (fixture arrival counter conflated with canonical ordinal). Intermittent Guard Mutation Limit recorded and closed 2026-08-03 (deterministic correlation contract). Fixture Crash Boundary Arrival Counter recorded and closed 2026-08-03. Parent-Fixture Hash Handshake recorded and closed as NOT REQUIRED 2026-08-03. Concurrent-Duplicate Misclassification regression recorded and closed 2026-08-03 by claim-epoch classification. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
