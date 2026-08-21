@@ -8379,6 +8379,33 @@ new-attempt writer; blocker rows without reconstructable current authority must
 refuse rather than absorb blocker supersession work.
 
 
+## T2 Tranche 4 Zero-Mutation Historical Classifier (recorded 2026-08-20)
+
+**Status:** read-only five-state classifier proven in isolated PostgreSQL
+schemas; operational database execution remains separately gated.
+
+`runtime/ticket-history-classifier-contract.js` is pure and authority-first.
+It reconstructs durable lifecycle authority as-of `closeAt`, demotes FAILED
+before classification, treats legacy status as consistency evidence only, and
+derives CLOSED outcomes from canonical pre-close lifecycle plus qualifying
+close/interruption evidence. Historical v2 completion uses immutable leaf
+membership and append-only per-Run evidence; mutable aggregate rows and
+`updated_at` are not treated as historical versions.
+
+`scripts/t2-five-state-classifier.js` gathers raw facts with SELECTs inside
+`BEGIN READ ONLY`, verifies `transaction_read_only=on` and an optional expected
+database identity, rolls back, and emits deterministic JSON with a report hash.
+It has no DATABASE_URL fallback and does not invoke reconciliation or mutation
+helpers. The isolated PostgreSQL proof snapshots all classifier-read tables,
+runs the command twice, and verifies byte-identical reports and no logical
+mutation. The pure matrix passes 28 assertions; the PostgreSQL proof passes 10
+assertions per run across three independent runs.
+
+Migration 041 is absent. The next step is a separately authorized,
+zero-ambiguity operational read-only enumeration; no migration or lifecycle
+mutation is included in this tranche.
+
+
 ---
 
 *Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and closed 2026-08-03 (one shared authority, both consumers). Governed Lifecycle Transport-Count Flake recorded and closed 2026-08-03 (fixture arrival counter conflated with canonical ordinal). Intermittent Guard Mutation Limit recorded and closed 2026-08-03 (deterministic correlation contract). Fixture Crash Boundary Arrival Counter recorded and closed 2026-08-03. Parent-Fixture Hash Handshake recorded and closed as NOT REQUIRED 2026-08-03. Concurrent-Duplicate Misclassification regression recorded and closed 2026-08-03 by claim-epoch classification. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
