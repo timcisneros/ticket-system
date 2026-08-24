@@ -8482,6 +8482,45 @@ raise is a no-op on COMPLETED, stale-completion never resurrects, and current-
 attempt exhaustion still blocks. 68 assertions pass on isolated PostgreSQL 17;
 the ordinal-242 owner passes unchanged.
 
+## T2 Migration-041 Classifier Fact-Assembly Parity — RESOLVED (recorded and corrected 2026-08-24)
+
+**Status:** RESOLVED in the working tree; operational cutover re-attempt
+requires a fresh release checkpoint plus a fresh amended-classifier barrier.
+
+The first authorized operational 041 execution refused safely inside its
+migration transaction and rolled back: the hook's classification of ticket 3
+returned `integrity_contradiction`
+(`HISTORY_CLASSIFIER_INVALID_INPUT`) on a fact set the accepted standalone
+double-run preflight had classified clean (5/5 migratable, byte-identical
+reports). No SQL body, ledger write, or data change occurred; the database
+remains at migration-040 semantics.
+
+Root cause: `classifyTicketHistory` is one semantic authority but its callers
+assembled persistence rows with PRIVATE mappers. The hook mapped diagnostic-log
+identity from raw `ticket_id` while selecting rows by
+`ticket_id IS NULL AND context_ticket_id = :id`, feeding `log.ticketId: null`
+into the contract's `positiveId(body.ticketId || log.ticketId)` for exactly
+the context-only logs it selected because of that context. Source review found
+further latent drift (run/plan bodies nested instead of spread — silently
+disabling v2 reconstruction — missing `run.ticketId`/`plan.ticketId`,
+dropped context_run_id resolution, synthesized run `updatedAt`). The
+double-run barrier could not see any of this because both runs used the
+standalone tool's own mapper.
+
+**Correction (minimum):** `runtime/ticket-history-classifier-facts.js` is now
+the single pure persistence-row → classifier-fact boundary (identity fallback:
+direct column wins; context columns resolve only when direct is NULL; global
+rows attach to nobody), required by BOTH `scripts/t2-five-state-classifier.js`
+and the 041 hook; the hook's SELECTs were widened to feed the same fields.
+Lifecycle semantics unchanged; the shared module is bound into migration 041's
+Q1 source-digest closure.
+
+**Regression evidence:** `scripts/t2-five-state-fact-parity-postgres-test.js`
+exercises BOTH real seams against one legacy-040 schema (context-only log,
+direct log, conflicting identity, global noise): standalone child-process
+report and real-hook projection must agree per Ticket; source assertions
+forbid private fact mappers from reappearing in either entry point.
+
 ---
 
 *Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and closed 2026-08-03 (one shared authority, both consumers). Governed Lifecycle Transport-Count Flake recorded and closed 2026-08-03 (fixture arrival counter conflated with canonical ordinal). Intermittent Guard Mutation Limit recorded and closed 2026-08-03 (deterministic correlation contract). Fixture Crash Boundary Arrival Counter recorded and closed 2026-08-03. Parent-Fixture Hash Handshake recorded and closed as NOT REQUIRED 2026-08-03. Concurrent-Duplicate Misclassification regression recorded and closed 2026-08-03 by claim-epoch classification. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*

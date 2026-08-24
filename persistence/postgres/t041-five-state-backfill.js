@@ -30,6 +30,16 @@ const {
   classifyTicketHistory
 } = require('../../runtime/ticket-history-classifier-contract');
 const {
+  ticketFact,
+  attemptFact,
+  runFact,
+  consequenceFact,
+  planFact,
+  eventFact,
+  logFact,
+  factsForTicket
+} = require('../../runtime/ticket-history-classifier-facts');
+const {
   normalizeCancellationAuthority
 } = require('../../runtime/ticket-cancellation-authority-contract');
 
@@ -64,6 +74,7 @@ function sourceDigests() {
   // semantic source can silently redefine what "running 041" means.
   const files = [
     path.join(__dirname, 't041-five-state-backfill.js'),
+    path.join(ROOT, 'runtime', 'ticket-history-classifier-facts.js'),
     path.join(ROOT, 'runtime', 'allocation-plan-contract.js'),
     path.join(ROOT, 'runtime', 'authority-paths.js'),
     path.join(ROOT, 'runtime', 'completion-decision-contract.js'),
@@ -102,16 +113,20 @@ async function inspectTicketFiveStateBackfill(store, { client } = {}) {
     IN SHARE ROW EXCLUSIVE MODE NOWAIT
   `);
 
-  // H2 — locked fact set (mirrors scripts/t2-five-state-classifier.js).
+  // H2 — locked fact set, normalized through the SHARED classifier-fact
+  // boundary so the hook's inputs are byte-equivalent to the standalone
+  // preflight classifier's (operational incident T2-041-1: a private mapper
+  // here fed log.ticketId:null for context-only diagnostic logs and refused
+  // a fact set the preflight had classified clean).
   const table = name => `${store.schema}.${name}`;
   const tickets = (await client.query(
     `SELECT id, status, cancellation_authority, body, created_at, updated_at
      FROM ${table('tickets')} ORDER BY id`)).rows;
   const attempts = (await client.query(
-    `SELECT id, ticket_id, ordinal, member_count, disposition, admitted_at, settled_at
+    `SELECT id, ticket_id, ordinal, member_count, disposition, admitted_at, settled_at, revision
      FROM ${table('ticket_attempts')} ORDER BY ticket_id, ordinal`)).rows;
   const runs = (await client.query(
-    `SELECT id, ticket_id, ticket_attempt_id, status, body, created_at, completed_at
+    `SELECT id, ticket_id, ticket_attempt_id, status, body, created_at, updated_at, completed_at
      FROM ${table('runs')} ORDER BY ticket_id, id`)).rows;
   const consequences = (await client.query(
     `SELECT run_id, ticket_id, consequence, recorded_at
@@ -125,6 +140,15 @@ async function inspectTicketFiveStateBackfill(store, { client } = {}) {
   const logs = (await client.query(
     `SELECT id, ticket_id, run_id, context_ticket_id, context_run_id, type, occurred_at, body
      FROM ${table('diagnostic_logs')} ORDER BY id`)).rows;
+  const facts = {
+    tickets: tickets.map(ticketFact),
+    attempts: attempts.map(attemptFact),
+    runs: runs.map(runFact),
+    consequences: consequences.map(consequenceFact),
+    plans: plans.map(planFact),
+    events: events.map(eventFact),
+    logs: logs.map(logFact)
+  };
 
   // Run-counter baseline: Q5 must not disturb run counters at all; Q8 proves it.
   await client.query(`
@@ -136,9 +160,6 @@ async function inspectTicketFiveStateBackfill(store, { client } = {}) {
     FROM ${table('runtime_status_counts')}
     WHERE entity_type = 'run'
   `);
-
-  const iso = value => new Date(value).toISOString();
-  const ms = value => (value === null || value === undefined ? null : new Date(value).getTime());
 
   // H3/H4 — classify EVERY Ticket; derive the DESIRED post-migration row.
   await client.query(`
@@ -155,63 +176,12 @@ async function inspectTicketFiveStateBackfill(store, { client } = {}) {
 
   for (const ticketRow of tickets) {
     const ticketId = Number(ticketRow.id);
-    const ticketFacts = {
-      id: ticketId,
-      status: ticketRow.status,
-      body: ticketRow.body || {},
-      createdAt: iso(ticketRow.created_at),
-      updatedAt: iso(ticketRow.updated_at),
-      cancellationAuthority: ticketRow.cancellation_authority || null
-    };
+    const owned = factsForTicket(facts, ticketId);
     let result;
     try {
       result = classifyTicketHistory({
-        ticket: ticketFacts,
-        attempts: attempts.filter(row => Number(row.ticket_id) === ticketId).map(row => ({
-          id: Number(row.id),
-          ordinal: Number(row.ordinal),
-          memberCount: Number(row.member_count),
-          disposition: row.disposition,
-          admittedAt: ms(row.admitted_at),
-          settledAt: ms(row.settled_at)
-        })),
-        runs: runs.filter(row => Number(row.ticket_id) === ticketId).map(row => ({
-          id: Number(row.id),
-          ticketAttemptId: Number(row.ticket_attempt_id),
-          status: row.status,
-          body: row.body || {},
-          createdAt: iso(row.created_at),
-          completedAt: row.completed_at ? iso(row.completed_at) : null,
-          updatedAt: row.completed_at ? iso(row.completed_at) : iso(row.created_at)
-        })),
-        consequences: consequences.filter(row => Number(row.ticket_id) === ticketId).map(row => ({
-          runId: Number(row.run_id),
-          recordedAt: ms(row.recorded_at),
-          consequence: row.consequence || {}
-        })),
-        plans: plans.filter(row => Number(row.ticket_id) === ticketId).map(row => ({
-          id: Number(row.id),
-          status: row.status,
-          body: row.body || {},
-          createdAt: iso(row.created_at)
-        })),
-        events: events.filter(row => Number(row.ticket_id) === ticketId).map(row => ({
-          id: String(row.id),
-          position: Number(row.position),
-          type: row.type,
-          ts: iso(row.ts),
-          payload: row.payload || {},
-          ticketId: Number(row.ticket_id),
-          runId: row.run_id === null ? null : Number(row.run_id)
-        })),
-        logs: logs.filter(row => Number(row.ticket_id) === ticketId ||
-          Number(row.context_ticket_id) === ticketId).map(row => ({
-          id: String(row.id),
-          ticketId: row.ticket_id === null ? null : Number(row.ticket_id),
-          type: row.type,
-          timestamp: row.occurred_at ? iso(row.occurred_at) : null,
-          body: row.body || {}
-        }))
+        ...owned,
+        ticket: owned.ticket
       });
     } catch (error) {
       fail(`ticket ${ticketId} classification threw: ${error.code || ''} ${error.message}`);

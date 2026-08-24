@@ -102,6 +102,7 @@ const TESTS = Object.freeze([
   { file: "t2-five-state-classifier-postgres-test.js", status: "required" },
   { file: "t2-tranche5-store-postgres-test.js", status: "required" },
   { file: "t2-tranche5-migration-postgres-test.js", status: "required" },
+  { file: "t2-five-state-fact-parity-postgres-test.js", status: "required" },
   { file: "action-contract-streak-test.js", status: "required" },
   { file: "agent-behavior-simulation-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "agent-handoff-queue-protocol-test.js", status: "orphaned", reason: "cutover-orphan" },

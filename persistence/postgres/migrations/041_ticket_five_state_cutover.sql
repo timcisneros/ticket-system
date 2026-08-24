@@ -15,7 +15,7 @@
 
 -- ── Q1: source-identity binding ────────────────────────────────────────────
 -- The ledger pins THIS file's bytes; these literals pin the FULL file-level
--- relative-require closure of the hook's semantic roots (13 modules — see
+-- relative-require closure of the hook's semantic roots (14 modules — see
 -- scripts/t041-semantic-closure-test.js, which walks require edges and fails
 -- on any divergence). Over-binding symbol-inert siblings is deliberate: it
 -- can only widen drift detection. Drift in any bound source after shipping
@@ -29,7 +29,8 @@ BEGIN
     FROM t041_identity AS identity
    WHERE NOT EXISTS (
      SELECT 1 FROM (VALUES
-       ('t041-five-state-backfill.js', 'b937a893b8cf3f61f218cc2e0e9067012962c682112a8e1d783d87868d83e5db'),
+       ('t041-five-state-backfill.js', 'ccf46e183962d508340207f4dd814d23bc0a1be5b5df65f0e9311ae07429fb70'),
+       ('ticket-history-classifier-facts.js', 'dd76da504e5c6825f5ddf0dc2e333d2518e77a28e19c3e88ef23f134b9052649'),
        ('allocation-plan-contract.js', 'a0c56f5944f179d5aff57bc873f8f20cc5aa2fce854d8731ca69896f41e948ba'),
        ('authority-paths.js', '087ea0983b6138bdf6681f2f239cc52879458d5a0bb01096b0c9b02228420bcb'),
        ('completion-decision-contract.js', '5877d9c148f51c2c6e9d76ba8442237f700adce1d83a71552e7ae6dc9da88c89'),
@@ -49,7 +50,7 @@ BEGIN
   IF mismatch IS NOT NULL THEN
     RAISE EXCEPTION '041 source identity drift: %', mismatch;
   END IF;
-  IF (SELECT COUNT(*) FROM t041_identity) <> 13 THEN
+  IF (SELECT COUNT(*) FROM t041_identity) <> 14 THEN
     RAISE EXCEPTION '041 identity table incomplete';
   END IF;
 END;

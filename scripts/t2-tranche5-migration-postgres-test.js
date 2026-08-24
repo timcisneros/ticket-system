@@ -136,7 +136,7 @@ function makeFixtureApi(pool, schema) {
                  started_at = $2::timestamptz,
                  completed_at = $3::timestamptz,
                  current_phase = 'terminalization',
-                 updated_at = clock_timestamp()
+                 updated_at = $3::timestamptz
              WHERE ticket_attempt_id = $1`,
             [attemptId,
               new Date(BASE_T + ordinal * 1000 + 700).toISOString(),

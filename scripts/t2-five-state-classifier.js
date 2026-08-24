@@ -9,6 +9,16 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const { Client } = require('pg');
 const { classifyTicketHistory } = require('../runtime/ticket-history-classifier-contract');
+const {
+  ticketFact,
+  attemptFact,
+  runFact,
+  consequenceFact,
+  planFact,
+  eventFact,
+  logFact,
+  factsForTicket
+} = require('../runtime/ticket-history-classifier-facts');
 
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 const REPORT_VERSION = 1;
@@ -65,82 +75,6 @@ function parseArguments(argv) {
   return options;
 }
 
-function ticketFact(row) {
-  return {
-    ...((row.body && typeof row.body === 'object' && !Array.isArray(row.body)) ? row.body : {}),
-    id: Number(row.id),
-    status: row.status,
-    cancellationAuthority: row.cancellation_authority,
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString()
-  };
-}
-
-function attemptFact(row) {
-  return {
-    id: Number(row.id),
-    ticketId: Number(row.ticket_id),
-    ordinal: Number(row.ordinal),
-    memberCount: Number(row.member_count),
-    disposition: row.disposition,
-    admittedAt: row.admitted_at.toISOString(),
-    settledAt: row.settled_at ? row.settled_at.toISOString() : null,
-    revision: Number(row.revision)
-  };
-}
-
-function runFact(row) {
-  return {
-    ...((row.body && typeof row.body === 'object' && !Array.isArray(row.body)) ? row.body : {}),
-    id: Number(row.id),
-    ticketId: Number(row.ticket_id),
-    ticketAttemptId: Number(row.ticket_attempt_id),
-    status: row.status,
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
-    completedAt: row.completed_at ? row.completed_at.toISOString() : null
-  };
-}
-
-function eventFact(row) {
-  return {
-    id: row.id,
-    position: Number(row.position),
-    ticketId: row.ticket_id === null ? null : Number(row.ticket_id),
-    runId: row.run_id === null ? null : Number(row.run_id),
-    type: row.type,
-    ts: row.ts.toISOString(),
-    payload: row.payload
-  };
-}
-
-function logFact(row) {
-  return {
-    id: Number(row.id),
-    ticketId: row.ticket_id === null
-      ? (row.context_ticket_id === null ? null : Number(row.context_ticket_id))
-      : Number(row.ticket_id),
-    runId: row.run_id === null
-      ? (row.context_run_id === null ? null : Number(row.context_run_id))
-      : Number(row.run_id),
-    type: row.type,
-    timestamp: row.occurred_at.toISOString(),
-    body: row.body
-  };
-}
-
-function planFact(row) {
-  return {
-    ...((row.body && typeof row.body === 'object' && !Array.isArray(row.body)) ? row.body : {}),
-    id: Number(row.id),
-    ticketId: Number(row.ticket_id),
-    status: row.status,
-    revision: Number(row.revision),
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString()
-  };
-}
-
 async function readFacts(client, schema) {
   const table = name => `"${schema}"."${name}"`;
   const tickets = await client.query(
@@ -168,12 +102,7 @@ async function readFacts(client, schema) {
     tickets: tickets.rows.map(ticketFact),
     attempts: attempts.rows.map(attemptFact),
     runs: runs.rows.map(runFact),
-    consequences: consequences.rows.map(row => ({
-      runId: Number(row.run_id),
-      ticketId: Number(row.ticket_id),
-      recordedAt: row.recorded_at.toISOString(),
-      consequence: row.consequence
-    })),
+    consequences: consequences.rows.map(consequenceFact),
     plans: plans.rows.map(planFact),
     events: events.rows.map(eventFact),
     logs: logs.rows.map(logFact)
@@ -182,13 +111,8 @@ async function readFacts(client, schema) {
 
 function buildReport(facts) {
   const tickets = facts.tickets.map(ticket => classifyTicketHistory({
-    ticket,
-    attempts: facts.attempts.filter(attempt => attempt.ticketId === ticket.id),
-    runs: facts.runs.filter(run => run.ticketId === ticket.id),
-    consequences: facts.consequences.filter(consequence => consequence.ticketId === ticket.id),
-    plans: facts.plans.filter(plan => plan.ticketId === ticket.id),
-    events: facts.events.filter(event => event.ticketId === ticket.id),
-    logs: facts.logs.filter(log => log.ticketId === ticket.id)
+    ...factsForTicket(facts, ticket.id),
+    ticket
   }));
   const summary = {
     total: tickets.length,

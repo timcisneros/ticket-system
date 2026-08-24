@@ -25,6 +25,9 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   't2-five-state-classifier-postgres-test.js',
   't2-tranche5-store-postgres-test.js',
   't2-tranche5-migration-postgres-test.js',
+  // T2 — preflight-classifier vs migration-hook fact-assembly parity
+  // (operational incident T2-041-1). Exercises BOTH real seams.
+  't2-five-state-fact-parity-postgres-test.js',
   't2-tranche5-release-admission-server-test.js',
   't2-tranche5-rerun-lock-order-test.js',
   't041-semantic-closure-test.js',
