@@ -12,6 +12,22 @@ const ROOT = path.resolve(__dirname, '..');
 
 const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'bounded-worker-pool-test.js',
+  // ── T2 Ticket lifecycle / attempt authority (Tranche 1..5) ──────────────
+  't2-lifecycle-contract-test.js',
+  't2-attempt-completion-contract-test.js',
+  't2-v2-completion-authority-contract-test.js',
+  'ticket-cancellation-authority-contract-test.js',
+  't2-five-state-classifier-contract-test.js',
+  't2-tranche5-blocking-authority-test.js',
+  't2-lock-protocol-postgres-test.js',
+  't2-lineage-closure-postgres-test.js',
+  't2-cancellation-authority-postgres-test.js',
+  't2-five-state-classifier-postgres-test.js',
+  't2-tranche5-store-postgres-test.js',
+  't2-tranche5-migration-postgres-test.js',
+  't2-tranche5-release-admission-server-test.js',
+  't2-tranche5-rerun-lock-order-test.js',
+  't041-semantic-closure-test.js',
   'business-scenario-contracts-test.js',
   'dev-environment-test.js',
   'rotate-session-secret-test.js',

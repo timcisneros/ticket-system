@@ -1699,12 +1699,20 @@ async function main() {
       // from a count is the strongest possible evidence it is not authority,
       // so it is allowed here by name rather than by a loosened rule.
       const EXCLUSION_RECORD = path.join('runtime', 'execution-semantics.js');
+      // SECOND PERMITTED APPEARANCE, and it is also the opposite of live
+      // authority: the T2 HISTORICAL classifier reads `run:interrupted` logs
+      // only when reconstructing pre-close interruption proof for legacy
+      // CLOSED rows — read-only history evidence, never a live projection,
+      // recovery, accounting, completion or blocking authority.
+      const HISTORY_CLASSIFIER = path.join(
+        'runtime', 'ticket-history-classifier-contract.js');
       for (const type of bestEffort) {
         const referenced = sources
           .filter(source => source.text.includes(type))
           .map(source => source.relative);
         const unexpected = referenced.filter(relative =>
-          !(relative === EXCLUSION_RECORD && type === 'run:failed'));
+          !(relative === EXCLUSION_RECORD && type === 'run:failed') &&
+          !(relative === HISTORY_CLASSIFIER && type === 'run:interrupted'));
         assertThat(unexpected.length === 0,
           `10 best effort: ${type} is read by no projection, recovery, ` +
           `accounting, completion or blocking authority${unexpected.length

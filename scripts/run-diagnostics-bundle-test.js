@@ -264,7 +264,9 @@ async function main() {
             allowWorkspaceWrites: true, allowParallelRuns: false, allowChildTickets: false, workspaceScope: 'shared'
           },
           workTypeId: null, workTypeSnapshot: null, workContextId: null, workContextSnapshot: null,
-          status: 'failed', createdBy: 'admin', changedBy: 'admin',
+          // T2 Tranche 5: Ticket-level `failed` is retired; the fixture
+          // ticket holds 'open' (the RUN below still fails, unchanged).
+          status: 'open', createdBy: 'admin', changedBy: 'admin',
           changedAt: now(), createdAt: now(), updatedAt: now()
         },
         eventPayload: { source: 'run-diagnostics-bundle-test' }

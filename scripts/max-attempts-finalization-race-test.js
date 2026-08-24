@@ -14,6 +14,18 @@
 //   4. the policy edit must rebase over that status-only change without losing
 //      the policy edit or rewriting either admitted Run's authority snapshots.
 //
+// FROZEN-T2 PARENT PROJECTION FOR THIS FIXTURE. The hermetic plan performs no
+// operation and declares no postconditions, so the bare model `complete` claim
+// cannot establish objective completion: each Run's persisted completion
+// decision is incomplete (OBJECTIVE_INCOMPLETE). Each singleton attempt
+// therefore settles FAILED and, with no canonical blocker seeded (maxAttempts
+// inherits the runtime default of 3), the controlled finalization demotes the
+// parent Ticket to OPEN. The policy edit then closes the ceiling at the exact
+// consumed attempt count (2 of 2), so the canonical policy-writer reprojection
+// composes maxAttemptsExhausted and projects BLOCKED. The race below still
+// pits the policy writer against a real in_progress -> open parent
+// finalization performed by the canonical settlement authority.
+//
 // No provider call is possible: the harness strips inherited provider credentials
 // and the preload replaces global.fetch before the server starts.
 
@@ -22,6 +34,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { withHarness, createAsserter } = require('./postgres-test-harness');
+const { composeBlockingAuthority } = require('../runtime/ticket-blocking-authority-composer');
 
 const ROOT = path.resolve(__dirname, '..');
 const STAMP = Date.now();
@@ -49,6 +62,33 @@ async function waitFor(fn, timeoutMs, label) {
     await sleep(100);
   }
   throw new Error(`timed out waiting for ${label}`);
+}
+
+// The exact composer inputs the canonical settlement transaction reads
+// (_composeBlockingAuthorityLocked shape), composed through the SHARED
+// blocking-authority module. Used to prove WHY this fixture's parent projects
+// OPEN instead of asserting a lifecycle status on faith.
+async function composeFor(store, ticket) {
+  const attempts = (await store.pool.query(
+    `SELECT id, ordinal, member_count, disposition, admitted_at, settled_at
+     FROM ${store.table('ticket_attempts')} WHERE ticket_id = $1 ORDER BY ordinal`,
+    [ticket.id])).rows.map(row => ({
+    id: Number(row.id), ordinal: Number(row.ordinal), memberCount: Number(row.member_count),
+    disposition: row.disposition, admittedAt: row.admitted_at,
+    settledAt: row.settled_at === null ? null : row.settled_at
+  }));
+  const events = (await store.pool.query(
+    `SELECT id, position, type, ts, payload FROM ${store.table('events')}
+     WHERE ticket_id = $1 AND type = ANY($2::text[]) ORDER BY position`,
+    [ticket.id, ['ticket.created', 'ticket.blocked', 'ticket.attempt_admitted',
+      'ticket.execution_policy_updated', 'ticket.triage_resolved']])).rows.map(row => ({
+    id: String(row.id), position: Number(row.position), type: row.type,
+    ts: row.ts, payload: row.payload || {}
+  }));
+  return composeBlockingAuthority({
+    triage: ticket.triage || null, attempts, events,
+    executionPolicy: ticket.executionPolicy || null, closeBoundary: null
+  });
 }
 
 function writeProviderPreload(directory) {
@@ -156,22 +196,34 @@ async function main() {
         const tickets = (await store.listTickets({ limit: 50 })).tickets || [];
         return tickets.find(candidate => candidate.objective === objective) || null;
       }, 10000, 'created Ticket');
-      try {
-        await waitFor(async () => {
-          const current = await store.getTicket(ticket.id);
-          const runs = (await store.listRunsForTicket({ ticketId: ticket.id, limit: 20 })).runs;
-          return current && ['completed', 'failed'].includes(current.status) && runs.length === 1 &&
-            runs[0].status === 'completed' ? { current, runs } : null;
-        }, 60000, 'first Run and parent Ticket to complete');
-      } catch (error) {
+      // Frozen-T2 truth for this fixture: the Run completes its execution loop,
+      // but the bare model `complete` claim with no declared postconditions
+      // mints an incomplete (OBJECTIVE_INCOMPLETE) completion decision, the
+      // singleton attempt settles FAILED, and — no canonical blocker being
+      // seeded — the parent Ticket demotes to OPEN. The wait still demands real
+      // convergence: settlement and projection must both have landed.
+      await waitFor(async () => {
         const current = await store.getTicket(ticket.id);
         const runs = (await store.listRunsForTicket({ ticketId: ticket.id, limit: 20 })).runs;
-        error.message += `; ticket=${current && current.status}; runs=${JSON.stringify(runs.map(run => ({
-          id: run.id,
-          status: run.status,
-          error: run.error
-        })))}; server=${firstServer.output().slice(-3000)}`;
-        throw error;
+        return current && current.status === 'open' && runs.length === 1 &&
+          runs[0].status === 'completed' ? { current, runs } : null;
+      }, 60000, 'first Run to complete and parent Ticket to settle OPEN');
+      {
+        const settled = await store.getCurrentTicketAttempt(ticket.id);
+        check(settled && settled.disposition === 'failed' && settled.settledAt !== null,
+          `phase-1 attempt settles FAILED (${settled && settled.disposition}, ` +
+          `${settled && settled.settledAt ? 'settled' : 'unsettled'})`);
+        const decisions = (await store.pool.query(
+          `SELECT c.consequence->'completionDecision'->>'completionDisposition' AS disp,
+                  c.consequence->'completionDecision'->>'reasonCode' AS reason
+           FROM ${store.table('run_consequences')} c JOIN ${store.table('runs')} r ON r.id = c.run_id
+           WHERE r.ticket_id = $1`, [ticket.id])).rows;
+        check(decisions.length === 1 && decisions[0].disp === 'incomplete' &&
+            decisions[0].reason === 'OBJECTIVE_INCOMPLETE',
+          `the completed Run's decision is incomplete/OBJECTIVE_INCOMPLETE (${JSON.stringify(decisions)})`);
+        const composedPhase1 = await composeFor(store, await store.getTicket(ticket.id));
+        check(composedPhase1.won === null,
+          `OPEN is canonical because this fixture seeds no canonical blocker (got ${composedPhase1.won})`);
       }
       await firstServer.stop();
 
@@ -250,10 +302,28 @@ async function main() {
         'controlled preload finalized the parent after the route read');
       check(edit.statusCode === 200,
         `policy-only edit rebases over Ticket finalization (HTTP ${edit.statusCode}: ${edit.body})`);
-      check(['completed', 'failed'].includes(afterEdit.status),
-        `parent finalization remains authoritative (${afterEdit.status})`);
-      check(afterEdit.revision === beforeEdit.revision + 2,
-        `finalization and policy edit each advance the Ticket revision (${beforeEdit.revision} -> ${afterEdit.revision})`);
+      // Frozen-T2 truth for the post-edit state, in order: (1) the controlled
+      // finalizer settles attempt 2 FAILED and demotes the parent to OPEN —
+      // proven by the attempt assertion below; (2) the policy writer then
+      // stores maxAttempts = 2 against two consumed attempts and its canonical
+      // reprojection composes maxAttemptsExhausted, projecting BLOCKED. The
+      // race property under test is that neither authority was lost: the
+      // finalization landed AND the policy reprojection landed on top of it.
+      check(afterEdit.status === 'blocked',
+        `policy reprojection projects BLOCKED at the closed ceiling (got ${afterEdit.status})`);
+      {
+        const settledSecond = await store.getCurrentTicketAttempt(ticket.id);
+        check(settledSecond && settledSecond.disposition === 'failed' && settledSecond.settledAt !== null,
+          `the controlled finalizer settled attempt 2 FAILED (${settledSecond && settledSecond.disposition}, ` +
+          `${settledSecond && settledSecond.settledAt ? 'settled' : 'unsettled'})`);
+      }
+      // Canonical revision arithmetic: the controlled finalizer contributes one
+      // transition (in_progress -> open), and the policy edit contributes two
+      // (the policy persist plus the maxAttemptsExhausted reprojection to
+      // blocked). Exactly these three must land — a lost or duplicated write
+      // would break the count in either direction.
+      check(afterEdit.revision === beforeEdit.revision + 3,
+        `finalization and policy reprojection each advance the Ticket revision (${beforeEdit.revision} -> ${afterEdit.revision})`);
       check(afterEdit.executionPolicy.maxAttempts === 2,
         `stored Ticket override is 2 (${afterEdit.executionPolicy.maxAttempts})`);
       for (const [field, value] of Object.entries(policyBefore)) {

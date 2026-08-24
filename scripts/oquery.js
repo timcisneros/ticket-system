@@ -53,6 +53,8 @@ function bold(s) { return `\x1b[1m${s}\x1b[0m`; }
 
 function statusTag(s) {
   if (s === 'completed') return green('completed');
+  if (s === 'canceled') return red('canceled');
+  // Run-level failed/interrupted keep their vocabulary (T2 Tranche 5).
   if (s === 'failed') return red('failed');
   return yellow(s || 'unknown');
 }

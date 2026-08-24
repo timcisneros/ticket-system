@@ -120,7 +120,8 @@ async function main() {
           allowWorkspaceWrites: true, allowParallelRuns: false, allowChildTickets: false, workspaceScope: 'shared'
         },
         workTypeId: null, workTypeSnapshot: null, workContextId: null, workContextSnapshot: null,
-        status: 'failed', createdBy: 'admin', changedBy: 'admin',
+        // T2 Tranche 5: Ticket-level `failed` is retired; fixture holds 'open'.
+        status: 'open', createdBy: 'admin', changedBy: 'admin',
         changedAt: now(), createdAt: now(), updatedAt: now()
       },
       eventPayload: { source: 'runtime-limits-ui-test' }

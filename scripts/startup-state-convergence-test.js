@@ -16,7 +16,9 @@
 //
 // WHAT MUST BE TRUE:
 //   * a terminalized COMPLETED run converges its ticket to completed
-//   * a terminalized FAILED run converges to failed and NEVER to completed
+//   * a terminalized FAILED run settles its attempt FAILED and converges the
+//     Ticket through the shared five-state contract: with no canonical blocker
+//     it demotes to OPEN, never to completed (Ticket-level `failed` is retired)
 //   * a terminalized INTERRUPTED run converges to open, starting no new run
 //   * reconciliation reads EXISTING evidence rather than inventing it
 //   * already-consistent state is left alone
@@ -45,6 +47,7 @@
 const { withHarness, createAsserter } = require('./postgres-test-harness');
 const { assertScenariosExecuted } = require('./child-process-settlement');
 const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
+const { composeBlockingAuthority } = require('../runtime/ticket-blocking-authority-composer');
 
 const STAMP = Date.now();
 const assert = createAsserter();
@@ -135,6 +138,33 @@ async function main() {
     const runEvents = async (ticketId, runId) =>
       (await ticketEvents(ticketId)).filter(event => event.runId === runId);
 
+    // The exact composer inputs the canonical settlement transaction reads
+    // (_composeBlockingAuthorityLocked shape), composed through the SHARED
+    // blocking-authority module. Used to prove WHY a fixture's Ticket projects
+    // the way it does instead of asserting a status on faith.
+    const composeFor = async ticket => {
+      const attempts = (await store.pool.query(
+        `SELECT id, ordinal, member_count, disposition, admitted_at, settled_at
+         FROM ${store.table('ticket_attempts')} WHERE ticket_id = $1 ORDER BY ordinal`,
+        [ticket.id])).rows.map(row => ({
+        id: Number(row.id), ordinal: Number(row.ordinal), memberCount: Number(row.member_count),
+        disposition: row.disposition, admittedAt: row.admitted_at,
+        settledAt: row.settled_at === null ? null : row.settled_at
+      }));
+      const events = (await store.pool.query(
+        `SELECT id, position, type, ts, payload FROM ${store.table('events')}
+         WHERE ticket_id = $1 AND type = ANY($2::text[]) ORDER BY position`,
+        [ticket.id, ['ticket.created', 'ticket.blocked', 'ticket.attempt_admitted',
+          'ticket.execution_policy_updated', 'ticket.triage_resolved']])).rows.map(row => ({
+        id: String(row.id), position: Number(row.position), type: row.type,
+        ts: row.ts, payload: row.payload || {}
+      }));
+      return composeBlockingAuthority({
+        triage: ticket.triage || null, attempts, events,
+        executionPolicy: ticket.executionPolicy || null, closeBoundary: null
+      });
+    };
+
     // ── Seed every scenario BEFORE the first boot ───────────────────────────
     // Startup reconciliation runs once, at boot, over whatever it finds. Seeding
     // afterwards would test nothing.
@@ -198,13 +228,27 @@ async function main() {
     assert((await store.getRun(completedRun.id)).status === 'completed',
       '1: convergence did not disturb the run it read');
 
-    // ── 2. Failed run converges to failed, never to completed ───────────────
+    // ── 2. Failed run converges truthfully under the frozen five-state contract ─
+    // A terminalized FAILED run is genuine failure evidence at the RUN layer, but
+    // Ticket-level `failed` is retired (T2). The healer runs the SAME canonical
+    // settlement authority as normal runtime terminalization, so this fixture must
+    // converge exactly as it would have without the crash window: the singleton
+    // attempt settles `failed`, the shared blocking-authority composer finds no
+    // canonical blocker (this fixture seeds no triage/refusal/exhaustion/hold/
+    // prior-blocked attempt), and the Ticket demotes to OPEN — never completed.
     scenariosRun += 1;
     const t2 = await store.getTicket(failedTicket.id);
-    assert(t2.status === 'failed',
-      `2: a stuck ticket behind a terminalized FAILED run converges to failed (got ${t2.status})`);
+    assert(t2.status === 'open',
+      `2: a stuck ticket behind a terminalized FAILED run converges to open when no canonical blocker wins (got ${t2.status})`);
     assert(t2.status !== 'completed',
       '2: a failed run can never produce a completed ticket');
+    const settledAttempt = await store.getCurrentTicketAttempt(failedTicket.id);
+    assert(settledAttempt && settledAttempt.disposition === 'failed' && settledAttempt.settledAt !== null,
+      `2: startup settled the attempt FAILED (got ${settledAttempt && settledAttempt.disposition}, ` +
+      `${settledAttempt && settledAttempt.settledAt ? 'settled' : 'unsettled'})`);
+    const composed2 = await composeFor(t2);
+    assert(composed2.won === null,
+      `2: OPEN is canonical because this fixture seeds no canonical blocker (got ${composed2.won})`);
     assert((await store.getRun(failedRun.id)).status === 'failed',
       '2: the failed run remains failed');
 
@@ -286,19 +330,21 @@ async function main() {
 
     // ── 9. Ticket, run and timeline agree after convergence ─────────────────
     scenariosRun += 1;
-    for (const [label, ticket, run, expected] of [
-      ['completed', completedTicket, completedRun, 'completed'],
-      ['failed', failedTicket, failedRun, 'failed']
+    for (const [label, ticket, run, expectedTicket, expectedRun] of [
+      ['completed', completedTicket, completedRun, 'completed', 'completed'],
+      // Five-state truth: the Run carries the failure; the Ticket demotes to
+      // open because no canonical blocker wins for this fixture.
+      ['failed', failedTicket, failedRun, 'open', 'failed']
     ]) {
       const ticketNow = await store.getTicket(ticket.id);
       const runNow = await store.getRun(run.id);
-      assert(ticketNow.status === expected && runNow.status === expected,
-        `9: ${label} — ticket and run agree on ${expected} (${ticketNow.status} / ${runNow.status})`);
+      assert(ticketNow.status === expectedTicket && runNow.status === expectedRun,
+        `9: ${label} — ticket ${expectedTicket} / run ${expectedRun} after convergence (${ticketNow.status} / ${runNow.status})`);
       const timeline = await ticketEvents(ticket.id);
       assert(timeline.some(event => event.runId === run.id && event.type === 'run.terminalized'),
         `9: ${label} — the ticket timeline carries the run's terminal evidence`);
       const replay = await store.readRunReplay(run.id);
-      assert(replay && replay.snapshot && replay.snapshot.terminalStatus === expected,
+      assert(replay && replay.snapshot && replay.snapshot.terminalStatus === expectedRun,
         `9: ${label} — the durable replay snapshot agrees with the converged status`);
     }
 

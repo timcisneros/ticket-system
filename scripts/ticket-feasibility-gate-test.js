@@ -118,14 +118,25 @@ async function main() {
     assert(!ticketPage.body.includes('Latest Run Triage'),
       'pre-run ticket triage is not rendered as latest-run triage');
 
-    // ── Manual completion is refused while triage is unresolved ────────────
-    const completeBlocked = await server.request('PATCH', `/api/tickets/${ticket.id}/status`, {
+    // ── T2 Tranche 5: the generic lifecycle PATCH surface is RETIRED ───────
+    // A blocked ticket cannot be moved through the old arbitrary-status
+    // writer at all; completion remains settlement-only, and resolution goes
+    // through the dedicated atomic resolve+reproject operation.
+    const retiredPatch = await server.request('PATCH', `/api/tickets/${ticket.id}/status`, {
       cookie, body: { status: 'completed' }
     });
-    assert(completeBlocked.statusCode === 409,
-      'pre-run blocked ticket rejects a manual completed transition');
-    assert(JSON.parse(completeBlocked.body).error.includes('ticket-level triage'),
-      'rejection explains the required ticket triage');
+    assert(retiredPatch.statusCode === 409,
+      'retired generic PATCH refuses lifecycle mutation with 409');
+    assert(JSON.parse(retiredPatch.body).error.includes('Generic Ticket lifecycle status mutation is retired'),
+      'refusal names the retirement and points at intent surfaces');
+
+    const resolved = await server.request('POST', `/api/tickets/${ticket.id}/triage/resolve`, {
+      cookie, body: { resolution: 'scope corrected in fixture' }
+    });
+    assert(resolved.statusCode === 200,
+      `triage resolve+reproject succeeds (${resolved.statusCode})`);
+    assert((await store.getTicket(ticket.id)).status === 'open',
+      'resolution reprojections the released blocker to open');
 
     console.log(`\nPASS: ticket feasibility gate — ${assert.count()} assertions (PostgreSQL-native)`);
   });

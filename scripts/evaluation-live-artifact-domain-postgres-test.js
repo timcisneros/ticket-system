@@ -510,7 +510,7 @@ async function main() {
                  (SELECT MIN(event.ts) FROM ${store.table('events')} AS event
                    WHERE event.ticket_id = $1 AND event.run_id IS NULL
                      AND event.type = 'ticket.updated'
-                     AND event.payload->>'status' IN ('completed', 'failed', 'blocked'))
+                     AND event.payload->>'status' IN ('completed', 'failed', 'blocked', 'open'))
                    AS terminal_ticket_at,
                  (SELECT MIN(event.ts) FROM ${store.table('events')} AS event
                    WHERE event.ticket_id = $1
@@ -518,7 +518,7 @@ async function main() {
                  (SELECT MIN(event.position) FROM ${store.table('events')} AS event
                    WHERE event.ticket_id = $1 AND event.run_id IS NULL
                      AND event.type = 'ticket.updated'
-                     AND event.payload->>'status' IN ('completed', 'failed', 'blocked'))
+                     AND event.payload->>'status' IN ('completed', 'failed', 'blocked', 'open'))
                    AS terminal_ticket_position,
                  (SELECT MIN(event.position) FROM ${store.table('events')} AS event
                    WHERE event.ticket_id = $1
@@ -531,7 +531,7 @@ async function main() {
                  (SELECT MIN(event.ts) FROM ${store.table('events')} AS event
                    WHERE event.ticket_id = $1 AND event.run_id IS NULL
                      AND event.type = 'ticket.updated'
-                     AND event.payload->>'status' IN ('completed', 'failed', 'blocked'))
+                     AND event.payload->>'status' IN ('completed', 'failed', 'blocked', 'open'))
                    >=
                  (SELECT MIN(event.ts) FROM ${store.table('events')} AS event
                    WHERE event.ticket_id = $1
@@ -572,11 +572,16 @@ async function main() {
             'temporal class: one terminal member cannot prematurely terminalize its ' +
               `still-unsettled exact attempt ${JSON.stringify(entry.temporalTrace)}`);
             assertThat(ordering.attempt_disposition === 'failed' &&
-              ordering.ticket_status === 'failed' && ordering.settled_at &&
+              // T2 Tranche 5: FAILED is Run/attempt authority; with no
+              // unresolved blocker the failed attempt projects the Ticket to
+              // the canonical demotion state `open`.
+              ordering.ticket_status === 'open' && ordering.attempt_disposition === 'failed' &&
+              ordering.settled_at &&
               Number(ordering.member_count) === ordering.member_ids.length &&
               ordering.member_statuses.every(status =>
                 ['completed', 'failed', 'interrupted'].includes(status)),
             'temporal class: all exact members settle one failed attempt before the Ticket ' +
+              'demotes to open (five-state) ' +
               `projects ${JSON.stringify({ attemptId: Number(ordering.attempt_id),
                 disposition: ordering.attempt_disposition,
                 memberIds: ordering.member_ids.map(Number),

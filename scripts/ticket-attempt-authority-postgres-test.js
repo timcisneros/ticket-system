@@ -231,8 +231,10 @@ async function main() {
     const settledMulti = await store.transitionTicketAfterRun({ runId: secondInterrupted.id });
     equal(settledMulti.attempt.disposition, 'failed',
       'existing multi-Run precedence projects failed over interrupted');
-    equal(settledMulti.ticket.status, 'failed',
-      'Ticket projection consumes only the settled attempt disposition');
+    // T2 Tranche 5: FAILED is Run/attempt authority only; with no unresolved
+    // blocker the settled failed attempt demotes the Ticket to open.
+    equal(settledMulti.ticket.status, 'open',
+      'Ticket demotes a settled failed attempt to open (five-state)');
     await store.createRunTriage({
       runId: firstFailed.id,
       triage: {
@@ -245,8 +247,11 @@ async function main() {
     });
     equal((await store.getCurrentTicketAttempt(multiTicket.id)).disposition, 'failed',
       'operator-attention evidence does not rewrite attempt disposition');
-    equal((await store.getTicket(multiTicket.id)).status, 'failed',
-      'triage remains a separate projection from canonical Ticket lifecycle');
+    // T2 Tranche 5: adding triage evidence AFTER settlement does not rewrite
+    // history — the materialized status updates through writers, and the
+    // attempt disposition itself is untouched.
+    equal((await store.getTicket(multiTicket.id)).status, 'open',
+      'post-settlement triage evidence does not retroactively rewrite the materialized status');
     await refuses(() => store.pool.query(
       `UPDATE ${store.table('ticket_attempts')}
        SET disposition = 'completed', settled_at = clock_timestamp(), revision = revision + 1

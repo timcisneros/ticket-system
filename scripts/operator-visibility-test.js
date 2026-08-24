@@ -85,11 +85,24 @@ async function main() {
     };
 
     // ── Tickets list filter chips ──
+    // T2 five-state lifecycle: Ticket-level `failed` is retired, so the filter
+    // chips enumerate the five valid statuses and run failures surface through
+    // the latest-run accent instead of a ticket status class.
     const ticketsPage = await get('/tickets');
     assert(ticketsPage.text.includes('class="filter-chip') && ticketsPage.text.includes('filter-chip__count'), 'tickets page must render status filter chips with counts');
-    const failedFiltered = await get('/tickets?status=failed');
-    assert(failedFiltered.status === 200 && !failedFiltered.text.includes('ticket-card--completed'), '?status=failed must exclude completed cards');
-    assert(failedFiltered.text.includes('ticket-card--failed'), '?status=failed must include failed cards');
+    // Filter-href vocabulary check: every status query param on /tickets comes
+    // from the ticket-page href builder, so `status=<vocabulary>` pins the
+    // rendered chip set without broad page-text searches (run-level "failed"
+    // evidence words elsewhere are legitimate).
+    for (const lifecycleStatus of ['open', 'in_progress', 'blocked', 'completed', 'canceled']) {
+      assert(ticketsPage.text.includes(`status=${lifecycleStatus}`), `tickets page must expose the ${lifecycleStatus} lifecycle filter`);
+    }
+    assert(!ticketsPage.text.includes('status=failed'), 'retired Ticket lifecycle filter failed must not be exposed');
+    assert(!ticketsPage.text.includes('status=closed'), 'retired Ticket lifecycle filter closed must not be exposed');
+    const openFiltered = await get('/tickets?status=open');
+    assert(openFiltered.status === 200 && !openFiltered.text.includes('ticket-card--completed'), '?status=open must exclude completed cards');
+    assert(openFiltered.text.includes('ticket-card--open'), '?status=open must include open cards');
+    assert(ticketsPage.text.includes('is-failed'), 'a failed latest run must still surface as a card failure accent');
 
     // ── Event journal ──
     const journal = await get('/event-journal');

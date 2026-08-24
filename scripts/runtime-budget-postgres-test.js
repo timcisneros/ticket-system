@@ -845,9 +845,16 @@ async function main() {
       const boundedSettlement = await store.transitionTicketAfterRun({
         runId: boundedPredecessor.id
       });
-      check(boundedSettlement.attempt.disposition === 'failed' &&
-        boundedSettlement.ticket.status === 'failed',
-      'maxAttempts predecessor settles before retry admission');
+      // T2 five-state settlement: Run and attempt failure stay BELOW the
+      // Ticket lifecycle, and the retired Ticket-level FAILED status is never
+      // produced. This fixture carries NO ticket-owned maxAttempts policy —
+      // the ceiling lives only inside each admitted run-budget snapshot and
+      // is enforced at admission — so the shared blocking-authority composer
+      // wins nothing and the settled failure demotes to open, not blocked.
+      check(boundedSettlement.attempt.disposition === 'failed',
+      'maxAttempts predecessor settles as a failed attempt');
+      check(boundedSettlement.ticket.status === 'open',
+      'maxAttempts predecessor settles before retry admission into the open five-state Ticket, not retired failed');
       await assert.rejects(
         store.createRetryRun({
           ticketId: boundedAttemptTicket.id,
@@ -865,7 +872,7 @@ async function main() {
         ticketId: boundedAttemptTicket.id
       })).runs.length === 1 &&
         await store.countTicketAttempts(boundedAttemptTicket.id) === 1 &&
-        (await store.getTicket(boundedAttemptTicket.id)).status === 'failed',
+        (await store.getTicket(boundedAttemptTicket.id)).status === 'open',
       'transactional retry exhaustion admits no new attempt or Run');
 
       const waitingEvents = (await store.listRunEvents(blockedRun.id))

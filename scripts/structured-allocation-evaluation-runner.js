@@ -447,6 +447,13 @@ async function proveDurablePath(store, ticketId, arm) {
   const ticketStatus = (await store.pool.query(
     `SELECT status FROM ${store.table('tickets')} WHERE id = $1`,
     [ticketId])).rows[0];
+  // T2 Tranche 5: attempt settlement is the durable "aggregate settled" fact —
+  // read from ticket_attempts directly, never inferred from the Ticket's
+  // materialized status string (which now demotes failed attempts to open).
+  const latestAttempt = (await store.pool.query(
+    `SELECT disposition FROM ${store.table('ticket_attempts')}
+     WHERE ticket_id = $1 ORDER BY ordinal DESC LIMIT 1`,
+    [ticketId])).rows[0];
   // THE CANONICAL RECONCILIATION AUTHORITY. Written by the store in the same
   // transaction as the aggregate decision it describes, so its presence is
   // evidence the reconciler ran and its write committed.
@@ -592,9 +599,8 @@ async function proveDurablePath(store, ticketId, arm) {
       : null,
     // The INFERRED fact, kept because it is genuinely useful — under its own
     // name, saying only what it observes.
-    aggregateSettled:
-      ['completed', 'failed', 'interrupted', 'cancelled', 'blocked']
-        .includes(ticketStatus && ticketStatus.status),
+    aggregateSettled: Boolean(latestAttempt &&
+      latestAttempt.disposition !== null && latestAttempt.disposition !== undefined),
     ticketResultStatus: ticketStatus ? ticketStatus.status : null,
     ticketStatus: ticketStatus ? ticketStatus.status : null,
     runCount: runs.length,

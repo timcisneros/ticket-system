@@ -6,7 +6,7 @@
   const viewFilterHrefs = typeof filterHrefs === 'undefined' || !filterHrefs ? null : filterHrefs;
   function statusOptionLabel(status) {
     if (status === 'open') return 'open — starts run';
-    if (status === 'closed') return 'closed — stops active runs';
+    if (status === 'canceled') return 'canceled';
     return status;
   }
 %>
@@ -46,7 +46,9 @@
 
     <% tickets.forEach(ticket => { %>
       <%
-        const isFailed = ticket.status === 'failed';
+        // T2 Tranche 5: Ticket-level `failed` is retired; accents derive from
+        // the latest RUN outcome, where failed/interrupted remain valid.
+        const isFailed = ticket.lastRunStatus === 'failed';
         const isInterrupted = ticket.lastRunStatus === 'interrupted';
         const hasPartial = (isFailed || isInterrupted) && ticket.lastRunHadPartialMutations;
         const accentClass = isFailed ? 'is-failed' : isInterrupted ? 'is-interrupted' : '';
@@ -56,20 +58,9 @@
           <span class="ticket-card__number">#<%= ticket.id %></span>
           <a href="/tickets/<%= ticket.id %>" class="ticket-card__objective"><%= ticket.objective %></a>
           <div class="ticket-card__status">
-            <% if (canUpdateTickets && ticketStatuses.includes(ticket.status)) { %>
-              <form class="status-form" data-ticket-id="<%= ticket.id %>">
-                <select name="status" class="status-select" aria-label="Ticket status">
-                  <% ticketStatuses.forEach(status => { %>
-                    <option value="<%= status %>" <%= ticket.status === status ? 'selected' : '' %>><%= statusOptionLabel(status) %></option>
-                  <% }) %>
-                </select>
-              </form>
-            <% } else { %>
-              <span class="status-badge status-<%= ticket.status %>"><%= ticket.status %></span>
-              <% if (ticket.status === 'interrupted') { %>
-                <span class="status-system-note" title="System status set by the runtime; not user-selectable">system status</span>
-              <% } %>
-            <% } %>
+            <!-- T2 Tranche 5: lifecycle status is display-only projection;
+                 the per-ticket status select called the retired PATCH. -->
+            <span class="status-badge status-<%= ticket.status %>"><%= ticket.status %></span>
             <% if (hasPartial) { %>
               <span class="partial-run-indicator" title="Last run performed <%= ticket.lastRunPartialMutationCount %> workspace mutation<%= ticket.lastRunPartialMutationCount === 1 ? '' : 's' %> before failing">&#9888;</span>
             <% } %>
@@ -149,7 +140,7 @@ function renderEmptyRow() {
 
 function statusOptionLabel(status) {
   if (status === 'open') return 'open — starts run';
-  if (status === 'closed') return 'closed — stops active runs';
+  if (status === 'canceled') return 'canceled';
   return status;
 }
 
@@ -183,7 +174,8 @@ function ticketSignature(ticket) {
 function createTicketCard(ticket) {
   const card = document.createElement('div');
   card.className = 'ticket-card';
-  const isFailed = ticket.status === 'failed';
+  // T2 Tranche 5: accents derive from the latest RUN outcome (client mirror).
+  const isFailed = ticket.lastRunStatus === 'failed';
   const isInterrupted = ticket.lastRunStatus === 'interrupted';
   if (isFailed) card.classList.add('is-failed');
   if (isInterrupted) card.classList.add('is-interrupted');
@@ -209,39 +201,14 @@ function createTicketCard(ticket) {
   const statusWrap = document.createElement('div');
   statusWrap.className = 'ticket-card__status';
 
-  if (canUpdateTickets && ticketStatuses.includes(ticket.status)) {
-    const form = document.createElement('form');
-    form.className = 'status-form';
-    form.dataset.ticketId = ticket.id;
-
-    const select = document.createElement('select');
-    select.name = 'status';
-    select.className = 'status-select';
-    select.setAttribute('aria-label', 'Ticket status');
-
-    ticketStatuses.forEach(status => {
-      const option = document.createElement('option');
-      option.value = status;
-      option.textContent = statusOptionLabel(status);
-      option.selected = ticket.status === status;
-      select.appendChild(option);
-    });
-
-    form.appendChild(select);
-    statusWrap.appendChild(form);
-  } else {
+  // T2 Tranche 5: lifecycle status is materialized projection — display only.
+  // The former client-rendered status <select> called the retired generic
+  // PATCH endpoint and could never succeed.
+  {
     const badge = document.createElement('span');
     badge.className = 'status-badge status-' + ticket.status;
     badge.textContent = ticket.status;
     statusWrap.appendChild(badge);
-
-    if (ticket.status === 'interrupted') {
-      const systemNote = document.createElement('span');
-      systemNote.className = 'status-system-note';
-      systemNote.title = 'System status set by the runtime; not user-selectable';
-      systemNote.textContent = 'system status';
-      statusWrap.appendChild(systemNote);
-    }
   }
 
   if ((isFailed || isInterrupted) && ticket.lastRunHadPartialMutations) {
@@ -465,42 +432,9 @@ async function loadTickets() {
   }
 }
 
-async function updateTicketStatus(ticketId, status, select) {
-  select.disabled = true;
-
-  try {
-    const response = await fetch('/api/tickets/' + encodeURIComponent(ticketId) + '/status', {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json'
-      },
-      body: JSON.stringify({ status })
-    });
-
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null);
-      window.alert(payload && payload.error ? payload.error : 'Ticket status change was rejected.');
-      await loadTickets();
-      return;
-    }
-
-    if (!liveTicketsConnected) {
-      await loadTickets();
-    }
-  } finally {
-    select.disabled = false;
-  }
-}
-
+// T2 Tranche 5: the former updateTicketStatus writer and its .status-select
+// listener arm are removed with the retired generic lifecycle PATCH endpoint.
 ticketsBody.addEventListener('change', event => {
-  if (event.target.matches('.status-select')) {
-    const form = event.target.closest('.status-form');
-    if (!form) return;
-
-    updateTicketStatus(form.dataset.ticketId, event.target.value, event.target);
-  }
-
   if (event.target.matches('.agent-assign-select') && event.target.value) {
     const form = event.target.closest('.assign-form');
     if (!form) return;

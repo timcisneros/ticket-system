@@ -17,6 +17,11 @@ const {
 const {
   projectTicketLifecycle
 } = require('./ticket-lifecycle-contract');
+const {
+  composeBlockingAuthority,
+  reconstructMaxAttemptsChain,
+  maxAttemptsAsOf
+} = require('./ticket-blocking-authority-composer');
 
 const LIFECYCLES = new Set(['open', 'in_progress', 'blocked', 'completed', 'canceled']);
 
@@ -204,44 +209,33 @@ function runInterruptionProof(ticketId, operator, closeAt, activeRuns, events, l
   return proofs;
 }
 
-function deriveBlocker(ticket, events, attempts, closeAt) {
-  const body = objectOrEmpty(ticket.body || ticket);
-  const triage = body.triage || null;
-  if (triage && typeof triage === 'object') {
-    const createdAt = triage.createdAt ? time(triage.createdAt, 'triage.createdAt') : null;
-    const resolvedAt = triage.resolvedAt ? time(triage.resolvedAt, 'triage.resolvedAt') : null;
-    if (createdAt !== null && (closeAt === null || createdAt <= closeAt) &&
-        triage.required === true && (resolvedAt === null || resolvedAt > closeAt)) {
-      return {
-        authority: { ticketTriageUnresolved: true },
-        reference: { triageCreatedAt: asTimestamp(triage.createdAt, 'triage.createdAt') }
-      };
-    }
-  }
-  const policy = body.executionPolicy || null;
-  const maxAttempts = policy && Number.isSafeInteger(policy.maxAttempts) && policy.maxAttempts > 0
-    ? policy.maxAttempts
-    : null;
-  const admittedCount = attempts.filter(attempt =>
-    closeAt === null || time(attempt.admittedAt, 'attempt.admittedAt') <= closeAt).length;
-  if (maxAttempts !== null && admittedCount >= maxAttempts) {
-    return {
-      authority: { maxAttemptsExhausted: true },
-      reference: { maxAttempts, admittedCount }
-    };
-  }
-  const refusal = events
-    .filter(event => (closeAt === null || eventTime(event) <= closeAt) &&
-      positiveId(event.ticketId, 'event.ticketId') === positiveId(ticket.id, 'ticket.id') &&
-      event.type === 'ticket.blocked' && eventPayload(event).reasonCode)
-    .sort((left, right) => eventTime(right) - eventTime(left))[0] || null;
-  if (refusal) {
-    return {
-      authority: { persistedRefusalEventId: refusal.id },
-      reference: { eventId: refusal.id }
-    };
-  }
-  return null;
+// Blocking-authority derivation for the historical view. Delegates to the
+// SHARED Tranche 5 composer so runtime writers and this classifier cannot
+// drift. closeBoundary is {position, tsMs} for a historical view (position is
+// the primary ordering authority) or null for the live view.
+//
+// The composer's fixed precedence: unresolved triage, latest settled BLOCKED
+// attempt, as-of maxAttempts exhaustion, executeTicketPlan admission hold,
+// then the CURRENT reasoned refusal event (superseded by any later successful
+// attempt admission within the boundary, ordered by event position).
+function deriveBlocker(ticket, events, attempts, closeBoundary) {
+  const composed = composeBlockingAuthority({
+    triage: objectOrEmpty(ticket.body || ticket).triage || null,
+    attempts: attempts.map(attempt => ({
+      id: attempt.id,
+      ordinal: attempt.ordinal,
+      disposition: attempt.disposition,
+      admittedAt: attempt.admittedAt,
+      settledAt: attempt.settledAt,
+      memberCount: attempt.memberCount
+    })),
+    events: events.filter(event =>
+      positiveId(event.ticketId, 'event.ticketId') === positiveId(ticket.id, 'ticket.id')),
+    executionPolicy: objectOrEmpty(ticket.body || ticket).executionPolicy || null,
+    closeBoundary
+  });
+  if (!composed.won) return null;
+  return { authority: composed.input, reference: composed.reference };
 }
 
 function deriveV2Completion(plan, members, decisionsByRunId) {
@@ -305,7 +299,7 @@ function deriveV2Completion(plan, members, decisionsByRunId) {
   };
 }
 
-function deriveLifecycle({ ticket, attempts, runs, consequences, plans, events, closeAt }) {
+function deriveLifecycle({ ticket, attempts, runs, consequences, plans, events, closeAt, closeBoundary = null }) {
   const ticketId = positiveId(ticket.id, 'ticket.id');
   const eligibleAttempts = attempts.filter(attempt =>
     time(attempt.admittedAt, 'attempt.admittedAt') <= (closeAt === null ? Number.POSITIVE_INFINITY : closeAt));
@@ -389,7 +383,7 @@ function deriveLifecycle({ ticket, attempts, runs, consequences, plans, events, 
   const cancellationAt = cancellation ? time(cancellation.committedAt, 'cancellationAuthority.committedAt') : null;
   const effectiveCancellation = cancellation &&
     (closeAt === null || cancellationAt <= closeAt) ? cancellation : null;
-  const blocker = deriveBlocker(ticket, events, eligibleAttempts, closeAt);
+  const blocker = deriveBlocker(ticket, events, eligibleAttempts, closeBoundary);
   const projection = projectTicketLifecycle({
     cancellationAuthority: effectiveCancellation,
     currentAttempt: currentView && currentView.rawSettled === null
@@ -501,6 +495,11 @@ function classifyTicketHistory(facts) {
     closeOperation = closeData.operations[0];
   }
   const closeAt = closeOperation ? closeOperation.closeAt : null;
+  // Event append POSITION is the primary historical ordering authority; the
+  // close timestamp remains applicability/consistency evidence.
+  const closeBoundary = closeOperation
+    ? { position: positiveId(closeOperation.event.position, 'close event position'), tsMs: closeAt }
+    : null;
   const semanticTicket = { ...ticket, cancellationAuthority: cancellation };
   let derived;
   try {
@@ -511,7 +510,8 @@ function classifyTicketHistory(facts) {
       consequences,
       plans,
       events,
-      closeAt
+      closeAt,
+      closeBoundary
     });
   } catch (error) {
     return Object.freeze({
@@ -528,34 +528,14 @@ function classifyTicketHistory(facts) {
       reasons: Object.freeze([reason(error.code || 'HISTORY_CLASSIFIER_AUTHORITY_INVALID', error.references || {})])
     });
   }
-  if (legacyStatus === 'completed' && derived.projection.state !== 'completed' && !cancellation) {
-    return Object.freeze({
-      ticketId,
-      legacyStatus,
-      classification: 'integrity_contradiction',
-      proposedLifecycle: null,
-      authorityReferences: references(derived.references),
-      closedClassification: null,
-      historicalCancellationAuthority: null,
-      reasons: Object.freeze([reason('HISTORY_CLASSIFIER_COMPLETION_AUTHORITY_MISSING', {
-        ticketId
-      })])
-    });
-  }
-  if (legacyStatus === 'in_progress' && derived.projection.state !== 'in_progress' && !cancellation) {
-    return Object.freeze({
-      ticketId,
-      legacyStatus,
-      classification: 'integrity_contradiction',
-      proposedLifecycle: null,
-      authorityReferences: references(derived.references),
-      closedClassification: null,
-      historicalCancellationAuthority: null,
-      reasons: Object.freeze([reason('HISTORY_CLASSIFIER_CURRENT_ATTEMPT_INVALID', {
-        ticketId
-      })])
-    });
-  }
+  // T2 Tranche 5 authority-first model: legacy status is consistency/history
+  // evidence only. A divergence between the legacy string and the derived
+  // canonical projection is RECORDED, never fatal — the derived projection is
+  // the migration authority (e.g. legacy 'completed' with a newer settled
+  // failed attempt and no blocker projects 'open'; legacy 'failed' with a
+  // durable latest completion authority projects 'completed'). Genuine
+  // authority contradictions (malformed/unorderable facts) still refuse via
+  // the deriveLifecycle catch above.
   if (legacyStatus && legacyStatus !== derived.projection.state) {
     reasons.push(reason('HISTORY_CLASSIFIER_LEGACY_STATUS_MATERIALIZATION_MISMATCH', {
       legacyStatus,

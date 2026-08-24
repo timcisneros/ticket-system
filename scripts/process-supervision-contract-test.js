@@ -689,9 +689,12 @@ function main() {
   const migrations = fs.readdirSync(
     path.join(__dirname, '..', 'persistence', 'postgres', 'migrations')
   );
-  assert(!migrations.some(file => /supervision|process_control|cancellation/i.test(
-    file
-  )), 'supervision adds no shadow lifecycle, cancellation, or control table');
+  // The canonical Ticket-cancellation AUTHORITY substrate (migration 040) is
+  // product authority, not a supervision shadow table; every OTHER migration
+  // name must stay free of supervision/lifecycle/control vocabulary.
+  assert(!migrations.some(file => file !== '040_ticket_cancellation_authority.sql' &&
+    /supervision|process_control|cancellation/i.test(file)),
+    'supervision adds no shadow lifecycle, cancellation, or control table');
 
   console.log('PASS: process supervision projection contract');
 }

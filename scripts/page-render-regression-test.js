@@ -375,13 +375,15 @@ async function main() {
     assert(summaryPayload.counts.ticketCount === 1, 'Work Context summary must use PostgreSQL ticket counts');
     assert(summaryPayload.counts.recentRunCount === 1, 'Work Context summary must use PostgreSQL run counts');
 
-    const close = await request('PATCH', `/api/tickets/${fixture.ticket.id}/status`, {
+    // T2 Tranche 5: the generic lifecycle PATCH is retired; cancellation is
+    // the dedicated intent surface and commits authority + CANCELED together.
+    const close = await request('POST', `/api/tickets/${fixture.ticket.id}/cancel`, {
       cookie,
-      body: { status: 'closed' }
+      body: { reason: 'page-render regression fixture' }
     });
-    assert(close.statusCode === 200, `ticket status mutation returned HTTP ${close.statusCode}`);
-    assert((await store.getTicket(fixture.ticket.id)).status === 'closed',
-      'ticket status mutation must commit to PostgreSQL');
+    assert(close.statusCode === 200, `ticket cancel returned HTTP ${close.statusCode}`);
+    assert((await store.getTicket(fixture.ticket.id)).status === 'canceled',
+      'cancellation must commit authority + CANCELED to PostgreSQL');
 
     const exportResponse = await request('GET', '/api/export?domain=tickets&limit=1', { cookie });
     assert(exportResponse.statusCode === 200, `bounded export returned HTTP ${exportResponse.statusCode}`);

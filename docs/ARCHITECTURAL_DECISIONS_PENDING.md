@@ -8405,6 +8405,82 @@ Migration 041 is absent. The next step is a separately authorized,
 zero-ambiguity operational read-only enumeration; no migration or lifecycle
 mutation is included in this tranche.
 
+## T2 Tranche 5 Operator-Facing Cancellation Surface — UNRESOLVED (recorded 2026-08-22)
+
+**Status:** OPEN product-surface decision. No policy invented.
+
+Tranche 5 ships the durable cancellation authority and its dedicated intent
+route `POST /api/tickets/:id/cancel` (authority + materialized CANCELED in one
+atomic projection), but provides NO operator-facing UI or CLI entry point for
+cancellation, and the retired generic lifecycle PATCH is refused
+unconditionally. The ticket-detail page therefore offers no cancel control,
+and `oquery` offers no cancel command.
+
+This is deliberate non-decision, not an oversight: T2 Tranche 2 recorded that
+"public cancellation activation ... remain[s] prerequisites before
+cancellation is exposed as final product behavior" (T2_IMPLEMENTATION_TRANCHE_2.md),
+and no later tranche record authorizes a specific operator surface. The
+independent review of Tranche 5 required that this NOT be silently assumed in
+either direction. Accordingly:
+
+- Cancellation remains API-reachable only until a product decision names the
+  intended surface (ticket-detail button, tickets-list action, oquery command,
+  or explicitly API-only).
+- No generic "set status" authority may be restored to fill the gap.
+- Completion remains settlement-only regardless of the decision.
+
+Decision owner: product. Any resolution must be recorded here with its
+rationale before UI/CLI work begins.
+
+## T2 Tranche 5 maxAttempts Reprojection Demoted Completed Tickets — RESOLVED (recorded and corrected 2026-08-24)
+
+**Status:** RESOLVED in this tranche's working tree; regression-pinned.
+
+The uncommitted Tranche-5 canonical reprojection inside
+`updateTicketMaxAttempts` composed blocking authority FIRST and only then
+considered a settled completed attempt (`won -> blocked`, else completed/open).
+Because the composer counts admitted attempts regardless of disposition,
+lowering or re-saving `maxAttempts` to the consumed count on a genuinely
+completed Ticket reprojection it `COMPLETED -> BLOCKED`
+(`maxAttemptsExhausted` winning at `admittedCount >= ceiling`). An independent
+review reproduced this through canonical writers only: exact deterministic
+`workspace_objective_receipt` authority minted a hash-bound
+`completed/OBJECTIVE_COMPLETED` decision, settlement projected COMPLETED, and
+the policy write demoted it (revisions +2 with a `ticket.lifecycle_reprojected`
+event naming `previousStatus: "completed"`).
+
+This contradicted frozen T2 precedence — rule 3 (current settled completed
+attempt with exact proof) outranks rule 4 (canonical blocker) — and diverged
+from BOTH other implementations of the same ordering: settlement
+(`transitionTicketAfterRun` maps `completed|blocked` dispositions directly and
+consults the composer only for failed/interrupted) and migration 041's
+historical classifier (`deriveCurrentLifecycle` feeds `projectTicketLifecycle`,
+which orders rule 3 before rule 4). For identical durable facts the classifier
+proposed `completed` while the runtime writer produced `blocked`; post-fix both
+agree.
+
+**Why completion wins:** the write-once settled disposition IS the persisted
+exact proof — settlement validated `evaluateAttemptCompletionAuthority` before
+writing it — and only the current/highest-ordinal attempt qualifies, so stale
+older completions cannot resurrect and an unsettled current attempt still
+outranks via the guard. Cancellation is untouched (the writer refuses
+committed cancellations outright).
+
+**Correction (minimum):** the reprojection now mirrors settlement exactly —
+current settled `completed` projects `completed`; every other settled
+disposition composes through the shared blocking-authority module for
+`blocked`/`open`. Exhaustion remains fully effective against failed/interrupted
+current attempts (the ordinal-242 race outcome is unchanged: two failed
+attempts at ceiling 2 still project BLOCKED) and remains visible as the latent
+composer verdict when a valid completion governs.
+
+**Regression evidence:** `scripts/t2-tranche5-store-postgres-test.js` section
+"completed-attempt precedence" pins: policy persisted, COMPLETED retained,
+no lifecycle event needed, exactly one durable event, completion intact,
+latent `maxAttemptsExhausted` reference recorded, CANCELED refuses the writer,
+raise is a no-op on COMPLETED, stale-completion never resurrects, and current-
+attempt exhaustion still blocks. 68 assertions pass on isolated PostgreSQL 17;
+the ordinal-242 owner passes unchanged.
 
 ---
 

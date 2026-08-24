@@ -420,7 +420,7 @@ async function runAllScenarios({ store, preloadPath, agent, mike, runScenario, g
         AGENT_MAX_EXECUTION_STEPS: '4',
         AGENT_MAX_MODEL_REQUESTS_PER_RUN: '4',
         AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
-        AGENT_MAX_RUNTIME_DURATION_MS: '5000'
+        AGENT_MAX_RUNTIME_DURATION_MS: '10000'
       },
       {
         expectedStatus: 'completed',
@@ -438,7 +438,7 @@ async function runAllScenarios({ store, preloadPath, agent, mike, runScenario, g
         AGENT_MAX_EXECUTION_STEPS: '4',
         AGENT_MAX_MODEL_REQUESTS_PER_RUN: '4',
         AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
-        AGENT_MAX_RUNTIME_DURATION_MS: '5000'
+        AGENT_MAX_RUNTIME_DURATION_MS: '10000'
       },
       {
         expectedStatus: 'completed',
@@ -447,7 +447,18 @@ async function runAllScenarios({ store, preloadPath, agent, mike, runScenario, g
       }
     );
 
-    // 3. provider timeout avoided after verified completion (low step limit, but still completes)
+    // 3. run-duration timeout avoided by verified completion (low step limit, but still completes)
+    // The durable runtime budget starts when the Run is claimed
+    // (runtimeBudgetStartedAt is stamped in startClaimedRun) and includes
+    // post-claim setup, compiler/model work, database round trips, and action
+    // processing. Two full agent turns measure roughly 2-4 seconds depending on
+    // host and database latency, so a 2000ms ceiling raced the completion
+    // authority itself and failed nondeterministically
+    // (RUN_RUNTIME_DURATION_EXCEEDED at clean HEAD too). 10000ms preserves the
+    // invariant under test — verified redundant-write completion terminalizes
+    // within the configured budget and step ceiling — without betting on
+    // wall-clock. Scenarios 1, 2, 8, and 15 share this same two-turn shape and
+    // use the same non-semantic headroom value.
     await runScenario(
       preloadPath,
       agent,
@@ -456,7 +467,7 @@ async function runAllScenarios({ store, preloadPath, agent, mike, runScenario, g
         AGENT_MAX_EXECUTION_STEPS: '3',
         AGENT_MAX_MODEL_REQUESTS_PER_RUN: '3',
         AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
-        AGENT_MAX_RUNTIME_DURATION_MS: '2000'
+        AGENT_MAX_RUNTIME_DURATION_MS: '10000'
       },
       {
         expectedStatus: 'completed',
@@ -566,7 +577,7 @@ async function runAllScenarios({ store, preloadPath, agent, mike, runScenario, g
         AGENT_MAX_EXECUTION_STEPS: '4',
         AGENT_MAX_MODEL_REQUESTS_PER_RUN: '4',
         AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
-        AGENT_MAX_RUNTIME_DURATION_MS: '5000'
+        AGENT_MAX_RUNTIME_DURATION_MS: '10000'
       },
       {
         expectedStatus: 'completed',
@@ -892,7 +903,7 @@ async function runAllScenarios({ store, preloadPath, agent, mike, runScenario, g
         AGENT_MAX_EXECUTION_STEPS: '3',
         AGENT_MAX_MODEL_REQUESTS_PER_RUN: '4',
         AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
-        AGENT_MAX_RUNTIME_DURATION_MS: '5000'
+        AGENT_MAX_RUNTIME_DURATION_MS: '10000'
       },
       {
         expectedStatus: 'completed',

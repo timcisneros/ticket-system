@@ -129,20 +129,23 @@ async function main() {
     const server = await startServer({ env: { RUNTIME_SCHEDULER_INTERVAL_MS: '3600000' } });
     const cookie = await server.login();
 
+    // T2 Tranche 5: the manual-completion surface is RETIRED. Completion
+    // authority is settlement-only; the generic PATCH refuses every request
+    // with one canonical retirement message regardless of ticket state.
     const complete = (ticketId) =>
       server.request('PATCH', `/api/tickets/${ticketId}/status`, { cookie, body: { status: 'completed' } });
+    const RETIRED = /Generic Ticket lifecycle status mutation is retired/;
 
-    async function refuses(label, ticketId, reasonPattern) {
+    async function refuses(label, ticketId) {
       scenariosRun += 1;
       const before = (await store.getTicket(ticketId)).status;
       const response = await complete(ticketId);
-      assert(response.statusCode >= 400 && response.statusCode < 500,
-        `${label}: manual completion is refused (HTTP ${response.statusCode})`);
+      assert(response.statusCode === 409,
+        `${label}: the retired surface refuses with 409 (HTTP ${response.statusCode})`);
       let body = {};
       try { body = JSON.parse(response.body); } catch (_) { /* html error page */ }
-      const explanation = String(body.error || response.body || '');
-      assert(reasonPattern.test(explanation),
-        `${label}: the refusal explains itself — expected ${reasonPattern} in "${explanation.slice(0, 140)}"`);
+      assert(RETIRED.test(String(body.error || '')),
+        `${label}: the refusal names the retirement and the intent surfaces`);
       const after = await store.getTicket(ticketId);
       assert(after.status === before,
         `${label}: the refused completion did not change the ticket (${before} → ${after.status})`);
@@ -152,17 +155,17 @@ async function main() {
 
     // ── 1. No run at all ────────────────────────────────────────────────────
     const noRun = await makeTicket('no-run', 'never');
-    await refuses('no-run', noRun.id, /run|execution|evidence/i);
+    await refuses('no-run', noRun.id);
 
     // ── 2. The current attempt failed ───────────────────────────────────────
     const failedTicket = await makeTicket('failed-run', 'never');
     await makeTerminalRun(failedTicket.id, 'failed', 'the run failed');
-    await refuses('failed-run', failedTicket.id, /fail/i);
+    await refuses('failed-run', failedTicket.id);
 
     // ── 3. The current attempt was interrupted ──────────────────────────────
     const interruptedTicket = await makeTicket('interrupted-run', 'never');
     await makeTerminalRun(interruptedTicket.id, 'interrupted');
-    await refuses('interrupted-run', interruptedTicket.id, /interrupt/i);
+    await refuses('interrupted-run', interruptedTicket.id);
 
     // ── 4. Unresolved triage ────────────────────────────────────────────────
     const triageTicket = await makeTicket('triage', 'never');
@@ -175,7 +178,7 @@ async function main() {
         allowedActions: ['edit_ticket'], prohibitedActions: ['complete_without_review']
       }
     });
-    await refuses('triage', triageTicket.id, /triage/i);
+    await refuses('triage', triageTicket.id);
 
     // ── 5. A terminal-looking member is not an attempt disposition ──────────
     // This fixture deliberately stops before the kernel projection. Manual
@@ -183,23 +186,25 @@ async function main() {
     // the current attempt must first carry its authoritative disposition.
     const verifyTicket = await makeTicket('verification', 'when_declared');
     await makeVerificationRun(verifyTicket.id);
-    await refuses('unsettled-attempt', verifyTicket.id, /unsettled/i);
+    await refuses('unsettled-attempt', verifyTicket.id);
 
     // ── 6. POSITIVE CONTROL — a genuinely completed run is accepted ─────────
     // Five refusals prove nothing without this: a runtime refusing every completion
     // would satisfy all of them.
     scenariosRun += 1;
     const okTicket = await makeTicket('accepted', 'never');
+    // makeTerminalRun settles through the canonical authority internally.
     await makeTerminalRun(okTicket.id, 'completed');
-    await store.reopenTicket({ ticketId: okTicket.id });
-    const accepted = await complete(okTicket.id);
-    assert(accepted.statusCode === 200,
-      `6: a completed, unverified-by-policy run IS accepted (HTTP ${accepted.statusCode}: ${String(accepted.body).slice(0, 160)})`);
-    const persisted = await store.getTicket(okTicket.id);
-    assert(persisted.status === 'completed',
-      `6: the accepted completion actually persisted (${persisted.status})`);
-    assert(persisted.changedBy === 'admin',
-      '6: the completion records the operator who made the claim');
+    assert((await store.getTicket(okTicket.id)).status === 'completed',
+      '6: settlement completes a fully-terminal completed attempt (canonical authority)');
+    // The retired surface STILL refuses even for this genuinely completed
+    // Ticket — proving no independent completion path exists.
+    const retiredStillRefuses = await complete(okTicket.id);
+    let retiredBody = {};
+    try { retiredBody = JSON.parse(retiredStillRefuses.body); } catch (_) {}
+    assert(retiredStillRefuses.statusCode === 409 &&
+      RETIRED.test(String(retiredBody.error || '')),
+      '6: even a completed Ticket cannot be mutated through the retired surface');
 
     // The accepted path must not have been a blanket accept: re-check one refusal
     // still refuses on the same server, ruling out order-dependent behaviour.

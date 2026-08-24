@@ -16,7 +16,9 @@ function scheduleHasReusableInterval(schedule) {
 }
 
 function emptyGeneratedTicketCounts() {
-  return { total: 0, blocked: 0, triaged: 0, pending: 0, inProgress: 0, completed: 0, failed: 0 };
+  // T2 Tranche 5: Ticket-level `failed` is retired; `canceled` replaces it in
+  // generated-Ticket accounting. Run-level outcomes are unchanged.
+  return { total: 0, blocked: 0, triaged: 0, pending: 0, inProgress: 0, completed: 0, canceled: 0 };
 }
 
 function isTriaged(ticket) {
@@ -46,7 +48,7 @@ function countGeneratedTickets(tickets) {
     if (ticket.status === 'open') counts.pending += 1;
     if (ticket.status === 'in_progress') counts.inProgress += 1;
     if (ticket.status === 'completed') counts.completed += 1;
-    if (ticket.status === 'failed') counts.failed += 1;
+    if (ticket.status === 'canceled') counts.canceled += 1;
   }
   return counts;
 }
@@ -82,7 +84,7 @@ function buildProcessTemplateState(template, generatedTickets = [], now = Date.n
   if (template.enabled !== true) healthStatus = 'disabled';
   else if (dueStatus === 'invalid_schedule') healthStatus = 'invalid_schedule';
   else if (last && (last.status === 'blocked' || isTriaged(last))) healthStatus = 'attention_needed';
-  else if (recentGeneratedTickets.some(ticket => ticket.status === 'failed' || ticket.status === 'blocked')) healthStatus = 'attention_needed';
+  else if (recentGeneratedTickets.some(ticket => ticket.status === 'canceled' || ticket.status === 'blocked')) healthStatus = 'attention_needed';
   else if (dueStatus === 'schedule_paused') healthStatus = 'paused';
   else if (counts.total === 0) healthStatus = 'no_recent_triggers';
   else healthStatus = 'ok';

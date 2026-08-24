@@ -45,9 +45,10 @@ const baseReadiness = {
     sourceRevision,
     applicationVersion: '1.1.1'
   },
+  // T2 Tranche 5: the runtime schema head is now migration 041.
   migrationStatus: {
-    currentVersion: 39,
-    headVersion: 39,
+    currentVersion: 41,
+    headVersion: 41,
     fullyApplied: true,
     checksumsValid: true,
     partial: false,

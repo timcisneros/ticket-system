@@ -199,16 +199,26 @@ result = classifyTicketHistory(factsFor({
 }));
 check(result.proposedLifecycle === 'in_progress', 'valid IN_PROGRESS derives in_progress');
 
+// T2 Tranche 5 authority-first: legacy-string divergence is recorded, never
+// fatal. With no attempt and no blocker the derived lifecycle is open.
 result = classifyTicketHistory(factsFor({ id: 3, status: 'in_progress' }));
-check(result.classification === 'integrity_contradiction', 'missing IN_PROGRESS attempt refuses');
+check(result.classification === 'migratable' && result.proposedLifecycle === 'open',
+  'legacy in_progress without an attempt demotes to open with a recorded mismatch');
+check(result.reasons.some(r => r.code === 'HISTORY_CLASSIFIER_LEGACY_STATUS_MATERIALIZATION_MISMATCH'),
+  'the divergence is recorded as an audit reason');
 
 result = classifyTicketHistory(factsFor({
   id: 4, status: 'completed', ...completedAttempt(4, 4, 4)
 }));
 check(result.proposedLifecycle === 'completed', 'valid COMPLETED derives completed');
 
+// T2 Tranche 5 authority-first: legacy completed without durable completion
+// authority projects open (stale completion cannot survive), recorded.
 result = classifyTicketHistory(factsFor({ id: 5, status: 'completed' }));
-check(result.classification === 'integrity_contradiction', 'COMPLETED without proof refuses');
+check(result.classification === 'migratable' && result.proposedLifecycle === 'open',
+  'legacy completed without proof demotes to open with a recorded mismatch');
+check(result.reasons.some(r => r.code === 'HISTORY_CLASSIFIER_LEGACY_STATUS_MATERIALIZATION_MISMATCH'),
+  'the stale-completion divergence is recorded as an audit reason');
 
 result = classifyTicketHistory(factsFor({
   id: 6, status: 'failed', attempts: [attempt(6, 6, 1, 'failed', T0)], runs: [run(6, 6, 6, 'failed')]

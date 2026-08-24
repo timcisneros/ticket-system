@@ -23,9 +23,12 @@ const manifest = buildReleaseManifest({
   buildNative: false
 });
 assert.equal(manifest.sourceRevision, revision);
-// The head advances with every migration. Ticket-attempt authority is 039.
-assert.equal(manifest.databaseMigrationHead,
-  '039_ticket_attempt_authority.sql');
+// The head advances with every migration; the manifest must report exactly
+// the highest applied migration filename (currently 041, five-state cutover).
+const migrationHead = fs.readdirSync(
+  path.join(__dirname, '..', 'persistence', 'postgres', 'migrations')
+).filter(name => /^\d{3}_.*\.sql$/.test(name)).sort().pop();
+assert.equal(manifest.databaseMigrationHead, migrationHead);
 assert.equal(manifest.releaseContract.sourceRevision, revision);
 assert.equal(validateReleaseManifest(manifest), manifest);
 assert.equal(JSON.stringify(manifest).includes('/home/'), false);

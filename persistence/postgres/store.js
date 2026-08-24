@@ -129,9 +129,11 @@ const {
   inspectTicketAttemptBackfill
 } = require('./ticket-attempt-backfill');
 const {
+  inspectTicketFiveStateBackfill
+} = require('./t041-five-state-backfill');
+const {
   deriveTicketAttemptDisposition,
-  normalizeTicketAttempt,
-  ticketStatusForAttemptDisposition
+  normalizeTicketAttempt
 } = require('../../runtime/ticket-attempt-contract');
 const {
   evaluateAttemptCompletionAuthority,
@@ -143,6 +145,10 @@ const {
   normalizeCancellationAuthority
 } = require('../../runtime/ticket-cancellation-authority-contract');
 const { projectTicketLifecycle } = require('../../runtime/ticket-lifecycle-contract');
+const {
+  composeBlockingAuthority,
+  TicketBlockingAuthorityError
+} = require('../../runtime/ticket-blocking-authority-composer');
 const {
   evaluateV2CompletionAuthority
 } = require('../../runtime/v2-completion-authority-contract');
@@ -167,7 +173,10 @@ const {
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
 const MIGRATION_FILE_PATTERN = /^[0-9]{3}_[a-z0-9_]+\.sql$/;
 const IDENTIFIER_PATTERN = /^[a-z_][a-z0-9_]*$/;
-const TICKET_STATUSES = new Set(['open', 'in_progress', 'completed', 'failed', 'blocked', 'closed']);
+// T2 Tranche 5 canonical five-state vocabulary. `failed` and `closed` are
+// historical only; Run-level failed/interrupted are unchanged. The atomic
+// cutover ships this constant and migration 041 in one release boundary.
+const TICKET_STATUSES = new Set(['open', 'in_progress', 'blocked', 'completed', 'canceled']);
 const RUN_STATUSES = new Set(['pending', 'running', 'completed', 'failed', 'interrupted']);
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'interrupted']);
 // ── Leaf-lineage minting capability ─────────────────────────────────────────
@@ -184,10 +193,6 @@ const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'interrupted']);
 // capability. Proven by falsification in
 // scripts/t2-lineage-closure-postgres-test.js (attacks A and F).
 const LEAF_LINEAGE_MINT = Symbol('postgresRuntimeStore.leafLineageMint');
-// The parent Ticket outcomes that END execution. `open` is deliberately absent:
-// returning an interrupted owned-scope ticket to `open` is recovery, not
-// terminalization, and must stay reachable without a leaf completion proof.
-const TERMINAL_TICKET_STATUSES = new Set(['completed', 'failed', 'blocked']);
 const RUN_RECOVERY_MODES = new Set(['lease_expiry', 'process_restart']);
 const OPERATION_OUTCOMES = new Set(['succeeded', 'failed', 'refused']);
 const PROCESS_OPERATION_STATES = new Set(['intent', 'active', 'finalizing', 'terminal']);
@@ -1996,6 +2001,13 @@ class PostgresRuntimeStore {
               // historical Run/plan/evidence shape; membership is never guessed.
               await inspectTicketAttemptBackfill(this, { client });
             }
+            if (version === '041_ticket_five_state_cutover.sql') {
+              // T2 Tranche 5: fail-fast eight-table NOWAIT lock, locked
+              // classification of EVERY Ticket, complete desired projection,
+              // and source-identity binding — all inside this transaction
+              // before the SQL cutover executes.
+              await inspectTicketFiveStateBackfill(this, { client });
+            }
             await client.query(fs.readFileSync(path.join(MIGRATIONS_DIR, version), 'utf8'));
             await client.query(
               `INSERT INTO ${this.table('schema_migrations')} (version) VALUES ($1)`,
@@ -2888,7 +2900,7 @@ class PostgresRuntimeStore {
     runEventPayload = () => ({}),
     eventType = 'ticket.allocation_leaf_runs_admitted',
     eventPayload = {}
-  }, { client = null } = {}) {
+  }, { client = null, admissionIntent = null } = {}) {
     const id = positiveSafeInteger(ticketId, 'ticketId');
     if (!Array.isArray(leafDrafts) || leafDrafts.length === 0) {
       throw new TypeError('leafDrafts must be a non-empty array');
@@ -2955,6 +2967,17 @@ class PostgresRuntimeStore {
           'The stored plan provenance names a different planning attempt');
       }
       if (plan.status !== 'pending') refuseLeafAdmission('plan_not_pending');
+
+      // T2 Tranche 5: explicit-intent continuation over the SAME admitted
+      // pending plan (retry_structured_refusal). The blocker-intent matrix is
+      // enforced under the held locks; no planner call, no new attempt, no
+      // new plan occurs here. Auto path (intent null) is unchanged.
+      let leafAuthorizedFromStatuses = null;
+      if (admissionIntent !== null) {
+        const composed = await this._composeBlockingAuthorityLocked(connection, ticket);
+        this.assertAdmissionIntentAuthorized(composed.won, admissionIntent, composed.reference);
+        leafAuthorizedFromStatuses = [ticket.status];
+      }
 
       // Exactly-once, enforced under the ticket lock rather than asserted. A
       // committed complete leaf set re-reports itself; anything else refuses.
@@ -3105,6 +3128,9 @@ class PostgresRuntimeStore {
         }
       }, {
         client: connection,
+        // T2 Tranche 5: explicit leaf-retry intents admit directly from the
+        // truthful prior lifecycle; the auto path keeps OPEN-only.
+        authorizedFromStatuses: leafAuthorizedFromStatuses,
         // The identities this transaction reserved from the runs sequence, and
         // only those. They travel beside the drafts, never inside them.
         reservedRunIds: bindings.map(binding => binding.runId),
@@ -6168,7 +6194,7 @@ class PostgresRuntimeStore {
     afterTerminalRunId = null,
     runEventPayload = () => ({}),
     ticketEventPayload = {}
-  }, { client = null, reservedRunIds = null, leafLineageMint = null } = {}) {
+  }, { client = null, reservedRunIds = null, leafLineageMint = null, authorizedFromStatuses = null } = {}) {
     const id = positiveSafeInteger(ticketId, 'ticketId');
     if (!Array.isArray(runDrafts) || runDrafts.length === 0) {
       throw new TypeError('runDrafts must be a non-empty array');
@@ -6278,8 +6304,16 @@ class PostgresRuntimeStore {
       }
       const ticket = ticketFromRow(ticketResult.rows[0]);
       assertTicketCancellationNotCommitted(ticket, 'Run admission Ticket');
-      if (ticket.status !== 'open') {
-        throw new StateTransitionConflictError('ticket', id, ['open'], ticket);
+      // T2 Tranche 5: ordinary/auto-run admission keeps its narrow OPEN-only
+      // authority. The canonical composed rerun writer supplies an explicit,
+      // intent-validated authorized prior set; a caller-supplied status list
+      // alone is never the authority (see rerunAdmitRuns).
+      const authorizedStatuses = Array.isArray(authorizedFromStatuses) &&
+        authorizedFromStatuses.length > 0
+        ? authorizedFromStatuses
+        : ['open'];
+      if (!authorizedStatuses.includes(ticket.status)) {
+        throw new StateTransitionConflictError('ticket', id, [...authorizedStatuses], ticket);
       }
       if (ticket.triage && ticket.triage.required === true && !ticket.triage.resolvedAt) {
         const error = new Error('Cannot start runs while unresolved ticket-level triage exists');
@@ -6437,7 +6471,9 @@ class PostgresRuntimeStore {
       const transitioned = await this.transitionTicket({
         ticketId: id,
         expectedRevision: ticket.revision,
-        fromStatuses: ['open'],
+        // T2 Tranche 5: intent-authorized callers admit directly from the
+        // truthful prior lifecycle; the default remains OPEN-only.
+        fromStatuses: authorizedStatuses,
         toStatus: 'in_progress',
         eventPayload: {
           ...callerTicketPayload,
@@ -6919,6 +6955,141 @@ class PostgresRuntimeStore {
         payload: { triage: document }
       });
       return { ticket, triage: document, event };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  // T2 Tranche 5: triage resolution and canonical reprojection are ONE
+  // atomic operation. Lock order: attempt FOR UPDATE -> Ticket FOR UPDATE
+  // (frozen protocol). After the durable resolution, the shared composer
+  // rederives the lifecycle; a materialized `blocked` Ticket whose blocking
+  // authority is now gone projects to `open` (minimal transition, subject to
+  // higher precedence through the projector inputs).
+  async resolveTicketTriageAndReproject({ ticketId, resolvedBy, resolution }, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const actor = requiredString(resolvedBy, 'resolvedBy');
+    const note = requiredString(resolution, 'resolution');
+    const execute = async connection => {
+      const currentAttempt = await this.getCurrentTicketAttempt(id, {
+        client: connection,
+        forUpdate: true
+      });
+      const currentResult = await connection.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (currentResult.rowCount === 0) return null;
+      const current = ticketFromRow(currentResult.rows[0]);
+      if (!current.triage || current.triage.required !== true || current.triage.resolvedAt) {
+        throw new TriageConflictError('ticket', id, current);
+      }
+      const clock = await connection.query('SELECT clock_timestamp() AS ts');
+      const resolvedAt = isoTimestamp(clock.rows[0].ts, 'triage resolution clock');
+      const document = this.assertJsonRecord({
+        ...current.triage,
+        required: false,
+        resolvedAt,
+        resolvedBy: actor,
+        resolution: note
+      }, 'triage');
+      const updated = await connection.query(
+        `UPDATE ${this.table('tickets')}
+         SET body = jsonb_set(body, '{triage}', $2::jsonb, true),
+             revision = revision + 1,
+             updated_at = $3::timestamptz
+         WHERE id = $1
+         RETURNING *`,
+        [id, document, resolvedAt]
+      );
+      let ticket = ticketFromRow(updated.rows[0]);
+      const event = await this._appendEvent(connection, {
+        type: 'ticket.triage_resolved',
+        ticketId: ticket.id,
+        payload: { triage: document }
+      });
+      let reprojectEvent = null;
+      if (ticket.status === 'blocked') {
+        const composed = await this._composeBlockingAuthorityLocked(connection, ticket);
+        if (!composed.won) {
+          const transitioned = await this.transitionTicket({
+            ticketId: ticket.id,
+            expectedRevision: ticket.revision,
+            fromStatuses: ['blocked'],
+            toStatus: 'open',
+            patch: {},
+            eventType: 'ticket.lifecycle_reprojected',
+            eventPayload: {
+              reason: 'triage_resolved',
+              supersededBlocker: composed.reference
+            }
+          }, { client: connection });
+          ticket = transitioned.ticket;
+          reprojectEvent = transitioned.event;
+        }
+      }
+      return { ticket, triage: document, event, reprojectEvent, currentAttempt };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  // Dedicated reasoned blocker writer — the only sanctioned producer of
+  // materialized `blocked` besides composer-driven reprojection. A blocker
+  // without its durable reason code is refused: prose alone is not authority.
+  async blockTicket({
+    ticketId,
+    reasonCode,
+    summary,
+    triage = null,
+    patch = {},
+    eventType = 'ticket.blocked',
+    eventPayload = {}
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    requiredString(reasonCode, 'reasonCode');
+    requiredString(summary, 'summary');
+    // ONE producer, ONE code: when the blocker pairs with a Ticket-triage
+    // fact, the refusal event's reasonCode MUST equal the triage's
+    // reasonCode, so a later ticket.triage_resolved event supersedes the
+    // refusal by exact match (shared composer rule).
+    const effectiveReasonCode = triage && typeof triage === 'object' &&
+      typeof triage.reasonCode === 'string' && triage.reasonCode.trim()
+      ? triage.reasonCode
+      : reasonCode;
+    if (triage && typeof triage === 'object' &&
+        (!effectiveReasonCode || !reasonCode)) {
+      throw new TypeError('blockTicket requires reasonCode');
+    }
+    const execute = async connection => {
+      const result = await connection.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (result.rowCount === 0) {
+        const error = new Error(`ticket ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const ticket = ticketFromRow(result.rows[0]);
+      // T2 Tranche 5: a committed cancellation authority is final. Blocking
+      // under the SAME transaction that holds the Ticket FOR UPDATE can never
+      // materialize blocked on a canceled Ticket, so `canceled -> blocked` is
+      // structurally impossible (authority + CANCELED stay one projection).
+      assertTicketCancellationNotCommitted(ticket, 'blocker');
+      assertStructuredAllocationAuthorityNotPatched(patch, 'blocker patch');
+      assertStructuredAllocationPlanningAttemptNotPatched(patch, 'blocker patch');
+      return this.transitionTicketState({
+        ticketId: id,
+        fromStatuses: [ticket.status],
+        toStatus: 'blocked',
+        patch: {
+          ...patch,
+          blockedReason: summary,
+          blockedReasonCode: effectiveReasonCode,
+          ...(triage ? { triage } : {})
+        },
+        eventType,
+        eventPayload: { reasonCode: effectiveReasonCode, ...eventPayload }
+      }, { client: connection });
     };
     return client ? execute(client) : this.withTransaction(execute);
   }
@@ -7638,7 +7809,7 @@ class PostgresRuntimeStore {
               COUNT(*) FILTER (WHERE status = 'open')::bigint AS pending,
               COUNT(*) FILTER (WHERE status = 'in_progress')::bigint AS in_progress,
               COUNT(*) FILTER (WHERE status = 'completed')::bigint AS completed,
-              COUNT(*) FILTER (WHERE status = 'failed')::bigint AS failed
+              COUNT(*) FILTER (WHERE status = 'canceled')::bigint AS canceled
        FROM sourced
        WHERE template_id = ANY($1::bigint[])
        GROUP BY template_id`,
@@ -7658,7 +7829,7 @@ class PostgresRuntimeStore {
         pending: count(row.pending),
         inProgress: count(row.in_progress),
         completed: count(row.completed),
-        failed: count(row.failed)
+        canceled: count(row.canceled)
       });
     }
 
@@ -9122,6 +9293,15 @@ class PostgresRuntimeStore {
     const callerPayload = this.assertJsonRecord(eventPayload, 'eventPayload');
 
     const execute = async connection => {
+      // T2 Tranche 5 lock order: attempt FOR UPDATE -> Ticket FOR UPDATE
+      // (frozen protocol). The durable limit change now owns canonical
+      // reprojection: raising the only exhausted ceiling releases a blocked
+      // Ticket; lowering it materializes blocked when exhaustion becomes
+      // true — both subject to higher lifecycle precedence.
+      const currentAttempt = await this.getCurrentTicketAttempt(id, {
+        client: connection,
+        forUpdate: true
+      });
       const currentResult = await connection.query(
         `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
         [id]
@@ -9133,6 +9313,7 @@ class PostgresRuntimeStore {
       }
 
       const before = ticketFromRow(currentResult.rows[0]);
+      assertTicketCancellationNotCommitted(before, 'maxAttempts update');
       const currentPolicy = before.executionPolicy == null
         ? null
         : this.assertJsonRecord(before.executionPolicy, 'ticket executionPolicy');
@@ -9164,7 +9345,7 @@ class PostgresRuntimeStore {
         throw new OptimisticConcurrencyError('ticket execution policy', id, before.revision);
       }
 
-      const ticket = ticketFromRow(updated.rows[0]);
+      let ticket = ticketFromRow(updated.rows[0]);
       const event = await this._appendEvent(connection, {
         type,
         ticketId: ticket.id,
@@ -9178,9 +9359,53 @@ class PostgresRuntimeStore {
           updatedAt: ticket.updatedAt
         }
       });
+
+      // Canonical reprojection under the held locks, through the FULL frozen
+      // five-state precedence — not the blocker composer alone:
+      //   1. cancellation       -> refused above (assertTicketCancellationNotCommitted);
+      //   2. unsettled attempt  -> never reaches this branch (guard below);
+      //   3. current settled COMPLETED attempt -> completed. The write-once
+      //      disposition IS the persisted exact proof (settlement validated
+      //      evaluateAttemptCompletionAuthority before writing it), and only
+      //      the current/highest-ordinal attempt qualifies, so stale older
+      //      completions cannot resurrect;
+      //   4/5. otherwise the shared composer decides blocked/open — a settled
+      //      blocked attempt still wins there (composer rule 2), then an
+      //      exhausted ceiling, admission hold, or reasoned refusal.
+      // This mirrors transitionTicketAfterRun exactly: maxAttemptsExhausted
+      // may exist latently but must never demote a genuinely completed Ticket
+      // (frozen rule 3 outranks rule 4).
+      let reprojectEvent = null;
+      if (!currentAttempt || currentAttempt.disposition !== null) {
+        let target;
+        if (currentAttempt && currentAttempt.disposition === 'completed') {
+          target = 'completed';
+        } else {
+          const composed = await this._composeBlockingAuthorityLocked(connection, ticket);
+          target = composed.won ? 'blocked' : 'open';
+        }
+        if (target !== ticket.status) {
+          const transitioned = await this.transitionTicket({
+            ticketId: ticket.id,
+            expectedRevision: ticket.revision,
+            fromStatuses: [ticket.status],
+            toStatus: target,
+            patch: {},
+            eventType: 'ticket.lifecycle_reprojected',
+            eventPayload: {
+              reason: 'max_attempts_updated',
+              fromMaxAttempts: previousMaxAttempts,
+              toMaxAttempts: nextMaxAttempts
+            }
+          }, { client: connection });
+          ticket = transitioned.ticket;
+          reprojectEvent = transitioned.event;
+        }
+      }
       return {
         ticket,
         event,
+        reprojectEvent,
         previousMaxAttempts,
         nextMaxAttempts
       };
@@ -9527,7 +9752,19 @@ class PostgresRuntimeStore {
         throw error;
       }
 
-      const targetStatus = ticketStatusForAttemptDisposition(attempt.disposition);
+      // T2 Tranche 5 canonical five-state projection. completed/blocked map
+      // directly from the write-once attempt disposition; failed/interrupted
+      // demote through the SHARED blocking-authority composer — an unresolved
+      // durable authority projects blocked, otherwise open. Stale completion
+      // cannot resurrect: this mapping runs only for the locked current
+      // (highest-ordinal) attempt inside its own settlement transaction.
+      let targetStatus;
+      if (attempt.disposition === 'completed' || attempt.disposition === 'blocked') {
+        targetStatus = attempt.disposition;
+      } else {
+        const composed = await this._composeBlockingAuthorityLocked(connection, ticket);
+        targetStatus = composed.won ? 'blocked' : 'open';
+      }
       if (ticket.status === targetStatus) {
         return {
           ticket,
@@ -9539,7 +9776,7 @@ class PostgresRuntimeStore {
           aggregateDecision: leafDecision
         };
       }
-      const patch = ['completed', 'failed', 'open'].includes(targetStatus)
+      const patch = ['completed', 'open'].includes(targetStatus)
         ? { rerunMode: null }
         : {};
       const transitioned = await this.transitionTicket({
@@ -9727,14 +9964,6 @@ class PostgresRuntimeStore {
           ticket
         );
       }
-      // Do not reinterpret historical `closed` as a new cancellation decision.
-      if (ticket.status === 'closed') {
-        refusal(
-          'TICKET_CANCELLATION_HISTORICAL_CLOSED',
-          `ticket ${id} has historical closed status and requires migration classification`,
-          ticket
-        );
-      }
       if (batchRuns.length > 0 &&
           (batchRuns.length !== currentAttempt.memberCount ||
            batchRuns.some(member => member.ticketId !== id ||
@@ -9810,9 +10039,14 @@ class PostgresRuntimeStore {
         reason: requestedAuthority.reason,
         committedAt: clock.rows[0].ts
       });
+      // T2 Tranche 5: the durable authority and the materialized CANCELED
+      // status are ONE canonical projection committed atomically. The
+      // write-once guard (cancellation_authority IS NULL) plus the 040
+      // immutability trigger make this neither-or-both under any crash.
       const updated = await connection.query(
         `UPDATE ${this.table('tickets')}
          SET cancellation_authority = $2::jsonb,
+             status = 'canceled',
              revision = revision + 1,
              updated_at = clock_timestamp()
          WHERE id = $1 AND cancellation_authority IS NULL
@@ -9857,6 +10091,287 @@ class PostgresRuntimeStore {
       };
     };
     return client ? execute(client) : this.withTransaction(execute);
+  }
+
+  // Frozen blocker-intent matrix (T2 Tranche 5). The intent token selects a
+  // row; authority is the composer-derived governing blocker. Auto/scheduler
+  // paths never carry an intent and therefore never supersede a blocker.
+  assertAdmissionIntentAuthorized(governing, intent, reference) {
+    const matrix = {
+      ticketTriageUnresolved: [],
+      maxAttemptsExhausted: [],
+      admissionHold: ['release_hold'],
+      persistedRefusalEventId: ['retry_structured_refusal'],
+      settledBlockedAttempt: ['rerun_terminal'],
+      none: ['rerun_terminal', 'retry_auto']
+    };
+    const permitted = matrix[governing ?? 'none'] ?? [];
+    if (permitted.includes(intent)) return;
+    if (governing === 'ticketTriageUnresolved') {
+      const error = new Error(
+        'Unresolved triage must be resolved before admission');
+      error.code = 'TICKET_TRIAGE_REQUIRED';
+      error.statusCode = 409;
+      throw error;
+    }
+    if (governing === 'maxAttemptsExhausted') {
+      const error = new Error(
+        'Attempt budget is exhausted; raise the durable maxAttempts limit first');
+      error.code = 'RUN_BUDGET_EXHAUSTED';
+      error.failureKind = 'runtime_budget_exhausted';
+      error.statusCode = 409;
+      throw error;
+    }
+    const error = new Error(
+      `admissionIntent ${intent} is not authorized for the current ` +
+      `${governing} blocker`);
+    error.code = 'TICKET_BLOCKER_INTENT_MISMATCH';
+    error.statusCode = 409;
+    error.currentBlocker = reference;
+    throw error;
+  }
+
+  // Shared blocking-authority composition for a Ticket whose rows the caller
+  // already holds under the frozen lock protocol. Reads the durable attempt
+  // list and only the event types the composer consumes. Live view: no close
+  // boundary; parentTicketId resolution relies on creation-time referential
+  // integrity (the append-only payload is the authority).
+  async _composeBlockingAuthorityLocked(connection, ticket) {
+    const attemptsResult = await connection.query(
+      `SELECT id, ordinal, member_count, disposition, admitted_at, settled_at
+       FROM ${this.table('ticket_attempts')}
+       WHERE ticket_id = $1
+       ORDER BY ordinal`,
+      [ticket.id]
+    );
+    const attempts = attemptsResult.rows.map(row => ({
+      id: positiveSafeInteger(row.id, 'attempt.id'),
+      ordinal: positiveSafeInteger(row.ordinal, 'attempt.ordinal'),
+      memberCount: positiveSafeInteger(row.member_count, 'attempt.memberCount'),
+      disposition: row.disposition,
+      admittedAt: rowTimestamp(row.admitted_at),
+      settledAt: row.settled_at === null ? null : rowTimestamp(row.settled_at)
+    }));
+    const eventsResult = await connection.query(
+      `SELECT id, position, type, ts, payload
+       FROM ${this.table('events')}
+       WHERE ticket_id = $1
+         AND type = ANY($2::text[])
+       ORDER BY position`,
+      [ticket.id, [
+        'ticket.created',
+        'ticket.blocked',
+        'ticket.attempt_admitted',
+        'ticket.execution_policy_updated',
+        'ticket.triage_resolved'
+      ]]
+    );
+    const events = eventsResult.rows.map(row => ({
+      id: String(row.id),
+      position: Number(row.position),
+      type: row.type,
+      ts: rowTimestamp(row.ts),
+      payload: row.payload || {}
+    }));
+    const composed = composeBlockingAuthority({
+      triage: ticket.triage || null,
+      attempts,
+      events,
+      executionPolicy: ticket.executionPolicy || null,
+      closeBoundary: null
+    });
+    return composed;
+  }
+
+  // Canonical composed rerun/retry admission — T2 Tranche 5.
+  //
+  // ONE transaction performs: plan lock (when routed) -> current-attempt
+  // member locks ORDER BY id -> attempt FOR UPDATE -> Ticket FOR UPDATE LAST;
+  // rederives the CURRENT governing blocker through the shared composer; and
+  // enforces the frozen blocker-intent matrix BEFORE admitting. There is NO
+  // OPEN waypoint: createRunsAndStartTicket transitions directly from the
+  // authorized prior state to in_progress inside this same transaction, so no
+  // durable COMPLETED/BLOCKED -> OPEN gap can exist and any failure rolls
+  // back to the exact prior state.
+  //
+  // admissionIntent is an intent TOKEN, not an authority: authority is the
+  // composer-derived governing blocker plus the fixed matrix below.
+  //
+  // Active-Run interruption is NOT part of this transaction (process/
+  // filesystem effects cannot join a DB transaction); callers interrupt
+  // first, each interruption settling its attempt in its own transaction.
+  async rerunAdmitRuns({
+    ticketId,
+    runDrafts,
+    admissionIntent,
+    afterTerminalRunId = null,
+    runEventPayload = () => ({}),
+    ticketEventPayload = {}
+  }) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const intent = requiredString(admissionIntent, 'admissionIntent');
+    const allowedIntents = new Set([
+      'rerun_terminal',
+      'retry_auto',
+      'release_hold',
+      'retry_structured_refusal'
+    ]);
+    if (!allowedIntents.has(intent)) {
+      const error = new Error(`Unsupported admissionIntent: ${intent}`);
+      error.code = 'TICKET_ADMISSION_INTENT_INVALID';
+      throw error;
+    }
+    if (!Array.isArray(runDrafts) || runDrafts.length === 0) {
+      throw new TypeError('runDrafts must be a non-empty array');
+    }
+    return this.withTransaction(async client => {
+      // Route without locks: current attempt + optional v2 plan reference.
+      const routeAttempt = await client.query(
+        `SELECT id FROM ${this.table('ticket_attempts')}
+         WHERE ticket_id = $1 ORDER BY ordinal DESC LIMIT 1`,
+        [id]
+      );
+      const routedAttemptId = routeAttempt.rowCount === 0
+        ? null
+        : positiveSafeInteger(routeAttempt.rows[0].id, 'attempt.id');
+      let routedPlanId = null;
+      if (routedAttemptId !== null) {
+        const routeRuns = await client.query(
+          `SELECT NULLIF(body->>'allocationPlanId', '') AS allocation_plan_id
+           FROM ${this.table('runs')}
+           WHERE ticket_attempt_id = $1 ORDER BY id`,
+          [routedAttemptId]
+        );
+        const references = [...new Set(routeRuns.rows
+          .map(row => row.allocation_plan_id)
+          .filter(value => value !== null))];
+        if (references.length > 1 ||
+            (references.length === 1 && !/^[1-9]\d*$/.test(references[0]))) {
+          const error = new Error(`ticket ${id} has malformed v2 allocation-plan routing`);
+          error.code = 'TICKET_RERUN_V2_AUTHORITY_INVALID';
+          throw error;
+        }
+        routedPlanId = references.length === 1 ? Number(references[0]) : null;
+      }
+      // Frozen protocol: allocation_plans FIRST when routed.
+      if (routedPlanId !== null) {
+        await this._findLockedPlannerAdmittedPlan(client, id, {
+          allocationPlanId: routedPlanId
+        });
+      }
+      // A terminal predecessor is LOCKED inside the runs phase — BEFORE any
+      // attempt or Ticket lock — and bound to THIS Ticket by identity. The
+      // former auto-retry composition relied on its own wrapper locking the
+      // predecessor before reopening; rerunAdmitRuns owns that duty now, so a
+      // stale or foreign predecessor id can never be acquired while this
+      // transaction holds tickets FOR UPDATE (the documented runs -> tickets
+      // FOR KEY SHARE inversion would otherwise form a real 40P01 cycle).
+      let lockedPredecessor = null;
+      if (afterTerminalRunId !== null && afterTerminalRunId !== undefined) {
+        const predecessorId = positiveSafeInteger(afterTerminalRunId, 'afterTerminalRunId');
+        const predecessorResult = await client.query(
+          `SELECT * FROM ${this.table('runs')} WHERE id = $1 FOR UPDATE`,
+          [predecessorId]
+        );
+        if (predecessorResult.rowCount === 0 ||
+            Number(predecessorResult.rows[0].ticket_id) !== id ||
+            !TERMINAL_RUN_STATUSES.has(predecessorResult.rows[0].status)) {
+          throw new StateTransitionConflictError(
+            'run',
+            predecessorId,
+            ['terminal predecessor of this Ticket for the requested retry'],
+            { status: predecessorResult.rowCount === 0 ? 'missing' : predecessorResult.rows[0].status }
+          );
+        }
+        // Held for the remainder of the transaction; full identity/agent/
+        // membership validation stays in createRunsAndStartTicket, which
+        // re-locks the now-held row as a no-op.
+        lockedPredecessor = runFromRow(predecessorResult.rows[0]);
+      }
+      // Attempt members ORDER BY id, then the attempt, then Ticket LAST.
+      if (routedAttemptId !== null) {
+        await client.query(
+          `SELECT * FROM ${this.table('runs')}
+           WHERE ticket_attempt_id = $1 ORDER BY id FOR UPDATE`,
+          [routedAttemptId]
+        );
+      }
+      const currentAttempt = await this.getCurrentTicketAttempt(id, {
+        client,
+        forUpdate: true
+      });
+      if ((currentAttempt ? currentAttempt.id : null) !== routedAttemptId) {
+        const error = new Error(`ticket ${id} current attempt changed while rerun was being admitted`);
+        error.code = 'TICKET_RERUN_STALE_ATTEMPT';
+        throw error;
+      }
+      if (currentAttempt && currentAttempt.disposition === null) {
+        const error = new StateTransitionConflictError(
+          'ticket_attempt', currentAttempt.id,
+          ['settled before Ticket rerun'], currentAttempt);
+        error.code = 'TICKET_ATTEMPT_UNSETTLED';
+        throw error;
+      }
+      const ticketResult = await client.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (ticketResult.rowCount === 0) {
+        const error = new Error(`ticket ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const ticket = ticketFromRow(ticketResult.rows[0]);
+      assertTicketCancellationNotCommitted(ticket, 'Rerun admission Ticket');
+      if (['canceled', 'in_progress'].includes(ticket.status)) {
+        throw new StateTransitionConflictError(
+          'ticket', id, ['open', 'blocked', 'completed'], ticket);
+      }
+      // Rederive the CURRENT governing blocker and enforce the matrix.
+      const composed = await this._composeBlockingAuthorityLocked(client, ticket);
+      this.assertAdmissionIntentAuthorized(composed.won, intent, composed.reference);
+      const governing = composed.won;
+      // Durable budget headroom, checked inside this transaction so a
+      // concurrent admission cannot slip between check and admit.
+      const budgetSnapshots = runDrafts.map((draft, index) => {
+        if (!Object.prototype.hasOwnProperty.call(draft, 'runtimeBudgetSnapshot') ||
+            draft.runtimeBudgetSnapshot === null ||
+            draft.runtimeBudgetSnapshot === undefined) {
+          return null;
+        }
+        try {
+          return normalizeRuntimeBudgetSnapshot(draft.runtimeBudgetSnapshot);
+        } catch (error) {
+          error.message = `runDrafts[${index}].runtimeBudgetSnapshot: ${error.message}`;
+          throw error;
+        }
+      }).filter(Boolean);
+      if (budgetSnapshots.length > 0) {
+        const admittedCount = await this.countTicketAttempts(id, { client });
+        const requestedAttempts = 1;
+        const maxAttempts = budgetSnapshots[0].maxAttempts;
+        if (admittedCount + requestedAttempts > maxAttempts) {
+          const error = new Error(
+            `Ticket ${id} cannot admit ${requestedAttempts} attempt(s): ` +
+            `${admittedCount} of ${maxAttempts} attempts already exist`);
+          error.code = 'RUN_BUDGET_EXHAUSTED';
+          error.failureKind = 'runtime_budget_exhausted';
+          throw error;
+        }
+      }
+      const created = await this.createRunsAndStartTicket({
+        ticketId: id,
+        runDrafts,
+        afterTerminalRunId,
+        runEventPayload,
+        ticketEventPayload: {
+          ...ticketEventPayload,
+          admissionIntent: intent,
+          supersededBlocker: composed.won ? composed.reference : null
+        }
+      }, { client, authorizedFromStatuses: [ticket.status] });
+      return { ...created, supersededBlocker: composed.won ? composed.reference : null };
+    });
   }
 
   async reopenTicket({ ticketId, rerunMode = null }, { client = null } = {}) {
@@ -9913,36 +10428,18 @@ class PostgresRuntimeStore {
     const id = positiveSafeInteger(ticketId, 'ticketId');
     const predecessorId = positiveSafeInteger(predecessorRunId, 'predecessorRunId');
     const draft = this.assertJsonRecord(runDraft, 'runDraft');
-    return this.withTransaction(async client => {
-      // The predecessor Run lock precedes reopenTicket's attempt/Ticket locks.
-      // reopenTicket ends by taking tickets FOR UPDATE, and run-evidence
-      // writers on the terminal predecessor take runs -> tickets FOR KEY SHARE
-      // (events FK); waiting for the predecessor lock while holding the Ticket
-      // lock would recreate that cycle inside this composed transaction. The
-      // full predecessor validation still happens inside
-      // createRunsAndStartTicket, which re-locks both rows as no-ops.
-      const predecessorLock = await client.query(
-        `SELECT * FROM ${this.table('runs')} WHERE id = $1 FOR UPDATE`,
-        [predecessorId]
-      );
-      if (predecessorLock.rowCount === 0) {
-        throw new StateTransitionConflictError(
-          'run',
-          predecessorId,
-          ['terminal predecessor for the requested retry'],
-          { status: 'missing' }
-        );
-      }
-      const reopened = await this.reopenTicket({ ticketId: id, rerunMode: 'auto_retry' }, { client });
-      if (!reopened) return null;
-      const created = await this.createRunsAndStartTicket({
-        ticketId: id,
-        runDrafts: [{ ...draft, rerunMode: 'auto_retry' }],
-        afterTerminalRunId: predecessorId,
-        runEventPayload,
-        ticketEventPayload: { rerunMode: 'auto_retry', predecessorRunId: predecessorId }
-      }, { client });
-      return { ...created, reopenEvent: reopened.event };
+    // T2 Tranche 5: automatic retry composes through the canonical rerun
+    // writer — predecessor validation, blocker matrix ('retry_auto' is
+    // authorized only when NO blocker governs) and direct
+    // prior-state -> in_progress admission in ONE transaction. The former
+    // durable reopen waypoint is gone.
+    return this.rerunAdmitRuns({
+      ticketId: id,
+      runDrafts: [{ ...draft, rerunMode: 'auto_retry' }],
+      admissionIntent: 'retry_auto',
+      afterTerminalRunId: predecessorId,
+      runEventPayload,
+      ticketEventPayload: { rerunMode: 'auto_retry', predecessorRunId: predecessorId }
     });
   }
 

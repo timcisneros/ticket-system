@@ -69,15 +69,26 @@ function positiveInteger(value, label) {
 // exists as a durable record AND has not been resolved/superseded by a durable
 // record of equivalent authority.
 //
-// The shape is intentionally narrow: a single boolean flag per blocking class.
+// The shape is intentionally narrow: one flag/reference per blocking class.
 // Callers compose the inputs from their own durable authority reads; the
 // projector does not inspect any other fact.
+//
+// T2 Tranche 5 additions (frozen reviewer decisions):
+//   settledBlockedAttempt — the write-once latest/highest settled Ticket
+//     attempt disposition itself when it is 'blocked'. Currency duty belongs
+//     to the composer: it must be supplied only while that attempt is the
+//     maximum ordinal and no newer attempt exists.
+//   admissionHold — the executeTicketPlan child admission hold, derived from
+//     the append-only ticket.created spawn-provenance event while zero
+//     attempts exist. First admitted attempt structurally ends the hold.
 function normalizeBlockingAuthority(value, label = 'blockingAuthority') {
   if (value === null || value === undefined) {
     return {
       ticketTriageUnresolved: false,
       persistedRefusalEventId: null,
-      maxAttemptsExhausted: false
+      maxAttemptsExhausted: false,
+      settledBlockedAttempt: null,
+      admissionHold: null
     };
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -86,7 +97,13 @@ function normalizeBlockingAuthority(value, label = 'blockingAuthority') {
       `${label} must be an object or null`
     );
   }
-  const allowed = ['ticketTriageUnresolved', 'persistedRefusalEventId', 'maxAttemptsExhausted'];
+  const allowed = [
+    'ticketTriageUnresolved',
+    'persistedRefusalEventId',
+    'maxAttemptsExhausted',
+    'settledBlockedAttempt',
+    'admissionHold'
+  ];
   const extras = Object.keys(value).filter(key => !allowed.includes(key));
   if (extras.length > 0) {
     throw new TicketLifecycleContractError(
@@ -106,10 +123,41 @@ function normalizeBlockingAuthority(value, label = 'blockingAuthority') {
     persistedRefusalEventId = value.persistedRefusalEventId;
   }
   const maxAttemptsExhausted = value.maxAttemptsExhausted === true;
+  let settledBlockedAttempt = null;
+  if (value.settledBlockedAttempt !== null && value.settledBlockedAttempt !== undefined) {
+    const candidate = value.settledBlockedAttempt;
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      throw new TicketLifecycleContractError(
+        'TICKET_LIFECYCLE_INVALID',
+        `${label}.settledBlockedAttempt must be an object or null`
+      );
+    }
+    settledBlockedAttempt = {
+      ticketAttemptId: positiveSafeInteger(candidate.ticketAttemptId,
+        `${label}.settledBlockedAttempt.ticketAttemptId`),
+      ordinal: positiveInteger(candidate.ordinal,
+        `${label}.settledBlockedAttempt.ordinal`)
+    };
+  }
+  let admissionHold = null;
+  if (value.admissionHold !== null && value.admissionHold !== undefined) {
+    const candidate = value.admissionHold;
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate) ||
+        typeof candidate.createdEventId !== 'string' ||
+        candidate.createdEventId.length === 0) {
+      throw new TicketLifecycleContractError(
+        'TICKET_LIFECYCLE_INVALID',
+        `${label}.admissionHold must be an object with a non-empty createdEventId string or null`
+      );
+    }
+    admissionHold = { createdEventId: candidate.createdEventId };
+  }
   return {
     ticketTriageUnresolved,
     persistedRefusalEventId,
-    maxAttemptsExhausted
+    maxAttemptsExhausted,
+    settledBlockedAttempt,
+    admissionHold
   };
 }
 
@@ -117,7 +165,9 @@ function hasUnresolvedBlockingAuthority(blockingAuthority) {
   if (!blockingAuthority) return false;
   return blockingAuthority.ticketTriageUnresolved === true ||
     blockingAuthority.persistedRefusalEventId !== null ||
-    blockingAuthority.maxAttemptsExhausted === true;
+    blockingAuthority.maxAttemptsExhausted === true ||
+    blockingAuthority.settledBlockedAttempt !== null ||
+    blockingAuthority.admissionHold !== null;
 }
 
 // Canonical five-state Ticket lifecycle projection. Pure, topology-neutral.

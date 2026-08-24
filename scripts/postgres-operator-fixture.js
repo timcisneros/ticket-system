@@ -194,10 +194,13 @@ async function seedOperatorFixture(store) {
   });
 
   // ── Verification failure → open run triage (the "run 102" blocker) ──
+  // T2 five-state lifecycle: the RUN failed and carries open run-level triage,
+  // but Ticket-level FAILED is retired. With no ticket-level triage, blocker
+  // or cancellation, the durable facts project this Ticket `open`.
   const failedTicket = (await store.createTicketWithEvent({
     ticket: baseTicket(agent, {
       objective: 'Generate vendor risk report (verification failed → run triage)',
-      status: 'failed'
+      status: 'open'
     }),
     eventPayload: { source: 'operator-fixture' }
   })).ticket;

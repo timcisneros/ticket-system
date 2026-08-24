@@ -323,7 +323,16 @@ function resolveSessionSecret() {
 const SESSION_SECRET = resolveSessionSecret();
 const PROVIDERS = ['openai', 'ollama'];
 const MODELS = ['gpt-5.1', 'gpt-5.1-mini', 'gpt-4.1', 'gpt-4.1-mini'];
-const TICKET_STATUSES = ['open', 'in_progress', 'completed', 'failed', 'blocked', 'closed'];
+// T2 Tranche 5 canonical five-state Ticket vocabulary (atomic cutover with
+// migration 041). Run-level failed/interrupted are unchanged.
+const TICKET_STATUSES = ['open', 'in_progress', 'blocked', 'completed', 'canceled'];
+const TICKET_LIFECYCLE_MUTATION_SURFACES = Object.freeze({
+  in_progress: 'attempt admission',
+  completed: 'completion authority and settlement',
+  canceled: 'Ticket cancellation authority',
+  blocked: 'canonical reasoned blocker writers',
+  open: 'canonical reprojection or atomic admission/retry'
+});
 const TRIAGE_REASON_CODES = ['verification_failed', 'authority_blocked', 'runtime_failed', 'provider_failed', 'model_contract_failed', 'stopped', 'objective_ambiguous', 'runtime_budget_insufficient', 'unknown'];
 const TRIAGE_REQUIRED_DECISIONS = ['review_failure', 'approve_retry', 'change_scope', 'fix_input', 'manual_recovery', 'clarify_objective', 'none'];
 // `requireVerification` has exactly ONE supported value, and it is not a switch.
@@ -4596,7 +4605,7 @@ function enrichTicketForDisplay(ticket, context) {
   else if (ticket.status === 'open' && hasRunnableTarget) executionSummaryLabel = 'will run automatically';
   else if (ticket.status === 'open' && ticket.assignmentTargetType === 'group') executionSummaryLabel = 'open — group has no agents';
   else if (ticket.status === 'completed') executionSummaryLabel = 'completed — rerun available';
-  else if (ticket.status === 'failed') executionSummaryLabel = 'failed — retry available';
+  else if (ticket.status === 'canceled') executionSummaryLabel = 'canceled';
 
   return {
     ...ticket,
@@ -9449,6 +9458,8 @@ async function buildTicketTimeline(ticketId) {
     'ticket.created': 'Ticket created',
     'ticket.updated': 'Ticket updated',
     'ticket.blocked': 'Ticket blocked',
+    'ticket.lifecycle_reprojected': 'Ticket lifecycle reprojected',
+    'ticket.triage_resolved': 'Ticket triage resolved',
     'ticket.structured_planning_started': 'Structured planning attempt created',
     'ticket.structured_planning_requested': 'Structured planner request started',
     'ticket.structured_planning_responded': 'Structured planner response received',
@@ -9519,6 +9530,9 @@ async function buildTicketTimeline(ticketId) {
         title: lifecycleTitles[event.type],
         summary: payload.message || payload.error ||
           structuredPlanningTimelineSummary(event.type, payload) ||
+          (event.type === 'ticket.lifecycle_reprojected' && payload.previousStatus
+            ? `Lifecycle reprojected from ${payload.previousStatus} to ${payload.status}`
+            : null) ||
           (payload.status ? `Status ${payload.status}` : event.type),
         sourceType: 'event',
         sourceRef,
@@ -9532,7 +9546,12 @@ async function buildTicketTimeline(ticketId) {
           sequence: event.seq ?? null,
           previousHash: event.prevHash || null,
           attemptNumber: event.runId ? runAttemptById.get(event.runId) || null : null,
-          replaySnapshotPath: payload.replaySnapshotPath || null
+          replaySnapshotPath: payload.replaySnapshotPath || null,
+          // T2 Tranche 5: canonical reprojections carry their transition ends
+          // so every audit surface agrees on the same facts.
+          ...(event.type === 'ticket.lifecycle_reprojected' && payload.previousStatus
+            ? { fromStatus: payload.previousStatus, toStatus: payload.status }
+            : {})
         }
       });
       continue;
@@ -14855,19 +14874,16 @@ async function blockTicketForFeasibility(ticket, error, context = {}) {
     missingAuthorityGrants: error.missingAuthorityGrants || []
   };
   const triage = buildTicketFeasibilityTriage(error, now);
-  const transitioned = await getTicketRunLifecycleRepository().transitionTicketState({
+  const transitioned = await getTicketRunLifecycleRepository().blockTicket({
     ticketId: persistedTicket.id,
-    fromStatuses: [persistedTicket.status],
-    toStatus: 'blocked',
+    reasonCode: 'feasibility_refused',
+    summary: error.message,
+    triage,
     patch: {
-      blockedReason: error.message,
       feasibility,
-      triage,
-      changedAt: now,
       ...(context.changedBy ? { changedBy: context.changedBy } : {})
     },
-    eventType: 'ticket.blocked',
-    eventPayload: { reason: error.message, feasibility, triage }
+    eventPayload: { reason: error.message, feasibility }
   });
   const blockedTicket = transitioned.ticket;
   appendSystemLog('ticket:feasibility_blocked', error.message, null, {
@@ -14901,18 +14917,12 @@ async function blockTicketForObjectiveAmbiguity(ticket, gateResult, context = {}
     resolvedBy: null,
     resolution: null
   });
-  const transitioned = await getTicketRunLifecycleRepository().transitionTicketState({
+  const transitioned = await getTicketRunLifecycleRepository().blockTicket({
     ticketId: persistedTicket.id,
-    fromStatuses: [persistedTicket.status],
-    toStatus: 'blocked',
-    patch: {
-      blockedReason: gateResult.summary,
-      triage,
-      changedAt: now,
-      ...(context.changedBy ? { changedBy: context.changedBy } : {})
-    },
-    eventType: 'ticket.blocked',
-    eventPayload: { reason: gateResult.summary, reasonCode: 'objective_ambiguous', triage }
+    reasonCode: 'objective_ambiguous',
+    summary: gateResult.summary,
+    triage,
+    eventPayload: { reasonCode: 'objective_ambiguous' }
   });
   const blockedTicket = transitioned.ticket;
   appendSystemLog('ticket:objective_ambiguous', gateResult.summary, null, {
@@ -15152,41 +15162,6 @@ async function finalizeTicketForRun(run, terminalStatus) {
   return result ? result.ticket : null;
 }
 
-async function validateManualTicketCompletion(ticket) {
-  if (!ticket) return { allowed: false, reason: 'Ticket not found' };
-  if (ticket.triage && ticket.triage.required) {
-    return { allowed: false, reason: 'Ticket cannot be completed while ticket-level triage is required.' };
-  }
-
-  const currentAttempt = await getRuntimeStateReadRepository()
-    .getCurrentTicketAttempt(ticket.id);
-  if (!currentAttempt) {
-    return { allowed: false, reason: 'Ticket cannot be completed without supporting runtime evidence.' };
-  }
-  const currentMembers = (await readAllRunsForTicket(ticket.id)).filter(run =>
-    run.ticketAttemptId === currentAttempt.id);
-  if (currentMembers.length !== currentAttempt.memberCount) {
-    return {
-      allowed: false,
-      reason: 'Ticket cannot be completed because its current attempt membership is incomplete.'
-    };
-  }
-  if (currentMembers.some(run => run.triage && run.triage.required === true)) {
-    return {
-      allowed: false,
-      reason: 'Ticket cannot be completed while a current-attempt Run requires triage.'
-    };
-  }
-  if (currentAttempt.disposition !== 'completed') {
-    const state = currentAttempt.disposition || 'unsettled';
-    return {
-      allowed: false,
-      reason: `Ticket cannot be completed because its current attempt is ${state}.`
-    };
-  }
-
-  return { allowed: true, currentAttempt };
-}
 
 // Serialize lifecycle transitions per ticket while allowing unrelated tickets
 // to progress concurrently. Async event durability introduces real yield points;
@@ -15551,26 +15526,6 @@ function hasUnresolvedTicketTriage(ticket) {
   return !!(ticket && ticket.triage && ticket.triage.required === true && !ticket.triage.resolvedAt);
 }
 
-// Low-level mutation primitive: opens a ticket so a rerun/retry can be created.
-// This is NOT a policy gate. Callers must already have applied the relevant
-// policy: validateManualRerun for operator-triggered reruns/retries, or
-// runAutoRetryAfterFailureIfPolicyAllows for automatic retries.
-// This primitive performs only a defensive unresolved-triage check.
-async function forceTicketOpenForRerun(ticketId, rerunMode = null) {
-  let result;
-  try {
-    result = await getTicketRunLifecycleRepository().reopenTicket({ ticketId, rerunMode });
-  } catch (error) {
-    if (error && (error.code === 'LIFECYCLE_CONFLICT' || error.code === 'TICKET_TRIAGE_REQUIRED')) {
-      error.statusCode = 409;
-    }
-    throw error;
-  }
-  if (!result) return null;
-  broadcastTicketChange();
-  return result.ticket;
-}
-
 // Manual rerun-from-start safety gate. Explicit ticket authority wins; null uses
 // the current deployment default for admission. Once admitted, the resolved value
 // is frozen in runtimeBudgetSnapshot.
@@ -15583,7 +15538,7 @@ async function validateManualRerun(ticket) {
   if (ticket.status === 'blocked' && ticket.parentTicketId != null) {
     return {
       allowed: false,
-      reason: 'Cannot rerun: child ticket created by executeTicketPlan is blocked by default. Open the ticket explicitly before rerunning.'
+      reason: 'Cannot rerun: child ticket created by executeTicketPlan holds an admission hold. Use release-admission to release and run it.'
     };
   }
 
@@ -15733,6 +15688,94 @@ async function rerunTicketFromBeginning(ticketId, changedBy = 'operator', mode =
   return withTicketTransitionLock(ticketId, () => rerunTicketFromBeginningUnlocked(ticketId, changedBy, mode, delegated));
 }
 
+// T2 Tranche 5 structured rerun branch resolution (frozen reviewer matrix).
+// A: pre-attempt refusal (no attempt, no plan) -> fresh planning entry, the
+//    first attempt is created exactly as today; provider call stays outside
+//    all admission locks.
+// B: pending admitted plan + plan_admitted attempt -> leaf continuation on
+//    the SAME plan; no planner call, no new attempt, no new plan.
+// C: failed/interrupted/request_started planning attempt -> NOT supersedable
+//    in T2; explicit reset-required refusal; Ticket remains BLOCKED.
+// D: terminal/consumed allocation plan -> STRUCTURED_PLAN_TERMINAL_RESET_REQUIRED.
+async function resolveStructuredRerunBranch(ticket) {
+  const plan = await getStructuredAllocationPlanningRepository()
+    .getAllocationPlanForTicket(ticket.id);
+  const attempt = ticket.structuredAllocationPlanningAttempt || null;
+  if (plan && attempt && attempt.state === 'plan_admitted' &&
+      plan.status === 'pending') {
+    return { kind: 'leaf_continuation', plan };
+  }
+  if (plan) return { kind: 'plan_terminal', plan };
+  if (attempt && ['failed', 'interrupted', 'request_started'].includes(attempt.state)) {
+    return { kind: 'planning_attempt_terminal', state: attempt.state };
+  }
+  return { kind: 'fresh_planning' };
+}
+
+function structuredRerunRefusal(kind, detail) {
+  const error = new Error(detail ||
+    (kind === 'plan_terminal'
+      ? 'Structured rerun requires an allocation-plan reset contract that does not exist in Tranche 5'
+      : 'The terminal structured planning attempt cannot be replaced in Tranche 5'));
+  error.code = kind === 'plan_terminal'
+    ? 'STRUCTURED_PLAN_TERMINAL_RESET_REQUIRED'
+    : 'STRUCTURED_PLANNING_ATTEMPT_RESET_REQUIRED';
+  error.statusCode = 409;
+  return error;
+}
+
+async function buildManualRerunDrafts(ticket, changedBy) {
+  const delegated = null;
+  if (ticket.assignmentTargetType === 'agent') {
+    const agent = await getConfiguredAgentRepository()
+      .getConfiguredAgentById(ticket.assignmentTargetId);
+    if (!agent) {
+      const error = new Error('Assigned agent for this ticket no longer exists');
+      error.code = 'RERUN_TARGET_MISSING';
+      error.statusCode = 400;
+      throw error;
+    }
+    const prepared = await prepareAgentRunDraft(
+      ticket, agent, null, null,
+      { userId: null, username: changedBy, source: 'rerun' },
+      {}
+    );
+    return prepared ? [prepared.run] : [];
+  }
+  if (usesOwnedScopeAllocation(ticket)) {
+    const agents = await getAgentsInGroup(ticket.assignmentTargetId);
+    assertTicketObjectiveWithinGrantedWritableRoots(ticket, agents);
+    const existingRuns = await collectRuntimeStatePages('listRunsForTickets', 'runs', {
+      ticketIds: [ticket.id],
+      statuses: ['pending', 'running']
+    });
+    const agentsToRun = agents.filter(agent => {
+      const pendingRunKey = `${ticket.id}:${agent.id}`;
+      return !runningRunKeys.has(pendingRunKey) && !existingRuns.some(run =>
+        run.ticketId === ticket.id &&
+        run.agentId === agent.id &&
+        ['pending', 'running'].includes(run.status)
+      );
+    });
+    if (agentsToRun.length === 0) return [];
+    const allocationPlan = await createAllocationPlan(ticket, agentsToRun);
+    const drafts = [];
+    for (const agent of agentsToRun) {
+      const prepared = await prepareAgentRunDraft(
+        ticket,
+        agent,
+        allocationPlan.items.find(item => item.assignedAgentId === agent.id),
+        allocationPlan.id,
+        delegated
+      );
+      if (!prepared) return [];
+      drafts.push(prepared.run);
+    }
+    return drafts;
+  }
+  return [];
+}
+
 async function rerunTicketFromBeginningUnlocked(ticketId, changedBy = 'operator', mode = 'retry', delegated = null) {
   const ticket = await getTicketById(ticketId);
 
@@ -15746,6 +15789,9 @@ async function rerunTicketFromBeginningUnlocked(ticketId, changedBy = 'operator'
     }, await getAgentsInGroup(ticket.assignmentTargetId));
   }
 
+  // Interruptions are separate transactions (process effects cannot join a
+  // DB transaction); each settles its attempt and lands the truthful
+  // lifecycle BEFORE the atomic admission below.
   const activeRuns = await collectRuntimeStatePages('listRunsForTickets', 'runs', {
     ticketIds: [ticketId],
     statuses: ['pending', 'running']
@@ -15754,15 +15800,112 @@ async function rerunTicketFromBeginningUnlocked(ticketId, changedBy = 'operator'
     await interruptAgentRunUnlocked(run, `${changedBy} rerun requested`);
   }
 
-  const reopenedTicket = await forceTicketOpenForRerun(ticketId, mode);
   appendSystemLog('ticket:rerun', `Ticket #${ticketId} rerun requested by ${changedBy} (mode: ${mode})`, null, {
     ticketId,
     changedBy,
     mode,
     changedAt: new Date().toISOString()
   });
-  await createRunsForTicket(reopenedTicket, delegated);
-  return reopenedTicket;
+
+  let admissionIntent = 'rerun_terminal';
+
+  if (hasStructuredPlanningAuthority(ticket)) {
+    const branch = await resolveStructuredRerunBranch(ticket);
+    if (branch.kind === 'planning_attempt_terminal') {
+      throw structuredRerunRefusal('attempt_terminal');
+    }
+    if (branch.kind === 'plan_terminal') {
+      throw structuredRerunRefusal('plan_terminal');
+    }
+    if (branch.kind === 'leaf_continuation') {
+      // Same plan, no planner call. Successful leaf admission supersedes the
+      // reasoned refusal by event position and projects IN_PROGRESS atomically.
+      const refreshed = await getTicketById(ticketId);
+      const admittedLeaf = await admitStructuredAllocationLeafRuns(
+        refreshed, branch.plan, { admissionIntent: 'retry_structured_refusal' });
+      broadcastTicketChange();
+      return getTicketById(ticketId);
+    }
+    // fresh_planning (case A): readiness re-proven; provider request happens
+    // inside runStructuredAllocationPlanning BEFORE any admission lock; a
+    // readiness failure writes a newer reasoned refusal and stays BLOCKED.
+    admissionIntent = 'retry_structured_refusal';
+    const planning = await runStructuredAllocationPlanning(ticket);
+    if (planning.handled) {
+      const refreshed = await getTicketById(ticketId);
+      return refreshed;
+    }
+  }
+
+  const current = await getTicketById(ticketId);
+  // T2 Tranche 5: atomic admission retired the reopen that used to persist
+  // rerunMode onto the Ticket body before draft construction. The normalized
+  // request mode must still reach the admitted Run, so stamp it onto this
+  // in-memory preparation view; buildAgentRunDraft (the one canonical draft
+  // constructor) copies ticket.rerunMode into every Run draft, and dispatch
+  // reads run.rerunMode to decide reassess prior-failure injection.
+  const runDrafts = await buildManualRerunDrafts({ ...current, rerunMode: mode }, changedBy);
+  if (runDrafts.length === 0) return current;
+  // T2 Tranche 5: ordinary operator rerun carries 'rerun_terminal'. The token
+  // is NOT authority — rerunAdmitRuns re-derives the governing blocker under
+  // the frozen lock protocol and enforces the frozen intent matrix, so it
+  // admits only when no blocker governs (or, for a settled-BLOCKED attempt,
+  // only via this explicit operator surface) and refuses every other blocker
+  // with TICKET_BLOCKER_INTENT_MISMATCH.
+  const created = await getTicketRunLifecycleRepository().rerunAdmitRuns({
+    ticketId,
+    runDrafts,
+    admissionIntent,
+    runEventPayload: buildRunCreatedEventPayload,
+    ticketEventPayload: { rerunMode: mode, source: 'operator_rerun' }
+  });
+  broadcastTicketChange();
+  for (const run of created.runs) {
+    appendRunLog(run, 'run:created', `Operator rerun admission${allocationLogSuffix(run)}`, null, {
+      admissionIntent,
+      supersededBlocker: created.supersededBlocker || null
+    });
+  }
+  return created.ticket;
+}
+
+// T2 Tranche 5: dedicated admission-hold release orchestration. Deliberately
+// NOT routed through rerunTicketFromBeginningUnlocked. Rerun preparation is
+// destructive by contract (it interrupts active Runs before admission); an
+// admission hold structurally governs ONLY while the Ticket has zero attempts
+// (shared composer rule), so a genuinely authorized release_hold has no Run to
+// interrupt — and any stale/replayed/raced/misdirected release must discover
+// that from the lock-scoped composer WITHOUT touching valid execution.
+// Preparation here is read-only; the authoritative blocker/intent decision
+// happens once, inside rerunAdmitRuns' transaction, and its refusal mutates
+// nothing.
+async function releaseTicketAdmission(ticketId, changedBy = 'operator', delegated = null) {
+  const exists = await getTicketById(ticketId);
+  if (!exists) return null;
+  const current = await getTicketById(ticketId);
+  const runDrafts = await buildManualRerunDrafts(current, changedBy);
+  if (runDrafts.length === 0) return current;
+  const created = await getTicketRunLifecycleRepository().rerunAdmitRuns({
+    ticketId,
+    runDrafts,
+    admissionIntent: 'release_hold',
+    runEventPayload: buildRunCreatedEventPayload,
+    ticketEventPayload: { source: 'release_admission' }
+  });
+  broadcastTicketChange();
+  for (const run of created.runs) {
+    appendRunLog(run, 'run:created', `Admission-hold release${allocationLogSuffix(run)}`, null, {
+      admissionIntent: 'release_hold',
+      supersededBlocker: created.supersededBlocker || null
+    });
+  }
+  appendSystemLog('ticket:release_admission', `Ticket #${ticketId} admission hold released by ${changedBy}`, null, {
+    ticketId,
+    changedBy,
+    supersededBlocker: created.supersededBlocker || null,
+    changedAt: new Date().toISOString()
+  });
+  return created.ticket;
 }
 
 async function interruptStaleRunsOnStartup() {
@@ -16184,13 +16327,11 @@ async function blockTicketForNoModelRoute(ticket, decision) {
     allowedActions: ['edit_routing_policy', 'change_assignment'], prohibitedActions: ['start_run_without_permitted_provider'],
     createdAt: now, resolvedAt: null, resolvedBy: null, resolution: null
   });
-  const transitioned = await getTicketRunLifecycleRepository().transitionTicketState({
+  const transitioned = await getTicketRunLifecycleRepository().blockTicket({
     ticketId: persisted.id,
-    fromStatuses: [persisted.status],
-    toStatus: 'blocked',
-    patch: { blockedReason: summary, triage, changedAt: now },
-    eventType: 'ticket.blocked',
-    eventPayload: { reason: summary, reasonCode: 'no_model_route', triage }
+    reasonCode: 'no_model_route',
+    summary,
+    triage
   });
   appendSystemLog('ticket:no_model_route', summary, null, { ticketId: transitioned.ticket.id, policyId: decision.policyId || null, rejectedProviders: decision.rejectedProviders || [] });
   broadcastTicketChange();
@@ -16748,18 +16889,12 @@ async function blockTicketForStructuredPlanning(ticket, { stage, reason, detail 
     return persisted;
   }
   const now = new Date().toISOString();
-  const transitioned = await getTicketRunLifecycleRepository().transitionTicketState({
+  const transitioned = await getTicketRunLifecycleRepository().blockTicket({
     ticketId: persisted.id,
-    fromStatuses: [persisted.status],
-    toStatus: 'blocked',
-    patch: { blockedReason: summary, changedAt: now },
-    eventType: 'ticket.blocked',
-    eventPayload: {
-      reason: summary,
-      reasonCode: reason,
-      structuredPlanningStage: stage,
-      workerRunsCreated: 0
-    }
+    reasonCode: reason,
+    summary,
+    patch: { structuredPlanningStage: stage },
+    eventPayload: { structuredPlanningStage: stage }
   });
   appendSystemLog('allocation:structured_planning_refused', summary, null, {
     ticketId: persisted.id,
@@ -17208,18 +17343,12 @@ async function blockTicketForStructuredLeafAdmission(ticket, { reason, detail = 
     });
     return persisted;
   }
-  const transitioned = await getTicketRunLifecycleRepository().transitionTicketState({
+  const transitioned = await getTicketRunLifecycleRepository().blockTicket({
     ticketId: persisted.id,
-    fromStatuses: [persisted.status],
-    toStatus: 'blocked',
-    patch: { blockedReason: summary, changedAt: new Date().toISOString() },
-    eventType: 'ticket.blocked',
-    eventPayload: {
-      reason: summary,
-      reasonCode: reason,
-      structuredLeafAdmissionStage: 'leaf_admission',
-      workerRunsCreated: 0
-    }
+    reasonCode: reason,
+    summary,
+    patch: { structuredLeafAdmissionStage: 'leaf_admission' },
+    eventPayload: { structuredLeafAdmissionStage: 'leaf_admission' }
   });
   appendSystemLog('allocation:structured_leaf_admission_refused', summary, null, {
     ticketId: persisted.id, reason, detail
@@ -17228,7 +17357,89 @@ async function blockTicketForStructuredLeafAdmission(ticket, { reason, detail = 
   return transitioned.ticket;
 }
 
-async function admitStructuredAllocationLeafRuns(ticket, plan) {
+class StructuredLeafPreflightRefusal extends Error {
+  constructor(reason, detail = null) {
+    super(detail || reason);
+    this.name = 'StructuredLeafPreflightRefusal';
+    this.reason = reason;
+    this.detail = detail;
+  }
+}
+
+// Leaf-draft preflight (agents, authorization, typed criteria, worker route),
+// extracted so the AUTO path and the explicit retry_structured_refusal path
+// share one implementation. Throws StructuredLeafPreflightRefusal.
+async function buildStructuredLeafDrafts(ticket, plan) {
+  const authority = ticket.structuredAllocationAuthority || null;
+  if (!authority || !authority.planningAuthoritySnapshot) {
+    throw new StructuredLeafPreflightRefusal('historical_authority_unavailable');
+  }
+  if (!ticketAssignmentMatchesPlanningAuthority(ticket, authority.planningAuthoritySnapshot)) {
+    throw new StructuredLeafPreflightRefusal('assignment_changed_since_capture');
+  }
+  const groupAgents = await getAgentsInGroup(ticket.assignmentTargetId);
+  const groupAgentIds = new Set(groupAgents.map(agent => agent.id));
+  const leafDrafts = [];
+  for (const item of plan.items) {
+    const agent = groupAgents.find(candidate => candidate.id === item.assignedAgentId) ||
+      await getConfiguredAgentRepository().getConfiguredAgentById(item.assignedAgentId);
+    if (!agent) throw new StructuredLeafPreflightRefusal('leaf_agent_missing', `allocation item ${item.allocationItemId}`);
+    if (!groupAgentIds.has(agent.id)) {
+      throw new StructuredLeafPreflightRefusal('leaf_agent_not_authorized', `agent ${agent.id}`);
+    }
+    let prepared;
+    try {
+      prepared = await prepareAgentRunDraft(
+        ticket,
+        agent,
+        item,
+        plan.id,
+        null,
+        { structuredLeafItem: { item, sharedConstraints: plan.sharedConstraints } }
+      );
+    } catch (error) {
+      if (error instanceof StructuredAllocationLeafRunError && error.reason) {
+        throw new StructuredLeafPreflightRefusal(error.reason, error.message);
+      }
+      throw error;
+    }
+    if (!prepared || prepared.existingRun || !prepared.run) {
+      throw new StructuredLeafPreflightRefusal('leaf_route_refused', `allocation item ${item.allocationItemId}`);
+    }
+    leafDrafts.push({ allocationItemId: item.allocationItemId, run: prepared.run });
+  }
+  return leafDrafts;
+}
+
+// Mandatory governed leaf capture, shared by both admission paths.
+async function buildStructuredGovernedCapture(ticket, leafDrafts) {
+  const policySource = readGovernedPolicySource(
+    await loadGovernedPlannerPolicyContainer(),
+    { role: GOVERNED_STRUCTURED_LEAF_ROLE });
+  const uniformBudget = assertUniformProgressPolicyInputs(
+    leafDrafts.map(draft => draft.run && draft.run.runtimeBudgetSnapshot));
+  const plannerGoverned = ticket.structuredAllocationPlanningAttempt &&
+    ticket.structuredAllocationPlanningAttempt.governedExecution;
+  if (!plannerGoverned || !plannerGoverned.parentPolicyReference) {
+    throw new Error(
+      'the admitted plan carries no captured parent policy revision, so leaf ' +
+      'authority cannot be proved to come from the same policy revision');
+  }
+  assertSameParentPolicyRevision(
+    plannerGoverned.parentPolicyReference,
+    buildParentPolicyReference(policySource),
+    'structured leaf admission');
+  const governedLeafCapture = {
+    policySource,
+    progressControlPolicy: buildDefaultProgressControlPolicy({
+      runtimeBudgetSnapshot: uniformBudget
+    })
+  };
+  return governedLeafCapture;
+}
+
+async function admitStructuredAllocationLeafRuns(ticket, plan, options = {}) {
+  const admissionIntent = options.admissionIntent === undefined ? null : options.admissionIntent;
   const refuse = async (reason, detail = null) => {
     await blockTicketForStructuredLeafAdmission(ticket, { reason, detail });
     return { handled: true, admitted: false, reason };
@@ -17251,109 +17462,19 @@ async function admitStructuredAllocationLeafRuns(ticket, plan) {
 
   // Preflight: agents, group authorization, typed criteria and worker route are
   // all resolved before the admission transaction opens.
-  const authority = ticket.structuredAllocationAuthority || null;
-  if (!authority || !authority.planningAuthoritySnapshot) {
-    return refuse('historical_authority_unavailable');
-  }
-  if (!ticketAssignmentMatchesPlanningAuthority(ticket, authority.planningAuthoritySnapshot)) {
-    return refuse('assignment_changed_since_capture');
-  }
-  const groupAgents = await getAgentsInGroup(ticket.assignmentTargetId);
-  const groupAgentIds = new Set(groupAgents.map(agent => agent.id));
-
-  const leafDrafts = [];
-  for (const item of plan.items) {
-    // The assigned agent is the worker principal. It is never replaced: an
-    // unavailable or unauthorized agent refuses the whole admission.
-    const agent = groupAgents.find(candidate => candidate.id === item.assignedAgentId) ||
-      await getConfiguredAgentRepository().getConfiguredAgentById(item.assignedAgentId);
-    if (!agent) return refuse('leaf_agent_missing', `allocation item ${item.allocationItemId}`);
-    if (!groupAgentIds.has(agent.id)) {
-      return refuse('leaf_agent_not_authorized', `agent ${agent.id}`);
-    }
-    let prepared;
-    try {
-      prepared = await prepareAgentRunDraft(
-        ticket,
-        agent,
-        item,
-        plan.id,
-        null,
-        { structuredLeafItem: { item, sharedConstraints: plan.sharedConstraints } }
-      );
-    } catch (error) {
-      if (error instanceof StructuredAllocationLeafRunError && error.reason) {
-        return refuse(error.reason, error.message);
-      }
-      throw error;
-    }
-    // prepareAgentRunDraft returns null when the worker route is refused or an
-    // in-memory execution key is held. Either way no truthful worker admission
-    // exists for this item, so nothing is persisted for any item.
-    if (!prepared || prepared.existingRun || !prepared.run) {
-      return refuse('leaf_route_refused', `allocation item ${item.allocationItemId}`);
-    }
-    leafDrafts.push({ allocationItemId: item.allocationItemId, run: prepared.run });
-  }
-
-  // ── The mandatory governed leaf capture ──────────────────────────────────
-  //
-  // The store requires `{ policySource, progressControlPolicy }` and refuses
-  // ungoverned structured leaf admission outright — the Tranche 4 cutover
-  // removed it. Nothing here supplied the capture, so every structured Ticket
-  // that reached this point was blocked, and the refusal was reported as a
-  // concurrency conflict by the catch below.
-  //
-  // TWO SEPARATE AUTHORITIES, captured together and never merged. `policySource`
-  // is the existing provider/routing/economic provenance container, read for the
-  // worker role. `progressControlPolicy` is versioned runtime execution control,
-  // built from the immutable runtime budget snapshot the drafts already carry.
+  let leafDrafts;
   let governedLeafCapture;
   try {
-    const policySource = readGovernedPolicySource(
-      await loadGovernedPlannerPolicyContainer(),
-      { role: GOVERNED_STRUCTURED_LEAF_ROLE });
-    // PROVED, NOT ASSUMED. The inputs are Ticket-scoped by construction, but the
-    // runtime limits are re-resolved per draft, so a configuration change
-    // landing mid-admission could still leave drafts disagreeing. Equality is
-    // checked across every draft and refuses before anything is admitted.
-    const uniformBudget = assertUniformProgressPolicyInputs(
-      leafDrafts.map(draft => draft.run && draft.run.runtimeBudgetSnapshot));
-    // ── CROSS-ROLE REVISION PARITY ───────────────────────────────────────
-    //
-    // The plan was admitted under the revision the PLANNER read. The worker
-    // policy is read here, later, from whatever container is active NOW. Those
-    // are two separate reads, and an administrator may have replaced the
-    // container in between with one whose worker entry is byte-identical and
-    // whose planner entry differs — every role hash would still match while the
-    // two roles were funded by two different revisions.
-    //
-    // So the planner's captured parent reference is the authority, and the
-    // worker's must equal it exactly. A version-1 attempt captured no such
-    // reference and cannot be retro-fitted with one; it is refused rather than
-    // credited with a binding it never recorded.
-    const plannerGoverned = ticket.structuredAllocationPlanningAttempt &&
-      ticket.structuredAllocationPlanningAttempt.governedExecution;
-    if (!plannerGoverned || !plannerGoverned.parentPolicyReference) {
-      throw new Error(
-        'the admitted plan carries no captured parent policy revision, so leaf ' +
-        'authority cannot be proved to come from the same policy revision');
+    if (!ticket.structuredAllocationAuthority ||
+        !ticket.structuredAllocationAuthority.planningAuthoritySnapshot) {
+      throw new StructuredLeafPreflightRefusal('historical_authority_unavailable');
     }
-    assertSameParentPolicyRevision(
-      plannerGoverned.parentPolicyReference,
-      buildParentPolicyReference(policySource),
-      'structured leaf admission');
-
-    governedLeafCapture = {
-      policySource,
-      progressControlPolicy: buildDefaultProgressControlPolicy({
-        runtimeBudgetSnapshot: uniformBudget
-      })
-    };
+    leafDrafts = await buildStructuredLeafDrafts(ticket, plan);
+    governedLeafCapture = await buildStructuredGovernedCapture(ticket, leafDrafts);
   } catch (error) {
-    // Missing or contradictory governed authority refuses BEFORE any leaf Run
-    // commits. No fallback policy is fabricated here: a capture invented to get
-    // past this point would bind governance nobody granted to every sibling Run.
+    if (error instanceof StructuredLeafPreflightRefusal) {
+      return refuse(error.reason, error.detail);
+    }
     return refuse('leaf_governed_authority_unavailable',
       error && error.message ? error.message : 'governed leaf capture unavailable');
   }
@@ -17368,7 +17489,7 @@ async function admitStructuredAllocationLeafRuns(ticket, plan) {
         governedLeafCapture,
         runEventPayload: buildRunCreatedEventPayload,
         eventPayload: { source: 'structured_allocation_leaf_admission' }
-      });
+      }, { admissionIntent });
   } catch (error) {
     // KNOWN REFUSALS KEEP THEIR EXACT CODE.
     if (error instanceof StructuredAllocationLeafRunError && error.reason) {
@@ -27276,6 +27397,14 @@ fastify.get('/api/tickets/events', { preHandler: fastify.requireAuth }, async (r
   setupSSEConnection(reply, request);
 });
 
+// T2 Tranche 5: arbitrary generic lifecycle PATCH authority is RETIRED.
+// Canonical ownership: in_progress=attempt admission; completed=settlement;
+// canceled=cancellation authority; blocked=reasoned blocker writers;
+// open=reprojection/atomic admission. Dedicated intent surfaces:
+//   POST /api/tickets/:id/cancel            (cancellation authority)
+//   POST /api/tickets/:id/rerun             (atomic rerun/retry admission)
+//   POST /api/tickets/:id/release-admission (admission-hold release)
+//   POST /api/tickets/:id/triage/resolve    (resolution + reprojection)
 fastify.patch('/api/tickets/:id/status', {
   preHandler: fastify.requireAuth,
   config: { mutationAdmission: true }
@@ -27284,109 +27413,103 @@ fastify.patch('/api/tickets/:id/status', {
     reply.code(403);
     return { error: 'Permission denied' };
   }
+  reply.code(409);
+  return {
+    error: 'Generic Ticket lifecycle status mutation is retired. ' +
+      'Use the dedicated intent operations: cancel, rerun, release-admission, triage resolve.',
+    canonicalLifecycleOwnership: TICKET_LIFECYCLE_MUTATION_SURFACES
+  };
+});
 
+// T2 Tranche 5: dedicated cancellation surface. cancelTicket commits the
+// durable authority AND materialized 'canceled' atomically; active-run
+// interruption follows as a consequence, outside the authority transaction.
+fastify.post('/api/tickets/:id/cancel', {
+  preHandler: fastify.requireAuth,
+  config: { mutationAdmission: true }
+}, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:update')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
   const ticketId = parseInt(request.params.id, 10);
-  const { status } = request.body || {};
-
-  if (Number.isNaN(ticketId) || !TICKET_STATUSES.includes(status)) {
-    reply.code(400);
-    return { error: 'Invalid ticket status' };
-  }
-
+  if (Number.isNaN(ticketId)) { reply.code(400); return { error: 'Invalid ticket id' }; }
   const ticket = await getTicketById(ticketId);
-
-  if (!ticket) {
-    reply.code(404);
-    return { error: 'Ticket not found' };
-  }
-
-  if (ticket.status === status) {
-    return { ticket };
-  }
-
+  if (!ticket) { reply.code(404); return { error: 'Ticket not found' };; }
   const changedBy = request.user ? request.user.username : String(request.session.userId);
-  const changedAt = new Date().toISOString();
-
-  if (status === 'completed') {
-    const completionCheck = await validateManualTicketCompletion(ticket);
-    if (!completionCheck.allowed) {
-      reply.code(409);
-      return { error: completionCheck.reason };
-    }
-  }
-
-  if (status === 'open' && usesOwnedScopeAllocation(ticket)) {
-    try {
-      assertAllocatedTicketCanStart({
-        ...ticket,
-        status,
-        updatedAt: changedAt
-      }, await getAgentsInGroup(ticket.assignmentTargetId));
-    } catch (error) {
-      appendSystemLog('allocation:setup_failed', error.message, null, {
-        code: error.code || 'VALIDATION_ERROR',
-        path: error.path || null,
-        assignedAgentId: error.assignedAgentId || null,
-        ticketId: ticket.id,
-        assignmentTargetId: ticket.assignmentTargetId,
-        changedBy,
-        changedAt
-      });
-      reply.code(400);
-      return { error: error.message || 'Owned-scope execution rejected' };
-    }
-  }
-
-  const previousStatus = ticket.status;
-  const transitioned = await getTicketRunLifecycleRepository().transitionTicketState({
-    ticketId,
-    fromStatuses: [previousStatus],
-    toStatus: status,
-    patch: { changedBy, changedAt },
-    eventPayload: { changedBy, changedAt }
-  });
-  const updatedTicket = transitioned.ticket;
-  broadcastTicketChange();
-
-  if (status === 'closed') {
+  const reason = (request.body && typeof request.body.reason === 'string' && request.body.reason.trim())
+    ? request.body.reason.trim().slice(0, 1024)
+    : `Cancelled by ${changedBy}`;
+  try {
+    const result = await getTicketRunLifecycleRepository().cancelTicket({
+      ticketId,
+      requestedBy: changedBy,
+      reason,
+      authoritySource: 'operator'
+    });
+    broadcastTicketChange();
+    appendSystemLog('ticket:cancelled', `Ticket #${ticketId} cancelled by ${changedBy}`, null, {
+      ticketId, changedBy, committedAt: result.cancellationAuthority.committedAt
+    });
     const activeRuns = await collectRuntimeStatePages('listRunsForTickets', 'runs', {
       ticketIds: [ticketId],
       statuses: ['pending', 'running']
     });
     for (const run of activeRuns) {
-      await interruptAgentRun(run, `${changedBy} closed ticket #${ticketId}`);
+      await interruptAgentRun(run, `${changedBy} cancelled ticket #${ticketId}`);
     }
-  }
-
-  appendSystemLog('ticket:status_change', `Ticket #${ticketId} status changed from ${previousStatus} to ${status} by ${changedBy}`, null, {
-    ticketId,
-    changedBy,
-    changedAt,
-    fromStatus: previousStatus,
-    toStatus: status
-  });
-
-  if (status === 'open') {
-    try {
-      await createRunsForTicket(updatedTicket, delegatedFromRequest(request, 'reopen_auto_run'));
-    } catch (error) {
-      const currentTicket = await getTicketById(ticketId);
-      if (currentTicket && currentTicket.status !== 'failed') {
-        await getTicketRunLifecycleRepository().transitionTicketState({
-          ticketId,
-          fromStatuses: [currentTicket.status],
-          toStatus: 'failed',
-          patch: { changedBy, changedAt: new Date().toISOString(), blockedReason: error.message || 'Run creation failed' },
-          eventPayload: { reason: error.message || 'Run creation failed' }
-        });
-      }
-      broadcastTicketChange();
-      reply.code(400);
-      return { error: error.message || 'Owned-scope execution rejected' };
+    return { ticket: await getTicketById(ticketId), cancellationAuthority: result.cancellationAuthority };
+  } catch (error) {
+    const code = error && error.code;
+    if (code === 'TICKET_CANCELLATION_COMPLETED' ||
+        code === 'TICKET_CANCELLATION_COMPLETION_INEVITABLE' ||
+        code === 'TICKET_CANCELLATION_AUTHORITY_CONFLICT' ||
+        code === 'TICKET_CANCELLATION_V2_AUTHORITY_CONFLICT') {
+      reply.code(409);
+      return { error: error.message, code };
     }
+    throw error;
   }
+});
 
-  return { ticket: updatedTicket };
+// T2 Tranche 5: admission-hold release for executeTicketPlan children. The
+// hold is superseded only by this explicit operator intent followed by a
+// successful atomic admission; there is no generic open path. The release_hold
+// token is validated ONCE, under the admission locks, against the
+// composer-derived governing blocker: an unauthorized/stale/replayed release
+// refuses with zero mutation and never interrupts valid current execution.
+fastify.post('/api/tickets/:id/release-admission', {
+  preHandler: fastify.requireAuth,
+  config: { mutationAdmission: true }
+}, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:update')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+  const ticketId = parseInt(request.params.id, 10);
+  if (Number.isNaN(ticketId)) { reply.code(400); return { error: 'Invalid ticket id' }; }
+  try {
+    const result = await releaseTicketAdmission(
+      ticketId,
+      request.user ? request.user.username : String(request.session.userId),
+      delegatedFromRequest(request, 'release_admission')
+    );
+    if (!result) { reply.code(404); return { error: 'Ticket not found' }; }
+    return { ticket: await getTicketById(ticketId) };
+  } catch (error) {
+    const code = error && error.code;
+    if (code === 'TICKET_BLOCKER_INTENT_MISMATCH' ||
+        code === 'TICKET_TRIAGE_REQUIRED' ||
+        code === 'RUN_BUDGET_EXHAUSTED' ||
+        code === 'TICKET_CANCELLATION_ALREADY_COMMITTED' ||
+        code === 'TICKET_ATTEMPT_UNSETTLED' ||
+        code === 'TICKET_RERUN_STALE_ATTEMPT' ||
+        code === 'STATE_TRANSITION_CONFLICT') {
+      reply.code(409);
+      return { error: error.message, code };
+    }
+    throw error;
+  }
 });
 
 fastify.post('/api/tickets/:id/rerun', {
@@ -27948,7 +28071,10 @@ async function syncInboxThreadResolution(ownerKind, ownerId, triage, resolvedBy)
 async function applyTicketTriageResolution(ticketId, resolvedBy, resolution) {
   let result;
   try {
-    result = await getTriageRepository().resolveTicketTriage({ ticketId, resolvedBy, resolution });
+    // T2 Tranche 5: resolution and canonical reprojection are one atomic
+    // operation; a released `blocked` projects to `open` under the frozen
+    // lock protocol when no other authority still governs.
+    result = await getTicketRunLifecycleRepository().resolveTicketTriageAndReproject({ ticketId, resolvedBy, resolution });
   } catch (error) {
     if (error && error.code === 'TRIAGE_NOT_REQUIRED') {
       return { error: 'No required ticket-level triage to resolve', code: 409 };

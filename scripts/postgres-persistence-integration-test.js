@@ -347,6 +347,8 @@ async function main() {
     assert.equal(processTemplatePage.nextAfterId, Number(legalTemplateRow.id));
     assert.equal(processTemplatePage.processTemplates[0].healthStatus, 'attention_needed');
     assert.equal(processTemplatePage.processTemplates[0].dueStatus, 'not_due');
+    // T2 Tranche 5: generated-Ticket accounting uses `canceled` (the retired
+    // Ticket-level `failed` vocabulary no longer exists).
     assert.deepEqual(processTemplatePage.processTemplates[0].generatedTicketCounts, {
       total: 1,
       blocked: 1,
@@ -354,7 +356,7 @@ async function main() {
       pending: 0,
       inProgress: 0,
       completed: 0,
-      failed: 0
+      canceled: 0
     });
     const financeTemplateState = await peer.getProcessTemplateStateById(financeTemplateRow.id, {
       now: '2026-07-18T12:00:00.000Z'
@@ -1559,9 +1561,8 @@ async function main() {
       open: 1,
       in_progress: 0,
       completed: 0,
-      failed: 0,
       blocked: 1,
-      closed: 0
+      canceled: 0
     });
     assert.deepEqual(
       (await store.listChildTickets({ parentTicketId: operatorReadParentTicket.id, limit: 10 })).tickets.map(ticket => ticket.id),
@@ -2123,7 +2124,9 @@ async function main() {
       runId: interruptedAllocationMember.run.id
     });
     assert.equal(completeAllocationSettlement.changed, true);
-    assert.equal(completeAllocationSettlement.ticket.status, 'failed');
+    // T2 Tranche 5: mixed failed/interrupted members settle the attempt as
+    // failed, and with no unresolved blocker the Ticket demotes to open.
+    assert.equal(completeAllocationSettlement.ticket.status, 'open');
 
     const lifecycleCreationRace = await Promise.allSettled([
       store.createRunsAndStartTicket({
@@ -2164,8 +2167,12 @@ async function main() {
       }),
       error => error && error.code === 'POSTGRES_RECORD_TOO_LARGE'
     );
-    assert.equal((await store.getTicket(retryBoundaryTicket.id)).status, 'failed',
-      'failed retry evidence must roll back ticket reopen');
+    // T2 Tranche 5: the failed predecessor attempt settles to the open
+    // demotion; a refused composed rerun must roll back entirely, leaving
+    // that truthful state (no stranded OPEN-from-COMPLETED gap exists here —
+    // the prior state was already the canonical demotion).
+    assert.equal((await store.getTicket(retryBoundaryTicket.id)).status, 'open',
+      'refused retry leaves the truthful post-failure state (no partial reopen)');
     const retryCountAfterRollback = await store.pool.query(
       `SELECT count(*)::int AS count FROM ${store.table('runs')} WHERE ticket_id = $1`,
       [retryBoundaryTicket.id]
@@ -2199,11 +2206,13 @@ async function main() {
         fromStatuses: ['in_progress'],
         toStatus: 'completed'
       }),
+      // T2 Tranche 5: 'failed' is no longer a Ticket status; the competing
+      // writer targets 'blocked' (same lost-update race semantics).
       peer.transitionTicket({
         ticketId: ticketRaceTicket.id,
         expectedRevision: 2,
         fromStatuses: ['in_progress'],
-        toStatus: 'failed'
+        toStatus: 'blocked'
       })
     ]);
     assert.equal(ticketRace.filter(result => result.status === 'fulfilled').length, 1);

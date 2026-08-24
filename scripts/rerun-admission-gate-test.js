@@ -318,18 +318,20 @@ async function main() {
       assert(await runCount(ambiguous.id) === 0,
         `6: and no run was created (${await runCount(ambiguous.id)})`);
 
-      // Reopening the ticket is the third door, and it must not be a way around the
-      // other two: the status change may be accepted, but no run may follow it.
+      // T2 Tranche 5: the reopen door is RETIRED. The generic lifecycle PATCH
+      // refuses outright, so it cannot be a way around the other two doors —
+      // and no run may follow a refusal that mutates nothing.
       const reopened = await server.request('PATCH', `/api/tickets/${ambiguous.id}/status`, {
         cookie, body: { status: 'open' }
       });
-      assert([200, 409].includes(reopened.statusCode),
-        `6: reopening returns a definite answer (HTTP ${reopened.statusCode})`);
+      assert(reopened.statusCode === 409,
+        `6: the retired PATCH refuses with a definite answer (HTTP ${reopened.statusCode})`);
       await sleep(1500);
       assert(await runCount(ambiguous.id) === 0,
-        `6: reopening a triaged ticket still creates no run (${await runCount(ambiguous.id)})`);
+        `6: the retired door still creates no run (${await runCount(ambiguous.id)})`);
       const afterReopen = await ticketNow(ambiguous.id);
-      assert(afterReopen.triage && afterReopen.triage.required === true && !afterReopen.triage.resolvedAt,
+      assert(afterReopen.status === 'blocked' &&
+        afterReopen.triage && afterReopen.triage.required === true && !afterReopen.triage.resolvedAt,
         '6: and the outstanding decision is still outstanding');
 
       // ── 7. RESOLUTION IS WHAT LIFTS THE GATE ──────────────────────────────────
@@ -346,6 +348,10 @@ async function main() {
         '7: the resolution is durable, carrying when it happened');
       assert(afterResolve.triage.resolvedBy,
         '7: and who made it, so the decision is attributable');
+      // T2 Tranche 5: resolution + canonical reprojection are atomic — the
+      // released blocker lands the Ticket on open in the same operation.
+      assert(afterResolve.status === 'open',
+        `7: resolve+reproject releases blocked to open (${afterResolve.status})`);
       const afterResolveRerun = await rerun(ambiguous.id);
       assert(afterResolveRerun.statusCode !== 409 ||
              !/unresolved ticket-level triage/.test(JSON.parse(afterResolveRerun.body).error || ''),
@@ -373,7 +379,8 @@ async function main() {
       // same repository call `blockTicketForNoModelRoute` uses.
       const beforeSeed = await waitFor(async () => {
         const current = await ticketNow(failing.id);
-        return current.status === 'failed' ? current : null;
+        // T2 Tranche 5: the settled failed attempt demotes to open.
+        return current.status === 'open' && current.rerunMode === null ? current : null;
       }, 30000, `ticket ${failing.id} terminal projection after retry`);
       await store.transitionTicketState({
         ticketId: failing.id,

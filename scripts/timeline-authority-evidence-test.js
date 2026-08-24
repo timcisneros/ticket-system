@@ -125,15 +125,22 @@ async function main() {
             store.getCurrentTicketAttempt(ticket.id)
           ]);
           if (!current || !attempt || !attempt.disposition || !attempt.settledAt) return null;
-          const projectedStatus = attempt.disposition === 'interrupted'
-            ? 'open'
-            : attempt.disposition;
+          // T2 five-state projection. A write-once attempt disposition of
+          // `completed` or `blocked` projects directly onto the Ticket; a
+          // `failed` or `interrupted` attempt demotes through the shared
+          // blocking-authority composer. This suite's fixtures seed no
+          // cancellation/triage/refusal/admission-hold/exhaustion or prior
+          // blocked attempt, so failed/interrupted attempts project OPEN —
+          // a retired Ticket-level `failed`/`closed` is never projected.
+          const projectedStatus = ['completed', 'blocked'].includes(attempt.disposition)
+            ? attempt.disposition
+            : 'open';
           return current.status === projectedStatus ? { ticket: current, attempt } : null;
         }, 30000, `${label} terminal Ticket projection`);
         assert(settledProjection.ticket.status ===
-          (settledProjection.attempt.disposition === 'interrupted'
-            ? 'open'
-            : settledProjection.attempt.disposition),
+          (['completed', 'blocked'].includes(settledProjection.attempt.disposition)
+            ? settledProjection.attempt.disposition
+            : 'open'),
           `${label}: terminal Ticket projection settled (${settledProjection.ticket.status})`);
         return { ticket: settledProjection.ticket, run: terminal };
       }

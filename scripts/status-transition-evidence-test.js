@@ -65,75 +65,94 @@ async function main() {
       return page.logs || page;
     };
 
-    const before = (await statusLogs()).length;
+    const firstEventPosition = Number((await store.pool.query(
+      `SELECT COALESCE(MAX(position), 0) AS p FROM ${store.schema}.events WHERE ticket_id = $1`,
+      [ticket.id])).rows[0].p);
 
     // ── Two transitions, so fromStatus is proved rather than assumed ─────────
-    const blocked = await server.request('PATCH', `/api/tickets/${ticket.id}/status`, {
-      cookie, body: { status: 'blocked' }
+    // T2 Tranche 5: blocking goes through the reasoned blocker writer; the
+    // release goes through atomic triage resolve+reprojection.
+    const blocked = await store.blockTicket({
+      ticketId: ticket.id,
+      reasonCode: 'authority_blocked',
+      summary: 'fixture authority block',
+      triage: { required: true, reasonCode: 'authority_blocked',
+        summary: 'fixture authority block', createdAt: new Date().toISOString(),
+        resolvedAt: null }
     });
-    assert(blocked.statusCode === 200, `the block transition was accepted (HTTP ${blocked.statusCode}: ${blocked.body})`);
-    assert((await store.getTicket(ticket.id)).status === 'blocked', 'the ticket is actually blocked');
+    assert(blocked.ticket.status === 'blocked', 'the ticket is actually blocked');
 
-    const reopened = await server.request('PATCH', `/api/tickets/${ticket.id}/status`, {
-      cookie, body: { status: 'open' }
+    const reopened = await store.resolveTicketTriageAndReproject({
+      ticketId: ticket.id, resolvedBy: 'admin', resolution: 'fixture scope correction'
     });
-    assert(reopened.statusCode === 200, `the reopen transition was accepted (HTTP ${reopened.statusCode})`);
     // Reopening synchronously dispatches a run, so the ticket may already have moved
     // on to in_progress by the time this reads it. What must be true is that it is no
     // longer blocked — the transition being audited actually took effect.
     const afterReopen = (await store.getTicket(ticket.id)).status;
     assert(afterReopen !== 'blocked', `the ticket is no longer blocked (got ${afterReopen})`);
 
-    // ── Surface 1: the durable log ──────────────────────────────────────────
-    const logs = await statusLogs();
-    assert(logs.length === before + 2, `both transitions were logged (got ${logs.length - before})`);
-
-    const openLog = logs[logs.length - 1];
-    assert(openLog.fromStatus === 'blocked', `the reopen log records where it came from (got ${openLog.fromStatus})`);
-    assert(openLog.toStatus === 'open', `the reopen log records where it went (got ${openLog.toStatus})`);
-    assert(openLog.changedBy === 'admin', 'the reopen log names who moved it');
-    assert(typeof openLog.changedAt === 'string' && openLog.changedAt.length > 0,
-      'the reopen log records when it moved');
-
-    const blockLog = logs[logs.length - 2];
-    assert(blockLog.fromStatus === 'open' && blockLog.toStatus === 'blocked',
-      'the earlier log records the earlier transition, not a duplicate of the later one');
+    // ── Surface 1: the durable EVENT chain ────────────────────────────────
+    // T2 Tranche 5: status transitions are audited by append-only events
+    // (ticket.blocked / ticket.triage_resolved / ticket.lifecycle_reprojected);
+    // the retired HTTP writer's separate diagnostic log no longer exists.
+    // The formerly protected invariant is preserved in full on the canonical
+    // surface: WHAT changed (transition ends), WHY it changed (the reasoned
+    // block and its matching release reason), and WHO authorized it (the
+    // attributed resolution inside the durable triage document).
+    const evs = (await store.pool.query(
+      `SELECT position, type, payload FROM ${store.schema}.events WHERE ticket_id = $1 AND position > $2 ORDER BY position`,
+      [ticket.id, firstEventPosition])).rows;
+    const blockEvent = evs.find(e => e.type === 'ticket.blocked');
+    assert(blockEvent && blockEvent.payload.reasonCode === 'authority_blocked',
+      'the block is recorded as a reasoned ticket.blocked event');
+    assert(blocked.ticket.triage &&
+        blocked.ticket.triage.required === true &&
+        blocked.ticket.triage.reasonCode === 'authority_blocked',
+      'the block durably records its unresolved triage fact (why it governed)');
+    const resolveEvent = evs.find(e => e.type === 'ticket.triage_resolved');
+    assert(Boolean(resolveEvent), 'the resolution is recorded durably');
+    assert(resolveEvent.payload.triage &&
+        resolveEvent.payload.triage.required === false &&
+        resolveEvent.payload.triage.resolvedAt,
+      'the resolution marks the triage resolved with its resolution instant');
+    // WHO: the durable triage document names the authorizing operator.
+    assert(resolveEvent.payload.triage.resolvedBy === 'admin' &&
+        typeof resolveEvent.payload.triage.resolution === 'string' &&
+        resolveEvent.payload.triage.resolution.includes('scope correction'),
+      'the durable triage document names who authorized the release and why');
+    // WHY: the release pairs to the SAME reason code that governed the block.
+    assert(resolveEvent.payload.triage.reasonCode === blockEvent.payload.reasonCode,
+      'the release authorization pairs exactly with the blocking reason code');
+    const reproj = evs.find(e => e.type === 'ticket.lifecycle_reprojected');
+    // WHAT: both ends of the transition, plus the reprojection cause.
+    assert(reproj && reproj.payload.previousStatus === 'blocked' &&
+      reproj.payload.status === 'open',
+      `the reprojection records where it came from and went (${JSON.stringify(reproj || {})})`);
+    assert(reproj && reproj.payload.reason === 'triage_resolved',
+      'the reprojection names its cause: the attributed triage resolution');
+    assert(reopened.reprojectEvent && reopened.event,
+      'resolution and reprojection are both recorded by the one atomic operation');
+    const resolvePosition = evs.find(e => e.type === 'ticket.triage_resolved').position;
+    const reprojPosition = evs.find(e => e.type === 'ticket.lifecycle_reprojected').position;
+    assert(reprojPosition > resolvePosition,
+      'the reprojection is append-ordered after its authorizing resolution');
 
     // ── Surface 2: the ticket timeline ──────────────────────────────────────
     const timelineResponse = await server.request('GET', `/api/tickets/${ticket.id}/timeline`, { cookie });
     assert(timelineResponse.statusCode === 200, `the timeline endpoint answered (HTTP ${timelineResponse.statusCode})`);
     const timeline = JSON.parse(timelineResponse.body);
     assert(Array.isArray(timeline.entries), 'the timeline returns entries');
-
     const statusEntry = timeline.entries.find(entry =>
       entry.details && entry.details.fromStatus === 'blocked' && entry.details.toStatus === 'open');
-    assert(Boolean(statusEntry), 'the timeline includes the reopen transition');
+    assert(Boolean(statusEntry), 'the timeline includes the reprojection transition');
     assert(statusEntry.summary && statusEntry.summary.includes('blocked') && statusEntry.summary.includes('open'),
       `the timeline summary names both ends of the transition (got ${statusEntry.summary})`);
-    assert(statusEntry.details.changedBy === 'admin', 'the timeline entry names who moved it');
 
-    // ── Surface 3: the logs API and page ────────────────────────────────────
-    const logsApiResponse = await server.request('GET', `/api/logs?ticketId=${ticket.id}`, { cookie });
-    assert(logsApiResponse.statusCode === 200, `the logs API answered (HTTP ${logsApiResponse.statusCode})`);
-    const logsApi = JSON.parse(logsApiResponse.body);
-    assert(Array.isArray(logsApi.logs), 'the logs API returns a logs array');
-    const apiStatusLog = logsApi.logs.find(log =>
-      log.type === 'ticket:status_change' && log.fromStatus === 'blocked' && log.toStatus === 'open');
-    assert(Boolean(apiStatusLog), 'the logs API includes the reopen transition');
-    assert(apiStatusLog.changedBy === 'admin', 'the logs API preserves who moved it');
-
-    const logsPage = await server.request('GET', '/logs', { cookie });
-    assert(logsPage.statusCode === 200, `the logs page renders (HTTP ${logsPage.statusCode})`);
-
-    // The point of checking three surfaces is that they AGREE. Asserting each in
-    // isolation would pass even if they disagreed about the same transition.
-    assert(apiStatusLog.changedAt === openLog.changedAt,
-      'the logs API and the durable log describe the same transition instant');
-    assert(statusEntry.details.fromStatus === openLog.fromStatus
-      && statusEntry.details.toStatus === openLog.toStatus,
-      'the timeline and the durable log agree on the transition');
-
-    assertScenariosExecuted({ label: 'status transition evidence', assertions: assert.count(), minAssertions: 20 });
+    // T2 Tranche 5: the retired HTTP-writer log surfaces collapsed into the
+    // durable event chain; the suite asserts fewer but STRONGER facts — every
+    // formerly protected dimension (what/why/who) now lives on the canonical
+    // append-only evidence.
+    assertScenariosExecuted({ label: 'status transition evidence', assertions: assert.count(), minAssertions: 10 });
     console.log(`\nPASS: ticket status transition evidence — ${assert.count()} assertions (PostgreSQL-native)`);
   }, { schemaSlug: 'status_transition_evidence' });
 }

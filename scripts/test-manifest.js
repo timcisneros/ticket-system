@@ -84,6 +84,24 @@ const ORPHAN_REASONS = Object.freeze({
 // Every scripts/*-test.js file, classified. Alphabetical.
 const TESTS = Object.freeze([
   { file: "suite-mutation-test.js", status: "excluded", reason: "mutation-tool" },
+  // ── T2 Ticket lifecycle / attempt authority (Tranche 1..5) ──────────────
+  // Pure contracts: deterministic, no database, always required.
+  { file: "t2-lifecycle-contract-test.js", status: "required" },
+  { file: "t2-attempt-completion-contract-test.js", status: "required" },
+  { file: "t2-v2-completion-authority-contract-test.js", status: "required" },
+  { file: "t2-five-state-classifier-contract-test.js", status: "required" },
+  { file: "ticket-cancellation-authority-contract-test.js", status: "required" },
+  { file: "t2-tranche5-blocking-authority-test.js", status: "required" },
+  { file: "t2-tranche5-release-admission-server-test.js", status: "required" },
+  { file: "t2-tranche5-rerun-lock-order-test.js", status: "required" },
+  { file: "t041-semantic-closure-test.js", status: "required" },
+  // PostgreSQL-backed T2 suites: isolated synthetic schemas via the harness.
+  { file: "t2-lock-protocol-postgres-test.js", status: "required" },
+  { file: "t2-lineage-closure-postgres-test.js", status: "required" },
+  { file: "t2-cancellation-authority-postgres-test.js", status: "required" },
+  { file: "t2-five-state-classifier-postgres-test.js", status: "required" },
+  { file: "t2-tranche5-store-postgres-test.js", status: "required" },
+  { file: "t2-tranche5-migration-postgres-test.js", status: "required" },
   { file: "action-contract-streak-test.js", status: "required" },
   { file: "agent-behavior-simulation-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "agent-handoff-queue-protocol-test.js", status: "orphaned", reason: "cutover-orphan" },

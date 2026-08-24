@@ -37,9 +37,13 @@
       <div class="hero-actions">
         <a class="btn-secondary" href="/tickets">Back to Tickets</a>
         <a class="btn-secondary" href="/logs?ticketId=<%= ticket.id %>">Ticket Logs</a>
-      <% if (canUpdateTickets && !hasUnresolvedTriage && ticket.status !== 'open' && !isBlockedSpawnedChild) { %>
-          <button type="button" class="btn-secondary" data-rerun-ticket-id="<%= ticket.id %>"><%= ticket.status === 'failed' ? 'Retry' : 'Rerun' %></button>
+      <% if (canUpdateTickets && !hasUnresolvedTriage && ticket.status !== 'open') { %>
+        <% if (isBlockedSpawnedChild) { %>
+          <button type="button" class="btn-secondary" data-release-admission-id="<%= ticket.id %>">Release &amp; run</button>
+        <% } else { %>
+          <button type="button" class="btn-secondary" data-rerun-ticket-id="<%= ticket.id %>"><%= ticket.status === 'completed' ? 'Rerun' : 'Retry' %></button>
         <% } %>
+      <% } %>
         <% if (canUpdateTickets) { %>
           <button type="button" class="btn-secondary" data-simulate-plan-id="<%= ticket.id %>" data-simulate-mode="gate">Test gate</button>
           <button type="button" class="btn-secondary" data-simulate-plan-id="<%= ticket.id %>" data-simulate-mode="model">Test agent plan (simulation)</button>
@@ -63,14 +67,13 @@
     <% if (hasUnresolvedTriage) { %>
       <p class="form-hint">Rerun disabled: unresolved ticket-level triage must be resolved or the ticket objective must be changed first.</p>
     <% } else if (isBlockedSpawnedChild) { %>
-      <p class="form-hint">Rerun disabled: this child ticket was created by executeTicketPlan and is blocked by default. Open it explicitly to enable execution.</p>
-      <button type="button" class="btn-secondary" data-open-ticket-id="<%= ticket.id %>">Open Ticket</button>
+      <p class="form-hint">Rerun disabled: this child ticket was created by executeTicketPlan and holds a durable admission hold. Use Release &amp; run to release the hold and start execution; the server verifies the hold still governs before admitting.</p>
     <% } else if (ticket.status !== 'open') { %>
       <%
         const isGroupTicket = typeof executionState !== 'undefined' && executionState && executionState.isGroup;
-        const rerunWord = ticket.status === 'failed' ? 'Retry' : 'Rerun';
+        const rerunWord = ticket.status === 'completed' ? 'Rerun' : 'Retry';
       %>
-      <p class="form-hint"><%= rerunWord %> interrupts any active run, reopens this ticket, and starts a new run from the current objective and assignment.<%= isGroupTicket ? ' For this group ticket it regenerates the work-unit allocation across group members.' : '' %></p>
+      <p class="form-hint"><%= rerunWord %> interrupts any active run and admits a new run atomically from the current objective and assignment; a governing blocker must be released first.<%= isGroupTicket ? ' For this group ticket it regenerates the work-unit allocation across group members.' : '' %></p>
     <% } %>
     <p class="form-hint">Simulation tests the agent plan without creating a run or mutating the workspace. "Test agent plan" calls the model; "Test gate" returns the objective clarification verdict only.</p>
     <div id="simulation-result" class="simulation-result"></div>
@@ -1460,17 +1463,19 @@ document.addEventListener('click', async event => {
     return;
   }
 
-  const openTicketButton = event.target.closest('[data-open-ticket-id]');
-  if (openTicketButton) {
-    openTicketButton.disabled = true;
-    fetch('/api/tickets/' + encodeURIComponent(openTicketButton.dataset.openTicketId) + '/status', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ status: 'open' })
+  const releaseAdmissionButton = event.target.closest('[data-release-admission-id]');
+  if (releaseAdmissionButton) {
+    releaseAdmissionButton.disabled = true;
+    // T2 Tranche 5: the dedicated admission-hold release surface. The server
+    // re-derives the governing blocker under lock; a hold that no longer
+    // governs refuses with the intent matrix.
+    fetch('/api/tickets/' + encodeURIComponent(releaseAdmissionButton.dataset.releaseAdmissionId) + '/release-admission', {
+      method: 'POST',
+      headers: { Accept: 'application/json' }
     }).then(response => {
       if (!response.ok) {
         return response.json().catch(() => ({})).then(data => {
-          window.alert(data.error || 'Ticket open failed');
+          window.alert(data.error || 'Ticket release failed');
           window.location.reload();
         });
       }

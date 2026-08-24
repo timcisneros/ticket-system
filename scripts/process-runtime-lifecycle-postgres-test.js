@@ -112,25 +112,41 @@ async function main() {
 
       let concurrent = 0;
       let maximumConcurrent = 0;
-      const lockOrder = [];
+      const lockEvents = [];
       await Promise.all([
         store.withProcessOperationLock(operationIdentity, async () => {
           concurrent += 1;
           maximumConcurrent = Math.max(maximumConcurrent, concurrent);
-          lockOrder.push('first-enter');
+          lockEvents.push({ tag: 'store', phase: 'enter' });
           await sleep(80);
-          lockOrder.push('first-leave');
+          lockEvents.push({ tag: 'store', phase: 'leave' });
           concurrent -= 1;
         }),
         peer.withProcessOperationLock(operationIdentity, async () => {
           concurrent += 1;
           maximumConcurrent = Math.max(maximumConcurrent, concurrent);
-          lockOrder.push('second-enter');
+          lockEvents.push({ tag: 'peer', phase: 'enter' });
           concurrent -= 1;
+          lockEvents.push({ tag: 'peer', phase: 'leave' });
         })
       ]);
-      assert(maximumConcurrent === 1 &&
-        lockOrder.indexOf('first-leave') < lockOrder.indexOf('second-enter'),
+      // THE CONTRACT (docs/PROCESS_EXECUTION_CONTRACT.md): the session
+      // advisory-lock family serializes operation ownership — exactly ONE
+      // holder per canonical identity at any instant. It does NOT promise
+      // WHICH contender acquires first: the two stores own independent pools,
+      // so either may win the acquisition race. Mutual exclusion is therefore
+      // proved structurally — four events, alternating enter/leave per tag,
+      // inner pair sharing one tag, never overlapping — rather than by a
+      // positional order that silently assumes `store` always wins.
+      const serializedExclusively =
+        maximumConcurrent === 1 &&
+        lockEvents.length === 4 &&
+        lockEvents[0].phase === 'enter' &&
+        lockEvents[3].phase === 'leave' &&
+        lockEvents[0].tag === lockEvents[1].tag &&
+        lockEvents[2].tag === lockEvents[3].tag &&
+        lockEvents[0].tag !== lockEvents[2].tag;
+      assert(serializedExclusively,
       'the canonical PostgreSQL advisory-lock family serializes operation ownership');
 
       let record = await store.getProcessOperation(operationIdentity);

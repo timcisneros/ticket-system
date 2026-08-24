@@ -87,7 +87,8 @@ function parentDeclaredWork() {
   });
 }
 
-function currentTicket(agent, objective, status = 'failed') {
+// T2 Tranche 5: Ticket-level `failed` is retired; fixtures hold 'open'.
+function currentTicket(agent, objective, status = 'open') {
   const now = new Date().toISOString();
   return {
     objective,

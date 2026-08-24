@@ -257,9 +257,23 @@ async function main() {
           `2: the consequence's mutations match the authoritative receipts (${doc.mutations.length} vs ${committed.length}) — the A16 property`);
         assert(doc.verification && typeof doc.verification.postconditionsStatus === 'string',
           '2: the consequence carries its verification status');
-        const finalTicket = await store.getTicket(crashed.ticket.id);
-        assert(['completed', 'failed', 'closed', 'in_progress'].includes(finalTicket.status),
-          `2: ticket finalization stayed consistent with the run (${finalTicket.status})`);
+        const finalTicket = await waitFor(async () => {
+          const current = await store.getTicket(crashed.ticket.id);
+          return current && current.status !== 'in_progress' ? current : null;
+        }, 30000, '2 ticket settlement projection');
+        // T2 five-state projection. The recovered Run is terminal `completed`,
+        // but its completion decision is OBJECTIVE_INCOMPLETE for this
+        // unrecognized synthetic objective, so the attempt settles `failed`.
+        // With no cancellation/triage/refusal/admission-hold/blocker authority,
+        // the shared blocking-authority composer demotes the Ticket to `open`.
+        // Retired Ticket-level `failed` and historical `closed` are never
+        // projected — by recovery or by ordinary terminalization.
+        const finalAttempt = await store.getCurrentTicketAttempt(crashed.ticket.id);
+        assert(finalAttempt && finalAttempt.disposition === 'failed' &&
+            Boolean(finalAttempt.settledAt),
+          `2: the recovered attempt settled with a truthful disposition (${finalAttempt ? `${finalAttempt.disposition}, ${finalAttempt.settledAt ? 'settled' : 'unsettled'}` : 'missing'})`);
+        assert(finalTicket.status === 'open',
+          `2: the settled failed attempt demoted the Ticket to open because no canonical blocker wins (${finalTicket.status})`);
       }
 
       // ── 3. after_run.snapshot_finalized — the bundle already committed ──────

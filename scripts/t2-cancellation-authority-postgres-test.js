@@ -343,8 +343,10 @@ async function main() {
     });
     equal(winning.changed, true, 'cancellation commits before completion is inevitable');
     equal(winning.lifecycle.state, 'canceled', 'cancellation projects canonical lifecycle to canceled');
-    equal(winning.ticket.status, 'in_progress',
-      'legacy Ticket status remains unchanged before the five-state cutover');
+    // T2 Tranche 5 atomic cutover: authority + materialized CANCELED commit
+    // together (the Tranche-2 deferral is superseded).
+    equal(winning.ticket.status, 'canceled',
+      'authority commit materializes CANCELED atomically');
     equal((await store.getTicket(winningTicket.id)).cancellationAuthority.requestedBy,
       'operator-a', 'cancellation authority is durable and attributable');
     const postCancelSettlement = await store.transitionTicketAfterRun({

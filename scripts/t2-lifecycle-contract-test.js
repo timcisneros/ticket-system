@@ -274,10 +274,13 @@ async function main() {
   });
 
   test('normalizeBlockingAuthority accepts null', () => {
+    // T2 Tranche 5: the neutral shape carries the two new frozen inputs.
     assert.deepEqual(normalizeBlockingAuthority(null), {
       ticketTriageUnresolved: false,
       persistedRefusalEventId: null,
-      maxAttemptsExhausted: false
+      maxAttemptsExhausted: false,
+      settledBlockedAttempt: null,
+      admissionHold: null
     });
   });
 

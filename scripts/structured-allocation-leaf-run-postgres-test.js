@@ -1678,8 +1678,10 @@ async function main() {
     const failedParentGated = await store.transitionTicketAfterRun({
       runId: failedFailed.subjectRun.id
     });
-    assert.equal(failedParentGated.ticket.status, 'failed',
-      'a proven failed leaf set keeps the canonical failed outcome');
+    // T2 Tranche 5: FAILED leaves are Run/attempt authority, not a Ticket
+    // lifecycle value; with no unresolved blocker the parent demotes to open.
+    assert.equal(failedParentGated.ticket.status, 'open',
+      'a proven failed leaf set demotes the parent to open (five-state)');
     assert.notEqual(blockedParent.ticket.status, failedParentGated.ticket.status,
       'the blocked/failed distinction survives the gate unchanged');
 
@@ -1691,7 +1693,8 @@ async function main() {
     assert.equal(
       (await store.listTicketEvents(failedFailed.scenario.ticket.id, { limit: 200 })).events
         .filter(event => (event.runId === null || event.runId === undefined) &&
-          event.payload && event.payload.status === 'failed').length,
+          event.payload && event.payload.previousStatus === 'in_progress' &&
+          event.payload.status === 'open').length,
       1,
       'repeated terminalization emits no duplicate terminal parent event'
     );

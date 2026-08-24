@@ -220,9 +220,19 @@ function classifyLiveTerminalCandidate(artifact) {
   if (artifact.quiescence?.timedOut === true) return 'runtime_timeout';
   const status = artifact.pathProof?.ticketResultStatus;
   if (status === 'completed') return 'successful_or_claimed_completion';
+  // T2 Tranche 5: FAILED is Run/attempt authority, not a Ticket lifecycle
+  // value. A quiescent Ticket whose every terminal Run failed IS the product
+  // failure surface, whether the legacy string said `failed` or the five-state
+  // projection says `open`.
   if (status === 'failed') return 'product_failure';
-  if (status === 'blocked') return 'product_blocked';
   const runStatuses = artifact.ticketReport?.terminalRunStatuses;
+  if (status === 'open' && Array.isArray(runStatuses) && runStatuses.length > 0 &&
+      runStatuses.some(runStatus => runStatus === 'failed')) {
+    // Any terminal FAILED Run means the product did not complete its work,
+    // even alongside completed siblings (mixed-outcome leaves).
+    return 'product_failure';
+  }
+  if (status === 'blocked') return 'product_blocked';
   if (status === 'open' && Array.isArray(runStatuses) && runStatuses.length > 0 &&
       runStatuses.every(runStatus => runStatus === 'interrupted')) {
     return 'interrupted_recoverable';
