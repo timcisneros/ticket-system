@@ -102,7 +102,7 @@ async function main() {
       error => error instanceof OptimisticConcurrencyError && error.entity === 'local connector object'
     );
 
-    const ticket = await store.createTicket({ status: 'open', title: 'Application-state ticket', workContextId: context.id });
+    const ticket = await store.createTicket({ status: 'open', title: 'Application-state ticket', objective: 'Application-state ticket', workContextId: context.id });
     const run = await store.createRun({ ticketId: ticket.id, agentId: openAiAgent.id, status: 'pending' });
     const plan = await store.createAllocationPlan({
       plan: {
@@ -178,7 +178,7 @@ async function main() {
       value: boundedPolicy,
       changedBy: 'cutover-test'
     });
-    const capacityTicket = await store.createTicket({ status: 'open', title: 'Deployment admission' });
+    const capacityTicket = await store.createTicket({ status: 'open', title: 'Deployment admission', objective: 'Deployment admission' });
     const capacityAttempt = await store.createRunsAndStartTicket({
       ticketId: capacityTicket.id,
       runDrafts: [
@@ -208,7 +208,7 @@ async function main() {
       changedBy: 'cutover-test'
     });
     assert.equal(expanded.config.maxActiveRuns, 4);
-    const localTicket = await store.createTicket({ status: 'open', title: 'Provider admission' });
+    const localTicket = await store.createTicket({ status: 'open', title: 'Provider admission', objective: 'Provider admission' });
     const localAttempt = await store.createRunsAndStartTicket({
       ticketId: localTicket.id,
       runDrafts: [

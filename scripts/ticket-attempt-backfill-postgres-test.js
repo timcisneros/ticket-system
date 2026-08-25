@@ -85,15 +85,40 @@ async function createAgent(store, name) {
   })).agent;
 }
 
+// Historical seeding: this fixture represents durable reality AS IT EXISTED
+// at the migration-038 horizon, BEFORE T3 objective-revision authority. It
+// therefore writes Tickets directly in their pre-T3 shape — no
+// body.objectiveRevision pointer and no ticket.objective_revised event — and
+// lets migration 042 itself establish the activation baseline when the
+// forward chain reaches it. Present-day creation seams (createTicket /
+// createTicketWithEvent) would inject post-T3 revision authority into what is
+// supposed to be historical state.
 async function createTicket(store, agent, objective) {
-  return store.createTicket({
-    objective,
-    status: 'in_progress',
-    assignmentTargetType: 'agent',
-    assignmentTargetId: agent.id,
-    assignmentMode: 'individual',
-    executionMode: 'agent'
-  });
+  const result = await store.pool.query(
+    `INSERT INTO ${store.table('tickets')}
+       (status, assignment_target_type, assignment_target_id, body)
+     VALUES ('in_progress', 'agent', $1,
+             $2::jsonb)
+     RETURNING *`,
+    [
+      agent.id,
+      JSON.stringify({
+        objective,
+        assignmentMode: 'individual',
+        executionMode: 'agent'
+      })
+    ]
+  );
+  return {
+    ...result.rows[0].body,
+    id: Number(result.rows[0].id),
+    status: result.rows[0].status,
+    assignmentTargetType: result.rows[0].assignment_target_type,
+    assignmentTargetId: Number(result.rows[0].assignment_target_id),
+    revision: Number(result.rows[0].revision),
+    createdAt: result.rows[0].created_at,
+    updatedAt: result.rows[0].updated_at
+  };
 }
 
 async function reserveRunId(store) {
@@ -431,16 +456,33 @@ async function main() {
 
     const immutableBefore = await store.pool.query(
       `SELECT id, ticket_id, agent_id, status, execution_mode, body, created_at, completed_at
-       FROM ${store.table('runs')} ORDER BY id`
+        FROM ${store.table('runs')} ORDER BY id`
     );
-    // T2 Tranche 5: the fixture stops at 038, so the real runner applies
+    // T3 temporal boundary: BEFORE the forward chain runs, every historical
+    // Ticket carries requested-outcome content but NO objective-revision
+    // authority of any kind — migration 042 must be the sole establisher.
+    const preT3Pointers = (await store.pool.query(
+      `SELECT count(*)::int AS n FROM ${store.table('tickets')}
+        WHERE body->'objectiveRevision' IS NOT NULL`
+    )).rows[0].n;
+    equal(preT3Pointers, 0,
+      'pre-042 fixture Tickets carry no objectiveRevision pointer');
+    const preT3RevisionEvents = (await store.pool.query(
+      `SELECT count(*)::int AS n FROM ${store.table('events')}
+        WHERE type = 'ticket.objective_revised'`
+    )).rows[0].n;
+    equal(preT3RevisionEvents, 0,
+      'pre-042 fixture emits no ticket.objective_revised events');
+
+    // T2 Tranche 5 / T3: the fixture stops at 038, so the real runner applies
     // exactly the pending tail — asserted EXACTLY, in order.
     const appliedMigrations = await store.migrate();
     equal(appliedMigrations, [
       '039_ticket_attempt_authority.sql',
       '040_ticket_cancellation_authority.sql',
-      '041_ticket_five_state_cutover.sql'
-    ], 'the real runner applies exactly the pending 039..041 sequence in order');
+      '041_ticket_five_state_cutover.sql',
+      '042_objective_revision_baseline.sql'
+    ], 'the real runner applies exactly the pending 039..042 sequence in order');
     const immutableAfter = await store.pool.query(
       `SELECT id, ticket_id, agent_id, status, execution_mode, body, created_at, completed_at
        FROM ${store.table('runs')} ORDER BY id`
@@ -478,6 +520,27 @@ async function main() {
       'durable attempt count agrees for v1');
     equal(await store.countTicketAttempts(v2Ticket.id), 1,
       'durable attempt count agrees for historical v2');
+
+    // T3 activation baseline: migration 042 — not fixture seeding —
+    // established revision-1 authority for every historical Ticket.
+    const baselineTickets = (await store.pool.query(
+      `SELECT id, body FROM ${store.table('tickets')} ORDER BY id`
+    )).rows;
+    ok(baselineTickets.length > 0 && baselineTickets.every(row =>
+      row.body.objectiveRevision &&
+      Number.isSafeInteger(row.body.objectiveRevision.number) &&
+      /^[0-9a-f]{64}$/.test(row.body.objectiveRevision.hash)),
+      'post-042 every historical Ticket carries the activation projection pointer');
+    const baselineEvents = (await store.pool.query(
+      `SELECT ticket_id, payload FROM ${store.table('events')}
+        WHERE type = 'ticket.objective_revised' ORDER BY position`
+    )).rows;
+    equal(baselineEvents.length, baselineTickets.length,
+      'migration 042 established exactly one baseline event per historical Ticket');
+    ok(baselineEvents.every(eventRow => eventRow.payload.provenance === 't3_activation_baseline' &&
+        eventRow.payload.number === 1 && eventRow.payload.previous === null &&
+        eventRow.payload.actor === 'migration:042_objective_revision_baseline'),
+      'every baseline event carries truthful t3_activation_baseline provenance');
   });
 
   await withPre039('refusal', async store => {

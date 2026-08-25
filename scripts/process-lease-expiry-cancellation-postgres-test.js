@@ -144,6 +144,7 @@ function intentFor(run, agent, operationIdentity) {
 async function createTicketRun(store, agent, title) {
   const ticket = (await store.createTicketWithEvent({
     ticket: {
+      objective: 'Fixture requested outcome',
       status: 'open',
       title,
       assignmentTargetType: 'agent',

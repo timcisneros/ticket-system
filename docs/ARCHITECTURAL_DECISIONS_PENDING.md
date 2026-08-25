@@ -8521,6 +8521,120 @@ direct log, conflicting identity, global noise): standalone child-process
 report and real-hook projection must agree per Ticket; source assertions
 forbid private fact mappers from reappearing in either entry point.
 
+## T3-A Objective-Revision Kernel — migration-authority exception and sanctioned baseline append (recorded 2026-08-24)
+
+**Status:** Frozen T3-a kernel decisions, implemented in the working tree; the
+activation migration is NOT authorized for operational execution until the
+separate T3 cutover boundary is authorized.
+
+**1. Why the activation baseline preserves generic `tickets.revision`
+(migration-only `tickets_revision_guard` suspension).** Installing
+`body.objectiveRevision` materializes kernel metadata over ALREADY-EXISTING
+requested-outcome content. It changes no operator-visible Ticket state —
+status, objective text, acceptance criteria, lifecycle and authority fields
+remain byte/value exact — so it is migration materialization, not a
+Ticket revision; advancing the generic counter would rewrite concurrency
+authority for every concurrent caller without any semantic change. This is the
+same invariant class as migration 039's narrowly scoped
+`runs_revision_guard` suspension (kernel column backfill preserved Run
+revisions), though the mechanism here guards Ticket-body metadata rather than
+a new Run column. The exception exists ONLY inside migration 042's
+transaction: disable immediately before the pointer-installation statements,
+restore immediately after, assert restoration (`pg_trigger.tgenabled`) and
+value-exactness before COMMIT. No runtime code gains guard-bypass authority.
+
+**2. Why migration-time insertion into the append-only events table is
+truthful.** No earlier migration had written `events`, because none needed to
+record a PRESENT-TENSE system fact. The T3 baseline does: it asserts "at T3
+activation this Ticket's requested outcome was exactly this canonical
+content" — with real append position, activation-time `capturedAt`, migration
+actor, `number:1`, `provenance:'t3_activation_baseline'`, full canonical
+content and binding hash. It never pretends to be creation history
+(`creation` provenance remains reserved to the actual creator authority). The
+mechanism is bounded to migration 042, this one event type, this one
+provenance; it is deterministic, idempotent on re-entry, refuses any
+pre-existing pointer/event ambiguity or noncanonical legacy content, and
+rolls back to zero partial baselines.
+
+**3. Activation/cutover boundary (repository-owned guidance).** Quiesce the
+runtime and ALL Ticket-creation/writer paths → prove quiescence → apply
+migrations through 042 via the canonical runner → verify every Ticket carries
+coherent baseline event + pointer → start the exact published revision-aware
+runtime source → verify admission integrity enforcement and revision-1
+creation behavior → reopen activity. No interval may permit un-revisioned
+creation after baselines exist, nor pointer-requiring admission before they do.
+
+**4. Objective-less legacy Tickets are an activation PRECONDITION failure,
+not a skip class.** A pre-T3 Ticket with no requested-outcome objective is
+valid legacy state, but T3 cannot truthfully fabricate revision content for
+content that does not exist. Migration 042 therefore REFUSES the entire
+activation transaction — code `T042_OBJECTIVE_REVISION_BASELINE_REQUIRED`,
+identifying affected Ticket ids and the absent-objective reason class, zero
+mutations — whenever any pre-T3 Ticket lacks a canonical objective.
+Objective-less Tickets are never skipped, repaired, invented, or left
+pointerless by a successful 042; successful 042 guarantees revision authority
+for EVERY Ticket. Operational activation requires separately authorized
+resolution of such Tickets (or proof none exist). The classification lives in
+ONE place (the hook's every-Ticket preflight); the SQL convergence block
+asserts the same unconditional invariant with no exemption.
+
+**5. Objective revision follows the frozen attempt → Ticket lock order.**
+`reviseTicketObjective` locks the latest Ticket attempt FOR UPDATE first and
+the Ticket row last — the settlement/rerun direction. Its authoritative
+unsettled-attempt read happens AFTER acquiring the Ticket lock as a plain
+(non-locking) SELECT: because every admission/settlement writer for this
+Ticket must hold the Ticket row while creating or settling attempts, any
+overlapping writer has completed by then, so the plain read cannot miss a
+concurrently admitted unsettled attempt and takes no lock that could invert
+the order into a new 40P01 cycle.
+
+**6. Advancing the repository migration head requires advancing the
+process-execution release contract's compatible-schema window.** The release
+contract pins `databaseSchemaVersion` / minimum / maximum to EXACTLY the
+repository migration head (historical convention: bumped together at every
+head-advancing commit — 37→38→39→41→42). Release readiness fails closed with
+`PROCESS_RELEASE_SCHEMA_INCOMPATIBLE` whenever `migrationStatus.headVersion`
+differs from that pin. Two separate discoveries during T3-a verification made
+this coupling concrete: (1) the canonical full checkpoint failed at ordinal
+135 because `postgres-runtime-cutover-test` seeded an OBJECTIVE-LESS current
+fixture Ticket and admission integrity correctly refused its missing/malformed
+objectiveRevision pointer — that fixture class was swept and corrected across
+all affected owners; (2) the PREVENTIVE remaining-owner sweep then exposed
+`process-runtime-dispatch-postgres-test` denying every runProcess with
+`PROCESS_SANDBOX_UNAVAILABLE` and `process-supervision-postgres-test` timing
+out awaiting a process operation that could never become active; clean-HEAD /
+dirty bisection isolated the cause to repository migration head 42 versus the
+contract's schema pin 41 (`PROCESS_RELEASE_SCHEMA_INCOMPATIBLE` → sandbox
+authority denied). Future head-advancing migrations MUST include the same
+release-contract window bump plus their owners' literal updates, or the
+release checkpoint will fail exactly here.
+
+**7. Generic `transitionTicket` can no longer mutate requested-outcome
+content.** A patch containing `objective` / `acceptanceCriteria` now refuses
+with `TICKET_OBJECTIVE_REVISION_REQUIRED` when the merged result differs
+canonically from current content. When the patch is only CANONICALLY EQUAL to
+current content, the requested-outcome keys are stripped/ignored before the
+body merge on BOTH branches — structured-authority and plain Tickets alike —
+so persisted requested-outcome storage bytes cannot be rewritten without
+objective-revision authority even through whitespace-padded variants. The
+surrounding ordinary transition still occurs and generic revision/evidence may
+therefore advance; that is not "no Ticket transition" — it is "no
+requested-outcome storage mutation." Tickets carrying
+`structuredAllocationAuthority` keep their verbatim historical
+`STRUCTURED_ALLOCATION_OBJECTIVE_IMMUTABLE` refusal for any MATERIAL change to
+either field (objective-text case preserving the original message verbatim;
+acceptanceCriteria now covered by the same immutability authority because
+revision identity binds both fields), checked with precedence over the generic
+rule. This seals the last runtime generic mutator able to create out-of-band
+requested-outcome byte drift; `reviseTicketObjective` is the only sanctioned
+writer of changed content.
+The declared-work PostgreSQL owner was resequenced accordingly: operator stop
+(existing lifecycle authority) settles the first attempt →
+`reviseTicketObjective` N→N+1 → rerun binds the NEW revision while the old
+admitted Run's declared-work snapshot remains byte-exact — replacing its
+former mid-attempt `transitionTicket` objective patch, which frozen T3
+correctly refuses.
+
 ---
 
 *Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and closed 2026-08-03 (one shared authority, both consumers). Governed Lifecycle Transport-Count Flake recorded and closed 2026-08-03 (fixture arrival counter conflated with canonical ordinal). Intermittent Guard Mutation Limit recorded and closed 2026-08-03 (deterministic correlation contract). Fixture Crash Boundary Arrival Counter recorded and closed 2026-08-03. Parent-Fixture Hash Handshake recorded and closed as NOT REQUIRED 2026-08-03. Concurrent-Duplicate Misclassification regression recorded and closed 2026-08-03 by claim-epoch classification. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*

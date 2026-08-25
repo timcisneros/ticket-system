@@ -243,6 +243,7 @@ async function seedSource(store, artifactRoot) {
     const dummyTicket = await store.createTicket({
       status: 'open',
       title: `Release backup sequence sentinel ${index}`,
+        objective: `Release backup sequence sentinel ${index}`,
       assignmentTargetType: 'agent',
       assignmentTargetId: agent.id,
       assignmentMode: 'individual'
@@ -904,6 +905,7 @@ async function main() {
       const newTicket = await restoredStore.createTicket({
         status: 'open',
         title: 'Post-restore sequence proof',
+        objective: 'Post-restore sequence proof',
         assignmentTargetType: 'agent',
         assignmentTargetId: seeded.agent.id,
         assignmentMode: 'individual'

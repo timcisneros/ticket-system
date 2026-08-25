@@ -234,21 +234,43 @@ async function main() {
 
       const directSnapshot = JSON.parse(JSON.stringify(direct.run.declaredWorkSnapshot));
       const workflowSnapshot = JSON.parse(JSON.stringify(workflow.run.declaredWorkSnapshot));
-      const changedDirectTicket = (await store.transitionTicket({
-        ticketId: direct.ticket.id,
-        expectedRevision: direct.ticket.revision,
-        fromStatuses: ['in_progress'],
-        toStatus: 'in_progress',
-        patch: {
-          objective: `Changed objective ${STAMP}`,
-          acceptanceCriteria: 'Changed acceptance criteria'
-        },
-        eventPayload: { source: 'declared-work-postgres-test' }
-      })).ticket;
+
+      // T3: requested-outcome changes go through objective-revision authority,
+      // which refuses revisions across an unsettled attempt. The operator
+      // therefore stops the in-flight Run with the existing truthful lifecycle
+      // authority, revises, and reruns from the revised outcome.
+      const stopResponse = await first.request(
+        'POST',
+        `/api/runs/${direct.run.id}/stop`,
+        { cookie, body: {} }
+      );
+      assert.equal(stopResponse.statusCode, 200, stopResponse.body.slice(0, 500));
       assert.equal(
         (await store.getRun(direct.run.id)).declaredWorkSnapshot.contractHash,
         directSnapshot.contractHash,
-        'ticket mutation does not rewrite admitted run authority'
+        'stopping the admitted run does not rewrite its declaration'
+      );
+      assert.equal(
+        (await store.getRun(direct.run.id)).declaredWorkSnapshot.objective.text,
+        directObjective,
+        'later revision never rewrites the old admitted declaration'
+      );
+
+      const revised = await store.reviseTicketObjective({
+        ticketId: direct.ticket.id,
+        expectedRevision: (await store.getTicket(direct.ticket.id)).revision,
+        objective: `Changed objective ${STAMP}`,
+        acceptanceCriteria: 'Changed acceptance criteria',
+        reasonCode: 'clarification',
+        reason: 'declared-work revision scenario',
+        actor: 'declared-work-postgres-test'
+      });
+      assert.equal(revised.objectiveRevision.number, 2,
+        'objective revision N->N+1 establishes revision 2');
+      assert.equal(
+        (await store.getRun(direct.run.id)).declaredWorkSnapshot.contractHash,
+        directSnapshot.contractHash,
+        'ticket objective revision does not rewrite admitted run authority'
       );
 
       const workflowDefinition = await store.getWorkflowById('legal-intake');
@@ -269,12 +291,14 @@ async function main() {
 
       const rerunResponse = await first.request(
         'POST',
-        `/api/tickets/${changedDirectTicket.id}/rerun`,
+        `/api/tickets/${direct.ticket.id}/rerun`,
         { cookie, body: {} }
       );
       assert.equal(rerunResponse.statusCode, 200, rerunResponse.body);
       const rerun = await latestRun(store, direct.ticket.id);
       assert.notEqual(rerun.id, direct.run.id);
+      assert.equal(rerun.objectiveRevision && rerun.objectiveRevision.number, 2,
+        'rerun binds the NEW objective revision');
       assert.equal(rerun.declaredWorkSnapshot.objective.text, `Changed objective ${STAMP}`);
       assert.notEqual(rerun.declaredWorkSnapshot.contractHash, directSnapshot.contractHash,
         'rerun admits a new declaration from then-current ticket authority');

@@ -85,11 +85,15 @@ function makeFixtureApi(pool, schema) {
   const q = (text, params) => pool.query(text, params);
 
   const api = {
-    async ticket({ status, body = {}, authority = null }) {
+    // T3 activation precondition: every Ticket seeded by THIS suite represents
+    // a normally migratable legacy Ticket, so the fixture supplies canonical
+    // requested-outcome content unless a caller overrides it. (Objective-less
+    // rows would make migration 042 refuse the whole activation.)
+    async ticket({ status, body = {}, authority = null, objective = `Tranche-5 fixture objective ${Math.random().toString(36).slice(2, 8)}` }) {
       const result = await q(
         `INSERT INTO "${schema}".tickets (status, body, cancellation_authority)
          VALUES ($1, $2::jsonb, $3::jsonb) RETURNING id`,
-        [status, JSON.stringify(body), authority ? JSON.stringify(authority) : null]
+        [status, JSON.stringify({ objective, ...body }), authority ? JSON.stringify(authority) : null]
       );
       return Number(result.rows[0].id);
     },

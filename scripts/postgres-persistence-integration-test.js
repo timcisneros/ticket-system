@@ -249,6 +249,7 @@ async function main() {
     assert.deepEqual(await store.getWorkContextCounts(), countsBeforeAuditRollback);
 
     const ticketOne = await store.createTicket({
+      objective: 'Fixture requested outcome',
       status: 'open',
       title: 'First ticket',
       workContextId: legalContext.workContext.id,
@@ -312,6 +313,7 @@ async function main() {
 
     const processTemplateTicket = await store.withTransaction(async client => {
       const ticket = await store.createTicket({
+      objective: 'Fixture requested outcome',
         status: 'blocked',
         title: 'Generated legal review',
         source: {
@@ -551,6 +553,7 @@ async function main() {
         ticket: {
           status: 'open',
           title: 'Group assignment race',
+          objective: 'Fixture requested outcome',
           assignmentTargetType: 'group',
           assignmentTargetId: assignmentRaceGroup.group.id
         }
@@ -1128,7 +1131,10 @@ async function main() {
     assert.equal(approved.proposal.createdTicketId, approved.ticket.id);
     assert.equal(approved.ticket.source.proposalId, proposalDraft.proposal.id);
     const approvalEvents = await store.listTicketEvents(approved.ticket.id, { limit: 10 });
-    assert.deepEqual(approvalEvents.events.map(item => item.type), ['ticket.created', 'watcher.proposal_approved']);
+    // T3: creation atomically establishes objective revision 1, so its event
+    // precedes ticket.created in the same transaction.
+    assert.deepEqual(approvalEvents.events.map(item => item.type),
+      ['ticket.objective_revised', 'ticket.created', 'watcher.proposal_approved']);
     await assert.rejects(
       peer.approveWatcherProposal({ proposalId: proposalDraft.proposal.id, changedBy: 'again', createTicket: async () => null }),
       error => error && error.code === 'WATCHER_PROPOSAL_NOT_PROPOSED'
@@ -1315,23 +1321,40 @@ async function main() {
       (await store.listAgentGroupMemberships({ groupIds: [agentSupportGroupId], limit: 10 })).memberships,
       []
     );
-    const ticketTwo = await store.createTicket({ status: 'open', title: 'Second ticket' });
-    const lifecycleTicket = await store.createTicket({ status: 'open', title: 'Lifecycle ticket' });
-    const ticketRaceTicket = await store.createTicket({ status: 'open', title: 'Ticket transition race' });
-    const rollbackTicket = await store.createTicket({ status: 'open', title: 'Rollback ticket' });
-    const transitionRollbackTicket = await store.createTicket({ status: 'open', title: 'Transition rollback ticket' });
-    const composedTicket = await store.createTicket({ status: 'open', title: 'Composed evidence transaction' });
-    const composedRollbackTicket = await store.createTicket({ status: 'open', title: 'Composed rollback transaction' });
-    const fencedTicket = await store.createTicket({ status: 'open', title: 'Lease fencing transaction' });
-    const leaseRepositoryTicket = await store.createTicket({ status: 'open', title: 'Lease repository boundary' });
-    const phaseProjectionTicket = await store.createTicket({ status: 'open', title: 'Run phase projection boundary' });
-    const terminalBoundaryTicket = await store.createTicket({ status: 'open', title: 'Terminalization boundary' });
-    const terminalRepairTicket = await store.createTicket({ status: 'open', title: 'Terminal repair boundary' });
-    const terminalRollbackTicket = await store.createTicket({ status: 'open', title: 'Terminalization rollback' });
-    const terminalExpiredTicket = await store.createTicket({ status: 'open', title: 'Expired terminal recovery' });
-    const nonTerminalEvidenceTicket = await store.createTicket({ status: 'open', title: 'Non-terminal evidence boundary' });
-    const runtimeStateReadTicket = await store.createTicket({ status: 'open', title: 'Runtime state read boundary' });
+    const ticketTwo = await store.createTicket({
+      objective: 'Fixture requested outcome', status: 'open', title: 'Second ticket' });
+    const lifecycleTicket = await store.createTicket({
+      objective: 'Fixture requested outcome', status: 'open', title: 'Lifecycle ticket' });
+    const ticketRaceTicket = await store.createTicket({
+      objective: 'Fixture requested outcome', status: 'open', title: 'Ticket transition race' });
+    const rollbackTicket = await store.createTicket({
+      objective: 'Fixture requested outcome', status: 'open', title: 'Rollback ticket' });
+    const transitionRollbackTicket = await store.createTicket({
+      objective: 'Fixture requested outcome', status: 'open', title: 'Transition rollback ticket' });
+    const composedTicket = await store.createTicket({
+      objective: 'Fixture requested outcome', status: 'open', title: 'Composed evidence transaction' });
+    const composedRollbackTicket = await store.createTicket({
+      objective: 'Fixture requested outcome', status: 'open', title: 'Composed rollback transaction' });
+    const fencedTicket = await store.createTicket({
+      objective: 'Fixture requested outcome', status: 'open', title: 'Lease fencing transaction' });
+    const leaseRepositoryTicket = await store.createTicket({
+      objective: 'Fixture requested outcome', status: 'open', title: 'Lease repository boundary' });
+    const phaseProjectionTicket = await store.createTicket({
+      objective: 'Fixture requested outcome', status: 'open', title: 'Run phase projection boundary' });
+    const terminalBoundaryTicket = await store.createTicket({
+      objective: 'Fixture requested outcome', status: 'open', title: 'Terminalization boundary' });
+    const terminalRepairTicket = await store.createTicket({
+      objective: 'Fixture requested outcome', status: 'open', title: 'Terminal repair boundary' });
+    const terminalRollbackTicket = await store.createTicket({
+      objective: 'Fixture requested outcome', status: 'open', title: 'Terminalization rollback' });
+    const terminalExpiredTicket = await store.createTicket({
+      objective: 'Fixture requested outcome', status: 'open', title: 'Expired terminal recovery' });
+    const nonTerminalEvidenceTicket = await store.createTicket({
+      objective: 'Fixture requested outcome', status: 'open', title: 'Non-terminal evidence boundary' });
+    const runtimeStateReadTicket = await store.createTicket({
+      objective: 'Fixture requested outcome', status: 'open', title: 'Runtime state read boundary' });
     const triageAuthorityTicket = await store.createTicket({
+      objective: 'Fixture requested outcome',
       status: 'blocked',
       title: 'Triage authority boundary',
       triage: {
@@ -1349,14 +1372,17 @@ async function main() {
       }
     });
     const operatorReadParentTicket = await store.createTicket({
+      objective: 'Fixture requested outcome',
       status: 'open', title: 'Operator read parent', workContextId: 700
     });
     const operatorReadChildTicket = await store.createTicket({
+      objective: 'Fixture requested outcome',
       status: 'blocked', title: 'Operator read child', workContextId: 700,
       parentTicketId: operatorReadParentTicket.id
     });
     const lifecycleBoundaryTicket = await store.createTicketWithEvent({
       ticket: {
+      objective: 'Fixture requested outcome',
         status: 'open',
         title: 'Ticket/run lifecycle boundary',
         assignmentTargetType: 'group',
@@ -1367,9 +1393,11 @@ async function main() {
       eventPayload: { source: 'integration' }
     });
     const lifecycleRaceTicket = await store.createTicket({
+      objective: 'Fixture requested outcome',
       status: 'open', title: 'Lifecycle creation race', assignmentTargetType: 'agent', assignmentTargetId: 30
     });
     const retryBoundaryTicket = await store.createTicket({
+      objective: 'Fixture requested outcome',
       status: 'open', title: 'Atomic retry boundary', assignmentTargetType: 'agent', assignmentTargetId: 40,
       assignmentMode: 'individual'
     });
@@ -1380,12 +1408,14 @@ async function main() {
     assert.equal(lifecycleBoundaryTicket.event.type, 'ticket.created');
     const childTicketRace = await Promise.all([
       store.createTicketWithEvent({
-        ticket: { status: 'blocked', assignmentTargetType: 'agent', assignmentTargetId: 99,
+        ticket: {
+      objective: 'Fixture requested outcome', status: 'blocked', assignmentTargetType: 'agent', assignmentTargetId: 99,
           spawnIdempotencyKey: 'integration-child-once' },
         eventPayload: { parentRunId: 999 }
       }),
       peer.createTicketWithEvent({
-        ticket: { status: 'blocked', assignmentTargetType: 'agent', assignmentTargetId: 99,
+        ticket: {
+      objective: 'Fixture requested outcome', status: 'blocked', assignmentTargetType: 'agent', assignmentTargetId: 99,
           spawnIdempotencyKey: 'integration-child-once' },
         eventPayload: { parentRunId: 999 }
       })
@@ -3309,7 +3339,8 @@ async function main() {
     } finally {
       foundationClient.release();
     }
-    const foundationTicket = await nonemptyFoundationStore.createTicket({ status: 'open', title: 'Disposable foundation data' });
+    const foundationTicket = await nonemptyFoundationStore.createTicket({
+      objective: 'Fixture requested outcome', status: 'open', title: 'Disposable foundation data' });
     const foundationRunResult = await nonemptyFoundationStore.pool.query(
       `INSERT INTO ${nonemptyFoundationStore.table('runs')}
         (ticket_id, agent_id, status, execution_mode, body)
@@ -3331,7 +3362,16 @@ async function main() {
     const preservedFoundationEvents = await nonemptyFoundationStore.pool.query(
       `SELECT count(*)::int AS count FROM ${nonemptyFoundationStore.table('events')}`
     );
-    assert.equal(preservedFoundationEvents.rows[0].count, 1, 'refused migration must preserve development evidence');
+    // T3 creation adds objective-revision revision-1 evidence alongside the
+    // development event; the refusal must preserve BOTH, never wipe.
+    const preservedRunCreated = await nonemptyFoundationStore.pool.query(
+      `SELECT count(*)::int AS count FROM ${nonemptyFoundationStore.table('events')}
+        WHERE type = 'run.created'`
+    );
+    assert.ok(preservedFoundationEvents.rows[0].count >= 1,
+      'refused migration must preserve development evidence');
+    assert.equal(preservedRunCreated.rows[0].count, 1,
+      'the original development run.created event survives verbatim');
     const refusedMigration = await nonemptyFoundationStore.pool.query(
       `SELECT 1 FROM ${nonemptyFoundationStore.table('schema_migrations')} WHERE version = $1`,
       ['002_runtime_evidence.sql']

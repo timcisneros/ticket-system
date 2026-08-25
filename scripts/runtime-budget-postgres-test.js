@@ -75,6 +75,7 @@ async function createAgent(store, label, provider = 'openai') {
 async function createTicket(store, agent, label) {
   return (await store.createTicketWithEvent({
     ticket: {
+      objective: 'Fixture requested outcome',
       status: 'open',
       title: label,
       assignmentTargetType: 'agent',

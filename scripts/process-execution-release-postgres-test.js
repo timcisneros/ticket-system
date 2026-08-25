@@ -15,10 +15,10 @@ async function main() {
     databaseUrl,
     schema
   }) => {
-    // T2 Tranche 5: the migration head is now the five-state cutover (041).
+    // T3: the migration head is now the objective-revision kernel (042).
     const migration = await store.getMigrationStatus();
-    assert.equal(migration.currentVersion, 41);
-    assert.equal(migration.headVersion, 41);
+    assert.equal(migration.currentVersion, 42);
+    assert.equal(migration.headVersion, 42);
     assert.equal(migration.fullyApplied, true);
     assert.equal(migration.checksumsValid, true);
     assert.equal(migration.unknownMigrations, 0);
@@ -26,7 +26,7 @@ async function main() {
       connectionString: databaseUrl,
       schema
     });
-    assert.equal(preflight.currentVersion, 41);
+    assert.equal(preflight.currentVersion, 42);
     assert.equal(preflight.fullyApplied, true,
       'production migration preflight accepts the isolated fully migrated schema');
 

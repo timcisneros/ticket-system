@@ -68,6 +68,7 @@ async function main() {
       })).agent;
       const ticket = (await store.createTicketWithEvent({
         ticket: {
+      objective: 'Fixture requested outcome',
           status: 'open',
           title: 'Process lifecycle authority',
           assignmentTargetType: 'agent',

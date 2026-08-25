@@ -62,8 +62,8 @@ async function main() {
       'run_budget_charges gains no monetary dimension'
     );
 
-    const ticket = await store.createTicket({ status: 'open', title: `T4 ${STAMP}` });
-    const otherTicket = await store.createTicket({ status: 'open', title: `T4b ${STAMP}` });
+    const ticket = await store.createTicket({ status: 'open', title: `T4 ${STAMP}`, objective: `T4 ${STAMP}` });
+    const otherTicket = await store.createTicket({ status: 'open', title: `T4b ${STAMP}`, objective: `T4b ${STAMP}` });
 
     const insertAccount = async (ticketId, role, authorized = 1_000_000, extra = {}) => {
       const result = await store.pool.query(

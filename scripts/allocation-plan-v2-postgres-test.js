@@ -222,13 +222,24 @@ async function main() {
     assert.equal(Object.prototype.hasOwnProperty.call(v1, 'planHash'), false);
     assert.equal(v1.items[0].allocationSubtask, 'Historical v1 subtask.');
 
-    await store.transitionTicket({
+    // T3: the requested-outcome change goes through objective-revision
+    // authority (this historical Ticket has no unsettled attempt); the
+    // blockedReason then moves through the ordinary generic transition.
+    await store.reviseTicketObjective({
       ticketId: v1Ticket.id,
       expectedRevision: v1Ticket.revision,
+      objective: `Changed live ticket state ${STAMP}`,
+      acceptanceCriteria: null,
+      reasonCode: 'correction',
+      reason: 'historical reconstruction fixture',
+      actor: 'allocation-plan-v2-test'
+    });
+    await store.transitionTicket({
+      ticketId: v1Ticket.id,
+      expectedRevision: (await store.getTicket(v1Ticket.id)).revision,
       fromStatuses: ['open'],
       toStatus: 'blocked',
       patch: {
-        objective: `Changed live ticket state ${STAMP}`,
         blockedReason: 'Historical reconstruction fixture.'
       },
       eventType: 'ticket.blocked',

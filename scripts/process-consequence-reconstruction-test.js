@@ -66,6 +66,7 @@ function processReceipt({
 async function createRun(store, agent, suffix) {
   const ticket = (await store.createTicketWithEvent({
     ticket: {
+      objective: 'Fixture requested outcome',
       status: 'open',
       title: `Process consequence ${suffix}`,
       assignmentTargetType: 'agent',

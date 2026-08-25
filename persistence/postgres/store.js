@@ -132,6 +132,18 @@ const {
   inspectTicketFiveStateBackfill
 } = require('./t041-five-state-backfill');
 const {
+  inspectObjectiveRevisionBaseline
+} = require('./t042-objective-revision-baseline');
+const {
+  EVENT_TYPE: OBJECTIVE_REVISION_EVENT_TYPE,
+  ADMISSION_INTEGRITY_ERROR_CODE,
+  canonicalRevisionContent,
+  normalizeRevisionEventPayload,
+  buildRevisionPayload,
+  evaluateRevisionGuards,
+  validatePointer
+} = require('../../runtime/ticket-objective-revision-contract');
+const {
   deriveTicketAttemptDisposition,
   normalizeTicketAttempt
 } = require('../../runtime/ticket-attempt-contract');
@@ -2008,6 +2020,14 @@ class PostgresRuntimeStore {
               // before the SQL cutover executes.
               await inspectTicketFiveStateBackfill(this, { client });
             }
+            if (version === '042_objective_revision_baseline.sql') {
+              // T3 activation baseline: canonicality-refusing, idempotent,
+              // atomic establishment of objective-revision revision-1
+              // authority (event + projection pointer) for every pre-T3
+              // Ticket, preserving generic tickets.revision via a narrowly
+              // scoped tickets_revision_guard suspension.
+              await inspectObjectiveRevisionBaseline(this, { client });
+            }
             await client.query(fs.readFileSync(path.join(MIGRATIONS_DIR, version), 'utf8'));
             await client.query(
               `INSERT INTO ${this.table('schema_migrations')} (version) VALUES ($1)`,
@@ -2222,6 +2242,14 @@ class PostgresRuntimeStore {
         { expectedTicketId: explicitId, expectedTicketObjective: ticketBody.objective }
       );
     }
+    // T3: every store-created Ticket carrying requested-outcome content
+    // leaves creation with revision-1 authority (event + projection pointer,
+    // one transaction). Objective-less low-level/test rows stay pre-T3-like
+    // and fail closed at admission.
+    const initialObjectiveRevision = this._buildInitialObjectiveRevision(ticketBody);
+    if (initialObjectiveRevision !== null) {
+      ticketBody.objectiveRevision = initialObjectiveRevision.pointer;
+    }
     const values = [
       status,
       ticket.assignmentTargetType || null,
@@ -2247,7 +2275,16 @@ class PostgresRuntimeStore {
            RETURNING *`,
           [explicitId, ...values]
         );
-      return ticketFromRow(result.rows[0]);
+      const createdTicket = ticketFromRow(result.rows[0]);
+      if (initialObjectiveRevision !== null) {
+        await this._appendCreationObjectiveRevisionEvent(
+          connection,
+          createdTicket.id,
+          initialObjectiveRevision,
+          createdTicket.createdAt
+        );
+      }
+      return createdTicket;
     };
     return client ? execute(client) : this.withTransaction(execute);
   }
@@ -2255,6 +2292,278 @@ class PostgresRuntimeStore {
   async createTicket(record, { client = null } = {}) {
     return this._createTicketRecord(record, { client });
   }
+
+  // ── T3: Ticket objective-revision kernel ──────────────────────────────────
+  //
+  // Historical authority = append-only `ticket.objective_revised` events that
+  // STORE full canonical requested-outcome content; content hashes BIND that
+  // stored content. The Ticket-body pointer/objective/acceptanceCriteria are
+  // CURRENT PROJECTION only — reconstruction never depends on them.
+
+  // Establishes revision-1 identity for a Ticket being created. Returns null
+  // when the caller supplied no objective at all: such a row is pre-T3-like,
+  // carries no revision identity, and post-T3 admission fails closed against
+  // it. Present content must ALREADY be canonical (trim/null rules); this
+  // seam refuses rather than silently rewrites.
+  _buildInitialObjectiveRevision(ticketBody) {
+    const rawObjective = Object.prototype.hasOwnProperty.call(ticketBody, 'objective')
+      ? ticketBody.objective
+      : undefined;
+    if (rawObjective === undefined || rawObjective === null) return null;
+    const canonicalContent = canonicalRevisionContent({
+      objective: rawObjective,
+      acceptanceCriteria: Object.prototype.hasOwnProperty.call(ticketBody, 'acceptanceCriteria')
+        ? ticketBody.acceptanceCriteria
+        : null
+    });
+    if (typeof rawObjective !== 'string' || rawObjective !== canonicalContent.objective) {
+      const error = new TypeError('ticket.objective must be canonical (trimmed, non-empty string)');
+      error.code = 'T3_OBJECTIVE_REVISION_INVALID';
+      throw error;
+    }
+    const hasCriteriaKey = Object.prototype.hasOwnProperty.call(ticketBody, 'acceptanceCriteria');
+    const rawCriteria = hasCriteriaKey ? ticketBody.acceptanceCriteria : null;
+    if (rawCriteria !== null && (typeof rawCriteria !== 'string' || rawCriteria !== canonicalContent.acceptanceCriteria)) {
+      const error = new TypeError('ticket.acceptanceCriteria must be canonical (trimmed string or null)');
+      error.code = 'T3_OBJECTIVE_REVISION_INVALID';
+      throw error;
+    }
+    const actor = typeof ticketBody.createdBy === 'string' && ticketBody.createdBy.trim()
+      ? ticketBody.createdBy.trim()
+      : 'store';
+    const content = canonicalRevisionContent({
+      objective: canonicalContent.objective,
+      acceptanceCriteria: canonicalContent.acceptanceCriteria
+    });
+    return {
+      pointer: { number: 1, hash: hashCanonical(content) },
+      content,
+      actor
+    };
+  }
+
+  _appendCreationObjectiveRevisionEvent(connection, ticketId, initial, capturedAt) {
+    const payload = normalizeRevisionEventPayload({
+      number: 1,
+      provenance: 'creation',
+      content: initial.content,
+      contentHash: hashCanonical(initial.content),
+      previous: null,
+      actor: initial.actor,
+      reasonCode: 'creation',
+      reason: null,
+      capturedAt
+    });
+    return this._appendObjectiveRevisionEvent(connection, ticketId, payload);
+  }
+
+  async _appendObjectiveRevisionEvent(connection, ticketId, payload) {
+    return this._appendEvent(connection, {
+      type: OBJECTIVE_REVISION_EVENT_TYPE,
+      ticketId,
+      payload
+    });
+  }
+
+  async _objectiveRevisionChainHead(client, ticketId) {
+    const result = await client.query(
+      `SELECT position, payload FROM ${this.table('events')}
+       WHERE ticket_id = $1 AND type = $2
+       ORDER BY position DESC LIMIT 1`,
+      [ticketId, OBJECTIVE_REVISION_EVENT_TYPE]
+    );
+    return result.rowCount === 0 ? null : result.rows[0];
+  }
+
+  // Fail-closed coherence proof between the append-only event chain and the
+  // current Ticket projection. Runs INSIDE the locked admission transaction
+  // before any immutable Run snapshot exists, so out-of-band projection drift
+  // can never be laundered into executed intent.
+  async _validatedObjectiveRevisionAuthority(client, ticket) {
+    const failure = detail => {
+      const error = new Error(`Ticket objective-revision integrity failure: ${detail}`);
+      error.code = ADMISSION_INTEGRITY_ERROR_CODE;
+      return error;
+    };
+    let pointer;
+    try {
+      pointer = validatePointer(ticket.objectiveRevision);
+    } catch (error) {
+      throw failure(`missing or malformed projection pointer (${error.message})`);
+    }
+    const head = await this._objectiveRevisionChainHead(client, ticket.id);
+    if (!head) throw failure('no objective-revision event chain for a Ticket carrying a pointer');
+    let payload;
+    try {
+      payload = normalizeRevisionEventPayload(head.payload);
+    } catch (error) {
+      throw failure(`chain head invalid (${error.message})`);
+    }
+    if (pointer.number !== payload.number || pointer.hash !== payload.contentHash) {
+      throw failure(
+        `projection pointer {${pointer.number}, ${pointer.hash}} does not match ` +
+        `chain head {${payload.number}, ${payload.contentHash}}`);
+    }
+    const eventCount = await client.query(
+      `SELECT count(*)::bigint AS n FROM ${this.table('events')}
+       WHERE ticket_id = $1 AND type = $2`,
+      [ticket.id, OBJECTIVE_REVISION_EVENT_TYPE]
+    );
+    if (Number(eventCount.rows[0].n) !== payload.number) {
+      throw failure(
+        `revision numbers must be contiguous from 1 (chain holds ${eventCount.rows[0].n}, head is ${payload.number})`);
+    }
+    if (payload.number > 1) {
+      const previousNumber = payload.previous === null ? null : payload.previous.number;
+      if (previousNumber !== payload.number - 1) {
+        throw failure('chain head previous pointer does not reference its immediate predecessor');
+      }
+    }
+    const projected = canonicalRevisionContent({
+      objective: ticket.objective,
+      acceptanceCriteria: Object.prototype.hasOwnProperty.call(ticket, 'acceptanceCriteria')
+        ? ticket.acceptanceCriteria
+        : null
+    });
+    if (hashCanonical(projected) !== payload.contentHash ||
+        projected.objective !== payload.content.objective ||
+        projected.acceptanceCriteria !== payload.content.acceptanceCriteria) {
+      throw failure('projected objective/acceptanceCriteria do not match chain-head content');
+    }
+    return Object.freeze({ number: payload.number, hash: payload.contentHash, content: payload.content });
+  }
+
+  // Guarded N -> N+1 objective revision. Changes REQUESTED OUTCOME ONLY:
+  // lifecycle status, every T2 blocker authority, cancellation state and the
+  // attempt budget are preserved verbatim; the frozen guard set refuses
+  // everything else fail-closed.
+  async reviseTicketObjective({
+    ticketId,
+    expectedRevision,
+    objective,
+    acceptanceCriteria,
+    reasonCode,
+    reason,
+    actor
+  }, { client = null } = {}) {
+    const id = positiveSafeInteger(ticketId, 'ticketId');
+    const expected = positiveSafeInteger(expectedRevision, 'expectedRevision');
+    const revisingActor = requiredString(actor, 'actor');
+    const nextContent = canonicalRevisionContent({ objective, acceptanceCriteria });
+    const execute = async connection => {
+      // FROZEN T2 LOCK ORDER: attempt authority FIRST, Ticket LAST — the same
+      // direction settlement/rerun writers use (attempt FOR UPDATE, then
+      // Ticket FOR UPDATE). Locking Ticket before the attempt here produced a
+      // real 40P01 cycle against settlement-direction writers.
+      const attemptAtLockTime = await connection.query(
+        `SELECT disposition FROM ${this.table('ticket_attempts')}
+         WHERE ticket_id = $1
+         ORDER BY ordinal DESC LIMIT 1
+         FOR UPDATE`,
+        [id]
+      );
+      const currentResult = await connection.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (currentResult.rowCount === 0) {
+        const error = new Error(`ticket ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const ticket = ticketFromRow(currentResult.rows[0]);
+      // Authoritative unsettled state is read AFTER the Ticket lock, WITHOUT
+      // taking any further lock. Holding the Ticket row lock excludes every
+      // admission/settlement writer for this Ticket (they all acquire the
+      // Ticket row before creating or settling attempts), so any overlapping
+      // writer has already committed or rolled back: this plain read observes
+      // the final attempt state and cannot race a concurrent admission into
+      // committing a revision across a newly admitted unsettled attempt. A
+      // second FOR UPDATE here would recreate the forbidden inversion.
+      const attemptNow = await connection.query(
+        `SELECT disposition FROM ${this.table('ticket_attempts')}
+         WHERE ticket_id = $1
+         ORDER BY ordinal DESC LIMIT 1`,
+        [id]
+      );
+      void attemptAtLockTime;
+      const unsettled = attemptNow.rowCount > 0 &&
+        attemptNow.rows[0].disposition === null;
+      let cancellationCommitted = false;
+      try {
+        assertTicketCancellationNotCommitted(ticket, 'Objective revision');
+      } catch (_) {
+        cancellationCommitted = true;
+      }
+      const expectedGenericRevisionMatches = ticket.revision === expected;
+      let authority = null;
+      let chainCoherent = true;
+      try {
+        authority = await this._validatedObjectiveRevisionAuthority(connection, ticket);
+      } catch (_) {
+        chainCoherent = false;
+      }
+      const canonicalNoOp = authority !== null &&
+        hashCanonical(nextContent) === authority.hash;
+      const guards = evaluateRevisionGuards({
+        status: ticket.status,
+        hasUnsettledAttempt: unsettled,
+        cancellationCommitted,
+        hasStructuredAllocationAuthority: Object.prototype.hasOwnProperty.call(ticket, 'structuredAllocationAuthority'),
+        expectedGenericRevisionMatches,
+        chainCoherent,
+        canonicalNoOp
+      });
+      if (!guards.ok) {
+        if (guards.code === 'TICKET_TRANSITION_CONFLICT') {
+          throw new OptimisticConcurrencyError('ticket', id, expected, ticket);
+        }
+        const error = new Error(`Objective revision refused: ${guards.code}`);
+        error.code = guards.code;
+        throw error;
+      }
+      const nextNumber = authority.number + 1;
+      const payload = buildRevisionPayload({
+        number: nextNumber,
+        previous: { number: authority.number, hash: authority.hash },
+        objective: nextContent.objective,
+        acceptanceCriteria: nextContent.acceptanceCriteria,
+        actor: revisingActor,
+        reasonCode,
+        reason,
+        capturedAt: (await connection.query('SELECT clock_timestamp() AS ts')).rows[0].ts
+      });
+      await this._appendObjectiveRevisionEvent(connection, id, payload);
+      const updated = await connection.query(
+        `UPDATE ${this.table('tickets')}
+          SET body = jsonb_set(jsonb_set(jsonb_set(body,
+                '{objective}', to_jsonb($2::text)),
+                '{acceptanceCriteria}', $3::jsonb),
+                '{objectiveRevision}', $4::jsonb),
+              revision = revision + 1,
+              updated_at = clock_timestamp()
+          WHERE id = $1 AND revision = $5
+          RETURNING *`,
+        [
+          id,
+          payload.content.objective,
+          JSON.stringify(payload.content.acceptanceCriteria),
+          JSON.stringify({ number: payload.number, hash: payload.contentHash }),
+          expected
+        ]
+      );
+      if (updated.rowCount === 0) {
+        throw new OptimisticConcurrencyError('ticket', id, expected, ticket);
+      }
+      return {
+        ticket: ticketFromRow(updated.rows[0]),
+        objectiveRevision: { number: payload.number, hash: payload.contentHash },
+        event: payload
+      };
+    };
+    return client ? execute(client) : this.withTransaction(execute);
+  }
+
 
   async createTicketWithEvent({
     ticket,
@@ -2301,6 +2610,16 @@ class PostgresRuntimeStore {
       }
       const spawnIdempotencyKey = optionalString(record.spawnIdempotencyKey);
       if (spawnIdempotencyKey) record.spawnIdempotencyKey = spawnIdempotencyKey;
+      // T3: the idempotent-spawn INSERT path bypasses _createTicketRecord, so
+      // it establishes revision-1 identically here. Replay of an existing
+      // child returns without appending a second revision-1 event.
+      let spawnObjectiveRevision = null;
+      if (spawnIdempotencyKey) {
+        spawnObjectiveRevision = this._buildInitialObjectiveRevision(record);
+        if (spawnObjectiveRevision !== null) {
+          record.objectiveRevision = spawnObjectiveRevision.pointer;
+        }
+      }
       let created;
       let inserted = true;
       if (spawnIdempotencyKey) {
@@ -2358,6 +2677,14 @@ class PostgresRuntimeStore {
       }
       if (!inserted) return { ticket: created, event: null, created: false };
       const admittedAuthority = created.structuredAllocationAuthority || null;
+      if (spawnObjectiveRevision !== null) {
+        await this._appendCreationObjectiveRevisionEvent(
+          connection,
+          created.id,
+          spawnObjectiveRevision,
+          created.createdAt
+        );
+      }
       const event = await this._appendEvent(connection, {
         type: 'ticket.created',
         ticketId: created.id,
@@ -6320,6 +6647,12 @@ class PostgresRuntimeStore {
         error.code = 'TICKET_TRIAGE_REQUIRED';
         throw error;
       }
+      // T3 fail-closed integrity boundary: mutable Ticket intent may become
+      // immutable executed intent ONLY through a coherent event-chain head.
+      // Validated here, under the locked Ticket row, BEFORE any Run snapshot
+      // exists; every Run in this attempt is stamped from THIS authority.
+      const objectiveRevisionAuthority =
+        await this._validatedObjectiveRevisionAuthority(connection, ticket);
 
       const agentIds = drafts.map(run => run.agentId);
       const budgetSnapshots = drafts.map((run, index) => {
@@ -6426,6 +6759,12 @@ class PostgresRuntimeStore {
       for (const [draftIndex, draft] of drafts.entries()) {
         const run = await this.createRun({
           ...draft,
+          // Authoritative revision identity from the validated locked Ticket
+          // authority. Prebuilt draft identity is non-authoritative.
+          objectiveRevision: {
+            number: objectiveRevisionAuthority.number,
+            hash: objectiveRevisionAuthority.hash
+          },
           status: 'pending',
           leaseOwner: null,
           leaseExpiresAt: null,
@@ -9068,15 +9407,101 @@ class PostgresRuntimeStore {
       }
       const current = ticketFromRow(currentResult.rows[0]);
       assertTicketCancellationNotCommitted(current, 'Ticket transition');
-      if (Object.prototype.hasOwnProperty.call(bodyPatch, 'objective')) {
-        if (current.structuredAllocationAuthority &&
-            bodyPatch.objective !== current.objective) {
+      // T3: requested-outcome content (objective / acceptanceCriteria) changes
+      // ONLY through reviseTicketObjective — the canonical objective-revision
+      // authority with its event, pointer, guards and actor/reason record.
+      // Generic mutation may not create the out-of-band projection drift that
+      // admission integrity would otherwise have to detect after the fact.
+      // Structured-allocation Tickets keep their pre-existing exact contract
+      // (authority admission freezes the objective entirely), which is checked
+      // first so its historical refusal code and equal-value allowance are
+      // preserved verbatim.
+      const patchesRequestedOutcome =
+        Object.prototype.hasOwnProperty.call(bodyPatch, 'objective') ||
+        Object.prototype.hasOwnProperty.call(bodyPatch, 'acceptanceCriteria');
+      if (patchesRequestedOutcome && current.structuredAllocationAuthority) {
+        // Structured-delegated Tickets are not revisable through T3 v1 at all.
+        // The historical objective-text refusal is preserved VERBATIM;
+        // acceptanceCriteria now falls under the SAME immutability authority
+        // because objective-revision identity binds BOTH fields.
+        const nextContent = (() => {
+          try {
+            return canonicalRevisionContent({
+              objective: Object.prototype.hasOwnProperty.call(bodyPatch, 'objective')
+                ? bodyPatch.objective
+                : current.objective,
+              acceptanceCriteria: Object.prototype.hasOwnProperty.call(bodyPatch, 'acceptanceCriteria')
+                ? bodyPatch.acceptanceCriteria
+                : (Object.prototype.hasOwnProperty.call(current, 'acceptanceCriteria')
+                  ? current.acceptanceCriteria
+                  : null)
+            });
+          } catch (_) {
+            return null; // malformed content is a material change attempt
+          }
+        })();
+        const currentContent = canonicalRevisionContent({
+          objective: current.objective,
+          acceptanceCriteria: Object.prototype.hasOwnProperty.call(current, 'acceptanceCriteria')
+            ? current.acceptanceCriteria
+            : null
+        });
+        const materiallyChanged = nextContent === null ||
+          hashCanonical(nextContent) !== hashCanonical(currentContent);
+        if (materiallyChanged) {
+          if (Object.prototype.hasOwnProperty.call(bodyPatch, 'objective') &&
+              bodyPatch.objective !== current.objective) {
+            // Verbatim historical refusal for an actual objective change.
+            const error = new Error(
+              'Ticket objective cannot change after structured-allocation authority admission'
+            );
+            error.code = 'STRUCTURED_ALLOCATION_OBJECTIVE_IMMUTABLE';
+            throw error;
+          }
+          // Same immutability authority, criteria-aware message.
           const error = new Error(
-            'Ticket objective cannot change after structured-allocation authority admission'
+            'Ticket acceptanceCriteria cannot change after structured-allocation authority admission'
           );
           error.code = 'STRUCTURED_ALLOCATION_OBJECTIVE_IMMUTABLE';
           throw error;
         }
+        // Canonical equal-value patch: the requested-outcome KEYS are stripped
+        // before merge, so persisted requested-outcome bytes cannot be
+        // rewritten without objective-revision authority even when the values
+        // are only canonically equal (e.g. whitespace-padded). The surrounding
+        // ordinary transition still occurs and its generic revision advances;
+        // this seals storage-byte drift, not the transition itself.
+        delete bodyPatch.objective;
+        delete bodyPatch.acceptanceCriteria;
+      } else if (patchesRequestedOutcome) {
+        const mergedRequestedOutcome = canonicalRevisionContent({
+          objective: Object.prototype.hasOwnProperty.call(bodyPatch, 'objective')
+            ? bodyPatch.objective
+            : current.objective,
+          acceptanceCriteria: Object.prototype.hasOwnProperty.call(bodyPatch, 'acceptanceCriteria')
+            ? bodyPatch.acceptanceCriteria
+            : (Object.prototype.hasOwnProperty.call(current, 'acceptanceCriteria')
+              ? current.acceptanceCriteria
+              : null)
+        });
+        const currentContent = canonicalRevisionContent({
+          objective: current.objective,
+          acceptanceCriteria: Object.prototype.hasOwnProperty.call(current, 'acceptanceCriteria')
+            ? current.acceptanceCriteria
+            : null
+        });
+        if (hashCanonical(mergedRequestedOutcome) !== hashCanonical(currentContent)) {
+          const error = new TypeError(
+            'Ticket requested-outcome changes require reviseTicketObjective'
+          );
+          error.code = 'TICKET_OBJECTIVE_REVISION_REQUIRED';
+          throw error;
+        }
+        // Canonical equal-value no-op: strip the keys so the merge cannot
+        // rewrite bytes. The allowed transition itself still advances the
+        // generic revision, exactly like any other permitted patch.
+        delete bodyPatch.objective;
+        delete bodyPatch.acceptanceCriteria;
       }
       const result = await connection.query(
         `WITH candidate AS (

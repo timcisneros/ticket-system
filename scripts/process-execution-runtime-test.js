@@ -309,7 +309,8 @@ async function main() {
       }) {
         const ticket = await store.createTicket({
           status: 'open',
-          title: `process persisted replay ${label} ${STAMP}`
+          title: `process persisted replay ${label} ${STAMP}`,
+          objective: `process persisted replay ${label} ${STAMP}`
         });
         const pending = await store.createRun({
           ticketId: ticket.id,

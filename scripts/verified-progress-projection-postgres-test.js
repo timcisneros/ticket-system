@@ -562,6 +562,7 @@ async function main() {
     // ── A non-structured Ticket is untouched ──────────────────────────────
     const plainTicket = await store.createTicket({
       title: `Plain ticket ${STAMP}`,
+      objective: `Plain ticket ${STAMP}`,
       description: 'No governed structured leaf execution',
       status: 'open',
       priority: 'medium'
