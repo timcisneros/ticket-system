@@ -9193,12 +9193,14 @@ async function buildTicketTimeline(ticketId) {
 
   const ticketCreatedEvent = events.find(event => event.type === 'ticket.created');
   if (!ticketCreatedEvent) {
+    // No created event survived: render the fallback WITHOUT borrowing the
+    // live objective projection as historical content (T3-b truthfulness).
     addEntry({
       id: `ticket:${parsedTicketId}:created`,
       timestamp: ticket.createdAt || null,
       type: 'ticket.created',
       title: 'Ticket created',
-      summary: timelineText(ticket.objective),
+      summary: null,
       sourceType: 'ticket',
       sourceRef: runtimeAuthoritySourceRef('ticket', parsedTicketId),
       sourceRole: 'live_state',
@@ -9207,6 +9209,40 @@ async function buildTicketTimeline(ticketId) {
         assignmentTargetType: ticket.assignmentTargetType || null,
         assignmentTargetId: ticket.assignmentTargetId || null,
         assignmentMode: ticket.assignmentMode || null
+      }
+    });
+  }
+
+  // T3-b: objective-revision history, rendered exclusively from each event's
+  // own immutable payload. Activation baselines are presented as activation
+  // authority, never as operator-authored edits at Ticket creation.
+  for (const revisionEvent of events.filter(event => event.type === 'ticket.objective_revised')) {
+    const payload = revisionEvent.payload || {};
+    const isBaseline = payload.provenance === 't3_activation_baseline';
+    addEntry({
+      id: `event:${revisionEvent.id}`,
+      timestamp: payload.capturedAt || revisionEvent.ts || null,
+      type: 'ticket.objective_revised',
+      title: isBaseline
+        ? 'Objective baseline established (T3 activation)'
+        : `Objective revised (revision ${payload.number})`,
+      summary: [
+        payload.content && payload.content.objective,
+        payload.content && payload.content.acceptanceCriteria
+          ? `Acceptance criteria: ${payload.content.acceptanceCriteria}`
+          : null
+      ].filter(Boolean).join(' — ') || null,
+      sourceType: 'event',
+      sourceRef: runtimeAuthoritySourceRef('event', revisionEvent.position),
+      sourceRole: 'append_only_event',
+      status: null,
+      details: {
+        objectiveRevisionNumber: payload.number ?? null,
+        actor: payload.actor || null,
+        reasonCode: payload.reasonCode || null,
+        reason: payload.reason || null,
+        contentHash: (payload.contentHash || '').slice(0, 12) || null,
+        provenance: payload.provenance || null
       }
     });
   }
@@ -27615,6 +27651,8 @@ fastify.post('/api/tickets/:id/simulate-plan', {
     requiredDecision: gateResult.requiredDecision || null,
     gateSummary: gateResult.summary || null,
     ambiguityPatterns: gateResult.ambiguityPatterns || null,
+    allowedActions: gateResult.allowedActions || null,
+    prohibitedActions: gateResult.prohibitedActions || null,
     modelCalled: false,
     productionRunCreated: false,
     workspaceMutated: false,
@@ -28155,6 +28193,87 @@ fastify.post('/api/tickets/:id/triage/resolve', {
     return { error: result.error };
   }
   return { ticket: result.ticket, triage: result.triage };
+});
+
+// T3-b — operator objective-revision surface. Delegates ALL semantic
+// authority (guards, chain, pointer, actor/reason) to the store kernel;
+// this handler performs only authentication, authorization, shape checks,
+// and repository-standard HTTP error mapping.
+fastify.post('/api/tickets/:id/objective-revisions', {
+  preHandler: fastify.requireAuth,
+  config: { mutationAdmission: true }
+}, async (request, reply) => {
+  if (!hasPermission(request.session.userId, 'ticket:update')) {
+    reply.code(403);
+    return { error: 'Permission denied' };
+  }
+
+  const ticketId = parseInt(request.params.id, 10);
+  if (!Number.isSafeInteger(ticketId) || ticketId <= 0) {
+    reply.code(400);
+    return { error: 'Invalid ticket id' };
+  }
+
+  const body = request.body && typeof request.body === 'object' &&
+    !Array.isArray(request.body) ? request.body : {};
+  const expectedRevision = Number(body.expectedRevision);
+  const objective = typeof body.objective === 'string' ? body.objective : '';
+  const acceptanceCriteria = Object.prototype.hasOwnProperty.call(body, 'acceptanceCriteria')
+    ? body.acceptanceCriteria
+    : null;
+  const reasonCode = typeof body.reasonCode === 'string' ? body.reasonCode.trim() : '';
+  const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
+
+  if (!objective.trim() || !Number.isSafeInteger(expectedRevision) || expectedRevision <= 0 ||
+      !reasonCode || !reason) {
+    reply.code(400);
+    return { error: 'objective, expectedRevision, reasonCode and reason are required' };
+  }
+
+  const actor = request.user ? request.user.username : String(request.session.userId);
+  try {
+    const result = await postgresRuntimeStore.reviseTicketObjective({
+      ticketId,
+      expectedRevision,
+      objective,
+      acceptanceCriteria,
+      reasonCode,
+      reason,
+      actor
+    });
+    broadcastTicketChange();
+    return {
+      ticketId: result.ticket.id,
+      objectiveRevision: result.objectiveRevision,
+      objective: result.ticket.objective,
+      acceptanceCriteria: result.ticket.acceptanceCriteria ?? null
+    };
+  } catch (error) {
+    const code = error && error.code;
+    if (code === 'TICKET_OBJECTIVE_REVISION_REQUIRED' ||
+        code === 'T3_OBJECTIVE_REVISION_INVALID') {
+      reply.code(400);
+      return { error: error.message, code };
+    }
+    if (code === 'POSTGRES_RECORD_NOT_FOUND') {
+      reply.code(404);
+      return { error: error.message, code };
+    }
+    if (code === 'TICKET_OBJECTIVE_REVISION_NOOP' ||
+        code === 'TICKET_ATTEMPT_UNSETTLED' ||
+        code === 'TICKET_OBJECTIVE_REVISION_STATE_INVALID' ||
+        code === 'TICKET_CANCELLATION_COMMITTED' ||
+        code === 'STRUCTURED_ALLOCATION_OBJECTIVE_IMMUTABLE' ||
+        code === 'TICKET_TRANSITION_CONFLICT') {
+      reply.code(409);
+      return { error: error.message, code };
+    }
+    if (error.name === 'OptimisticConcurrencyError') {
+      reply.code(409);
+      return { error: error.message, code: 'TICKET_TRANSITION_CONFLICT' };
+    }
+    throw error;
+  }
 });
 
 fastify.post('/api/runs/:id/triage/resolve', {

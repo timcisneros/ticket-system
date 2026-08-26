@@ -1137,6 +1137,14 @@
               <strong><%= entry.title %></strong>
               <% if (entry.status) { %><span class="status-badge status-<%= entry.status %>"><%= entry.status %></span><% } %>
               <% if (entry.summary) { %><div class="text-muted"><%= entry.summary %></div><% } %>
+              <% if (entry.details && (entry.details.actor || entry.details.reasonCode)) { %>
+                <div class="text-muted">
+                  <% if (entry.details.actor) { %>by <%= entry.details.actor %><% } %>
+                  <% if (entry.details.reasonCode) { %> (<%= entry.details.reasonCode %>)<% } %>
+                  <% if (entry.details.reason) { %>: <%= entry.details.reason %><% } %>
+                </div>
+              <% } %>
+              <% if (entry.summary) { %><div class="text-muted"><%= entry.summary %></div><% } %>
               <% if (entry.details && (entry.details.operation || entry.details.path)) { %>
                 <div class="text-muted">
                   <% if (entry.details.operation) { %><code><%= entry.details.operation %></code><% } %>
@@ -1442,6 +1450,9 @@ document.addEventListener('click', async event => {
       const parts = [];
       parts.push('<strong>Gate verdict:</strong> ' + escapeHtml(data.gateVerdict));
       if (data.reasonCode) parts.push('<strong>Reason:</strong> ' + escapeHtml(data.reasonCode));
+      if (Array.isArray(data.allowedActions) && data.allowedActions.includes('edit_objective')) {
+        parts.push('<strong>Resolve:</strong> correct the objective via an objective revision (POST /api/tickets/<ticket id>/objective-revisions, requires ticket:update), then re-run this gate.');
+      }
       if (data.gateSummary) parts.push('<strong>Summary:</strong> ' + escapeHtml(data.gateSummary));
       if (data.simulatedAgent) parts.push('<strong>Simulated agent:</strong> ' + escapeHtml(data.simulatedAgent));
       if (data.modelError) parts.push('<strong>Model error:</strong> ' + escapeHtml(data.modelError));

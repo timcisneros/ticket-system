@@ -33,6 +33,7 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   // integrity, per-attempt Run stamp uniformity.
   't3-objective-revision-contract-test.js',
   't3-objective-revision-postgres-test.js',
+  't3b-objective-revision-surface-test.js',
   't2-tranche5-release-admission-server-test.js',
   't2-tranche5-rerun-lock-order-test.js',
   't041-semantic-closure-test.js',
