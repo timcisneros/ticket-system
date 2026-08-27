@@ -8751,3 +8751,100 @@ exact Run's current attempt to acquire any non-null write-once disposition plus
 fetch the Ticket and consume the fresh post-settlement revision. Product and
 fixture settlement semantics are unchanged. T3 semantic closure and release
 acceptance remain pending narrow finding-closure review.
+
+---
+
+## Broad Ticket-Kernel Roadmap (T0–T10) and T4 Tranche Authority — bootstrap record (recorded 2026-08-26)
+
+**Status:** Repository-owned architecture authority, supplied as such because a T4 opening
+recovery proved it was otherwise unrecoverable (hermeticity evidence at the end of this entry).
+This section is the single canonical statement of the broad ticket-kernel roadmap; no other
+document duplicates or supersedes it. The other registered roadmaps
+(`PROCESS_EXECUTION_ROADMAP.md`, `WORK_DEFINITION_AND_TYPED_EVIDENCE_ROADMAP.md`,
+`STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md`) are separate axes — process executor,
+typed evidence, structured allocation — and do NOT define this sequence.
+
+### The roadmap
+
+An architectural sequencing boundary only. It is NOT a requirement that every tranche introduce
+a large subsystem.
+
+| Tranche | Name | State |
+| --- | --- | --- |
+| T0 | baseline | starting point |
+| T1 | structured allocation decision | decided (structured-allocation evaluation closed FINAL STOP; see `SYSTEM_STATUS.md`) |
+| T2 | lifecycle + reasons | implemented; FROZEN |
+| T3 | objective revisions / immutable executed intent | implemented; FROZEN |
+| T4 | relationships | NEXT — design UNFROZEN (brief below) |
+| T5 | waiting / time / fairness / backpressure | pending |
+| T6 | effect boundary | pending |
+| T7 | intervention / context | pending |
+| T8 | operator plane | pending |
+| T9 | external actor / event | pending |
+| T10 | foundation closure | final |
+
+Tranche names alone confer no semantics: behavior for T5+ must never be inferred forward from a
+name, and each later tranche becomes repository-owned only through its own recorded brief and
+registered decision.
+
+### T4 purpose
+
+One narrow kernel question:
+
+HOW MAY ONE TICKET BE DURABLY AND UNAMBIGUOUSLY RELATED TO ANOTHER TICKET WITHOUT MAKING
+MUTABLE PROSE, UI LABELS, OR ACCIDENTAL STORAGE TOPOLOGY INTO AUTHORITY?
+
+T4 is about cross-Ticket relationship FACTS. T4 does NOT assign scheduling, waiting, ordering,
+fairness, backpressure, execution, completion, cancellation, or lifecycle consequences to those
+facts, and consequences must not be inferred merely from a relationship name. In particular T4
+MUST NOT create a dependency/waiting engine: waiting/time/fairness/backpressure belong to T5.
+
+### T4 design boundaries
+
+1. Preserve all frozen T2/T3 authority.
+2. Keep Ticket lifecycle projection topology-neutral unless a later explicitly reviewed tranche
+   changes that.
+3. Distinguish durable relationship truth from mutable Ticket prose, UI-only labels, incidental
+   JSON topology, execution-attempt membership, allocation topology, Work Context grouping,
+   handoff provenance, process-template provenance, watcher provenance, and workspace/effect
+   ownership.
+4. Do not duplicate authority for facts already authoritatively owned elsewhere.
+5. Audit the existing workflow parent/child Ticket topology (spawn-provenance `parentTicketId`
+   links carried in Ticket bodies): it is a real cross-Ticket relation-like surface whose present
+   authority/invariants must be understood first.
+6. Determine whether that surface should remain owned by its existing spawn provenance and merely
+   expose a relationship projection, be strengthened with referential/integrity authority, or be
+   represented by a general T4 relation primitive. DO NOT assume the answer in advance.
+7. Determine the minimum operator-authored relationship capability, if any, justified by product
+   need.
+8. Explicitly prevent relationship kinds/labels from silently becoming execution or lifecycle
+   authority.
+9. Preserve immutable Ticket identity across objective revision and attempts.
+10. Fail closed when a consumer requires authoritative relationship truth and the underlying
+    authority is malformed or contradictory.
+
+### Design status — UNFROZEN
+
+Open design questions, none answered here and none to be assumed: whether T4 needs a new relation
+table; edge-owned versus Ticket-owned versus event-derived versus projected representation; exact
+kinds; closed versus extensible kind vocabulary; directional versus symmetric representation;
+cycles; duplicate-edge semantics; create/retract semantics; permission vocabulary; hashing; event
+shape; locking strategy; API shape; UI shape; and whether handoff or parent/child provenance
+should be represented as T4 relations at all.
+
+No T4 semantic kernel is frozen. Any earlier contingent proposal from outside the repository
+(during the opening recovery or elsewhere) is NOT authority. T4 implementation is not authorized
+until a design is recovered from THIS authority, independently reviewed, and frozen in its own
+registered decision.
+
+### Why this entry exists — hermeticity evidence from the T4 opening recovery
+
+Recovery from repository evidence alone established: T2/T3 implemented semantics were fully
+recoverable (frozen contract modules under `runtime/`, migrations 039–042, owner tests pinned in
+the test manifest and release checkpoint, matching register entries). The forward broad roadmap
+was NOT recoverable: no repository source named T4, defined "relationships" as a tranche, or
+sequenced T0–T10, so a fresh model could only have proceeded on hidden conversational context.
+T4 implementation was therefore correctly refused until this bootstrap made the roadmap and
+tranche purpose repository-owned, exactly per the core principle that nothing required to
+understand, operate, audit, or continue this project may exist only in agent memory or chat
+context.

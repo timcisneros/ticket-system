@@ -6,8 +6,10 @@
 - [`SETUP_AND_FIRST_RUN.md`](SETUP_AND_FIRST_RUN.md) — environment and first run.
 - [`SYSTEM_STATUS.md`](SYSTEM_STATUS.md) — implemented guarantees and remaining productization work.
 - [`ARCHITECTURAL_DECISIONS_PENDING.md`](ARCHITECTURAL_DECISIONS_PENDING.md) — canonical register of
-  open integrity defects, deferred work, and pending architectural decisions. Read before starting
-  work that touches runtime enforcement, feasibility, recovery, or objective interpretation.
+  open integrity defects, deferred work, and pending architectural decisions; also carries the
+  broad ticket-kernel roadmap (T0–T10) and the current-tranche brief.
+  Read before starting work that touches runtime enforcement, feasibility, recovery, objective
+  interpretation, or ticket-kernel sequencing.
 - [`STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md`](STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md)
   — completed structured allocation and governed model economics roadmap through Tranche 6. The
   frozen evaluation ended FINAL STOP; the explicit post-result decision demotes future first-class
