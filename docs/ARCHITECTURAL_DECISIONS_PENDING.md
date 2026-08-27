@@ -8776,7 +8776,7 @@ a large subsystem.
 | T2 | lifecycle + reasons | implemented; FROZEN |
 | T3 | objective revisions / immutable executed intent | implemented; FROZEN |
 | T4 | relationships | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed, runtime cutover verified — see the T4 operational closure entry below) |
-| T5 | waiting / time / fairness / backpressure | PURPOSE BOOTSTRAPPED; SEMANTIC KERNEL UNFROZEN; IMPLEMENTATION NOT STARTED (see the T5 authority bootstrap entry below) |
+| T5 | waiting / time / fairness / backpressure | SEMANTIC KERNEL FROZEN; IMPLEMENTATION NOT STARTED; OPERATIONAL CLOSURE NOT CLAIMED (see the T5 semantic freeze entry below) |
 | T6 | effect boundary | pending |
 | T7 | intervention / context | pending |
 | T8 | operator plane | pending |
@@ -8798,8 +8798,8 @@ renamed.
 Known axes:
 
 1. **Broad T0–T10 ticket-kernel roadmap** (this section). Broad T5 = waiting / time /
-   fairness / backpressure. Broad T5's only registered authority is the T5 authority
-   bootstrap entry below.
+   fairness / backpressure. Broad T5's registered authority is the T5 authority
+   bootstrap entry below together with the T5 semantic freeze entry that follows it.
 2. **T2 internal implementation tranches.** "T2 Tranche 5" names T2's own internal
    implementation sequence (five-state Ticket lifecycle cutover, migration 041 lineage,
    operator-facing cancellation surface, maxAttempts reprojection corrections). It has no
@@ -9097,6 +9097,12 @@ T4 — relationships: **OPERATIONALLY CLOSED.**
 
 **Status:** PURPOSE BOOTSTRAPPED; SEMANTIC KERNEL UNFROZEN; IMPLEMENTATION NOT STARTED;
 OPERATIONAL CLOSURE NOT CLAIMED.
+*(The preceding sentence is historical status as recorded at this 2026-08-27 bootstrap. It is
+superseded by the T5 semantic freeze entry below: the semantic design was recovered from THIS
+entry's authority, passed independent review, and is now FROZEN there. This entry's
+mechanism classifications, fences, terminology separations, and open-question list remain the
+historical authority that led to that freeze; the freeze entry records the answers to the
+open questions.)*
 
 Tranche names alone confer no semantics: the words "waiting / time / fairness / backpressure"
 are a roadmap label plus an ownership boundary inherited from the frozen T4 kernel (T4-I6),
@@ -9277,3 +9283,170 @@ authorities, boundaries, and evidence are preserved here so the future design do
 re-derive them; they are NOT precomputed into design decisions. Do not freeze accidental
 topology or implementation. Recovery burden must not be reduced by silently deciding open
 questions in advance.
+
+---
+
+## T5 Waiting / Time / Fairness / Backpressure — semantic freeze (recorded 2026-08-27)
+
+**Status:** SEMANTIC KERNEL FROZEN; IMPLEMENTATION NOT STARTED; OPERATIONAL CLOSURE NOT
+CLAIMED.
+
+This is the registered decision the T5 authority bootstrap entry above requires. The semantic
+design was recovered from that bootstrap's authority (kernel question, classifications A–G,
+frozen predecessor fences, terminology separations, open questions) and then passed independent
+design review. Initial independent review found HIGH=3 / MEDIUM=5 / LOW=2; blocking classes
+included T2 admission conflation, false FIFO/seniority guarantees, accidental scheduler
+fossilization, a restart/live-pressure contradiction, evidence overclaim, and over-broad time
+wording. The design was corrected with the strategy: corrected admission vocabulary; REMOVAL of
+FIFO/fairness from the semantic kernel rather than repair; narrowed restart/time/evidence
+boundaries; no new durable authority introduced. Narrow independent finding-closure re-review
+returned HIGH=0 / MEDIUM=0 / LOW=1 with verdict ALL T5 DESIGN REVIEW FINDINGS CLOSED; CORRECTED
+T5 SEMANTIC KERNEL READY TO RECORD AS FROZEN AUTHORITY. No blocking finding remains. The
+remaining LOW was a standalone wording ambiguity in T5-I4 and is closed in this freeze by
+stating NON-DECISION DISPATCH DEFERRAL and ATTEMPT ADMISSION HAS ALREADY OCCURRED explicitly.
+No T2/T3/T4 authority was reopened.
+
+### T5 purpose
+
+T5 defines the semantic boundaries for temporary Run deferral and related capacity/pressure
+conditions that are NOT already frozen T2 blocker authority. T5 protects truthful distinctions
+and predecessor boundaries. T5 does NOT define a scheduler, queue policy, fairness algorithm,
+or new Ticket lifecycle state.
+
+### Frozen invariants
+
+- **T5-I1 — No new lifecycle state.** T5 adds no Ticket lifecycle state. Deferral, waiting, or
+  pressure by themselves never mutate Ticket lifecycle. The frozen T2 lifecycle remains exactly
+  OPEN, IN_PROGRESS, BLOCKED, COMPLETED, CANCELED. T5 introduces no WAITING state.
+- **T5-I2 — Attempt-member deferral.** A pending Run is ALREADY an admitted member of its
+  existing T2 attempt. Temporary dispatch/resource deferral of that Run creates: no Ticket
+  blocker; no NEW attempt; no settlement of the existing attempt; no increment of attempt
+  count; no disposition change of the existing attempt; no Run-membership change; no T3
+  identity change; no Ticket lifecycle mutation. Scheduler dispatch claim and execution-lease
+  acquisition have ZERO T2 attempt-admission authority. The word "admission" is reserved for
+  the frozen T2 attempt-admission boundary.
+- **T5-I3 — Two-phase run deferral.** PHASE 1 — PRE-LEASE DISPATCH DEFERRAL: the Run already
+  belongs to its admitted attempt; the Run remains pending; no execution lease exists yet;
+  queue time remains outside predecessor-governed execution duration; the cause may or may not
+  be durably classifiable. PHASE 2 — IN-LEASE RESOURCE-CAPACITY WAITING: same Run; same
+  admitted attempt; execution lease already exists; resource-capacity acquisition may wait;
+  predecessor-governed duration continues to accrue; T5 neither pauses nor resets that duration
+  authority. The two phases must not be conflated or assumed to have identical evidence or
+  timing behavior.
+- **T5-I4 — Mechanism reconsideration boundary.** A mechanism may automatically
+  retry/reconsider a Run after TEMPORARY NON-DECISION DISPATCH DEFERRAL. "Non-decision" here
+  refers ONLY to execution dispatch/lease acquisition. ATTEMPT ADMISSION HAS ALREADY OCCURRED.
+  This reconsideration creates no new attempt, does not settle the existing attempt, and is not
+  reopening a Ticket or attempt. Runtime time/capacity changes MUST NOT be inferred to
+  automatically clear or reopen predecessor decisions of record, including: T2 blocker
+  decisions; admissionHold; churn-blocked decisions; budget exhaustion; maxAttemptsExhausted;
+  any other predecessor decision of record.
+- **T5-I5 — No T5 time-granted eligibility.** T5 introduces no clock-granted Run eligibility of
+  its own. There is no T5 "not before X" authority. `next_eligible_at` is NOT T5 semantic
+  eligibility authority. Scheduler/retry interval constants are NOT T5 semantic policy.
+  Predecessor-owned clocks may change conditions consumed by runtime/T5 reasoning, including:
+  run-lease expiry; capacity-slot staleness/reclaim; recovery fences; governed execution
+  duration; process-template due scheduling. That does NOT transfer clock ownership to T5. T5
+  gives the process clock no new semantic standing.
+- **T5-I6 — Ordering/fairness not frozen.** T5 v1 freezes NO FIFO guarantee, queue-order
+  guarantee, fairness guarantee, or starvation guarantee. Existing `created_at, id` claim
+  ordering, `first_blocked_at` older-waiter behavior, fairness indexes, SKIP LOCKED, scheduler
+  cursor traversal, and wait-row active behavior remain REPLACEABLE MECHANISM. None of
+  `first_blocked_at`, `active`, `capacity.waiting` events, or `created_at` ordering is promoted
+  into broad-T5 fairness authority. A future fairness policy requires its own product-justified
+  registered decision. QUEUE ORDER != FAIRNESS POLICY.
+- **T5-I7 — Non-conflation boundary.** T5 MUST NOT conflate: (1) Run dispatch/resource
+  deferral; (2) contemporaneous mutation-admission pressure; (3) capacity-machinery errors;
+  (4) hard budget exhaustion; (5) latched evidence-persistence failure. Mutation-admission
+  pressure remains predecessor-owned, is contemporaneous process-local mechanism state, and has
+  no required historical semantic persistence. The existing failureKind string
+  `capacity_backpressure` is NOT canonical T5 semantics and MUST NOT be interpreted as meaning
+  ordinary capacity occupancy only. Any rename/alias cleanup is implementation work, not frozen
+  semantics.
+- **T5-I8 — Evidence-bounded cause claims.** A capacity-wait cause/domain may be asserted only
+  when coherent supporting evidence exists; for example, coherent durable capacity-wait
+  evidence may support a cause claim for a budgeted Run. But `pending + no lease` alone does
+  NOT prove "waiting for capacity." Without sufficient evidence the truthful result is
+  UNKNOWN / NOT DURABLY CLASSIFIED. T5 invents no durable evidence merely to improve
+  observability.
+- **T5-I9 — Restart truthfulness of durable distinctions.** Every distinction T5 declares
+  DURABLE semantic truth must remain truthful and recoverable after restart from durable
+  authority/evidence. Intentionally live-only mechanism conditions do NOT require historical
+  reconstruction: a process-local mutation-pressure condition may disappear on restart because
+  refused requests never obtained durable work identity/state. UNKNOWN remains valid after
+  restart where cause was never durably established. No durable T5 truth may depend on an
+  undocumented in-memory timer.
+- **T5-I10 — Predecessor non-interference.** T5 changes nothing in T2 (five lifecycle states;
+  blocker-authority input set; admissionHold; attempt admission; attempt counting; attempt
+  membership), T3 (objective revision; immutable executed intent; attempt/rerun/resume
+  identity), or T4 (relationship authority; T4-I1..I8; relationship facts remain operationally
+  inert). T5 also does NOT absorb or redefine: mutation-admission ownership; lease/stale-work
+  recovery; runtime-budget authority; governed-duration authority; churn `continue|blocked`;
+  provider transport no-retry behavior; process-template `next_run_at` scheduling; known
+  ungoverned-family duration defects. Those remain predecessor/separate authorities.
+
+### Explicit non-concepts
+
+T5 does NOT introduce: Ticket WAITING; a sixth lifecycle state; a new Run status; a new waiting
+identity; a new capacity-request identity; a new durable eligibility table/field/event; FIFO
+policy; fairness policy; starvation policy; priority policy; an aging/deadline system;
+dependency semantics; a generic scheduler; a queue framework; T5-owned retry timing; T5-owned
+process-template scheduling.
+
+### Existing-mechanism disposition
+
+The bootstrap entry above remains the inventory authority; status against the frozen kernel:
+
+- `run_capacity_waits` — mechanism/evidence surface, NOT promoted wholesale to T5 authority.
+- `first_blocked_at` / `active` / fairness index — mechanism only; no T5 ordering semantics.
+- `next_eligible_at` — mechanism/diagnostic field; not eligibility authority.
+- mutation-admission — predecessor-owned live pressure mechanism.
+- claim ordering / scheduler cursor / SKIP LOCKED — replaceable scheduler mechanism.
+- lease/recovery — predecessor execution-continuity mechanism.
+- hard budgets — predecessor bounds, not backpressure.
+- process-template `next_run_at` — separate process-execution domain.
+- "Waiting to start" / `run:queued` — presentation only.
+
+### T5 implementation obligation — run_capacity_waits active flag does not reactivate
+
+**Status:** OPEN IMPLEMENTATION / EVIDENCE DEFECT; NOT A SEMANTIC-FREEZE BLOCKER; MUST CLOSE
+BEFORE T5 OPERATIONAL CLOSURE.
+
+Verified source truth:
+
+- `active = true` exists only as the INSERT default (`run_capacity_waits`, migration 030).
+- Both conflict-update/re-wait writers (`recordPendingRunCapacityWait` and the
+  `acquireRuntimeCapacity` upsert in `persistence/postgres/runtime-budget-methods.js`) update
+  `next_eligible_at` / `updated_at` / revision but do NOT set `active = true`.
+- Successful claim and slot acquisition both set `active = false` (claim deactivation in
+  `claimPendingRun`; `acquireRuntimeCapacity` success path).
+- After first deactivation, a later re-wait can emit truthful `capacity.waiting` evidence while
+  the row remains `active = false`.
+- Production reachability was independently established for:
+  1. budgeted Run pre-lease block -> claim/deactivate -> requeue/resume -> blocks again;
+  2. same Run acquires one resource -> row deactivates -> later waits for another resource.
+
+Consequences:
+
+- `getRunBudgetState` may expose `capacityWait.active = false` while the Run is currently
+  waiting.
+- The older-waiter mechanism's `active = true` filter can stop recognizing such a waiter.
+- This is mechanism/evidence corruption, NOT T5 semantic authority. `active` is NOT promoted
+  into T5 semantics.
+
+Closure requirement: implementation must repair or replace the stale-active evidence/mechanism
+and supply deterministic + PostgreSQL owner proof before T5 can be declared operationally
+closed. The fix is NOT prescribed by this freeze.
+
+### Implementation boundary
+
+Implementation must preserve/prove T5-I1..T5-I10. Expected work may include: enforcing or
+auditing semantic non-conflation at relevant readers; making operator/read surfaces obey
+UNKNOWN when evidence is absent; ensuring no unenforced `next_eligible_at` value is presented
+as semantic time; correcting the verified `run_capacity_waits` active-reactivation defect above;
+adding deterministic and PostgreSQL owners; registering required owners in the canonical
+manifest/checkpoint. No migration is required merely because T5 exists: the current semantic
+design requires NO new table, NO new column, NO new event type, NO new lifecycle state. If
+implementation discovers that T5-I1..T5-I10 cannot be truthfully implemented without new
+durable semantic authority, a migration, a new writer, or a T2/T3/T4 semantic change: STOP and
+reopen architecture. Do not improvise around the freeze.
