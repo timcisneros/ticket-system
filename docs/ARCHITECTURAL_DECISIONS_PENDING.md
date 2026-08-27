@@ -8777,7 +8777,7 @@ a large subsystem.
 | T3 | objective revisions / immutable executed intent | implemented; FROZEN |
 | T4 | relationships | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed, runtime cutover verified — see the T4 operational closure entry below) |
 | T5 | waiting / time / fairness / backpressure | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed; no separate operational cutover required — see the T5 operational closure entry below) |
-| T6 | effect boundary | pending |
+| T6 | effect boundary | AUTHORITY BOOTSTRAPPED; SEMANTIC KERNEL UNFROZEN; IMPLEMENTATION NOT STARTED; OPERATIONAL CLOSURE NOT CLAIMED (see the T6 Effect Boundary — authority bootstrap entry below) |
 | T7 | intervention / context | pending |
 | T8 | operator plane | pending |
 | T9 | external actor / event | pending |
@@ -9577,3 +9577,246 @@ No unresolved broad-T5 implementation or operational-closure obligation remains.
 freezes no FIFO/fairness/ordering policy; future scheduler, fairness, or product work in this
 area requires its own registered decision under this register's discipline and does not
 reopen T5 closure.
+
+---
+
+## T6 Effect Boundary — authority bootstrap (recorded 2026-08-27)
+
+**Status:** AUTHORITY BOOTSTRAPPED; SEMANTIC KERNEL UNFROZEN; IMPLEMENTATION NOT STARTED;
+OPERATIONAL CLOSURE NOT CLAIMED.
+
+This entry is a minimum authority bootstrap, recorded because a fresh read-only recovery
+(2026-08-27) proved broad T6 had no brief, no kernel question, and no registered classification
+of the existing effect-related mechanisms, while the roadmap label "effect boundary" carries no
+repository semantics. It was produced by a repository-only discovery pass over source, migrations,
+runtime contracts, evidence surfaces, tests, and register entries.
+
+Recorded explicitly:
+
+- The roadmap label **"effect boundary" confers NO semantics**. No T6 concept may be inferred
+  from the name.
+- This entry authorizes **semantic DESIGN only**.
+- It **freezes NO T6 invariant**.
+- It **promotes NO existing effect mechanism into broad-T6 semantic authority**.
+- **Implementation is prohibited** until a separate T6 semantic-freeze decision is recorded in
+  this register (see Implementation prohibition below).
+
+### T6 kernel question (DESIGN QUESTION — NOT ITS ANSWER)
+
+WHEN AN ADMITTED RUN CAUSES, OR MAY CAUSE, A REAL EFFECT OUTSIDE THE AUTHORITATIVE POSTGRES
+RUNTIME, WHICH EXISTING PRE-EFFECT, CROSS-EFFECT, POST-EFFECT, AND UNCERTAINTY REQUIREMENTS ARE
+GENERAL T6 INVARIANTS, WHICH MUST REMAIN DOMAIN-SPECIFIC, AND WHAT MINIMUM DURABLE FACTS — IF ANY
+BEYOND THOSE PREDECESSOR-OWNED REQUIREMENTS — ARE REQUIRED SO THAT CRASH, RESTART, OR PARTIAL
+FAILURE ALWAYS YIELDS EITHER SUPPORTED TRUTH ABOUT WHAT HAPPENED OR A TRUTHFUL REFUSAL TO CLAIM
+IT — WITHOUT PROMOTING ANY SINGLE EXISTING PER-DOMAIN MECHANISM INTO GENERAL SEMANTIC AUTHORITY
+OR REDEFINING FROZEN T2/T3/T4/T5 AUTHORITY?
+
+Why the question is phrased this way: the repository already contains predecessor-owned and
+domain-specific effect requirements — the operator-contract rule that a future irreversible-effect
+surface must record its attempted request before execution and its result/failure afterward
+(`docs/OPERATOR_CONTRACT.md` "External Side-Effect Boundary"); existing workspace crash-window
+recovery behavior (recorded below as an existing workspace fact); governed provider
+request/delivery uncertainty requirements; and process operation persistence requirements. The
+OPEN semantic issue is what broad T6 generalizes — not whether those repository facts exist.
+
+### Existing effect surfaces — candidates, NOT T6 authority
+
+Standing rule: **EXISTENCE OF AN IMPLEMENTED MECHANISM DOES NOT PROMOTE IT TO BROAD-T6 SEMANTIC
+AUTHORITY.** A later registered T6 decision may reclassify with recorded reasons.
+
+**1. Workspace target operations.** Existing behavior owned by current source and tests
+(`persistence/postgres/migrations/004_non_terminal_evidence.sql`,
+`persistence/postgres/store.js`, `server.js`): a durable prepared intent exists before a real
+target action; the action executes outside the runtime transaction; an operation receipt is
+committed atomically with replay/event evidence; recovery can classify a prepared-but-unreceipted
+operation against current target state, reconciling applied effects WITHOUT re-applying, and
+refusing uncertain ones for explicit reconciliation; evidence must not be fabricated. Recorded as
+EXISTING WORKSPACE BEHAVIOR only. NOT frozen as T6 semantics: the exact prepare/effect/receipt/
+reconcile triad, its vocabulary, and its SQL shape are NOT broad-T6 authority.
+
+**2. Governed provider transport.** A separate durable request/delivery uncertainty protocol
+(reservation → request_started → transport uncertainty window → response_persisted → settled/released;
+no retransmission after delivery uncertainty; settlement reconstructible from the durable response).
+A DIFFERENT solution to the same boundary; do NOT model it as workspace prepared-intent machinery.
+
+**3. Process operations.** A separate durable exactly-once/recoverable operation lifecycle with
+closed terminal outcomes and hash-pinned launch/containment identity; process output is evidence,
+not authority. Its lifecycle-state names are NOT frozen into T6.
+
+**4. Browser v1.** A read-tier/evidence regime with NO prepared-intent reconciliation path
+(read receipts and replay/event evidence only; in-memory session state is live-only; the browser
+mutation tier is designed but NOT implemented). This asymmetry is an EXISTING FACT, not a defect
+silently repaired by T6.
+
+**5. Reserved `external.effect` vocabulary.** Consumed by consequence/read surfaces
+(`collectExplicitExternalEffects`, run decision map). NO repository producer exists. Therefore it
+is NOT current effect authority; no emitter may be created by this bootstrap; its
+keep/retire/implement disposition is an OPEN T6 semantic question. A fresh model must not infer
+that `external.effect` rows currently exist.
+
+**6. Operator recovery.** The existing human-authored durable recovery mechanism for workspace
+uncertainty (`operator_recovery_intents`, migration 012). A candidate constraint, not broad-T6
+authority.
+
+Compressed classifications (bootstrap classification only):
+
+- **A — EXISTING REPOSITORY AUTHORITY T6 MUST NOT CONTRADICT:**
+  - *Frozen broad-tranche semantic authority:* T2 lifecycle/attempt/blocker/cancellation; T3
+    objective revision + immutable executed intent; T4-I1..I8; T5-I1..I10.
+  - *Other repository-recorded predecessor/current authority:* churn `continue|blocked`; the
+    governed persistence classifications (e.g. `REQUIRED — POST-EXTERNAL-SIDE-EFFECT,
+    UNCERTAINTY ON FAILURE`) as recorded durability authority; "process output is evidence, not
+    authority"; "availability is not write authority".
+- **B — existing mechanism constraining design but not T6 authority:** workspace prepared
+  intents, operation receipts, reconciliation behavior, advisory-lock fencing, mutation-fingerprint
+  idempotency, operator recovery, governed provider request lifecycle, process operation
+  lifecycle, browser v1 evidence path, runtime budgets, mutation admission, lease fencing, the
+  fail-closed evidence-persistence latch.
+- **C — unresolved candidate semantic role:** `external.effect`; `consequence.externalEffects`;
+  attempted-vs-committed consequence data; the applied/not-applied/uncertain vocabulary; the
+  generalization of any workspace mechanism; cross-domain operation-key identity; target-side
+  idempotency as a participant obligation.
+- **D — presentation/diagnostic/evidence only:** run decision map labels; run-detail projections;
+  best-effort run logs; "Waiting to start" labels.
+- **E — historical/noncanonical:** JSON-era authority documents and storage names (see the
+  OPEN PRE-DESIGN HERMETICITY OBLIGATION below); historical "Tranche N" labels on other axes.
+- **F — missing authority / hermeticity gap:** no broad repository-owned T6 effect authority
+  existed before this record (CLOSED as an AUTHORITY-BOOTSTRAP GAP by this entry; see below).
+
+### Predecessor fences (non-negotiable T6 design fences)
+
+**T2:**
+- No lifecycle state; effect state must not become a sixth state or a disguised lifecycle state.
+- No effect-driven attempt admission/membership/count/disposition semantics; "admission" remains
+  T2 vocabulary.
+- No redefinition of completion, cancellation, or blocker authority; churn vocabulary remains
+  exactly `continue | blocked`.
+
+**T3:**
+- Current requested intent vs immutable executed intent unchanged.
+- Effect evidence must not be fabricated against current Ticket intent.
+- Objective-revision authority unchanged.
+
+**T4:**
+- Workflow-spawn relationship provenance gains ZERO effect authority.
+- Relationship kind does not route or authorize effects.
+
+**T5:**
+- Waiting/deferral/backpressure/time/fairness boundaries unchanged.
+- Mutation admission remains predecessor-owned.
+- UNKNOWN remains truthful when evidence is insufficient.
+- The restart-truthfulness discipline remains binding.
+- Effect state must not become a disguised T5 wait state.
+
+Other repository-owned guards preserved where material: provider no-retry / never-retransmit on
+uncertain delivery; process output is evidence, not authority; runtime budgets remain their
+existing authority; evidence-persistence failure remains fail-closed; availability is not write
+authority.
+
+No additional fence is created by this bootstrap.
+
+### Terminology / non-conflation fences (for T6 design)
+
+- EFFECT ≠ MUTATION ≠ CONSEQUENCE ≠ RECEIPT ≠ INTENT.
+- EXECUTION TARGET (immutable model-artifact identity, `runtime/execution-target-registry.js`)
+  ≠ TARGET OPERATION (workspace/browser effect operation) ≠ TARGET PROVIDER (workspace boundary).
+- OPERATION RECEIPT ≠ READ RECEIPT ≠ MUTATION RECEIPT ≠ ECONOMIC SETTLEMENT RECEIPT.
+- EXTERNAL EFFECT ≠ NOTIFICATION.
+- UNCERTAIN ≠ FAILED ≠ NOT_APPLIED.
+- "admission" remains T2 vocabulary. "kind" remains T4 relationship vocabulary.
+  "waiting/deferral" remains T5 vocabulary.
+
+The positive T6 vocabulary is NOT defined by this bootstrap.
+
+### Open semantic questions (recorded OPEN; NOT answered here)
+
+1. Does T6 need a single effect concept, or only general boundary invariants over existing
+   domain mechanisms?
+2. Which parts of the workspace prepare/effect/receipt/reconcile behavior generalize, if any?
+3. What minimum durable fact supports a positive claim that an effect occurred?
+4. What does absence of post-effect evidence prove, if anything?
+5. When must the truthful result be UNKNOWN/UNCERTAIN, and who may resolve it?
+6. What is T6's relationship to target-side idempotency?
+7. Which current domains are actually governed by broad T6?
+8. Is attempted-vs-committed consequence data semantic truth or projection?
+9. Does completion target-state evidence own effect truth or only completion truth?
+10. What is the disposition of the reserved-but-never-emitted `external.effect` vocabulary?
+11. Do operation keys remain domain-specific or gain any broad identity rule?
+12. What effect claims must remain truthful after restart?
+
+### EXISTING WORKSPACE RECOVERY FACT — NOT YET A BROAD-T6 INVARIANT
+
+To close the authority-location weakness found during discovery (the strongest concise statement
+of this behavior previously lived primarily in a test-file comment), the CURRENT workspace
+behavior is recorded here as repository fact:
+
+- A durable prepared intent exists before the target action.
+- The real effect may occur before a receipt can be durably committed (the crash window).
+- If recovery proves the effect applied, reconciliation completes evidence WITHOUT re-applying
+  the effect.
+- If recovery cannot distinguish the state safely, recovery REFUSES and requires explicit
+  reconciliation (the Run is interrupted; a reconciliation-required event is recorded).
+- Positive effect evidence is NEVER fabricated.
+
+This is an EXISTING WORKSPACE RECOVERY FACT, NOT YET A BROAD-T6 INVARIANT. Executable owner:
+`scripts/target-operation-reconciliation-test.js` (registered required in the canonical test
+manifest and release checkpoint). Recording this fact does NOT decide that the exact workspace
+mechanism, vocabulary, or storage generalizes.
+
+### Hermeticity finding disposition (discovery pass, 2026-08-27)
+
+- **HIGH-1 — No broad repository-owned T6 effect authority existed.**
+  Disposition: CLOSED BY THIS BOOTSTRAP RECORD as an AUTHORITY-BOOTSTRAP GAP. This is not an
+  implementation defect. The record now provides the canonical question, predecessor fences,
+  candidate classifications, and open semantic questions. It still does NOT answer T6.
+- **MEDIUM-1 — Stale JSON-era authority documents.**
+  `docs/AUTHORITY_AND_DURABILITY.md`, `docs/EVIDENCE_VS_TELEMETRY.md`, and
+  `docs/EXECUTION_SEMANTICS.md` contain discoverable JSON-era/storage authority statements that
+  conflict with current PostgreSQL authority unless a superseding document is also read.
+  Disposition: OPEN PRE-DESIGN HERMETICITY OBLIGATION. It MUST be resolved before T6 semantic
+  design begins. The future correction must preserve useful historical content while ensuring a
+  fresh model cannot mistake retired JSON authority for current runtime truth.
+- **MEDIUM-2 — Crash-window contract lived primarily in a test comment.**
+  Disposition: CLOSED by the EXISTING WORKSPACE RECOVERY FACT section above, which records the
+  current behavior in repository authority and names its executable owner, without freezing the
+  mechanism as a broad-T6 invariant.
+- **MEDIUM-3 — `external.effect` has no producer.**
+  Disposition: recorded explicitly (surface 5 above): consumed by consequence/read surfaces; no
+  current producer; reserved/non-authoritative today; keep/retire/implement disposition is an
+  OPEN T6 semantic question. NOT "fixed" during bootstrap.
+
+### Pre-design gate
+
+T6 semantic design MUST NOT begin until BOTH:
+
+1. this authority-bootstrap record is published; AND
+2. the OPEN PRE-DESIGN HERMETICITY OBLIGATION for the stale JSON-era authority documents is
+   closed.
+
+This gate is about repository self-sufficiency, not semantic review. The `external.effect` open
+question does NOT block design. No source implementation is permitted before semantic freeze
+regardless.
+
+### Schema / migration status
+
+- The existing schema is sufficient to conduct T6 semantic design.
+- No T6 migration is currently authorized or required by this bootstrap.
+- Whether implementation eventually needs new persistence is OPEN and depends on the frozen
+  semantic result. No migration number is named.
+
+### Implementation prohibition
+
+Until T6 semantic freeze: NO T6 production implementation; NO migration; NO new T6 event type;
+NO new effect table; NO API; NO generic effect framework; NO promotion of prepared intents or
+operation receipts into broad authority. If semantic design concludes that predecessor semantics
+must change: STOP for explicit architecture review.
+
+### Cognitive-efficiency rule
+
+A fresh capable model should be able to recover from this entry and the broad roadmap entry
+alone: what T6 is allowed to decide; what it may NOT redefine; which existing mechanisms are
+candidates only; and which questions require semantic judgment — with minimum search/reasoning
+burden consistent with understanding the system. Facts, authorities, boundaries, and evidence are
+preserved here so the future design does not need to re-derive them; they are NOT precomputed
+into design decisions. Do not freeze accidental topology or implementation. Recovery burden must
+not be reduced by silently deciding open questions in advance.
