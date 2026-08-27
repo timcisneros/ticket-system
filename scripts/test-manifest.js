@@ -107,6 +107,11 @@ const TESTS = Object.freeze([
   { file: "t3-objective-revision-postgres-test.js", status: "required" },
   { file: "t3b-objective-revision-surface-test.js", status: "required" },
   { file: "t3c-reader-closure-postgres-test.js", status: "required" },
+  // T4 — workflow-spawn relationship kernel: canonical pure seam plus real
+  // PostgreSQL evidence reads (provenance authority, refusal classes,
+  // enumeration completeness, body negative non-authority).
+  { file: "t4-spawn-relation-contract-test.js", status: "required" },
+  { file: "t4-spawn-relation-postgres-test.js", status: "required" },
   { file: "action-contract-streak-test.js", status: "required" },
   { file: "agent-behavior-simulation-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "agent-handoff-queue-protocol-test.js", status: "orphaned", reason: "cutover-orphan" },

@@ -81,16 +81,37 @@
 <% } %>
 </section>
 
-<% if (typeof parentTicket !== 'undefined' && parentTicket) { %>
+<%
+  // T4 frozen kernel: the parent relationship comes from the canonical
+  // spawn-provenance seam, not from mutable Ticket-body topology.
+  const parentProjectionResolved = typeof parentProjection !== 'undefined' &&
+    parentProjection && parentProjection.outcome === 'FACT';
+  const parentProjectionRefused = typeof parentProjection !== 'undefined' &&
+    parentProjection && parentProjection.outcome === 'REFUSED';
+  const parentRenderTicket = parentProjectionResolved ? parentProjection.parentTicket : null;
+  const parentOriginPayload = parentProjectionResolved ? parentProjection.originPayload : null;
+%>
+<% if (parentProjectionRefused) { %>
+<section class="detail-section">
+  <h2>Parent Ticket</h2>
+  <div class="attn critical">
+    <h3><span class="sev">Unavailable</span> Parent lineage could not be verified</h3>
+    <p>Authoritative spawn provenance refused resolution: <code><%= parentProjection.reason %></code></p>
+    <% if (parentProjection.parentTicketId) { %><p>Referenced parent ticket: #<%= parentProjection.parentTicketId %></p><% } %>
+    <% if (parentProjection.originEvent && parentProjection.originEvent.position) { %><p class="text-muted">Originating creation event position: <%= parentProjection.originEvent.position %></p><% } %>
+    <p class="text-muted">No parent linkage is shown rather than an apparently complete one. The underlying provenance must be repaired before this relationship can be displayed.</p>
+  </div>
+</section>
+<% } else if (parentProjectionResolved && parentRenderTicket) { %>
 <section class="detail-section">
   <h2>Parent Ticket</h2>
   <p class="text-muted">This ticket was spawned from a parent ticket/run. Parent and child statuses are independent.</p>
   <dl class="detail-grid">
-    <div><dt>Ticket</dt><dd><a href="/tickets/<%= parentTicket.id %>">Ticket #<%= parentTicket.id %></a></dd></div>
-    <div><dt>Objective</dt><dd><%= parentTicket.objective %></dd></div>
-    <div><dt>Status</dt><dd><span class="status-badge status-<%= parentTicket.status %>"><%= parentTicket.status %></span></dd></div>
-    <% if (ticket.parentRunId) { %><div><dt>Parent Run</dt><dd><a href="/runs/<%= ticket.parentRunId %>">Run #<%= ticket.parentRunId %></a></dd></div><% } %>
-    <% if (ticket.spawnPlanId) { %><div><dt>Spawn Plan</dt><dd><code><%= ticket.spawnPlanId %></code></dd></div><% } %>
+    <div><dt>Ticket</dt><dd><a href="/tickets/<%= parentRenderTicket.id %>">Ticket #<%= parentRenderTicket.id %></a></dd></div>
+    <div><dt>Objective</dt><dd><%= parentRenderTicket.objective %></dd></div>
+    <div><dt>Status</dt><dd><span class="status-badge status-<%= parentRenderTicket.status %>"><%= parentRenderTicket.status %></span></dd></div>
+    <% if (parentOriginPayload && parentOriginPayload.parentRunId) { %><div><dt>Parent Run</dt><dd><a href="/runs/<%= parentOriginPayload.parentRunId %>">Run #<%= parentOriginPayload.parentRunId %></a></dd></div><% } %>
+    <% if (parentOriginPayload && parentOriginPayload.spawnPlanId) { %><div><dt>Spawn Plan</dt><dd><code><%= parentOriginPayload.spawnPlanId %></code></dd></div><% } %>
   </dl>
 </section>
 <% } %>
@@ -406,9 +427,29 @@
 </details>
 <% } %>
 
-<% if (typeof childTickets !== 'undefined' && childTickets && childTickets.length > 0) { %>
+<%
+  // T4 frozen kernel: child lineage enumerates only proven spawn-relation
+  // facts; refused candidates render explicitly instead of disappearing into
+  // an apparently complete list (T4-I5).
+  const childrenEnumeration = typeof childrenProjection !== 'undefined' && childrenProjection
+    ? childrenProjection
+    : null;
+%>
+<% if (childrenEnumeration && childrenEnumeration.state === 'INCOMPLETE') { %>
+<div class="attn critical">
+  <h3><span class="sev">Incomplete</span> Child lineage could not be fully verified</h3>
+  <p><%= childrenEnumeration.refused.length %> of <%= childrenEnumeration.candidateCount %> attributable child candidates were refused by authoritative spawn provenance.</p>
+  <ul>
+    <% childrenEnumeration.refused.forEach(refusal => { %>
+      <li>Ticket #<%= refusal.childTicketId %> — <code><%= refusal.reason %></code></li>
+    <% }) %>
+  </ul>
+  <p class="text-muted">Proven facts are listed below alongside the refusals. Refused candidates are never silently omitted, but the set is not complete until the underlying provenance is repaired.</p>
+</div>
+<% } %>
+<% if (childrenEnumeration && childrenEnumeration.childTickets.length > 0) { %>
 <details class="disclosure" open>
-  <summary>Child Tickets <span class="sub"><%= childTickets.length %> spawned</span></summary>
+  <summary>Child Tickets <span class="sub"><%= childrenEnumeration.childTickets.length %> spawned<%= childrenEnumeration.state === 'INCOMPLETE' ? ' · incomplete' : '' %></span></summary>
   <div class="body">
     <p class="text-muted">Read-only lineage from this ticket. Child outcomes do not automatically complete or fail the parent ticket.</p>
     <table class="tickets-table">
@@ -422,7 +463,7 @@
         </tr>
       </thead>
       <tbody>
-        <% childTickets.forEach(child => { %>
+        <% childrenEnumeration.childTickets.forEach(child => { %>
           <tr>
             <td><a href="/tickets/<%= child.id %>">Ticket #<%= child.id %></a></td>
             <td><%= child.objective %></td>

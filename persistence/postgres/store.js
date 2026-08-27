@@ -7211,6 +7211,84 @@ class PostgresRuntimeStore {
     };
   }
 
+  // ── T4 workflow-spawn relationship reads (frozen kernel; READ-ONLY) ────────
+  //
+  // Authority is the child's append-only ticket.created event payload
+  // (docs/ARCHITECTURAL_DECISIONS_PENDING.md, T4 freeze, T4-I1..T4-I8). These
+  // methods introduce NO writer, NO table and NO migration (T4 §9); they only
+  // expose exact evidence to the canonical pure seam in
+  // runtime/t4-spawn-relation-contract.js. Completeness is load-bearing:
+  // neither method may silently truncate, because a filtered subset must
+  // never pose as relationship authority (T4-I3), so both fail closed on
+  // oversized sets instead of paging them out as normal results.
+  async listChildCreationProvenance(childTicketId) {
+    const id = positiveSafeInteger(childTicketId, 'childTicketId');
+    const result = await this.pool.query(
+      `SELECT id, position, ts, payload
+        FROM ${this.table('events')}
+        WHERE ticket_id = $1 AND type = 'ticket.created'
+        ORDER BY position
+        LIMIT $2`,
+      [id, this.maxQueryRows + 1]
+    );
+    if (result.rowCount > this.maxQueryRows) {
+      throw new RangeError(`child ${id} ticket.created provenance exceeds the configured maximum of ${this.maxQueryRows}`);
+    }
+    return result.rows.map(row => ({
+      id: String(row.id),
+      position: positiveSafeInteger(Number(row.position), 'event.position'),
+      ts: rowTimestamp(row.ts),
+      payload: row.payload || {}
+    }));
+  }
+
+  // Parent-side candidate discovery over IMMUTABLE event payloads. This query
+  // can never establish relationship truth (candidates confer none, T4-I3);
+  // it names the children whose complete provenance the canonical resolver
+  // must interpret. Textual comparison matches BOTH durable payload shapes of
+  // parentTicketId (JSON number and digit string). Read-only; no lock class.
+  async findSpawnCandidateChildTickets({ parentTicketId } = {}) {
+    const parentId = positiveSafeInteger(parentTicketId, 'parentTicketId');
+    const result = await this.pool.query(
+      `SELECT id FROM (
+         SELECT DISTINCT e.ticket_id AS id
+          FROM ${this.table('events')} AS e
+          WHERE e.type = 'ticket.created'
+            AND e.ticket_id IS NOT NULL
+            AND e.payload->>'parentTicketId' = $1::text
+       ) AS candidates
+       ORDER BY id
+       LIMIT $2`,
+      [parentId, this.maxQueryRows + 1]
+    );
+    if (result.rowCount > this.maxQueryRows) {
+      throw new RangeError(`parent ${parentId} spawn candidate set exceeds the configured maximum of ${this.maxQueryRows}`);
+    }
+    return result.rows.map(row => positiveSafeInteger(Number(row.id), 'candidate.ticketId'));
+  }
+
+  // Bounded display-row fetch backing the T4 projections: existence evidence
+  // for resolution plus presentation metadata only. Membership facts come
+  // exclusively from the event-provenance seam upstream.
+  async listTicketsByIds({ ticketIds } = {}) {
+    if (!Array.isArray(ticketIds)) {
+      throw new TypeError('ticketIds must be an array');
+    }
+    if (ticketIds.length > this.maxQueryRows) {
+      throw new RangeError(`ticketIds exceeds the configured maximum of ${this.maxQueryRows}`);
+    }
+    const ids = [...new Set(ticketIds.map(id => positiveSafeInteger(id, 'ticketIds[]')))];
+    ids.sort((a, b) => a - b);
+    if (ids.length === 0) return [];
+    const result = await this.pool.query(
+      `SELECT * FROM ${this.table('tickets')}
+        WHERE id = ANY($1::bigint[])
+        ORDER BY id`,
+      [ids]
+    );
+    return result.rows.map(row => ticketFromRow(row));
+  }
+
   async createRunTriage({ runId, triage }, { client = null } = {}) {
     const id = positiveSafeInteger(runId, 'runId');
     const callerTriage = this.assertJsonRecord(triage, 'triage');

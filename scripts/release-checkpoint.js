@@ -39,6 +39,10 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   // each Run's immutable declared work; missing/malformed post-T3 authority
   // fails closed; legacy Runs use the recovered compatibility rule.
   't3c-reader-closure-postgres-test.js',
+  // T4 — workflow-spawn relationship kernel: the canonical pure interpretation
+  // seam. Deterministic: contract classification, resolution and enumeration
+  // composition only.
+  't4-spawn-relation-contract-test.js',
   't2-tranche5-release-admission-server-test.js',
   't2-tranche5-rerun-lock-order-test.js',
   't041-semantic-closure-test.js',
@@ -205,6 +209,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // Kernel-owned topology-neutral attempt identity, atomic membership,
   // settlement/projection, retry/resume, and database constraints.
   'ticket-attempt-authority-postgres-test.js',
+  // T4 — workflow-spawn relationship kernel against real persistence:
+  // complete provenance retrieval, event-payload candidate discovery,
+  // fail-closed corruption classes, body negative non-authority.
+  't4-spawn-relation-postgres-test.js',
   // Real pre-039 schema plus source-owned v1/v2/singleton backfill/refusal.
   'ticket-attempt-backfill-postgres-test.js',
   'postgres-persistence-integration-test.js',

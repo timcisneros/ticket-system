@@ -105,6 +105,18 @@ const {
   assertUniformProgressPolicyInputs,
   buildDefaultProgressControlPolicy
 } = require('./runtime/churn-decision-contract');
+// T4 workflow-spawn relationship kernel: the canonical pure interpretation
+// seam (docs/ARCHITECTURAL_DECISIONS_PENDING.md, T4 freeze). Server readers
+// route authoritative parent/child questions through it; Ticket bodies never
+// grant or deny a relationship.
+const {
+  resolveChildSpawnRelation,
+  coherentProvenanceParentIds,
+  combineSpawnEnumeration
+} = require('./runtime/t4-spawn-relation-contract');
+// Single production definition of the executeTicketPlan child spawn bytes
+// (draft + ticket.created payload) shared by the producer and T4 owners.
+const { buildChildWorkflowTicketCreation } = require('./runtime/workflow-ticket-spawn-construction');
 // The canonical worker role, from the orchestration that already owns it —
 // not a new literal.
 const {
@@ -6490,8 +6502,92 @@ function readAllRunsForTicket(ticketId) {
   return collectRuntimeStatePages('listRunsForTicket', 'runs', { ticketId });
 }
 
-function readAllChildTickets(parentTicketId) {
-  return collectRuntimeStatePages('listChildTickets', 'tickets', { parentTicketId });
+// ── T4 spawn-relation projections (frozen kernel) ────────────────────────────
+//
+// Authoritative parent/child questions resolve ONLY through append-only
+// ticket.created provenance via runtime/t4-spawn-relation-contract.js
+// (T4-I1..T4-I8). Candidate discovery filters immutable event payloads and
+// confers no authority; every attributable candidate is resolved from its
+// COMPLETE creation-provenance set; refusals surface typed rather than
+// silently disappearing (T4-I3/T4-I5). Ticket bodies are never consulted for
+// relationship truth.
+async function projectParentSpawnChildren(parentTicketId) {
+  const candidateIds = await postgresRuntimeStore.findSpawnCandidateChildTickets({ parentTicketId });
+  const provenanceByChild = [];
+  for (const childTicketId of candidateIds) {
+    provenanceByChild.push({
+      childTicketId,
+      records: await postgresRuntimeStore.listChildCreationProvenance(childTicketId)
+    });
+  }
+  // Batched parent-existence evidence BEFORE resolution so no per-child guess
+  // can substitute a body claim for existence truth.
+  const referencedParentIds = new Set([parentTicketId]);
+  for (const { records } of provenanceByChild) {
+    for (const id of coherentProvenanceParentIds(records)) referencedParentIds.add(id);
+  }
+  const existingParents = new Set((await postgresRuntimeStore.listTicketsByIds({
+    ticketIds: [...referencedParentIds]
+  })).map(row => row.id));
+  const resolutions = provenanceByChild.map(({ childTicketId, records }) =>
+    resolveChildSpawnRelation({
+      childTicketId,
+      records,
+      existingParentTicketIds: existingParents
+    })
+  );
+  const enumeration = combineSpawnEnumeration({ parentTicketId, resolutions });
+
+  const originByChild = new Map(enumeration.facts.map(fact => [fact.childTicketId, fact.originEvent]));
+  const factChildIds = enumeration.facts.map(fact => fact.childTicketId);
+  const childRows = factChildIds.length
+    ? await postgresRuntimeStore.listTicketsByIds({ ticketIds: factChildIds })
+    : [];
+  const latestChildRuns = await readLatestRunsForTickets(factChildIds);
+  const childTickets = buildChildTicketSummaries(childRows, latestChildRuns)
+    .map(summary => ({ ...summary, originEvent: originByChild.get(summary.id) || null }))
+    .sort((a, b) => a.id - b.id);
+
+  return {
+    kind: enumeration.kind,
+    state: enumeration.state,
+    candidateCount: enumeration.candidateCount,
+    refused: enumeration.refused,
+    childTickets
+  };
+}
+
+async function projectChildSpawnParent(ticket) {
+  const records = await postgresRuntimeStore.listChildCreationProvenance(ticket.id);
+  const referencedParentIds = coherentProvenanceParentIds(records);
+  const existingParents = new Set(referencedParentIds.length
+    ? (await postgresRuntimeStore.listTicketsByIds({ ticketIds: referencedParentIds }))
+      .map(row => row.id)
+    : []);
+  const resolution = resolveChildSpawnRelation({
+    childTicketId: ticket.id,
+    records,
+    existingParentTicketIds: existingParents
+  });
+  if (resolution.outcome === 'ABSENT') return { outcome: 'ABSENT' };
+  if (resolution.outcome !== 'FACT') return resolution;
+  // Display-only metadata comes from the ORIGINATING record identified by the
+  // fact — presentation context, never grant/deny authority (T4-I2).
+  const parentRows = await postgresRuntimeStore.listTicketsByIds({
+    ticketIds: [resolution.fact.parentTicketId]
+  });
+  const originRecord = records.find(record => Number(record.position) === resolution.fact.originEvent.position) || null;
+  const originPayload = originRecord ? originRecord.payload : {};
+  return {
+    outcome: 'FACT',
+    fact: resolution.fact,
+    parentTicket: parentRows[0] || null,
+    originPayload: {
+      parentRunId: originPayload.parentRunId ?? null,
+      spawnedByStepId: originPayload.spawnedByStepId ?? null,
+      spawnPlanId: originPayload.spawnPlanId ?? null
+    }
+  };
 }
 
 async function readLatestRunsForTickets(ticketIds) {
@@ -21821,51 +21917,23 @@ async function createChildWorkflowTicketFromPlan(run, workflow, step, planTicket
   const existing = await getRuntimeStateReadRepository().getTicketBySpawnIdempotencyKey(planTicket.idempotencyKey);
   if (existing) return existing;
 
-  const now = new Date().toISOString();
-  const childTicketDraft = {
-    objective: planTicket.objective,
-    status: 'blocked',
-    blockedReason: 'Created by executeTicketPlan; child workflow execution is not automatic in v1.',
-    assignmentTargetType: 'agent',
-    assignmentTargetId: run.agentId,
-    assignmentMode: 'individual',
-    executionMode: 'workflow',
-    workflowId: planTicket.workflowId,
-    workflowInput: planTicket.workflowInput,
-    capabilityType: 'workflow',
-    capabilityId: planTicket.workflowId,
-    capabilityInput: planTicket.workflowInput,
-    executionPolicy: normalizeExecutionPolicy(null, 'shared'),
-    parentTicketId: run.ticketId,
-    parentRunId: run.id,
-    parentWorkflowId: workflow.id,
-    spawnedByStepId: step.id,
+  // Single production definition of the child draft / ticket.created bytes
+  // lives in the extracted constructor; this caller and tests share it. The
+  // canonical live policy normalizer remains the execution-policy authority:
+  // its result is resolved HERE so future legitimate changes flow into newly
+  // spawned workflow children exactly as before the extraction.
+  const { ticketDraft, eventPayload } = buildChildWorkflowTicketCreation({
+    run,
+    workflow,
+    step,
+    planTicket,
     spawnPlanId,
-    spawnIdempotencyKey: planTicket.idempotencyKey,
-    spawnReason: planTicket.reason || null,
-    createdBy: 'workflow:' + workflow.id,
-    createdAt: now,
-    updatedAt: now
-  };
+    executionPolicy: normalizeExecutionPolicy(null, 'shared')
+  });
 
   const created = await getTicketRunLifecycleRepository().createTicketWithEvent({
-    ticket: childTicketDraft,
-    eventPayload: {
-      objective: childTicketDraft.objective,
-      assignmentTargetType: childTicketDraft.assignmentTargetType,
-      assignmentTargetId: childTicketDraft.assignmentTargetId,
-      assignmentMode: childTicketDraft.assignmentMode,
-      executionMode: childTicketDraft.executionMode,
-      workflowId: childTicketDraft.workflowId,
-      blockedReason: childTicketDraft.blockedReason || null,
-      parentTicketId: childTicketDraft.parentTicketId,
-      parentRunId: childTicketDraft.parentRunId,
-      parentWorkflowId: childTicketDraft.parentWorkflowId,
-      spawnedByStepId: childTicketDraft.spawnedByStepId,
-      spawnPlanId: childTicketDraft.spawnPlanId,
-      spawnIdempotencyKey: childTicketDraft.spawnIdempotencyKey,
-      createdBy: childTicketDraft.createdBy
-    }
+    ticket: ticketDraft,
+    eventPayload
   });
   broadcastTicketChange();
   return created.ticket;
@@ -26982,10 +27050,9 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
 
   const allocationPlan = await getTicketAllocationPlan(ticketId);
   const agents = await listConfiguredAgentOptions();
-  const [rawTicketRuns, operationHistory, rawChildTickets] = await Promise.all([
+  const [rawTicketRuns, operationHistory] = await Promise.all([
     readAllRunsForTicket(ticketId),
-    readAllTicketOperations(ticketId),
-    readAllChildTickets(ticketId)
+    readAllTicketOperations(ticketId)
   ]);
   const ticketRuns = await hydrateRunReplaySnapshots(enrichTicketRuns(rawTicketRuns, operationHistory, agents));
   const ticketAttemptPositions = ticketRuns.length > 0
@@ -27050,9 +27117,13 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     });
   }
 
-  const parentTicket = ticket.parentTicketId ? await repository.getTicket(ticket.parentTicketId) : null;
-  const latestChildRuns = await readLatestRunsForTickets(rawChildTickets.map(child => child.id));
-  const childTickets = buildChildTicketSummaries(rawChildTickets, latestChildRuns);
+  // T4 frozen kernel: parent/child relationship truth from the canonical
+  // spawn-provenance seam only (T4-I1..T4-I5). Refusals render as explicit
+  // unavailable/corrupt states; they are never flattened into complete lists.
+  const [parentProjection, childrenProjection] = await Promise.all([
+    projectChildSpawnParent(ticket),
+    projectParentSpawnChildren(ticketId)
+  ]);
   const structuredAllocation = projectStructuredAllocationAuthorityForTicket(ticket);
   const structuredAllocationPlanning = projectStructuredAllocationPlanningForTicket(ticket, {
     allocationPlan
@@ -27080,8 +27151,8 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
     structuredAllocationPlanning,
     structuredAllocationLeafExecution,
     verifiedProgress: ticketVerifiedProgress,
-    parentTicket,
-    childTickets,
+    parentProjection,
+    childrenProjection,
     browserTarget: ticket.targetRef && ticket.targetRef.kind === 'browser'
       ? (await getBrowserTargetById(ticket.targetRef.browserTargetId))
       : null,
