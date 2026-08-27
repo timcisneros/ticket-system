@@ -8775,8 +8775,8 @@ a large subsystem.
 | T1 | structured allocation decision | decided (structured-allocation evaluation closed FINAL STOP; see `SYSTEM_STATUS.md`) |
 | T2 | lifecycle + reasons | implemented; FROZEN |
 | T3 | objective revisions / immutable executed intent | implemented; FROZEN |
-| T4 | relationships | semantic kernel FROZEN (see the T4 freeze entry below); implementation NOT STARTED |
-| T5 | waiting / time / fairness / backpressure | pending |
+| T4 | relationships | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed, runtime cutover verified — see the T4 operational closure entry below) |
+| T5 | waiting / time / fairness / backpressure | PURPOSE BOOTSTRAPPED; SEMANTIC KERNEL UNFROZEN; IMPLEMENTATION NOT STARTED (see the T5 authority bootstrap entry below) |
 | T6 | effect boundary | pending |
 | T7 | intervention / context | pending |
 | T8 | operator plane | pending |
@@ -8786,6 +8786,35 @@ a large subsystem.
 Tranche names alone confer no semantics: behavior for T5+ must never be inferred forward from a
 name, and each later tranche becomes repository-owned only through its own recorded brief and
 registered decision.
+
+### Tranche numbering axes — disambiguation guard
+
+This repository contains MULTIPLE UNRELATED tranche-numbering axes. A bare historical
+"Tranche N" label outside this broad-roadmap authority MUST NOT be interpreted as broad Tn
+without explicit authority saying so. This is a hermeticity/cognitive-efficiency guard, not a
+rename migration: historical migration headers, register entries, and file names are NOT
+renamed.
+
+Known axes:
+
+1. **Broad T0–T10 ticket-kernel roadmap** (this section). Broad T5 = waiting / time /
+   fairness / backpressure. Broad T5's only registered authority is the T5 authority
+   bootstrap entry below.
+2. **T2 internal implementation tranches.** "T2 Tranche 5" names T2's own internal
+   implementation sequence (five-state Ticket lifecycle cutover, migration 041 lineage,
+   operator-facing cancellation surface, maxAttempts reprojection corrections). It has no
+   relation to broad T5.
+3. **Historical other-workstream tranche numbering.** Existing migration/register references
+   such as the runtime-budget/evidence "Tranche 5" (migrations 030, 035–038; the "Tranche 5
+   Register: CLOSED (2026-08-05)" entry) belong to that workstream's own historical sequence.
+   They DO NOT mean broad T5 is implemented, designed, or closed. "Tranche 6" in
+   `SYSTEM_STATUS.md` is the structured-allocation axis, not broad T6. Other historical
+   tranche numbering may also exist (for example the eight-tranche process-execution roadmap
+   and the four-tranche typed-evidence roadmap are separate axes entirely).
+
+Rule: when any artifact says "Tranche N" or "Tn" without an explicit pointer to THIS roadmap
+section, treat it as its own workstream's label. Broad Tn status is defined ONLY by this
+section and the registered entries it names.
 
 ### T4 purpose
 
@@ -8859,6 +8888,10 @@ context.
 ## T4 Workflow-Spawn Relationship Kernel — semantic freeze (recorded 2026-08-26)
 
 **Status:** Frozen semantic kernel. Implementation NOT started; operational closure NOT claimed.
+*(The preceding sentence is historical status as recorded at this 2026-08-26 semantic freeze.
+It is superseded by the T4 operational closure entry below: T4 implementation has since
+completed, passed independent implementation review and the canonical checkpoint, and broad T4
+is OPERATIONALLY CLOSED. The semantic kernel recorded here is unchanged.)*
 This is the registered decision the T4 bootstrap record above requires before implementation: the
 design was recovered from THIS authority, passed independent design review with three medium
 findings closed (M1: non-authoritative Ticket-body topology can neither grant nor veto relationship
@@ -9006,7 +9039,241 @@ or any T2/T3 change necessary: STOP and reopen architecture before making that c
 
 ### Open status after freeze
 
-T4 purpose: FROZEN. T4 semantic kernel: FROZEN (this entry). T4 implementation: NOT STARTED. T4
-operational closure: NOT CLAIMED. Handoff/general operator relationships: DEFERRED, not silently
-decided — exposure via a later second projection or kind remains available only through a future
-registered decision under this register's discipline.
+*(Historical status as recorded at this 2026-08-26 semantic freeze:)* T4 purpose: FROZEN. T4
+semantic kernel: FROZEN (this entry). T4 implementation: NOT STARTED (at the time of the
+freeze). T4 operational closure: NOT CLAIMED (at the time of the freeze). Handoff/general
+operator relationships: DEFERRED, not silently decided — exposure via a later second projection
+or kind remains available only through a future registered decision under this register's
+discipline. Current status is recorded in the T4 operational closure entry below.
+
+---
+
+## T4 Workflow-Spawn Relationship Kernel — operational closure (recorded 2026-08-27)
+
+**Status:** OPERATIONALLY CLOSED. This entry repairs a stale-status hermeticity defect: before
+this entry, a fresh recovery of this register could infer that broad T4 remained unimplemented
+because the freeze entry above recorded "implementation NOT started" as its then-current
+status. This is a status/evidence repair only. It changes NO T4 semantic decision and does not
+touch T4-I1..T4-I8, which remain exactly as frozen in the entry above.
+
+### Current authoritative status
+
+T4 — relationships: **OPERATIONALLY CLOSED.**
+
+- Semantic kernel: FROZEN (2026-08-26 entry above; T4-I1..T4-I8 unchanged).
+- Implementation: COMPLETE (pure contract `runtime/t4-spawn-relation-contract.js` with owner
+  tests `t4-spawn-relation-contract-test.js` and `t4-spawn-relation-postgres-test.js`
+  registered required in the canonical test manifest, plus its localized server read seams).
+- Independent implementation review: CLOSED with HIGH=0, MEDIUM=0, LOW=0.
+- Canonical release checkpoint: PASSED 252/252 owned suites.
+- Runtime cutover: COMPLETED; the exact published revision was verified running.
+
+### Independently recoverable evidence
+
+- Published commit (also current repository HEAD at the time this closure was recorded):
+  `bb9159569a5dc21dc735aea1bde089b844fe25ec`
+- Published tree: `32450e402502bb2e243f210e387874ac1f4da5f8`
+- Canonical checkpoint `checkpointRunIdentity`:
+  `24968bcc-9adb-4198-8a9f-aff568bbfbc0`
+- Canonical checkpoint `registryHash`:
+  `844af8c1521a9c99093062e54c2c17d2246e14789c6510ee371a91336093a4ee`
+- Checkpoint result: passedCount / totalCount = 252 / 252
+
+### Operational cutover record
+
+- The exact published revision was verified running at cutover; no migration or schema change
+  was required or made.
+- No provider call was used for closure verification.
+- No operational workflow-spawn relationship existed in the live system, so a read-only
+  positive-path relationship sample could not be taken. Operational closure therefore relies
+  on live source/readiness verification plus the checkpoint-owned deterministic and PostgreSQL
+  positive-path evidence (the owner tests above), which remains retained by the checkpoint.
+- This limitation is recorded so no later reader assumes a live positive-path sample was or
+  was not taken.
+
+---
+
+## T5 Waiting / Time / Fairness / Backpressure — authority bootstrap (recorded 2026-08-27)
+
+**Status:** PURPOSE BOOTSTRAPPED; SEMANTIC KERNEL UNFROZEN; IMPLEMENTATION NOT STARTED;
+OPERATIONAL CLOSURE NOT CLAIMED.
+
+Tranche names alone confer no semantics: the words "waiting / time / fairness / backpressure"
+are a roadmap label plus an ownership boundary inherited from the frozen T4 kernel (T4-I6),
+NOT a definition. This entry is a minimum authority bootstrap, recorded because a fresh
+read-only recovery (2026-08-27) proved broad T5 had no brief, no kernel question, and no
+registered classification of the existing related mechanisms, while three unrelated
+"Tranche 5" numbering axes collide with the broad name (see the tranche-numbering
+disambiguation guard in the broad roadmap entry above).
+
+This entry authorizes DESIGN RECOVERY only. It does NOT decide the T5 kernel, does NOT freeze
+any semantic invariant, does NOT promote any existing mechanism to T5 authority, and does NOT
+answer the open questions below.
+
+### T5 kernel question (design question, NOT its answer)
+
+WHEN WORK CANNOT OR SHOULD NOT PROCEED NOW FOR REASONS NOT ALREADY OWNED BY FROZEN T2 BLOCKER
+AUTHORITY, WHAT DURABLE FACTS — IF ANY — MAY GOVERN:
+
+- when that work becomes eligible to proceed;
+- ordering/fairness among otherwise eligible contenders;
+- and how capacity/backpressure defers or refuses work;
+
+WITHOUT:
+
+- introducing another Ticket lifecycle state;
+- redefining T2 BLOCKED or admissionHold;
+- changing T3 attempt/revision/executed-intent identity;
+- giving T4 relationships operational meaning;
+- turning runtime budgets into backpressure;
+- or promoting incidental scheduler/queue/timer mechanisms into semantic authority merely
+  because they already exist?
+
+This question intentionally leaves open whether the correct T5 kernel is small, large, or even
+whether some candidate concepts require new durable authority at all. The T5 semantic design
+must be recovered from THIS authority through a registered decision of its own; nothing in
+this bootstrap pre-freezes an answer.
+
+### Existing surfaces: candidates, NOT authority
+
+A read-only audit (2026-08-27) inventoried the materially relevant existing surfaces. Standing
+rule for all of them: **EXISTENCE OF A MECHANISM DOES NOT PROMOTE IT TO BROAD-T5 SEMANTIC
+AUTHORITY.** Each classification below is the bootstrap classification only; a later
+registered T5 decision may reclassify with recorded reasons.
+
+**A. Durable runtime capacity wait mechanism — DESIGN CANDIDATE / EXISTING MECHANISM.**
+`run_capacity_waits` (migration 030) carries `first_blocked_at`, `next_eligible_at`, `active`,
+capacity-domain/resource identity, a fairness index ordered by `first_blocked_at`, FIFO-like
+older-waiter selection in `acquireRuntimeCapacity`, and `capacity.waiting` /
+`capacity.acquired` evidence events. Written today only for budgeted Runs that lose the claim
+(`server.js` gates on the run-budget snapshot) and inside `withCapacity` slot waiting.
+NOT YET FROZEN AS BROAD-T5 SEMANTIC AUTHORITY. Open decisions include whether persisted
+waiting itself is product semantic truth; whether FIFO fairness is semantic or replaceable;
+and whether `next_eligible_at` is policy or mechanism.
+
+**B. Mutation admission backpressure — EXISTING SYSTEM-LEVEL BACKPRESSURE MECHANISM; T5
+OWNERSHIP UNDECIDED.** Bounded outstanding mutation/appending admission
+(`runtime/mutation-admission.js`), HTTP 429 / Retry-After under pressure, scheduler pause
+while saturated, automatic reopening when pressure clears (register-recorded recovery
+scenarios). Broad T5 does NOT own this yet; ownership is an open question.
+
+**C. Pending-run claim order / capacity — LOWER-LEVEL RUNTIME MECHANISM unless a later T5
+decision explicitly promotes a semantic rule.** `max_active_runs`, `local_model_concurrency`,
+`allowParallelRuns` sibling serialization, SKIP LOCKED / lease mechanics, and `created_at, id`
+pending-run claim ordering (PostgreSQL-coordinated in `claimPendingRun`). Capacity ceilings
+and lease/claim machinery remain runtime mechanisms. Whether FIFO claim order itself is a
+semantic fairness rule is OPEN.
+
+**D. Lease / stale-work time — PRE-EXISTING EXECUTION-CONTINUITY MECHANISM.** DB-clock lease
+expiry and recovery (`lease_expires_at <= clock_timestamp()` fencing, `run.lease_expired`,
+recovery modes). T5 may consume its evidence but does not automatically own or redefine it.
+
+**E. Hard runtime budgets — PREDECESSOR-OWNED HARD EXECUTION/RESOURCE BOUNDS.** Immutable
+per-run snapshots: attempts, execution steps, model requests, duration, workspace/process/
+browser operations, artifact bytes, and related capacity reservations (migrations 024/030,
+`runtime-budget-contract.js`, workload-profile envelopes). They are NOT automatically T5
+backpressure. Their authority is NOT reopened by T5.
+
+**F. Process-template due scheduling — SEPARATE PROCESS-EXECUTION MECHANISM.** `next_run_at`
+process-template scheduling and its due index create tickets on a schedule. Possible relevance
+of the word "time" is an OPEN T5 scope question; it is NOT absorbed automatically.
+
+**G. Presentation-only waiting — PRESENTATION ONLY; NOT SEMANTIC AUTHORITY.** UI labels such
+as "Waiting to start" and `run:queued` presentation are derived display of pending state.
+
+### Frozen predecessor boundaries (non-negotiable T5 design fences)
+
+**T2:**
+
+- Exactly five Ticket lifecycle states remain: OPEN, IN_PROGRESS, BLOCKED, COMPLETED, CANCELED.
+- T5 does NOT gain permission merely from its name to add WAITING.
+- T2 blocker authority remains frozen (triage unresolved, persisted refusal,
+  maxAttemptsExhausted, settledBlockedAttempt, admissionHold — the closed input set of the
+  pure lifecycle projector).
+- admissionHold remains T2 authority unless architecture is explicitly reopened.
+- A persisted blocked decision is not automatically reopened by runtime time or capacity
+  changes ("a persisted block is the decision of record and is never reopened by the runtime").
+
+**T3:**
+
+- Objective revision authority unchanged.
+- Executed intent remains immutable per admitted execution.
+- Attempt/rerun/resume identity unchanged; T5 timing must not silently redefine attempt
+  identity.
+
+**T4:**
+
+- Workflow-spawn relationship facts remain topology only.
+- Relationship kind has ZERO waiting, dependency, ordering, scheduling, fairness, or
+  backpressure authority (T4-I6).
+- T5 must not infer dependency semantics from parent/child relationship facts.
+
+**Other predecessor guards already recorded elsewhere in this register and
+`docs/DECISION_LOG.md`:**
+
+- Queue time != governed execution time (the immutable execution epoch — earliest
+  `run.lease_acquired` — starts governed duration; a never-leased Run has zero spent time).
+- Governed execution duration uses its existing execution epoch / database-clock authority
+  (`clock_timestamp()`, not the process clock), with reason
+  `cumulative_execution_duration_exhausted`.
+- Runtime-initiated retry/replan/reroute remains declined where frozen (the churn decision
+  vocabulary is exactly `continue | blocked`; a separately authorized retry Run is unaffected).
+- Governed provider transport has no retry/second-route/repair semantics.
+- Existing hard runtime budgets remain their current authority.
+
+### Terminology separations for T5 design
+
+**BLOCKED != WAITING** for T5 design purposes, and no new WAITING lifecycle state is defined
+by this bootstrap. The five current uses that must never be conflated:
+
+1. T2 lifecycle BLOCKED (durable blocker authority projection);
+2. T2 admissionHold projected as BLOCKED (spawned child pending first admission — T2's frozen
+   projection of a waiting-like condition; do not re-derive from T5);
+3. Run capacity waiting while the Run remains `pending` (`run_capacity_waits` +
+   `capacity.waiting` evidence; no lifecycle mutation today);
+4. churn decision `blocked` (run-level progress stop; decision of record);
+5. presentation labels like "Waiting to start".
+
+Further separations:
+
+- **HARD LIMIT != BACKPRESSURE.** A per-run/request/workspace-operation cap is an enforcement
+  bound, not system-level admission pressure.
+- **QUEUE ORDER != FAIRNESS POLICY.** A FIFO claim ordering is a mechanism default; a fairness
+  policy is a declared semantic rule.
+- **AUDIT TIMESTAMP != TIME AUTHORITY.** Only timestamps whose value changes an authoritative
+  decision (lease fencing, execution-epoch duration, due-template discovery, capacity-wait
+  ordering) are time authority.
+- **T4 RELATIONSHIP != DEPENDENCY.** A parent/child relationship fact carries zero waiting or
+  ordering meaning.
+
+### Open questions (recorded OPEN; NOT answered here)
+
+1. Is existing durable FIFO capacity fairness (`first_blocked_at` ordering) semantic truth or
+   replaceable mechanism?
+2. Does broad T5 require any NEW durable waiting authority at all?
+3. If durable waiting exists, is it Run-level, Ticket-visible projection, or something else —
+   while preserving the frozen five-state lifecycle?
+4. Is T2 admissionHold explicitly OUT OF SCOPE, or would changing it require an explicit
+   reopening of T2?
+5. Is `next_eligible_at` semantic policy or scheduler mechanism?
+6. Should non-budgeted pending Runs participate in the same durable capacity waiting evidence?
+7. Does broad T5 own mutation-admission backpressure or merely consume its pressure signal?
+8. Should the existing `capacity_backpressure` failure-kind wording be disambiguated from
+   system mutation backpressure?
+9. Is pending-run FIFO claim order semantic fairness or replaceable scheduling?
+10. Does process-template `next_run_at` belong to broad T5 or remain a separate
+    process-execution concern?
+11. Are known ungoverned-family duration inconsistencies (per-loop-entry duration, attempt-
+    local counters; see the A3 verdict entries above) relevant to T5, or do they remain
+    runtime-budget/runtime-execution defects outside T5?
+
+### Cognitive-efficiency rule
+
+A fresh capable model should be able to recover from this entry and the broad roadmap entry
+alone: what T5 is allowed to decide; what it is NOT allowed to redefine; which existing
+mechanisms are merely evidence/candidates; and which questions still require semantic judgment
+— with minimum search/reasoning burden consistent with understanding the system. Facts,
+authorities, boundaries, and evidence are preserved here so the future design does not need to
+re-derive them; they are NOT precomputed into design decisions. Do not freeze accidental
+topology or implementation. Recovery burden must not be reduced by silently deciding open
+questions in advance.
