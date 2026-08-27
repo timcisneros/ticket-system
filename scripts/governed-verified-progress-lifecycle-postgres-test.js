@@ -97,12 +97,40 @@ function stagedResponse(identity, plan, match) {
   };
 }
 
+// This owner needs the admitted LEAF objective itself to exercise the
+// pre-adapter direct-workspace shortcut. The shared fixture deliberately has a
+// neutral default objective, so adapt its planner proposal only while this one
+// canonical fixture is being built. The ordinary proposal normalizer still
+// validates and hashes the resulting direct-write declarations; no stored
+// authority is edited after admission.
+async function seedDirectWriteGovernedTicket(store, options) {
+  const planningContract = require('../runtime/structured-allocation-planning-contract');
+  const normalizePlannerProposal = planningContract.normalizePlannerProposal;
+  planningContract.normalizePlannerProposal = value => normalizePlannerProposal({
+    ...value,
+    items: value.items.map(item => {
+      const match = /^Review (.+?) and record concrete findings$/.exec(item.objective);
+      assert.ok(match, `fixture leaf objective has the expected owned-root shape: ${item.objective}`);
+      const owned = match[1].replace(/\/$/, '');
+      return {
+        ...item,
+        objective: `Create folders ${owned}/alpha and ${owned}/beta`
+      };
+    })
+  });
+  try {
+    return await seedGovernedStructuredTicket(store, options);
+  } finally {
+    planningContract.normalizePlannerProposal = normalizePlannerProposal;
+  }
+}
+
 async function main() {
   await withHarness('governed verified progress lifecycle',
     async ({ store, workspaceRoot, startServer }) => {
       const assertThat = createAsserter();
 
-      const seeded = await seedGovernedStructuredTicket(store, {
+      const seeded = await seedDirectWriteGovernedTicket(store, {
         stamp: STAMP,
         actor: ACTOR,
         workspaceRoot,
@@ -131,6 +159,11 @@ async function main() {
       const factA = facts.find(f => f.criterion.path.endsWith('/alpha'));
       const factB = facts.find(f => f.criterion.path.endsWith('/beta'));
       assert.ok(factA && factB, 'two admitted facts');
+      const leafObjective = run.declaredWorkSnapshot.objective.text;
+      assertThat(/\bcreate\b/i.test(leafObjective) &&
+        leafObjective.includes(factA.criterion.path) &&
+        leafObjective.includes(factB.criterion.path),
+      'the real governed leaf carries a direct-workspace-style admitted objective');
 
       // Deterministic initial state: the owned parent exists, neither declared
       // folder does. createFolder is non-recursive in production.
@@ -390,6 +423,32 @@ async function main() {
         assertThat(verdict(batchTwo, factA) === true && verdict(batchTwo, factB) === true,
           'request 2 evidence is A=true, B=true');
 
+        // ── GOVERNED COMPLETION INPUT, NOT THE EARLY HEURISTICS ──────────
+        // Request 1 performed a successful mutation named directly by the
+        // leaf objective. Before the production gate under test, that was
+        // enough for isDirectWorkspaceObjectiveSatisfied() to break the loop
+        // before this evidence set existed. Reaching request 2 proves the
+        // incomplete A=true/B=false window did not terminalize the leaf.
+        const replayEvents = Array.isArray(snapshot.events) ? snapshot.events : [];
+        const completionClaims = replayEvents.filter(event =>
+          event && event.type === 'run:postcondition_completed');
+        assertThat(completionClaims.length === 1 &&
+          completionClaims[0].source === 'governed_postcondition_evidence',
+        'the completing input is the existing governed postcondition replay claim');
+        const completionClaim = completionClaims[0];
+        assertThat(String(completionClaim.step) === String(receiptB.step_id),
+          'the incomplete first governed criterion set did not complete the Run');
+        const supporting = completionClaim.governedPostconditionEvidence &&
+          completionClaim.governedPostconditionEvidence.supportingEvidence;
+        assertThat(Array.isArray(supporting) && supporting.length === 2 &&
+          supporting.map(item => item.evidenceId).sort((a, b) => a - b).join(',') ===
+            batchTwo.map(item => item.evidenceId).sort((a, b) => a - b).join(','),
+        'the replay claim names the exact completing persisted governed set');
+        assertThat(!replayEvents.some(event => event &&
+          (event.type === 'workspace.objective_satisfied' ||
+           event.type === 'workflow.draft_objective_satisfied')),
+        'no direct-workspace, workflow-draft, or parent-objective heuristic supplied completion');
+
         // ── The transition derivation production itself uses ──────────────
         const transitions = await store.readGovernedFactTransitions(runId);
         assertThat(transitions !== null, 'production derives fact transitions');
@@ -478,6 +537,8 @@ async function main() {
         const decision = consequences[0].consequence.completionDecision;
         assertThat(Boolean(decision.decisionHash || decision.completionDecisionHash),
           'the completion decision is hash-identified');
+        assertThat(decision.completionDisposition === 'completed',
+          'the unchanged completion-decision contract accepts the governed replay claim');
 
         // Tranche 3 reconciliation completed the leaf item.
         const plan = await store.getAllocationPlanForTicket(run.ticketId);
@@ -487,6 +548,8 @@ async function main() {
         assertThat(Boolean(leafItem), 'the leaf item is present in the aggregate decision');
         assertThat(leafItem.itemStatus === 'completed',
           'Tranche 3 reconciliation completed the leaf item from persisted facts');
+        assertThat(leafItem.reason === 'completion_verified',
+          'leaf reconciliation records completion_verified');
 
         // Ticket projection succeeds over the completed governed Run.
         const cookie = await server.login();

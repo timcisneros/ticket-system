@@ -34,6 +34,11 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   't3-objective-revision-contract-test.js',
   't3-objective-revision-postgres-test.js',
   't3b-objective-revision-surface-test.js',
+  // T3-c — executed-intent reader closure: post-admission readers (prompt,
+  // completion evidence, interrupted/failed/terminal-repair replay) consume
+  // each Run's immutable declared work; missing/malformed post-T3 authority
+  // fails closed; legacy Runs use the recovered compatibility rule.
+  't3c-reader-closure-postgres-test.js',
   't2-tranche5-release-admission-server-test.js',
   't2-tranche5-rerun-lock-order-test.js',
   't041-semantic-closure-test.js',

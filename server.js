@@ -120,12 +120,14 @@ const {
   getRunRuntimeBudgetSnapshot
 } = require('./runtime/runtime-budget-contract');
 const {
+  DeclaredWorkContractError,
   assertDeclaredWorkCompletionAuthorityBinding,
   buildDeclaredWorkSnapshot,
   normalizeDeclaredWorkSnapshot,
   projectDeclaredWorkForModel,
   projectDeclaredWorkForRun
 } = require('./runtime/declared-work-contract');
+const { validatePointer } = require('./runtime/ticket-objective-revision-contract');
 const {
   buildStructuredAllocationAuthorityDraft,
   evaluateStructuredAllocationCurrentApplicability,
@@ -215,7 +217,9 @@ const {
   eligibleExecutionFacts
 } = require('./runtime/governed-eligible-facts');
 const {
-  buildGovernedPostconditionEvidence
+  buildGovernedPostconditionEvidence,
+  contentRecordOf,
+  normalizeGovernedPostconditionEvidence
 } = require('./runtime/governed-postcondition-evidence-contract');
 const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
@@ -11555,7 +11559,7 @@ function createReplaySnapshotBase(run, overrides = {}) {
 }
 
 async function createRunReplaySnapshot(run, ticket, agent, providerConfig, runtimeEnvelope, systemInstructionSnapshot) {
-  const declaredWork = projectDeclaredWorkForRun(run);
+  const executed = resolveExecutedRequestedOutcome(run, ticket);
   const result = await getRunReplayRepository().initializeRunReplay({
     runId: run.id,
     ticketId: run.ticketId,
@@ -11563,9 +11567,7 @@ async function createRunReplaySnapshot(run, ticket, agent, providerConfig, runti
     provider: providerConfig.provider,
     model: providerConfig.model,
     runtimeEnvelope,
-    ticketObjectiveSnapshot: declaredWork.snapshot
-      ? declaredWork.snapshot.objective.text
-      : ticket.objective,
+    ticketObjectiveSnapshot: executed.objectiveText,
     executionPolicySnapshot: copyExecutionPolicy(run.executionPolicySnapshot, runWorkspaceScope(run)),
     runtimeLimits: pickRuntimeLimitValues(getRunRuntimeLimitsSnapshot(run)),
     runtimeLimitsSnapshot: getRunRuntimeLimitsSnapshot(run),
@@ -11573,8 +11575,8 @@ async function createRunReplaySnapshot(run, ticket, agent, providerConfig, runti
     completionAuthoritySnapshot: run.completionAuthoritySnapshot
       ? normalizeCompletionAuthoritySnapshot(run.completionAuthoritySnapshot)
       : null,
-    declaredWorkSnapshot: declaredWork.snapshot,
-    declaredWorkAvailability: declaredWork.availability,
+    declaredWorkSnapshot: executed.declaredWork,
+    declaredWorkAvailability: executed.availability,
     systemInstructionSnapshot,
       effectiveRuntimeConfig: buildEffectiveRuntimeConfigSnapshot(agent, getRunRuntimeLimitsSnapshot(run))
     })
@@ -14096,6 +14098,10 @@ async function classifyInterruptionPhase(run) {
 async function ensureInterruptedRunReplaySnapshot(run, reason, phase = null) {
   const ticket = await getTicketById(run.ticketId) || null;
   const agent = await getConfiguredAgentRepository().getConfiguredAgentById(run.agentId);
+  // T3-c: interruption replay reflects the Run's immutable executed intent.
+  // A revision-bound Run without declared work fails closed; only legacy Runs
+  // fall back to current Ticket projection (historical-unavailable).
+  const executed = resolveExecutedRequestedOutcome(run, ticket);
 
   await getRunReplayRepository().initializeRunReplay({
     runId: run.id,
@@ -14105,7 +14111,7 @@ async function ensureInterruptedRunReplaySnapshot(run, reason, phase = null) {
     provider: agent ? (agent.provider || 'openai') : null,
     model: agent ? (agent.model || null) : null,
     runtimeEnvelope: null,
-    ticketObjectiveSnapshot: ticket ? ticket.objective : null,
+    ticketObjectiveSnapshot: executed.objectiveText,
     systemInstructionSnapshot: null,
     primitiveContract: {
       allowedOperations: [...AGENT_ALLOWED_OPERATIONS],
@@ -14121,6 +14127,10 @@ async function ensureInterruptedRunReplaySnapshot(run, reason, phase = null) {
 async function ensureFailedRunReplaySnapshot(run, reason) {
   const ticket = await getTicketById(run.ticketId) || null;
   const agent = await getConfiguredAgentRepository().getConfiguredAgentById(run.agentId);
+  // T3-c: failure replay reflects the Run's immutable executed intent.
+  // A revision-bound Run without declared work fails closed; only legacy Runs
+  // fall back to current Ticket projection (historical-unavailable).
+  const executed = resolveExecutedRequestedOutcome(run, ticket);
 
   await getRunReplayRepository().initializeRunReplay({
     runId: run.id,
@@ -14130,7 +14140,7 @@ async function ensureFailedRunReplaySnapshot(run, reason) {
     provider: agent ? (agent.provider || 'openai') : null,
     model: agent ? (agent.model || null) : null,
     runtimeEnvelope: null,
-    ticketObjectiveSnapshot: ticket ? ticket.objective : null,
+    ticketObjectiveSnapshot: executed.objectiveText,
     systemInstructionSnapshot: null,
     primitiveContract: {
       allowedOperations: [...AGENT_ALLOWED_OPERATIONS],
@@ -15350,11 +15360,16 @@ async function reconcileTerminalRunUnlocked(run) {
   if (!run.replaySnapshot) {
     const ticket = await getRuntimeStateReadRepository().getTicket(run.ticketId);
     const agent = await getConfiguredAgentRepository().getConfiguredAgentById(run.agentId);
+    // T3-c: terminal repair must fabricate missing replay evidence from the
+    // Run's immutable executed intent — never from mutable current intent. A
+    // revision-bound Run without declared work refuses the repair; legacy Runs
+    // use the historical compatibility projection.
+    const executed = resolveExecutedRequestedOutcome(run, ticket);
     run.replaySnapshot = createReplaySnapshotBase(run, {
       agentNameSnapshot: run.agentName || (agent ? agent.name : 'Unknown agent'),
       provider: agent ? (agent.provider || 'openai') : null,
       model: agent ? (agent.model || null) : null,
-      ticketObjectiveSnapshot: ticket ? ticket.objective : null,
+      ticketObjectiveSnapshot: executed.objectiveText,
       note: 'Run terminal evidence was repaired after execution completion'
     });
   }
@@ -20496,6 +20511,105 @@ async function persistGovernedPostconditionEvidence(run, {
   return { appended: stored.appended, batch };
 }
 
+// Adapter only: translate one persisted, complete governed fact set into the
+// replay observation shape the existing completion decision already consumes.
+// It decides no postcondition itself. `satisfied` came from the canonical
+// evaluator before the atomic append, while every identity comparison below
+// proves that the persisted verdicts belong to this immutable Run authority.
+function buildGovernedCompletionReplayClaim(run, persisted) {
+  if (!run || !run.leafRunBinding || !run.governedExecution || !persisted ||
+      !Array.isArray(persisted.appended)) return null;
+  const facts = eligibleExecutionFacts(run);
+  if (facts.length === 0 || persisted.appended.length !== facts.length) return null;
+
+  const records = persisted.appended.map(entry => {
+    const wrapped = entry && entry.evidence;
+    return {
+      evidenceId: entry && Number.isSafeInteger(entry.evidenceId)
+        ? entry.evidenceId
+        : null,
+      record: wrapped
+        ? normalizeGovernedPostconditionEvidence(wrapped)
+        : contentRecordOf(entry)
+    };
+  });
+  if (records.some(entry => entry.evidenceId === null)) return null;
+
+  const expectedGovernedAuthorityHash =
+    run.governedExecution.progressControlPolicy.policyHash;
+  const expectedItemId = run.leafRunBinding.allocationItemId;
+  const expectedKind = persisted.batch ? 'post_batch' : 'baseline';
+  const byIdentity = new Map();
+  for (const entry of records) {
+    const evidence = entry.record;
+    if (byIdentity.has(evidence.declaredFactIdentity)) return null;
+    byIdentity.set(evidence.declaredFactIdentity, entry);
+  }
+
+  const checkedPaths = [];
+  const supportingEvidence = [];
+  for (const fact of facts) {
+    const entry = byIdentity.get(fact.declaredFactIdentity);
+    if (!entry) return null;
+    const evidence = entry.record;
+    if (evidence.ticketId !== run.ticketId || evidence.runId !== run.id ||
+        evidence.allocationPlanId !== run.allocationPlanId ||
+        evidence.allocationItemId !== expectedItemId ||
+        evidence.governedAuthorityHash !== expectedGovernedAuthorityHash ||
+        evidence.completionAuthorityHash !== fact.completionAuthorityHash ||
+        evidence.declaredFactIdentity !== fact.declaredFactIdentity ||
+        evidence.criterionHash !== fact.criterionHash ||
+        evidence.criterionType !== fact.criterionType ||
+        evidence.evaluatorIdentity !== fact.evaluatorIdentity ||
+        evidence.evaluatorVersion !== fact.evaluatorVersion ||
+        evidence.evaluationKind !== expectedKind ||
+        !evidence.observedEvidence ||
+        evidence.observedEvidence.path !== fact.criterion.path ||
+        evidence.satisfied !== true) return null;
+
+    if (persisted.batch) {
+      if (evidence.requestSourceIdentity !== persisted.batch.requestSourceIdentity ||
+          evidence.logicalSourceIdentity !== persisted.batch.requestSourceIdentity ||
+          evidence.batchStepId !== persisted.batch.batchStepId ||
+          evidence.throughOperationReceiptId !==
+            persisted.batch.throughOperationReceiptId ||
+          evidence.evaluatedReceiptCount !== persisted.batch.evaluatedReceiptCount) {
+        return null;
+      }
+    }
+
+    checkedPaths.push({
+      type: fact.criterionType === 'folder_exists'
+        ? 'folder'
+        : fact.criterionType === 'path_absent' ? 'absent' : 'file',
+      path: fact.criterion.path,
+      ...(fact.criterionType === 'file_content_equals'
+        ? { contentSha256: fact.criterion.contentSha256 }
+        : {})
+    });
+    supportingEvidence.push({
+      evidenceId: entry.evidenceId,
+      evidenceHash: evidence.evidenceHash,
+      declaredFactIdentity: evidence.declaredFactIdentity
+    });
+  }
+
+  return {
+    reason: 'Persisted governed evidence satisfies every admitted Run postcondition',
+    checkedPaths,
+    governedPostconditionEvidence: {
+      source: 'governed_postcondition_evidence',
+      completionAuthorityHash: facts[0].completionAuthorityHash,
+      evaluationKind: expectedKind,
+      requestSourceIdentity: persisted.batch
+        ? persisted.batch.requestSourceIdentity
+        : null,
+      batchStepId: persisted.batch ? persisted.batch.batchStepId : null,
+      supportingEvidence
+    }
+  };
+}
+
 async function executeWorkspaceOperationUnlocked(run, action, step = 0, operationContext = {}) {
   const { operation, args: rawArgs } = parseWorkspaceOperation(action);
   const { args, strippedKeys } = sanitizeOperationArgs(operation, rawArgs);
@@ -22306,26 +22420,84 @@ function compactRuntimeEnvelopeForPrompt(runtimeEnvelope) {
   return compact;
 }
 
-function buildAdmittedTicketProjection(run, ticket) {
+// The ONE executed-intent seam. Answers exactly: "What immutable requested
+// outcome belongs to this Run?" Run-level revision authority is classified
+// FIRST through the frozen T3-a pointer validator: a PRESENT objectiveRevision
+// must be a valid post-T3 authority backed by coherent immutable declared work
+// — a present-but-malformed pointer is corrupted state that fails closed even
+// when another snapshot happens to look usable, and it can never masquerade as
+// legacy history. Only a genuinely absent revision authority (the repository's
+// pre-T3 representation) may use the historical compatibility behavior:
+// declared work when an earlier-tranche snapshot exists, otherwise current
+// Ticket projection marked historically unavailable without claiming it is
+// historical truth.
+function resolveExecutedRequestedOutcome(run, ticket) {
+  const hasRevisionAuthority = Boolean(run) &&
+    run.objectiveRevision !== null && run.objectiveRevision !== undefined;
+  if (hasRevisionAuthority) {
+    try {
+      validatePointer(run.objectiveRevision);
+    } catch (error) {
+      throw new DeclaredWorkContractError(
+        'DECLARED_WORK_REVISION_AUTHORITY_MALFORMED',
+        `DECLARED_WORK_REVISION_AUTHORITY_MALFORMED: Run ${run ? run.id : '?'} carries a ` +
+          `malformed objectiveRevision authority (${error.message})`
+      );
+    }
+    const declared = projectDeclaredWorkForRun(run);
+    if (!declared.snapshot) {
+      throw new DeclaredWorkContractError(
+        'DECLARED_WORK_AUTHORITY_REQUIRED',
+        `DECLARED_WORK_AUTHORITY_REQUIRED: Run ${run ? run.id : '?'} carries ` +
+          'objectiveRevision authority without immutable declared-work evidence'
+      );
+    }
+    return declaredWorkOutcome(declared.snapshot);
+  }
   const declared = projectDeclaredWorkForRun(run);
-  if (!declared.snapshot) {
+  if (declared.snapshot) {
+    return declaredWorkOutcome(declared.snapshot);
+  }
+  return {
+    source: 'legacy-ticket-compatibility',
+    availability: declared.availability,
+    declaredWork: null,
+    objectiveText: ticket ? ticket.objective : null,
+    acceptanceCriteria: ticket && ticket.acceptanceCriteria != null
+      ? ticket.acceptanceCriteria
+      : null
+  };
+}
+
+function declaredWorkOutcome(snapshot) {
+  const ticketAuthoredCriterion = snapshot.successCriteria.find(item =>
+    item.kind === 'text' && item.provenance === 'ticket-authored');
+  return {
+    source: 'declared-work',
+    availability: 'available',
+    declaredWork: snapshot,
+    objectiveText: snapshot.objective.text,
+    acceptanceCriteria: ticketAuthoredCriterion
+      ? ticketAuthoredCriterion.declaration
+      : null
+  };
+}
+
+function buildAdmittedTicketProjection(run, ticket) {
+  const executed = resolveExecutedRequestedOutcome(run, ticket);
+  if (executed.source !== 'declared-work') {
     return {
       ...(ticket || {}),
       declaredWork: null,
-      declaredWorkAvailability: declared.availability
+      declaredWorkAvailability: executed.availability
     };
   }
-  const declaredWork = projectDeclaredWorkForModel(declared.snapshot);
-  const ticketAuthoredCriterion = declaredWork.successCriteria.find(item =>
-    item.kind === 'text' && item.provenance === 'ticket-authored');
   return {
     ...(ticket || {}),
-    objective: declaredWork.objective.text,
-    acceptanceCriteria: ticketAuthoredCriterion
-      ? ticketAuthoredCriterion.declaration
-      : null,
-    declaredWork,
-    declaredWorkAvailability: declared.availability
+    objective: executed.objectiveText,
+    acceptanceCriteria: executed.acceptanceCriteria,
+    declaredWork: projectDeclaredWorkForModel(executed.declaredWork),
+    declaredWorkAvailability: executed.availability
   };
 }
 
@@ -22741,6 +22913,7 @@ async function runAgentTicket(runId) {
     await reconcileRunBudgetReservations(run);
     runtimeBudgetController.assertDuration(run);
     const promptTicket = buildAdmittedTicketProjection(run, ticket);
+    const governedLeafRun = Boolean(run && run.leafRunBinding && run.governedExecution);
     providerConfig = getAgentProviderConfig(agent);
     const runtimeLimitsSnapshot = getRunRuntimeLimitsSnapshot(
       run,
@@ -23120,30 +23293,41 @@ async function runAgentTicket(runId) {
       // The writer itself returns null for any Run that is not a governed
       // structured leaf Run, so no second provider-path decision is made here —
       // one dispatch policy, one call site.
+      let governedBaselinePostcondition = null;
       if (!governedBaselineRecorded && !isBrowserRun(run)) {
-        await persistGovernedPostconditionEvidence(run, { evaluationKind: 'baseline' });
+        const persistedBaseline = await persistGovernedPostconditionEvidence(
+          run, { evaluationKind: 'baseline' });
+        governedBaselinePostcondition = buildGovernedCompletionReplayClaim(
+          run, persistedBaseline);
         governedBaselineRecorded = true;
       }
       if (!isBrowserRun(run) && !resumedFromPersistedState) {
         const obviousPostcondition = compiledContract
           ? checkObjectiveContractPostcondition(compiledContract)
-          : checkObviousTicketPostcondition(ticket);
-        if (obviousPostcondition) {
-          await recordRunEvent(run, 'run:postcondition_completed', obviousPostcondition.reason, {
+          : checkObviousTicketPostcondition(promptTicket);
+        const preModelPostcondition = governedLeafRun
+          ? governedBaselinePostcondition
+          : obviousPostcondition;
+        if (preModelPostcondition) {
+          await recordRunEvent(run, 'run:postcondition_completed', preModelPostcondition.reason, {
             step,
             mutatingActionCount: 0,
-            checkedPaths: obviousPostcondition.checkedPaths,
-            source: 'pre_model'
+            checkedPaths: preModelPostcondition.checkedPaths,
+            source: governedLeafRun ? 'governed_postcondition_evidence' : 'pre_model',
+            ...(preModelPostcondition.governedPostconditionEvidence
+              ? { governedPostconditionEvidence:
+                  preModelPostcondition.governedPostconditionEvidence }
+              : {})
           });
-          if (obviousPostcondition.absentDelete) {
+          if (preModelPostcondition.absentDelete) {
             await appendEvent({
               type: 'workspace.delete_target_already_absent',
               ticketId: run.ticketId,
               runId: run.id,
               stepId: String(step),
               payload: {
-                paths: obviousPostcondition.checkedPaths.map(check => check.path),
-                reason: obviousPostcondition.reason,
+                paths: preModelPostcondition.checkedPaths.map(check => check.path),
+                reason: preModelPostcondition.reason,
                 executed: false,
                 mutationCommitted: false
               }
@@ -24195,7 +24379,7 @@ async function runAgentTicket(runId) {
           const opDurationMs = Date.now() - actionStartedAt;
           const canRetryPriorOwnerConflict = isRecoverablePriorArtifactOwnerConflict(
             error,
-            ticket,
+            promptTicket,
             modelRequestCount,
             step,
             limits
@@ -24206,7 +24390,7 @@ async function runAgentTicket(runId) {
           // paths out of that message, and "the file is missing" must stay
           // distinguishable from "the path is the wrong type" however it is worded.
           actionResults.push(canRetryPriorOwnerConflict
-            ? { action, ...buildPriorArtifactOwnerRetryResult(error, ticket) }
+            ? { action, ...buildPriorArtifactOwnerRetryResult(error, promptTicket) }
             : {
                 action,
                 error: error.message,
@@ -24301,7 +24485,11 @@ async function runAgentTicket(runId) {
 
       listPathsThisStep.forEach(listedPath => listedDirectoryPaths.add(listedPath));
 
-      if (!modelPlan.complete &&
+      // Governed structured leaves have immutable admitted direct
+      // postconditions. Workflow-draft prose cannot terminate one before the
+      // persisted governed evaluator has assembled the evidence those
+      // postconditions require.
+      if (!governedLeafRun && !modelPlan.complete &&
           isWorkflowDraftObjective(promptTicket.objective) &&
           hasSuccessfulWorkflowDraftAction(actionResults)) {
         await recordRunEvent(run, 'workflow.draft_objective_satisfied', 'Workflow draft objective satisfied by created disabled draft', {
@@ -24312,7 +24500,12 @@ async function runAgentTicket(runId) {
         break;
       }
 
-      if (!isBrowserRun(run) && !resumedFromPersistedState && !modelPlan.complete && await isDirectWorkspaceObjectiveSatisfied(run, ticket, actionResults)) {
+      // The successful-mutation shortcut is legitimate for ordinary direct
+      // Runs, but it is not completion authority for a governed leaf. Let that
+      // leaf reach the post-batch persisted-evidence adapter below instead.
+      if (!governedLeafRun && !isBrowserRun(run) && !resumedFromPersistedState &&
+          !modelPlan.complete &&
+          await isDirectWorkspaceObjectiveSatisfied(run, promptTicket, actionResults)) {
         await recordRunEvent(run, 'workspace.objective_satisfied', 'Workspace objective satisfied by successful mutation evidence', {
           step,
           source: 'successful_workspace_mutation',
@@ -24379,15 +24572,18 @@ async function runAgentTicket(runId) {
       // receipts and each admitted fact is evaluated against the resulting
       // workspace state. This runs before the presentation claim below, which
       // remains non-authoritative.
+      let governedPostcondition = null;
       if (!isBrowserRun(run)) {
-        await persistGovernedPostconditionEvidence(run, {
+        const persistedPostconditionEvidence = await persistGovernedPostconditionEvidence(run, {
           evaluationKind: 'post_batch',
           batchStepId: String(step),
           requestSourceIdentity: `model-request:agent:${step}:provider`
         });
+        governedPostcondition = buildGovernedCompletionReplayClaim(
+          run, persistedPostconditionEvidence);
       }
       const compiledPostcondition = isBrowserRun(run) ? null : checkObjectiveContractPostcondition(compiledContract);
-      const declaredDirectPostcondition = isBrowserRun(run) ? null : checkObviousTicketPostcondition(ticket);
+      const declaredDirectPostcondition = isBrowserRun(run) ? null : checkObviousTicketPostcondition(promptTicket);
       // A REDUNDANT ACTION IS NOT EVIDENCE OF COMPLETION FOR A GOVERNED RUN.
       //
       // `checkPostconditionCompletion` carries a last-resort heuristic: if the
@@ -24403,16 +24599,17 @@ async function runAgentTicket(runId) {
       // ever prepare request 2 — discarding verified progress that was already
       // durable while a declared fact was still false.
       //
-      // A governed leaf Run has a better answer available and must use it: its
-      // admitted declared facts, evaluated by the same authority that owns
-      // completion. So the heuristic is simply not consulted here. The two
-      // authoritative sources above are unchanged.
-      const governedLeafRun = Boolean(run && run.leafRunBinding && run.governedExecution);
-      const postcondition = compiledPostcondition ||
-        declaredDirectPostcondition ||
-        (isBrowserRun(run) || governedLeafRun
-          ? null
-          : await checkPostconditionCompletion(run, actions, actionResults, step));
+      // A governed leaf Run has a better answer available and must use it: one
+      // complete persisted set for its admitted declared facts, evaluated by the
+      // same authority that owns completion. So neither the heuristic nor a live
+      // filesystem postcondition shortcut supplies its completion claim.
+      const postcondition = governedLeafRun
+        ? governedPostcondition
+        : compiledPostcondition ||
+          declaredDirectPostcondition ||
+          (isBrowserRun(run)
+            ? null
+            : await checkPostconditionCompletion(run, actions, actionResults, step));
       if (postcondition) {
         await recordRunEvent(run, 'run:postcondition_completed', postcondition.reason, {
           step,
@@ -24420,11 +24617,17 @@ async function runAgentTicket(runId) {
           checkedPaths: Array.isArray(postcondition.checkedPaths)
             ? postcondition.checkedPaths
             : [],
-          source: compiledPostcondition
-            ? 'deterministic_objective_contract'
-            : declaredDirectPostcondition
-              ? 'declared_direct_postcondition'
-              : 'redundant_operation'
+          source: governedLeafRun
+            ? 'governed_postcondition_evidence'
+            : compiledPostcondition
+              ? 'deterministic_objective_contract'
+              : declaredDirectPostcondition
+                ? 'declared_direct_postcondition'
+                : 'redundant_operation',
+          ...(postcondition.governedPostconditionEvidence
+            ? { governedPostconditionEvidence:
+                postcondition.governedPostconditionEvidence }
+            : {})
         });
         completed = true;
         break;

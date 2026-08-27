@@ -8638,3 +8638,116 @@ correctly refuses.
 ---
 
 *Corrupted Replay Snapshot Recovery Loop recorded, diagnosed and closed 2026-08-03 by scripts/governed-replay-corruption-postgres-test.js. Ticket Projection Over Failed Leaf recorded and closed 2026-08-03. Run Detail Page Over Corrupt Transcript recorded and closed 2026-08-03. Replay-Availability Field Unasserted recorded and closed 2026-08-03. Duplicate Terminal-Leaf Derivations recorded and closed 2026-08-03 (one shared authority, both consumers). Governed Lifecycle Transport-Count Flake recorded and closed 2026-08-03 (fixture arrival counter conflated with canonical ordinal). Intermittent Guard Mutation Limit recorded and closed 2026-08-03 (deterministic correlation contract). Fixture Crash Boundary Arrival Counter recorded and closed 2026-08-03. Parent-Fixture Hash Handshake recorded and closed as NOT REQUIRED 2026-08-03. Concurrent-Duplicate Misclassification regression recorded and closed 2026-08-03 by claim-epoch classification. Malformed Success Persistence Resistance recorded 2026-08-03. Replayed Recovery Window Churn recorded and resolved 2026-08-02. Governed Request Delivery Uncertainty recorded and resolved 2026-08-02. Governed Response-Hash Tamper recorded 2026-08-02. Workspace Operation Error Handling recorded 2026-05-28. Event Log Stream Semantics merged 2026-06-12 from `UNRESOLVED_EVENT_LOG_QUESTIONS.md` (2026-05-28). complete:true Under Per-Response Action Caps recorded 2026-06-18, ported to this document 2026-07-16. Structured Allocation Leaf-Run Retry Boundary recorded 2026-07-31. Governed No-Progress Refusal Coverage recorded and closed 2026-08-02. Recovered Governed Run Resume recorded and closed 2026-08-02 by scripts/governed-authorized-restart-postgres-test.js by scripts/governed-no-progress-withholding-postgres-test.js.*
+
+## T3-C Executed-Intent Reader Closure — one resolver seam, legacy compatibility rule, fail-closed authority (recorded 2026-08-26)
+
+**Status:** Implemented in the working tree on top of frozen T3-a/T3-b; owned
+by `scripts/t3c-reader-closure-postgres-test.js` (registered required in the
+test manifest and release checkpoint). No migration and no storage change.
+
+**1. One repository-owned executed-intent seam.** Post-admission readers do not
+each re-derive Run intent. `resolveExecutedRequestedOutcome(run, ticket)` in
+server.js answers exactly "What immutable requested outcome belongs to this
+Run?": declared work when `projectDeclaredWorkForRun` yields a snapshot
+(objective text plus the ticket-authored success criterion as executed
+acceptanceCriteria); otherwise the rules below. `buildAdmittedTicketProjection`
+is now a thin consumer of the same seam, so prompt/runtime/completion readers
+that already consumed `promptTicket` needed no edits.
+
+**2. Post-T3 missing/malformed authority fails closed.** A Run carrying
+`objectiveRevision` authority that lacks coherent immutable declared work is an
+integrity failure, not a fallback opportunity: the seam throws
+`DeclaredWorkContractError('DECLARED_WORK_AUTHORITY_REQUIRED')` (malformed
+snapshots already throw through normalization/binding validation). A PRESENT but
+malformed pointer is likewise corrupted state, never legacy history: revision
+authority is classified FIRST through the frozen T3-a `validatePointer`, so a
+noncanonical pointer throws
+`DeclaredWorkContractError('DECLARED_WORK_REVISION_AUTHORITY_MALFORMED')` and
+cannot ride on an otherwise-usable declared-work snapshot. The stop boundary
+refuses, terminalization does not fabricate replay evidence, and the Run is left
+un-terminalized rather than evidenced against current Ticket intent. No new
+taxonomy was invented — existing declared-work and T3 pointer-integrity
+semantics carry the refusal.
+
+**3. Legacy Runs: recovered write-once compatibility rule.** Pre-T3 Runs — those
+whose Run-level objectiveRevision authority is GENUINELY ABSENT (null/absent
+field), as opposed to present-but-malformed — legitimately have
+historically-unavailable executed intent
+(existing `projectDeclaredWorkForRun` availability semantics; successful 042
+guarantees revision authority for every TICKET but cannot retroactively stamp
+RUNS admitted before T3). For such Runs the interrupted/terminal-repair replay
+captures then-current Ticket intent AT WRITE TIME, records
+`declaredWorkAvailability: 'historical-unavailable'`, and is never retroactively
+re-read or rewritten by later revisions. This is captured-at-interrupt evidence,
+not a claim that current Ticket intent is historical truth. No migration was
+created for pre-T3 Runs.
+
+**4. Readers changed vs deliberately untouched.** Changed to consume the Run's
+immutable projection/seam: the two `checkObviousTicketPostcondition` completion
+shortcuts in `runAgentTicket`, `isDirectWorkspaceObjectiveSatisfied`, the
+prior-artifact-owner retry decision/corrective feedback, `createRunReplaySnapshot`,
+`ensureInterruptedRunReplaySnapshot`, `ensureFailedRunReplaySnapshot`, and the
+missing-replay fabrication branch of `reconcileTerminalRunUnlocked`. Deliberately
+untouched: pre-admission feasibility/allocation/admission-gate readers (current
+intent is the correct authority before admission), workflow routing identity,
+and presentation/diagnostic renderings that display current Ticket state next to
+Run snapshots with explicit labels.
+
+Recorded 2026-08-26 as the T3-c implementation candidate; independent
+implementation review accepted and T3 semantic closure supported; canonical
+release acceptance remains pending.
+
+**5. Post-review finding: governed completion evidence adapter.** The canonical
+checkpoint's governed verified-progress lifecycle owner exposed that the old
+post-batch `checkObviousTicketPostcondition(ticket)` call had made a structured
+leaf completable by re-parsing mutable parent-Ticket intent. The accepted T3-c
+change to `promptTicket` correctly removed that invalid authority, but revealed
+that `completion-decision-contract` still received direct postcondition input
+only through replay `run:postcondition_completed` observations even after the
+same canonical evaluator had committed a complete governed evidence set.
+
+The bounded correction stays in server assembly, before terminalization. For a
+governed structured leaf only, `buildGovernedCompletionReplayClaim` translates
+one atomically persisted evidence set into the existing replay claim shape when
+and only when it has exactly one satisfied verdict for every immutable
+`eligibleExecutionFacts(run)` criterion and every Run, Ticket, plan, item,
+governed-policy, completion-authority, evaluator and request-window binding
+agrees. Malformed evidence throws through existing normalization; incomplete,
+unsatisfied, foreign or stale evidence produces no completion claim. The claim
+records the supporting evidence ids/hashes, so the unchanged completion
+decision's required-evidence hash binds the exact persisted rows. It does not
+parse Ticket intent or inspect the filesystem, creates no new evidence format,
+and changes no completion vocabulary, precedence, leaf mapping, attempt
+settlement or migration identity.
+
+**6. Review status.** This correction is a substantive post-review finding and
+does not close T3-c or authorize a release checkpoint. Focused finding-closure
+review remains required. During focused verification, the first T3-c owner
+invocation observed `Run.status = completed` before its separate Ticket
+settlement transaction advanced the Ticket revision, then attempted objective
+revision with the stale generic revision and raised `OptimisticConcurrencyError`.
+An unchanged second invocation passed all 42 assertions. The completion-evidence
+correction does not execute for that non-governed Run; the owner synchronization
+observation remains recorded rather than being hidden or repaired in this
+bounded change.
+
+**7. Independent medium-finding correction status.** Independent finding-
+closure review accepted the adapter's internal evidence binding but found two
+separate medium defects. The production defect is corrected: a governed leaf
+with a direct-write-style immutable leaf objective could still take the pre-
+adapter workflow-draft or successful-workspace-mutation terminal shortcut.
+`runAgentTicket` now excludes governed structured leaves from those two ordinary-
+Run heuristics, so they reach persisted governed postcondition assembly and can
+complete only through the existing `run:postcondition_completed` input produced
+from a complete admitted fact set. The ordinary non-governed heuristics are
+unchanged.
+
+The original S1 correction predicate was rejected as over-constrained. This
+owner's existing scenario truthfully settles Run `completed`, attempt
+disposition `blocked`, and Ticket status `blocked`; neither the fixture nor the
+product is changed to force another outcome. Synchronization now waits for the
+exact Run's current attempt to acquire any non-null write-once disposition plus
+`settledAt`. Only after observing that durable attempt boundary does the owner
+fetch the Ticket and consume the fresh post-settlement revision. Product and
+fixture settlement semantics are unchanged. T3 semantic closure and release
+acceptance remain pending narrow finding-closure review.
