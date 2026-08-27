@@ -641,9 +641,15 @@ function methods() {
              clock_timestamp() + ($7::bigint * interval '1 millisecond')
            )
            ON CONFLICT (run_id) DO UPDATE
-             SET next_eligible_at = EXCLUDED.next_eligible_at,
+             SET capacity_domain = EXCLUDED.capacity_domain,
+                 resource_key = EXCLUDED.resource_key,
+                 source_identity = EXCLUDED.source_identity,
+                 reason = EXCLUDED.reason,
+                 next_eligible_at = EXCLUDED.next_eligible_at,
                  updated_at = clock_timestamp(),
-                 revision = current_wait.revision + 1
+                 revision = current_wait.revision + 1,
+                 active = true,
+                 first_blocked_at = clock_timestamp()
              WHERE current_wait.active = false OR
                current_wait.capacity_domain <> EXCLUDED.capacity_domain OR
                current_wait.resource_key <> EXCLUDED.resource_key
@@ -802,15 +808,21 @@ function methods() {
                $1, $2, $3, $4, $5, $6,
                clock_timestamp() + ($7::bigint * interval '1 millisecond')
              )
-             ON CONFLICT (run_id) DO UPDATE
-               SET next_eligible_at = EXCLUDED.next_eligible_at,
-                   updated_at = clock_timestamp(),
-                   revision = current_wait.revision + 1
-               WHERE current_wait.active = false OR
-                 current_wait.capacity_domain <> EXCLUDED.capacity_domain OR
-                 current_wait.resource_key <> EXCLUDED.resource_key OR
-                 current_wait.source_identity <> EXCLUDED.source_identity
-             RETURNING (xmax = 0) AS inserted`,
+            ON CONFLICT (run_id) DO UPDATE
+              SET capacity_domain = EXCLUDED.capacity_domain,
+                  resource_key = EXCLUDED.resource_key,
+                  source_identity = EXCLUDED.source_identity,
+                  reason = EXCLUDED.reason,
+                  next_eligible_at = EXCLUDED.next_eligible_at,
+                  updated_at = clock_timestamp(),
+                  revision = current_wait.revision + 1,
+                  active = true,
+                  first_blocked_at = clock_timestamp()
+              WHERE current_wait.active = false OR
+                current_wait.capacity_domain <> EXCLUDED.capacity_domain OR
+                current_wait.resource_key <> EXCLUDED.resource_key OR
+                current_wait.source_identity <> EXCLUDED.source_identity
+            RETURNING (xmax = 0) AS inserted`,
             [
               id,
               ticketId,

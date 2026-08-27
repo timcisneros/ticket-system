@@ -378,6 +378,10 @@ const TESTS = Object.freeze([
   { file: "scheduler-observability-test.js", status: "required" },
   { file: "startup-data-integrity-test.js", status: "required" },
   { file: "status-transition-evidence-test.js", status: "required" },
+  // T5 — the dedicated cross-boundary semantic owner for the frozen waiting/
+  // deferral kernel. Real PostgreSQL; machinery itself is owned by
+  // runtime-budget-postgres-test.js above.
+  { file: "t5-waiting-boundary-postgres-test.js", status: "required" },
   { file: "structured-allocation-activation-retirement-postgres-test.js", status: "required" },
   { file: "structured-allocation-leaf-run-contract-test.js", status: "required" },
   { file: "structured-allocation-leaf-run-postgres-test.js", status: "required" },

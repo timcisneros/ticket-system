@@ -9409,10 +9409,10 @@ The bootstrap entry above remains the inventory authority; status against the fr
 
 ### T5 implementation obligation — run_capacity_waits active flag does not reactivate
 
-**Status:** OPEN IMPLEMENTATION / EVIDENCE DEFECT; NOT A SEMANTIC-FREEZE BLOCKER; MUST CLOSE
-BEFORE T5 OPERATIONAL CLOSURE.
+**Status:** CLOSED — IMPLEMENTATION / EVIDENCE DEFECT REPAIRED AND INDEPENDENTLY REVIEWED
+(HIGH = 0, MEDIUM = 0, LOW = 0). History below is preserved unchanged for a fresh model.
 
-Verified source truth:
+Verified source truth (pre-repair):
 
 - `active = true` exists only as the INSERT default (`run_capacity_waits`, migration 030).
 - Both conflict-update/re-wait writers (`recordPendingRunCapacityWait` and the
@@ -9426,7 +9426,7 @@ Verified source truth:
   1. budgeted Run pre-lease block -> claim/deactivate -> requeue/resume -> blocks again;
   2. same Run acquires one resource -> row deactivates -> later waits for another resource.
 
-Consequences:
+Consequences (pre-repair):
 
 - `getRunBudgetState` may expose `capacityWait.active = false` while the Run is currently
   waiting.
@@ -9434,9 +9434,66 @@ Consequences:
 - This is mechanism/evidence corruption, NOT T5 semantic authority. `active` is NOT promoted
   into T5 semantics.
 
-Closure requirement: implementation must repair or replace the stale-active evidence/mechanism
-and supply deterministic + PostgreSQL owner proof before T5 can be declared operationally
-closed. The fix is NOT prescribed by this freeze.
+Original closure requirement: implementation must repair or replace the stale-active
+evidence/mechanism and supply deterministic + PostgreSQL owner proof before T5 can be declared
+operationally closed. The fix is NOT prescribed by this freeze.
+
+Closure evidence (independent implementation review returned HIGH = 0 / MEDIUM = 0 / LOW = 0):
+
+- Production repair — `persistence/postgres/runtime-budget-methods.js`: both
+  `recordPendingRunCapacityWait` and the `acquireRuntimeCapacity` wait upsert now make every
+  qualifying new/re-activated wait row describe the CURRENT wait episode by updating
+  `capacity_domain`, `resource_key`, `source_identity`, `reason`, `next_eligible_at`,
+  `updated_at`, `revision` (exactly +1, trigger-enforced), `active = true`, and
+  `first_blocked_at` = current episode start. Repeated polling of the same already-active
+  wait remains idempotent. Mechanism coherence follows the separately recorded
+  RECORDED IMPLEMENTATION-MECHANISM DECISION — run_capacity_waits is the
+  current-wait-episode snapshot (below); `active` remains mechanism/evidence state, NOT
+  broad-T5 semantic authority.
+- Mechanism owner — `scripts/runtime-budget-postgres-test.js`: owns initial active wait,
+  deactivation, same-identity reactivation, changed-identity reactivation for BOTH writers,
+  current identity/cause coherence, exact revision behavior, no duplicate event/revision churn
+  on repeated polling of the new identity, `first_blocked_at` episode behavior,
+  `getRunBudgetState` current identity, actual-resource waiter recognition, and no false
+  blocking on the stale prior resource.
+- Frozen-T5 cross-boundary owner — `scripts/t5-waiting-boundary-postgres-test.js`: owns
+  already-admitted attempt-member deferral, no new attempt/settlement/lifecycle mutation,
+  UNKNOWN/null without evidence, coherent current capacity evidence, `next_eligible_at`
+  non-authority, two-phase distinction, changed-identity idempotence boundary, and restart
+  truthfulness of the CURRENT wait identity.
+- Vocabulary owner — `scripts/runtime-budget-contract-test.js`: pins the existing
+  `failureKind` mapping without making `capacity_backpressure` canonical T5 occupancy
+  semantics.
+- Manifest/checkpoint ownership — `scripts/test-manifest.js` and `scripts/release-checkpoint.js`
+  register the dedicated T5 PostgreSQL owner exactly once as required.
+
+### RECORDED IMPLEMENTATION-MECHANISM DECISION — run_capacity_waits is the current-wait-episode snapshot
+
+**Status:** RECORDED IMPLEMENTATION-MECHANISM DECISION; NOT BROAD-T5 SEMANTIC AUTHORITY.
+Recorded during the T5 active-reactivation implementation because repository authority was
+insufficient to define `first_blocked_at` across a changed/re-activated wait. This decision
+owns mechanism coherence only; it introduces NO FIFO, fairness, seniority, or starvation
+policy and does not modify T5-I1..T5-I10.
+
+`run_capacity_waits` is the durable CURRENT-WAIT-EPISODE snapshot for one Run (one row per
+Run, primary key `run_id`). Append-only `capacity.waiting` events provide historical wait
+evidence. Therefore:
+
+1. When the existing conflict-update predicate qualifies because a new/re-activated wait
+   episode is being recorded, the row must describe the CURRENT wait: `active = true`,
+   current identity/cause fields match the current writer input, and `first_blocked_at`
+   begins the NEW current wait episode.
+2. Repeated polling of the SAME already-active current wait remains idempotent: no row
+   update, `first_blocked_at` stable, no revision churn, no duplicate `capacity.waiting`
+   event.
+3. `first_blocked_at` is mechanism state only. It is NOT broad-T5 FIFO/fairness/seniority
+   authority.
+4. A Run may not carry old wait-episode seniority into a new wait episode merely because
+   the same `run_id` row is reused.
+
+This decision does NOT by itself close the active-reactivation obligation above; that
+obligation is CLOSED (see above) following the independent finding-closure re-review, with
+this decision recorded as its mechanism-coherence basis.
 
 ### Implementation boundary
 

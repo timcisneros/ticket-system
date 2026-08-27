@@ -296,6 +296,9 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'runtime-limits-config-test.js',
   'runtime-limits-ui-test.js',
   'runtime-budget-postgres-test.js',
+  // T5 — the dedicated cross-boundary semantic owner for the frozen waiting/
+  // deferral kernel (capacity machinery itself is owned directly above).
+  't5-waiting-boundary-postgres-test.js',
   'renamepath-runtime-regression-test.js',
   // A20 — the two confirmed orphans repaired in this tranche, plus two suites that
   // already exercised the PostgreSQL store and were nonetheless unregistered.

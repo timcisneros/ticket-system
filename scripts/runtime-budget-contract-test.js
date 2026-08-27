@@ -156,6 +156,25 @@ for (const code of [
   ok(RUNTIME_BUDGET_FAILURE_CODES.includes(code), `typed failure is frozen: ${code}`);
 }
 
+// T5-I7 vocabulary guard: the failureKind strings are non-canonical mechanism
+// vocabulary. 'capacity_backpressure' covers capacity-machinery errors and
+// target/launcher capacity refusals — it must never be reinterpreted as
+// canonical ordinary-capacity-occupancy or budget-exhaustion semantics.
+for (const [code, expectedKind] of [
+  ['RUN_BUDGET_EXHAUSTED', 'runtime_budget_exhausted'],
+  ['RUN_RUNTIME_DURATION_EXCEEDED', 'runtime_duration_exhausted'],
+  ['RUN_FEASIBILITY_REJECTED', 'deterministic_infeasibility'],
+  ['RUNTIME_CAPACITY_UNAVAILABLE', 'capacity_backpressure'],
+  ['RUNTIME_CAPACITY_LEASE_CONFLICT', 'capacity_backpressure'],
+  ['RUNTIME_CAPACITY_RECONCILIATION_FAILED', 'capacity_backpressure'],
+  ['TARGET_CAPACITY_UNAVAILABLE', 'capacity_backpressure'],
+  ['PROCESS_LAUNCHER_CAPACITY_UNAVAILABLE', 'capacity_backpressure']
+]) {
+  const error = new RuntimeBudgetError('vocabulary guard', code);
+  ok(error.failureKind === expectedKind,
+    `${code} maps to the frozen non-canonical failureKind ${expectedKind}`);
+}
+
 const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 const storeSource = fs.readFileSync(
   path.join(__dirname, '..', 'persistence/postgres/runtime-budget-methods.js'),

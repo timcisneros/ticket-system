@@ -759,6 +759,549 @@ async function main() {
         operationIdentity: 'target-operation:reclaimed'
       });
 
+      // Durable capacity-wait row lifecycle (mechanism owner). A re-wait after
+      // prior deactivation must restore active=true so the row, the
+      // capacity.waiting evidence, getRunBudgetState, and the older-waiter
+      // selection all describe the same current truth. The row is the durable
+      // CURRENT-WAIT-EPISODE snapshot for one Run: every qualifying
+      // conflict-update makes identity, cause, and first_blocked_at describe
+      // the new current episode, while repeated polling of the SAME
+      // already-active wait stays idempotent. This pins the MECHANISM's
+      // evidence coherence; it asserts no ordering fairness.
+      const waitRowFor = async runId => {
+        const result = await store.pool.query(
+          `SELECT capacity_domain, resource_key, source_identity, reason,
+                  first_blocked_at, next_eligible_at, active, revision
+           FROM ${store.table('run_capacity_waits')} WHERE run_id = $1`,
+          [runId]
+        );
+        return result.rowCount === 1 ? result.rows[0] : null;
+      };
+      const waitingEventCount = async runId => {
+        const result = await store.listRunEvents(runId);
+        return result.filter(event => event.type === 'capacity.waiting').length;
+      };
+
+      const mechSerialSnapshot = budget({
+        executionPolicy: { allowParallelRuns: false }
+      });
+      const mechSerialTicket = await createTicket(store, capacityAgent, 'Wait-row serial');
+      const mechAdmission = await store.createRunsAndStartTicket({
+        ticketId: mechSerialTicket.id,
+        runDrafts: [capacityAgent, capacityAgent].map(memberAgent => ({
+          ticketId: mechSerialTicket.id,
+          agentId: memberAgent.id,
+          status: 'pending',
+          executionMode: 'agent',
+          runtimeBudgetSnapshot: mechSerialSnapshot
+        }))
+      });
+      const [mechHolder, mechWaiter] = mechAdmission.runs;
+      check(Boolean(await claim(store, mechHolder, 'mech-holder-one')),
+        'wait-row fixture holder occupies the serialized ticket active slot');
+      const firstWait = await store.recordPendingRunCapacityWait({
+        runId: mechWaiter.id,
+        retryMs: 500
+      });
+      check(Boolean(firstWait), 'a genuinely blocked budgeted run records a capacity wait');
+      const insertedRow = await waitRowFor(mechWaiter.id);
+      check(insertedRow && insertedRow.active === true && Number(insertedRow.revision) === 1,
+        'initial genuine capacity wait records an active row at revision 1');
+      const firstWaitState = await store.getRunBudgetState(mechWaiter.id);
+      check(firstWaitState.capacityWait && firstWaitState.capacityWait.active === true &&
+        firstWaitState.capacityWait.capacityDomain === 'global_run',
+      'getRunBudgetState reports the initial wait as coherent active evidence');
+      const firstWaitingEvents = await waitingEventCount(mechWaiter.id);
+      const repeatedWait = await store.recordPendingRunCapacityWait({
+        runId: mechWaiter.id,
+        retryMs: 500
+      });
+      check(Boolean(repeatedWait), 'repeated polling still observes the occupied condition');
+      const afterRepeatRow = await waitRowFor(mechWaiter.id);
+      check(afterRepeatRow.active === true && Number(afterRepeatRow.revision) === 1,
+        'repeated identical polling while active performs no revision churn');
+      check(afterRepeatRow.first_blocked_at.getTime() ===
+        insertedRow.first_blocked_at.getTime(),
+      'repeated identical polling while active keeps first_blocked_at stable');
+      check((await waitingEventCount(mechWaiter.id)) === firstWaitingEvents,
+        'repeated identical polling while active emits no duplicate waiting event');
+
+      await store.releaseRunLease({
+        runId: mechHolder.id,
+        leaseOwner: 'mech-holder-one',
+        payload: { reason: 'wait-row deactivation fixture' }
+      });
+      check(Boolean(await claim(store, mechWaiter, 'mech-waiter-one')),
+        'freed serialization lets the waiting run claim its lease');
+      const claimedRow = await waitRowFor(mechWaiter.id);
+      check(claimedRow.active === false && Number(claimedRow.revision) === 2,
+        'successful claim deactivates the wait row and advances revision exactly once');
+
+      await store.releaseRunLease({
+        runId: mechWaiter.id,
+        leaseOwner: 'mech-waiter-one',
+        payload: { reason: 'wait-row re-wait fixture' }
+      });
+      check(Boolean(await claim(peer, mechHolder, 'mech-holder-two')),
+        'the holder claims again once the waiter released its lease');
+      check((await claim(store, mechWaiter, 'mech-waiter-two')) === null,
+        'the released waiter is capacity-blocked again before its re-wait');
+      const reactivated = await store.recordPendingRunCapacityWait({
+        runId: mechWaiter.id,
+        retryMs: 500
+      });
+      check(Boolean(reactivated), 'the released waiter records a genuine re-wait');
+      const reactivatedRow = await waitRowFor(mechWaiter.id);
+      check(reactivatedRow.active === true && Number(reactivatedRow.revision) === 3,
+        'a genuine re-wait restores active=true and advances revision exactly once');
+      check(reactivatedRow.first_blocked_at.getTime() >
+        insertedRow.first_blocked_at.getTime(),
+      'same-identity re-wait begins a new episode: first_blocked_at resets');
+      check((await waitingEventCount(mechWaiter.id)) === firstWaitingEvents + 1,
+        're-wait emits one truthful new capacity.waiting event');
+      const reactivatedState = await store.getRunBudgetState(mechWaiter.id);
+      check(reactivatedState.capacityWait && reactivatedState.capacityWait.active === true &&
+        reactivatedState.capacityWait.capacityDomain === 'global_run',
+      'getRunBudgetState reports the re-wait as coherent active evidence again');
+
+      // Changed scheduler identity across episodes (writer 1). The shared
+      // runtime-limit configuration is narrowed for this fixture and restored
+      // in the finally block, making the global deployment identity reachable
+      // for the re-wait. The fixture first waits on ticket serialization,
+      // deactivates by claiming, then genuinely re-waits on the global
+      // deployment identity; the row must describe the CURRENT episode.
+      const savedSchedulerLimits = await store.getRuntimeLimitsConfig();
+      let fillerWave = null;
+      try {
+        const schedTicket = await createTicket(store, capacityAgent,
+          'Wait-row scheduler identity');
+        const schedAdmission = await store.createRunsAndStartTicket({
+          ticketId: schedTicket.id,
+          runDrafts: [capacityAgent, capacityAgent].map(memberAgent => ({
+            ticketId: schedTicket.id,
+            agentId: memberAgent.id,
+            status: 'pending',
+            executionMode: 'agent',
+            runtimeBudgetSnapshot: mechSerialSnapshot
+          }))
+        });
+        const [schedHolder, schedWaiter] = schedAdmission.runs;
+        check(Boolean(await claim(store, schedHolder, 'sched-identity-holder')),
+          'scheduler-identity fixture holder occupies the serialized ticket');
+        check((await claim(store, schedWaiter, 'sched-identity-x')) === null,
+          'the scheduler-identity waiter is genuinely blocked pre-lease');
+        const schedWaitA = await store.recordPendingRunCapacityWait({
+          runId: schedWaiter.id,
+          retryMs: 500
+        });
+        check(Boolean(schedWaitA), 'the first scheduler wait episode records identity A');
+        const schedRowA = await waitRowFor(schedWaiter.id);
+        check(schedRowA && schedRowA.active === true &&
+          schedRowA.capacity_domain === 'global_run' &&
+          schedRowA.resource_key === `ticket:${schedTicket.id}` &&
+          schedRowA.reason === 'Ticket policy serializes active runs' &&
+          schedRowA.source_identity === `scheduler:${schedWaiter.id}`,
+        'identity A wait row is coherent with the serialization block');
+        const schedFirstBlockedA = schedRowA.first_blocked_at.getTime();
+        const schedEventsA = await waitingEventCount(schedWaiter.id);
+        await store.releaseRunLease({
+          runId: schedHolder.id,
+          leaseOwner: 'sched-identity-holder',
+          payload: { reason: 'scheduler identity fixture' }
+        });
+        check(Boolean(await claim(store, schedWaiter, 'sched-identity-live')),
+          'identity A clears and the waiter claims, deactivating its row');
+        const schedRowInactive = await waitRowFor(schedWaiter.id);
+        check(schedRowInactive.active === false,
+          'the identity A row is deactivated after the successful claim');
+        await store.releaseRunLease({
+          runId: schedWaiter.id,
+          leaseOwner: 'sched-identity-live',
+          payload: { reason: 'scheduler identity fixture' }
+        });
+        const fillerTicket = await createTicket(store, capacityAgent,
+          'Wait-row scheduler fillers');
+        fillerWave = await store.createRunsAndStartTicket({
+          ticketId: fillerTicket.id,
+          runDrafts: [capacityAgent, capacityAgent].map(memberAgent => ({
+            ticketId: fillerTicket.id,
+            agentId: memberAgent.id,
+            status: 'pending',
+            executionMode: 'agent',
+            runtimeBudgetSnapshot: budget()
+          }))
+        });
+        check(Boolean(await claim(store, fillerWave.runs[0], 'sched-filler-one')) &&
+          Boolean(await claim(store, fillerWave.runs[1], 'sched-filler-two')),
+        'two filler leases saturate the narrowed global active-run ceiling');
+        await setSchedulerLimits(store, { maxActiveRuns: 2 });
+        const schedWaitB = await store.recordPendingRunCapacityWait({
+          runId: schedWaiter.id,
+          retryMs: 500
+        });
+        check(Boolean(schedWaitB) && schedWaitB.resourceKey === 'deployment',
+          'the scheduler now blocks the waiter on the global deployment identity');
+        const schedRowB = await waitRowFor(schedWaiter.id);
+        check(schedRowB && schedRowB.active === true &&
+          schedRowB.capacity_domain === 'global_run' &&
+          schedRowB.resource_key === 'deployment' &&
+          schedRowB.reason === 'Global active-run capacity is occupied' &&
+          schedRowB.source_identity === `scheduler:${schedWaiter.id}`,
+        'the changed-identity re-wait makes the row describe identity B');
+        check(Number(schedRowB.revision) === Number(schedRowInactive.revision) + 1,
+          'the changed-identity re-wait advances revision exactly once');
+        check(schedRowB.first_blocked_at.getTime() > schedFirstBlockedA,
+          'the changed-identity re-wait begins a new first_blocked_at episode');
+        check((await waitingEventCount(schedWaiter.id)) === schedEventsA + 1,
+          'exactly one new capacity.waiting event describes identity B');
+        const schedStateB = await store.getRunBudgetState(schedWaiter.id);
+        check(schedStateB.capacityWait && schedStateB.capacityWait.active === true &&
+          schedStateB.capacityWait.resourceKey === 'deployment' &&
+          schedStateB.capacityWait.reason === 'Global active-run capacity is occupied',
+        'getRunBudgetState describes identity B, not the stale identity A');
+        check(schedStateB.capacityWait.resourceKey !== `ticket:${schedTicket.id}`,
+          'no stale active row remains on identity A');
+        await store.recordPendingRunCapacityWait({
+          runId: schedWaiter.id,
+          retryMs: 500
+        });
+        const schedRowPoll = await waitRowFor(schedWaiter.id);
+        check(schedRowPoll.active === true &&
+          Number(schedRowPoll.revision) === Number(schedRowB.revision) &&
+          schedRowPoll.first_blocked_at.getTime() ===
+            schedRowB.first_blocked_at.getTime() &&
+          schedRowPoll.resource_key === 'deployment',
+        'repeated polling of the SAME identity B stays idempotent');
+        check((await waitingEventCount(schedWaiter.id)) === schedEventsA + 1,
+          'repeated polling of the SAME identity B emits no duplicate event');
+      } finally {
+        await setSchedulerLimits(store, {
+          maxActiveRuns: savedSchedulerLimits.maxActiveRuns,
+          localModelConcurrency: savedSchedulerLimits.localModelConcurrency
+        });
+        if (fillerWave) {
+          await store.releaseRunLease({
+            runId: fillerWave.runs[0].id,
+            leaseOwner: 'sched-filler-one',
+            payload: { reason: 'scheduler identity fixture cleanup' }
+          });
+          await store.releaseRunLease({
+            runId: fillerWave.runs[1].id,
+            leaseOwner: 'sched-filler-two',
+            payload: { reason: 'scheduler identity fixture cleanup' }
+          });
+        }
+      }
+
+      const mechTicket = await createTicket(store, capacityAgent, 'Wait-row in-lease');
+      const mechWave = await store.createRunsAndStartTicket({
+        ticketId: mechTicket.id,
+        runDrafts: [capacityAgent, capacityAgent, capacityAgent].map(memberAgent => ({
+          ticketId: mechTicket.id,
+          agentId: memberAgent.id,
+          status: 'pending',
+          executionMode: 'agent',
+          runtimeBudgetSnapshot: budget()
+        }))
+      });
+      const [mechWinner, mechLoser, mechYounger] = mechWave.runs;
+      await claim(store, mechWinner, 'mech-runtime-winner');
+      await claim(store, mechLoser, 'mech-runtime-loser');
+      await claim(store, mechYounger, 'mech-runtime-younger');
+      check((await store.acquireRuntimeCapacity({
+        capacityDomain: 'target',
+        resourceKey: 'browser:mech-shared',
+        limit: 1,
+        leaseOwner: 'mech-runtime-winner',
+        runId: mechWinner.id,
+        operationIdentity: 'mech:first',
+        leaseDurationMs: 30_000,
+        sourceIdentity: 'mech:first'
+      })).acquired, 'in-lease fixture winner holds the single shared target slot');
+      check((await store.acquireRuntimeCapacity({
+        capacityDomain: 'target',
+        resourceKey: 'browser:mech-shared',
+        limit: 1,
+        leaseOwner: 'mech-runtime-loser',
+        runId: mechLoser.id,
+        operationIdentity: 'mech:second',
+        leaseDurationMs: 30_000,
+        sourceIdentity: 'mech:second'
+      })).acquired === false, 'in-lease fixture loser waits on the occupied shared slot');
+      const inLeaseWaitRow = await waitRowFor(mechLoser.id);
+      check(inLeaseWaitRow.active === true,
+        'in-lease capacity waiting records an active durable wait row');
+      await store.acquireRuntimeCapacity({
+        capacityDomain: 'target',
+        resourceKey: 'browser:mech-unrelated',
+        limit: 1,
+        leaseOwner: 'mech-runtime-loser',
+        runId: mechLoser.id,
+        operationIdentity: 'mech:unrelated',
+        leaseDurationMs: 30_000,
+        sourceIdentity: 'mech:unrelated'
+      });
+      check((await waitRowFor(mechLoser.id)).active === false,
+        'acquiring another resource deactivates the run stale wait row');
+      await store.releaseRuntimeCapacity({
+        capacityDomain: 'target',
+        resourceKey: 'browser:mech-unrelated',
+        slotNumber: (await store.pool.query(
+          `SELECT slot_number FROM ${store.table('runtime_capacity_slots')}
+           WHERE capacity_domain = 'target' AND resource_key = 'browser:mech-unrelated'
+             AND run_id = $1`,
+          [mechLoser.id]
+        )).rows[0].slot_number,
+        leaseOwner: 'mech-runtime-loser',
+        runId: mechLoser.id,
+        operationIdentity: 'mech:unrelated'
+      });
+      const loserRevisionBefore = (await waitRowFor(mechLoser.id)).revision;
+      check((await store.acquireRuntimeCapacity({
+        capacityDomain: 'target',
+        resourceKey: 'browser:mech-shared',
+        limit: 1,
+        leaseOwner: 'mech-runtime-loser',
+        runId: mechLoser.id,
+        operationIdentity: 'mech:second',
+        leaseDurationMs: 30_000,
+        sourceIdentity: 'mech:second'
+      })).acquired === false, 'the loser genuinely re-waits on the still-occupied shared slot');
+      const reactivatedInLease = await waitRowFor(mechLoser.id);
+      check(reactivatedInLease.active === true &&
+        Number(reactivatedInLease.revision) === Number(loserRevisionBefore) + 1,
+      'in-lease re-wait restores active=true with exactly one revision advance');
+      await store.releaseRuntimeCapacity({
+        capacityDomain: 'target',
+        resourceKey: 'browser:mech-shared',
+        slotNumber: (await store.pool.query(
+          `SELECT slot_number FROM ${store.table('runtime_capacity_slots')}
+           WHERE capacity_domain = 'target' AND resource_key = 'browser:mech-shared'
+             AND run_id = $1`,
+          [mechWinner.id]
+        )).rows[0].slot_number,
+        leaseOwner: 'mech-runtime-winner',
+        runId: mechWinner.id,
+        operationIdentity: 'mech:first',
+        reason: 'wait-row older-waiter fixture'
+      });
+      const younger = await store.acquireRuntimeCapacity({
+        capacityDomain: 'target',
+        resourceKey: 'browser:mech-shared',
+        limit: 1,
+        leaseOwner: 'mech-runtime-younger',
+        runId: mechYounger.id,
+        operationIdentity: 'mech:third',
+        leaseDurationMs: 30_000,
+        sourceIdentity: 'mech:third'
+      });
+      check(younger.acquired === false,
+        'with a free slot, the older-waiter mechanism still yields to the reactivated waiter');
+      const youngerWaitRow = await waitRowFor(mechYounger.id);
+      check(youngerWaitRow && youngerWaitRow.active === true,
+        'the blocked younger run records its own active wait row');
+
+      // Changed in-lease identity across episodes (writer 2). Old wait
+      // identity A -> deactivation -> genuine in-lease wait on DIFFERENT
+      // identity B -> repeated identical B polls stay idempotent. Also owns
+      // predecessor older-waiter truthfulness: after changed-identity
+      // reactivation the mechanism must see the waiter on the ACTUAL current
+      // resource B, and the stale resource A must not be falsely blocked.
+      const identTicket = await createTicket(store, capacityAgent,
+        'Wait-row changed identity');
+      const identWave = await store.createRunsAndStartTicket({
+        ticketId: identTicket.id,
+        runDrafts: [capacityAgent, capacityAgent, capacityAgent, capacityAgent]
+          .map(memberAgent => ({
+            ticketId: identTicket.id,
+            agentId: memberAgent.id,
+            status: 'pending',
+            executionMode: 'agent',
+            runtimeBudgetSnapshot: budget()
+          }))
+      });
+      const [identHolder, identLoser, identOther, identYounger] = identWave.runs;
+      check(Boolean(await claim(store, identHolder, 'ident-holder')) &&
+        Boolean(await claim(store, identLoser, 'ident-loser')) &&
+        Boolean(await claim(store, identOther, 'ident-other')) &&
+        Boolean(await claim(store, identYounger, 'ident-younger')),
+      'the changed-identity fixture admits and claims its four members');
+      check((await store.acquireRuntimeCapacity({
+        capacityDomain: 'target',
+        resourceKey: 'browser:ident-a',
+        limit: 1,
+        leaseOwner: 'ident-holder',
+        runId: identHolder.id,
+        operationIdentity: 'ident-holder:a',
+        leaseDurationMs: 30_000,
+        sourceIdentity: 'ident-holder:a'
+      })).acquired, 'identity A resource is occupied by the holder');
+      check((await store.acquireRuntimeCapacity({
+        capacityDomain: 'target',
+        resourceKey: 'browser:ident-b',
+        limit: 1,
+        leaseOwner: 'ident-other',
+        runId: identOther.id,
+        operationIdentity: 'ident-other:b',
+        leaseDurationMs: 30_000,
+        sourceIdentity: 'ident-other:b'
+      })).acquired, 'identity B resource is occupied by the other run');
+      check((await store.acquireRuntimeCapacity({
+        capacityDomain: 'target',
+        resourceKey: 'browser:ident-a',
+        limit: 1,
+        leaseOwner: 'ident-loser',
+        runId: identLoser.id,
+        operationIdentity: 'ident-loser:a',
+        leaseDurationMs: 30_000,
+        sourceIdentity: 'ident-loser:a'
+      })).acquired === false, 'the loser genuinely waits on identity A');
+      const identRowA = await waitRowFor(identLoser.id);
+      check(identRowA && identRowA.active === true &&
+        identRowA.resource_key === 'browser:ident-a' &&
+        identRowA.source_identity === 'ident-loser:a',
+      'identity A in-lease wait row records identity A coherently');
+      const identRevisionA = Number(identRowA.revision);
+      const identFirstBlockedA = identRowA.first_blocked_at.getTime();
+      const identEventsA = await waitingEventCount(identLoser.id);
+      check((await store.acquireRuntimeCapacity({
+        capacityDomain: 'target',
+        resourceKey: 'browser:ident-c',
+        limit: 1,
+        leaseOwner: 'ident-loser',
+        runId: identLoser.id,
+        operationIdentity: 'ident-loser:c',
+        leaseDurationMs: 30_000,
+        sourceIdentity: 'ident-loser:c'
+      })).acquired, 'acquiring a free third resource deactivates identity A');
+      const identRowInactive = await waitRowFor(identLoser.id);
+      check(identRowInactive.active === false &&
+        Number(identRowInactive.revision) === identRevisionA + 1,
+      'the identity A row deactivates with exactly one revision advance');
+      await store.releaseRuntimeCapacity({
+        capacityDomain: 'target',
+        resourceKey: 'browser:ident-c',
+        slotNumber: (await store.pool.query(
+          `SELECT slot_number FROM ${store.table('runtime_capacity_slots')}
+           WHERE capacity_domain = 'target' AND resource_key = 'browser:ident-c'
+             AND run_id = $1`,
+          [identLoser.id]
+        )).rows[0].slot_number,
+        leaseOwner: 'ident-loser',
+        runId: identLoser.id,
+        operationIdentity: 'ident-loser:c'
+      });
+      check((await store.acquireRuntimeCapacity({
+        capacityDomain: 'target',
+        resourceKey: 'browser:ident-b',
+        limit: 1,
+        leaseOwner: 'ident-loser',
+        runId: identLoser.id,
+        operationIdentity: 'ident-loser:b',
+        leaseDurationMs: 30_000,
+        sourceIdentity: 'ident-loser:b'
+      })).acquired === false, 'the loser genuinely re-waits on identity B');
+      const identRowB = await waitRowFor(identLoser.id);
+      check(identRowB && identRowB.active === true &&
+        identRowB.capacity_domain === 'target' &&
+        identRowB.resource_key === 'browser:ident-b' &&
+        identRowB.source_identity === 'ident-loser:b' &&
+        identRowB.reason === 'Capacity target/browser:ident-b is occupied',
+      'the changed-identity re-wait makes the row describe identity B');
+      check(Number(identRowB.revision) === Number(identRowInactive.revision) + 1,
+        'the in-lease changed-identity re-wait advances revision exactly once');
+      check(identRowB.first_blocked_at.getTime() > identFirstBlockedA,
+        'the in-lease changed-identity re-wait begins a new first_blocked_at episode');
+      check((await waitingEventCount(identLoser.id)) === identEventsA + 1,
+        'exactly one new capacity.waiting event describes identity B');
+      const identStateB = await store.getRunBudgetState(identLoser.id);
+      check(identStateB.capacityWait && identStateB.capacityWait.active === true &&
+        identStateB.capacityWait.capacityDomain === 'target' &&
+        identStateB.capacityWait.resourceKey === 'browser:ident-b' &&
+        identStateB.capacityWait.sourceIdentity === 'ident-loser:b' &&
+        identStateB.capacityWait.reason ===
+          'Capacity target/browser:ident-b is occupied',
+      'getRunBudgetState describes identity B, not the stale identity A');
+      await store.acquireRuntimeCapacity({
+        capacityDomain: 'target',
+        resourceKey: 'browser:ident-b',
+        limit: 1,
+        leaseOwner: 'ident-loser',
+        runId: identLoser.id,
+        operationIdentity: 'ident-loser:b',
+        leaseDurationMs: 30_000,
+        sourceIdentity: 'ident-loser:b'
+      });
+      const identRowPoll = await waitRowFor(identLoser.id);
+      check(identRowPoll.active === true &&
+        Number(identRowPoll.revision) === Number(identRowB.revision) &&
+        identRowPoll.first_blocked_at.getTime() ===
+          identRowB.first_blocked_at.getTime() &&
+        identRowPoll.resource_key === 'browser:ident-b',
+      'repeated identical in-lease polling of identity B stays idempotent');
+      check((await waitingEventCount(identLoser.id)) === identEventsA + 1,
+        'repeated identical in-lease polling emits no duplicate event');
+      await store.releaseRuntimeCapacity({
+        capacityDomain: 'target',
+        resourceKey: 'browser:ident-b',
+        slotNumber: (await store.pool.query(
+          `SELECT slot_number FROM ${store.table('runtime_capacity_slots')}
+           WHERE capacity_domain = 'target' AND resource_key = 'browser:ident-b'
+             AND run_id = $1 AND lease_owner = 'ident-other'`,
+          [identOther.id]
+        )).rows[0].slot_number,
+        leaseOwner: 'ident-other',
+        runId: identOther.id,
+        operationIdentity: 'ident-other:b'
+      });
+      const identBFreed = await store.pool.query(
+        `SELECT slot_number FROM ${store.table('runtime_capacity_slots')}
+         WHERE capacity_domain = 'target' AND resource_key = 'browser:ident-b'
+           AND lease_owner IS NULL`);
+      check(identBFreed.rowCount === 1,
+        'the identity B slot is genuinely free for the mechanism proof');
+      check((await store.acquireRuntimeCapacity({
+        capacityDomain: 'target',
+        resourceKey: 'browser:ident-b',
+        limit: 1,
+        leaseOwner: 'ident-younger',
+        runId: identYounger.id,
+        operationIdentity: 'ident-younger:b',
+        leaseDurationMs: 30_000,
+        sourceIdentity: 'ident-younger:b'
+      })).acquired === false,
+      'with a free B slot, the mechanism still sees the CURRENT identity B waiter');
+      await store.releaseRuntimeCapacity({
+        capacityDomain: 'target',
+        resourceKey: 'browser:ident-a',
+        slotNumber: (await store.pool.query(
+          `SELECT slot_number FROM ${store.table('runtime_capacity_slots')}
+           WHERE capacity_domain = 'target' AND resource_key = 'browser:ident-a'
+             AND run_id = $1 AND lease_owner = 'ident-holder'`,
+          [identHolder.id]
+        )).rows[0].slot_number,
+        leaseOwner: 'ident-holder',
+        runId: identHolder.id,
+        operationIdentity: 'ident-holder:a'
+      });
+      const identAFreed = await store.pool.query(
+        `SELECT slot_number FROM ${store.table('runtime_capacity_slots')}
+         WHERE capacity_domain = 'target' AND resource_key = 'browser:ident-a'
+           AND lease_owner IS NULL`);
+      check(identAFreed.rowCount === 1,
+        'the identity A slot is genuinely free for the stale-row proof');
+      check((await store.acquireRuntimeCapacity({
+        capacityDomain: 'target',
+        resourceKey: 'browser:ident-a',
+        limit: 1,
+        leaseOwner: 'ident-younger',
+        runId: identYounger.id,
+        operationIdentity: 'ident-younger:a',
+        leaseDurationMs: 30_000,
+        sourceIdentity: 'ident-younger:a'
+      })).acquired,
+      'the stale identity A resource is not falsely blocked by the reactivated row');
+
       const serialTicket = await createTicket(store, agent, 'Serial ticket');
       const serialSnapshot = budget({
         executionPolicy: { allowParallelRuns: false }
