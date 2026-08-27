@@ -12,7 +12,7 @@ subject to runtime authority, evidence, replay, recovery, evaluation, and conseq
 
 - Main app: `server.js` using Fastify and EJS.
 - Structured runtime authority: PostgreSQL only, through `persistence/postgres/store.js` and
-  migrations `persistence/postgres/migrations/001_*.sql` through `028_*.sql`.
+  all canonical migrations under `persistence/postgres/migrations/`.
 - Runtime flow: ticket creation -> run admission/claim -> lease-fenced execution -> authority checks
   -> target operation -> transactional event/replay/receipt evidence -> evaluation/consequence.
 - PostgreSQL owns sessions, catalogs, inbox/application state, runtime policy, leases, event chains,
