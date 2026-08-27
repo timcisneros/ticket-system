@@ -8775,7 +8775,7 @@ a large subsystem.
 | T1 | structured allocation decision | decided (structured-allocation evaluation closed FINAL STOP; see `SYSTEM_STATUS.md`) |
 | T2 | lifecycle + reasons | implemented; FROZEN |
 | T3 | objective revisions / immutable executed intent | implemented; FROZEN |
-| T4 | relationships | NEXT — design UNFROZEN (brief below) |
+| T4 | relationships | semantic kernel FROZEN (see the T4 freeze entry below); implementation NOT STARTED |
 | T5 | waiting / time / fairness / backpressure | pending |
 | T6 | effect boundary | pending |
 | T7 | intervention / context | pending |
@@ -8823,7 +8823,7 @@ MUST NOT create a dependency/waiting engine: waiting/time/fairness/backpressure 
 10. Fail closed when a consumer requires authoritative relationship truth and the underlying
     authority is malformed or contradictory.
 
-### Design status — UNFROZEN
+### Design status — UNFROZEN at bootstrap; FROZEN 2026-08-26 by the registered freeze below
 
 Open design questions, none answered here and none to be assumed: whether T4 needs a new relation
 table; edge-owned versus Ticket-owned versus event-derived versus projected representation; exact
@@ -8832,10 +8832,15 @@ cycles; duplicate-edge semantics; create/retract semantics; permission vocabular
 shape; locking strategy; API shape; UI shape; and whether handoff or parent/child provenance
 should be represented as T4 relations at all.
 
-No T4 semantic kernel is frozen. Any earlier contingent proposal from outside the repository
-(during the opening recovery or elsewhere) is NOT authority. T4 implementation is not authorized
-until a design is recovered from THIS authority, independently reviewed, and frozen in its own
-registered decision.
+No T4 semantic kernel was frozen as of this bootstrap, and any earlier contingent proposal from
+outside the repository (during the opening recovery or elsewhere) is NOT authority. T4 became
+authorized for freeze only once a design was recovered from THIS authority, independently reviewed
+with three medium findings closed (body negative non-authority; handoff scoping; enumeration
+completeness), and recorded in its own registered decision — see "T4 Workflow-Spawn Relationship
+Kernel — semantic freeze (recorded 2026-08-26)" below. The questions above are answered there
+exactly as far as the first kernel reaches; handoff exposure and operator-authored kinds remain
+deferred, not silently decided. Implementation remains separately gated by the implementation
+review boundary recorded in that freeze entry.
 
 ### Why this entry exists — hermeticity evidence from the T4 opening recovery
 
@@ -8848,3 +8853,160 @@ T4 implementation was therefore correctly refused until this bootstrap made the 
 tranche purpose repository-owned, exactly per the core principle that nothing required to
 understand, operate, audit, or continue this project may exist only in agent memory or chat
 context.
+
+---
+
+## T4 Workflow-Spawn Relationship Kernel — semantic freeze (recorded 2026-08-26)
+
+**Status:** Frozen semantic kernel. Implementation NOT started; operational closure NOT claimed.
+This is the registered decision the T4 bootstrap record above requires before implementation: the
+design was recovered from THIS authority, passed independent design review with three medium
+findings closed (M1: non-authoritative Ticket-body topology can neither grant nor veto relationship
+truth; M2: first kernel scope is workflow-spawn parentage only, handoff remains separate; M3:
+candidate discovery is not authority — every emitted fact requires complete per-child provenance
+interpretation), and is frozen here. This entry does not reopen any frozen T2/T3 authority.
+
+T4's first semantic kernel intentionally formalizes ONE already-existing durable cross-Ticket truth
+— WORKFLOW-SPAWN PARENTAGE — through a derived read seam. It introduces NO generic relationship
+subsystem.
+
+### 1. Authority (T4-I1, T4-I2)
+
+The authoritative relationship source is the existing immutable append-only workflow-spawn
+provenance carried by the child's `ticket.created` event (the accepted predicate provenance of the
+frozen T2 blocking-authority composer). The existing sanctioned writer remains unchanged. No new
+relationship writer exists. No relationship table exists. No mutable Ticket body field is
+relationship authority: `body.parentTicketId` and related spawn topology may neither establish a
+relationship, nor deny a relationship, nor invalidate otherwise coherent authoritative provenance.
+Body disagreement is non-authoritative integrity drift only — diagnosable, or mechanically
+repairable only under a separately authorized procedure, never load-bearing for authority.
+
+### 2. Canonical T4 fact (T4-I7)
+
+T4 exposes a derived immutable workflow-spawn relationship fact containing the minimum semantic
+identity:
+
+- child Ticket identity;
+- parent Ticket identity;
+- one exact workflow-spawn relationship kind;
+- originating authoritative `ticket.created` event identity/position.
+
+No independent relationship identity is minted; the immutable originating record supplies identity.
+The fact binds Ticket identities only — not Ticket revisions, attempts, Runs, allocation items, or
+workflow execution topology — therefore T2 reruns/retries/resume and T3 objective revisions cannot
+alter it.
+
+### 3. Interpretation seam
+
+One canonical pure T4 interpretation boundary owns workflow-spawn relationship semantics. It
+consumes, semantically: one child Ticket identity; that child's COMPLETE relevant immutable
+creation-provenance set; and exact evidence sufficient to determine whether the referenced parent
+Ticket exists. SQL/query/storage mechanics are outside the pure semantic contract.
+
+The seam is the sole canonical interpreter of workflow-spawn provenance AS A T4 RELATIONSHIP FACT.
+It is NOT the sole global consumer of workflow-spawn provenance: the frozen T2 blocking-authority
+composer remains an intentionally independent existing consumer of the same already-frozen
+provenance predicate, and T2 remains unchanged.
+
+### 4. Resolution
+
+A child-specific authoritative relationship read consumes the child's complete relevant provenance:
+
+- exactly one coherent applicable provenance record => one relationship fact;
+- clean absence => truthful relationship absence;
+- attempted but malformed provenance => fail closed;
+- multiple applicable parent bindings, including duplicate applicable records => fail closed;
+- referenced parent identity nonexistent/incoherent => fail closed.
+
+Never choose among conflicting records, collapse them, infer intended parentage, or fall back to
+Ticket body topology. Implementation uses repository-consistent exact failure vocabulary (the
+review-established classification MALFORMED_SPAWN_PROVENANCE /
+MULTIPLE_APPLICABLE_PROVENANCE / PARENT_TICKET_NOT_FOUND names the classes; exact code spelling is
+implementation-reviewable, refusal-not-choice is not).
+
+### 5. Parent -> child enumeration (T4-I3, T4-I5)
+
+CANDIDATE DISCOVERY and AUTHORITATIVE RELATION RESOLUTION are permanently distinguished. A
+parent-indexed query over immutable event payloads MAY discover candidate child Ticket identities;
+that filtered query is NEVER sufficient to establish relationship truth. For every candidate child:
+load its COMPLETE relevant creation-provenance set, invoke the canonical resolver, emit a
+relationship fact only if exactly one coherent fact is proven AND its parent identity equals the
+requested parent.
+
+A candidate whose complete provenance is malformed, multiple, orphaned, or otherwise unresolved
+must not silently disappear into a normal complete result. The enumeration result shape itself must
+explicitly distinguish COMPLETE (all attributable candidates resolved coherently) from INCOMPLETE
+(one or more attributable candidates refused); an INCOMPLETE result carries both the proven
+coherent facts and typed refused child identities with refusal reasons. Completeness state lives in
+the typed semantic result, not in callers noticing a non-empty refusal array. A consumer requiring
+a complete authoritative set may escalate INCOMPLETE to fail-closed refusal.
+
+### 6. Bounded corruption (T4-I4)
+
+Corruption scope follows evidence. A malformed provenance record that cannot itself be attributed
+to a requested parent must not poison unrelated parent enumeration globally; which parent malformed
+provenance "probably" meant is never inferred. Child-specific required-truth reads still fail
+closed on that child's own malformed authority. Presentation may render an explicit
+unavailable/corrupt state but must NEVER convert an authoritative refusal or an INCOMPLETE result
+into an apparently complete empty/partial relationship list.
+
+### 7. Kind has zero operational authority (T4-I6)
+
+The workflow-spawn relationship kind grants ZERO lifecycle meaning, admission meaning, scheduling,
+waiting, ordering, fairness, backpressure, execution authority, completion authority, or
+cancellation authority. The existing frozen T2 admissionHold behavior remains exactly where its
+reviewed authority lives (the frozen composer path), and T4 must not restate or reroute it merely
+through the new relationship abstraction. T5 owns waiting/time/fairness/backpressure.
+
+### 8. Separate authority models remain separate
+
+T4 does NOT unify handoff provenance, Work Context grouping, Ticket Attempt membership, Run
+membership, allocation topology, process-template provenance, watcher provenance, or
+workspace/effect ownership. Handoff receives no T4 kind in this tranche. Operator-authored
+arbitrary relationship kinds remain unauthorized absent later recorded product need and design
+authority.
+
+### 9. Storage / writes
+
+NO relation table. NO new persistence authority. NO migration. NO relationship writer. NO
+create/retract/edit relation API. NO new locking class. NO new transaction authority. NO
+body-immutability guard merely to preserve body parity. Existing workflow-spawn creation and
+idempotency authority (including the migration-003 spawn-idempotency unique index) remains
+unchanged.
+
+### 10. Expected implementation shape — guidance, not permission to alter frozen semantics
+
+The minimum implementation may include: one pure runtime T4 spawn-relation contract; minimal
+read-only persistence methods for parent-side candidate discovery and complete child-side
+creation-provenance retrieval; localized server readers moving authoritative parent/child questions
+off `body.parentTicketId` onto the canonical seam; explicit UI unavailable/corrupt handling where a
+current projection would otherwise silently omit refused relationship truth; and deterministic pure
+plus PostgreSQL owners registered in the canonical test manifest and release checkpoint. A
+migration is NOT expected. If implementation proves a migration, new writer, new authority source,
+or any T2/T3 change necessary: STOP and reopen architecture before making that change.
+
+### Frozen invariants
+
+- **T4-I1 — Provenance authority.** Append-only workflow-spawn creation provenance is the sole
+  authority for the T4 workflow-spawn relationship fact.
+- **T4-I2 — Negative non-authority.** Mutable/incidental Ticket-body topology can neither grant
+  nor deny that fact.
+- **T4-I3 — Complete-provenance resolution.** No filtered subset establishes relationship truth;
+  an emitted fact requires complete relevant provenance resolution for that child.
+- **T4-I4 — Bounded fail-closed corruption.** Malformed, multiple, or orphaned authority refuses
+  required truth without inventing parentage or globally widening corruption beyond evidence.
+- **T4-I5 — Explicit enumeration completeness.** Parent-side authoritative enumeration explicitly
+  distinguishes COMPLETE from INCOMPLETE and never presents refused candidates as a complete set.
+- **T4-I6 — Kind non-authority.** The relationship kind itself has no lifecycle/execution/waiting
+  semantics.
+- **T4-I7 — Derived identity.** No independent relationship identity or writer is introduced;
+  immutable originating provenance carries identity.
+- **T4-I8 — Frozen predecessor isolation.** T2/T3 semantics and existing T2 provenance consumers
+  remain unchanged.
+
+### Open status after freeze
+
+T4 purpose: FROZEN. T4 semantic kernel: FROZEN (this entry). T4 implementation: NOT STARTED. T4
+operational closure: NOT CLAIMED. Handoff/general operator relationships: DEFERRED, not silently
+decided — exposure via a later second projection or kind remains available only through a future
+registered decision under this register's discipline.
