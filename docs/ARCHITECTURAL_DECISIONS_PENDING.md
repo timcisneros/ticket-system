@@ -8776,7 +8776,7 @@ a large subsystem.
 | T2 | lifecycle + reasons | implemented; FROZEN |
 | T3 | objective revisions / immutable executed intent | implemented; FROZEN |
 | T4 | relationships | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed, runtime cutover verified — see the T4 operational closure entry below) |
-| T5 | waiting / time / fairness / backpressure | SEMANTIC KERNEL FROZEN; IMPLEMENTATION NOT STARTED; OPERATIONAL CLOSURE NOT CLAIMED (see the T5 semantic freeze entry below) |
+| T5 | waiting / time / fairness / backpressure | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed; no separate operational cutover required — see the T5 operational closure entry below) |
 | T6 | effect boundary | pending |
 | T7 | intervention / context | pending |
 | T8 | operator plane | pending |
@@ -9290,6 +9290,11 @@ questions in advance.
 
 **Status:** SEMANTIC KERNEL FROZEN; IMPLEMENTATION NOT STARTED; OPERATIONAL CLOSURE NOT
 CLAIMED.
+*(The preceding sentence is historical status as recorded at this 2026-08-27 semantic freeze.
+It is superseded by the T5 operational closure entry below: implementation has since completed
+and been published to master, the registered implementation/evidence obligation has CLOSED, and
+broad T5 is OPERATIONALLY CLOSED. The semantic kernel recorded here, including T5-I1..T5-I10,
+is unchanged.)*
 
 This is the registered decision the T5 authority bootstrap entry above requires. The semantic
 design was recovered from that bootstrap's authority (kernel question, classifications A–G,
@@ -9507,3 +9512,68 @@ design requires NO new table, NO new column, NO new event type, NO new lifecycle
 implementation discovers that T5-I1..T5-I10 cannot be truthfully implemented without new
 durable semantic authority, a migration, a new writer, or a T2/T3/T4 semantic change: STOP and
 reopen architecture. Do not improvise around the freeze.
+
+---
+
+## T5 Waiting / Time / Fairness / Backpressure — operational closure (recorded 2026-08-27)
+
+**Status:** OPERATIONALLY CLOSED. This entry records broad-T5 operational closure after the
+published implementation; it is a status/evidence record only. It changes NO T5 semantic
+decision and does not touch T5-I1..T5-I10, which remain exactly as frozen in the T5 semantic
+freeze entry above.
+
+### Current authoritative status
+
+T5 — waiting / time / fairness / backpressure: **OPERATIONALLY CLOSED.**
+
+- Semantic kernel: FROZEN (2026-08-27 freeze entry above; T5-I1..T5-I10 unchanged).
+- Implementation: COMPLETE and published to master.
+- Independent implementation review: CLOSED with HIGH=0, MEDIUM=0, LOW=0.
+- Registered active-reactivation implementation/evidence obligation: CLOSED (its closure
+  evidence is inside the freeze entry above and is not duplicated here).
+- RECORDED IMPLEMENTATION-MECHANISM DECISION — run_capacity_waits current-wait-episode
+  snapshot: RECORDED and unchanged; remains mechanism-only, not broad-T5 semantic authority.
+- Canonical release checkpoint: PASSED 253/253 owned suites.
+- No separate operational cutover was required or performed (record below).
+
+### Independently recoverable evidence
+
+- Published commit (also current repository HEAD at the time this closure was recorded):
+  `0a947d1272098604f102405b2a6943c3d24822a9`
+- Published tree: `05722980926c0428200a69840e1a3911eea349ea`
+- Production implementation: `persistence/postgres/runtime-budget-methods.js` — the corrected
+  current-wait-episode writers; the full implementation narrative is the freeze entry's
+  closure evidence above and is not duplicated here.
+- Registered owners: `scripts/runtime-budget-contract-test.js`,
+  `scripts/runtime-budget-postgres-test.js`, `scripts/t5-waiting-boundary-postgres-test.js`
+  (registered required in the canonical test manifest and release checkpoint).
+- Canonical checkpoint `checkpointRunIdentity`:
+  `180eda6c-8622-445e-aa88-421c316dbbcb`
+- Canonical checkpoint `registryHash`:
+  `2a0b397b73971d7a47163b335457ecb40273f5d240ff946f23c6c8e4e33b1a74`
+- Checkpoint result: passedCount / totalCount = 253 / 253
+
+### No-cutover record
+
+T5 required NO separate operational cutover: no migration; no schema change; no new table,
+column, or event type; no new durable semantic authority; no backfill; no
+provider/external-service change. The corrected behavior uses the existing migration-030
+`run_capacity_waits` representation. Any pre-repair wait-row state is handled by the
+corrected current-wait writers on that Run's next genuine wait; no operational database
+rewrite was required. No operational database action was required or performed for T5
+closure. No runtime restart is a T5 closure requirement.
+
+### Honest evidence basis
+
+Operational closure relies on the published source identity above, the independent
+implementation review, and the canonical deterministic/PostgreSQL checkpoint evidence. No
+live positive-path capacity-pressure sample was required or taken. This is recorded so no
+later reader invents either a live test that did not happen or an unperformed closure
+requirement.
+
+### Remaining T5 work
+
+No unresolved broad-T5 implementation or operational-closure obligation remains. T5-I6 still
+freezes no FIFO/fairness/ordering policy; future scheduler, fairness, or product work in this
+area requires its own registered decision under this register's discipline and does not
+reopen T5 closure.
