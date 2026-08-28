@@ -50,8 +50,8 @@ The ticket system supports four distinct execution boundaries. Each boundary con
 **Definition**: The idempotent mutation boundary inside a single run.
 
 **Rules**:
-- Every mutating workspace operation (`writeFile`, `createFolder`, `renamePath`, `deletePath`) is fingerprinted by `computeMutationFingerprint`.
-- If the exact same fingerprint already exists in `operation-history.json` for the current run, the operation is skipped as an idempotent no-op and the prior result is returned.
+- Every mutating workspace operation (`writeFile`, `createFolder`, `renamePath`, `deletePath`) is fingerprinted, and the fingerprint is recorded with its committed operation receipt.
+- If the exact same fingerprint already exists in the Run's authoritative committed-mutation evidence for the current run — the PostgreSQL `operation_receipts` store — the operation is skipped as an idempotent no-op and the prior result is returned.
 - If a **different** operation already committed on the **same path** in the current run, the new operation is rejected with `MUTATION_CONFLICT`.
 - The fingerprint for `renamePath` includes both `path` and `nextPath`, so renaming A→B and then A→C are treated as different operations (and the second would conflict on path A).
 - The fingerprint for `deletePath` is just the path, so deleting the same file twice is idempotent.
@@ -75,12 +75,12 @@ POST /api/tickets/:id/rerun
 Body: { "mode": "reassess" }  // or omit for default "retry"
 ```
 
-The `mode` is stored on the ticket (`ticket.rerunMode`) and copied to the new run (`run.rerunMode`). When the ticket reaches a terminal status (`completed`, `failed`, `interrupted`), `rerunMode` is cleared.
+The `mode` is stored on the ticket (`ticket.rerunMode`) and copied to the new run (`run.rerunMode`). In the current five-state Ticket vocabulary (`open`, `in_progress`, `blocked`, `completed`, `canceled`), `rerunMode` is cleared when the ticket transitions to `completed` or is reopened back to `open`.
 
 ## Invariants
 
 1. `priorFailureContext` is injected **only** when `rerunMode === 'reassess'` and `actionResults.length === 0`.
-2. `rerunMode` is cleared on ticket terminalization.
-3. `findCommittedMutation` skips only exact fingerprint matches (same operation + same args).
-4. `findConflictingMutation` rejects any different operation targeting the same path in the same run.
-5. `computeMutationFingerprint` covers all four mutating operations.
+2. `rerunMode` is cleared when the ticket transitions to `completed` or back to `open`.
+3. Idempotent skip applies only to exact fingerprint matches (same operation + same args).
+4. Any different operation targeting the same path in the same run is rejected with `MUTATION_CONFLICT`.
+5. Mutation fingerprinting covers all four mutating operations.

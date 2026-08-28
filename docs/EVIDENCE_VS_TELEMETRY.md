@@ -2,7 +2,13 @@
 
 ## Summary
 
-The substrate has three distinct output classes with different durability, consumption, and trust requirements. The append-only `events.jsonl` is **intended** to contain **evidence only** (Option A). In practice it leaks two telemetry events (`scheduler.tick`, `run.heartbeat`), making the current file **evidence + telemetry** (Option B). Debug output is explicitly excluded from `events.jsonl`.
+The substrate has three distinct output classes with different durability, consumption, and trust requirements. The append-only event journal is **intended** to contain **evidence only** (Option A). In practice it leaks two telemetry events (`scheduler.tick`, `run.heartbeat`), making it **evidence + telemetry** (Option B) — still true of the current PostgreSQL `events` table. Debug output is explicitly excluded from the event journal.
+
+> **Storage status:** File names below — `events.jsonl`, `runs.json`, `logs.json`,
+> `operation-history.json` — name the **retired JSON adapter** in this document's
+> historical portions. The same evidence/telemetry/debug classification applies to the
+> current PostgreSQL `events`, `runs`, and `logs` relations. Canonical storage
+> authority: `docs/RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH.md`.
 
 ---
 
@@ -55,7 +61,7 @@ The substrate has three distinct output classes with different durability, consu
 | **Purpose** | Answer "how is the system behaving?" — queue depth, lease freshness, loop health. Not a proof of action. |
 | **Retention expectations** | Time-bounded. Useful for recent operational dashboards. Can be downsampled or expired without breaking correctness. |
 | **Replay value** | **Low / None.** Replay does not need telemetry to reproduce behavior; it needs evidence of decisions and mutations. |
-| **Recovery value** | **Low.** A missing heartbeat or tick does not prevent resumption; the mutable `runs.json` lease fields are sufficient. |
+| **Recovery value** | **Low.** A missing heartbeat or tick does not prevent resumption; the authoritative lease state owned by the runtime store (PostgreSQL; formerly the mutable `runs.json` lease fields) is sufficient. |
 | **Audit value** | **Low.** Telemetry is observational, not probative. A tick with `pendingRuns: 3` does not prove three runs were actually started. |
 
 **Concrete substrate examples:**
@@ -83,8 +89,8 @@ The substrate has three distinct output classes with different durability, consu
 
 | Output type | Location | Nature |
 |-------------|----------|--------|
-| `console.log` / `console.error` in `server.js` | stdout/stderr | Startup diagnostics, bootstrap messages, flush errors. Never written to `events.jsonl`. |
-| `appendRunLog()` entries | `data/logs.json` | Human-readable run narrative (`run:started`, `workspace:write`, `model:request`). Stored in a separate mutable file, not the append-only event log. |
+| `console.log` / `console.error` in `server.js` | stdout/stderr | Startup diagnostics, bootstrap messages, flush errors. Never written to the event journal. |
+| `appendRunLog()` entries | `logs` relation (a mutable `logs.json` file under the retired adapter) | Human-readable run narrative (`run:started`, `workspace:write`, `model:request`). Stored separately from the append-only event journal. |
 
 ---
 
@@ -98,7 +104,7 @@ The substrate has three distinct output classes with different durability, consu
 | Is it hashed / sequenced in the run event chain? | Yes | `scheduler.tick` is not sequenced; `run.heartbeat` is | No |
 | Is it consumed by telemetry-report.js for metrics? | Some (violations, authority) | Yes (`scheduler.tick`, `run.heartbeat`) | No |
 | Is it consumed by operational dashboards? | No | Yes | No |
-| Can it be derived from other events? | No (it is the source) | Yes (`scheduler.tick` could be replaced by polling `runs.json`) | N/A |
+| Can it be derived from other events? | No (it is the source) | Yes (`scheduler.tick` could be replaced by polling the `runs` authority) | N/A |
 
 ---
 
@@ -119,7 +125,7 @@ The substrate has three distinct output classes with different durability, consu
 - `scheduler.tick` accounts for **98.5% of event lines** but is never used for state reconstruction. It is purely telemetry.
 - `run.heartbeat` is borderline but primarily telemetry; its presence in recovery scripts is incidental.
 
-These two event types leak telemetry into the evidence log. They are not debug output (Option C is incorrect because `console.log` and `appendRunLog` never write to `events.jsonl`).
+These two event types leak telemetry into the evidence log. They are not debug output (Option C is incorrect because `console.log` and `appendRunLog` never write to the event journal).
 
 ### Why Option C is wrong
 
@@ -127,7 +133,7 @@ There are **zero** debug events in `events.jsonl`. Debug output is routed to:
 - `console.log` / `console.error` → stdout/stderr
 - `appendRunLog` → `data/logs.json`
 
-The substrate maintains a clean separation: `events.jsonl` is structured, append-only, and evidence-oriented; `logs.json` is human-readable, mutable, and debug-oriented.
+The substrate maintains a clean separation: the event journal is structured, append-only, and evidence-oriented; the operator-narrative log surface (`logs` relation; `logs.json` under the retired adapter) is human-readable, mutable, and debug-oriented.
 
 ---
 

@@ -4,14 +4,21 @@ Purpose: Record where live ticket/run state actually lives, what survives a rest
 and what projection rebuild does — so the "policy/triage isn't event-sourced" caveat
 stops resurfacing as a suspected defect.
 
-Decision: **Option A** (from the durability audits). The materialized JSON files are
-authoritative for live state; projection rebuild is diagnostic tooling, not a restore
-path. Policy and triage annotations are intentionally **not** event-sourced at this
-time. Two read-only audits found no blocker.
+Status: The JSON live-state and storage descriptions in the sections below describe the
+**retired JSON runtime adapter** and are kept as a decision record. PostgreSQL is the
+sole current runtime authority. Canonical current authority: `docs/POSTGRES_CUTOVER.md`
+and `docs/RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH.md`. The `data/*.json` paths named
+below are not live runtime persistence.
+
+Decision (recorded under the retired JSON adapter): **Option A** (from the durability
+audits). The materialized JSON files were authoritative for live state under that
+adapter; projection rebuild is diagnostic tooling, not a restore path. Policy and
+triage annotations are intentionally **not** event-sourced at this time. Two read-only
+audits found no blocker.
 
 ---
 
-## 1. Authoritative files
+## 1. Authoritative files under the retired JSON adapter
 
 | File | Authoritative for |
 | ---- | ----------------- |
@@ -21,14 +28,17 @@ time. Two read-only audits found no blocker.
 | `data/events.jsonl` | Append-only lifecycle/event log (run lifecycle, verification verdicts, `ticket.blocked`, `run.triage_created`, status changes). **Not** the live read path. |
 | `data/replay-snapshots/run-<id>.json` | Per-run execution evidence (replay snapshot), referenced by `run.replaySnapshotPath` |
 
-The running server reads and writes the JSON files directly (`readTickets`/`writeTickets`,
-`readRuns`/`writeRuns`). It does **not** reconstruct live state by replaying
-`events.jsonl`.
+Under that adapter the running server read and wrote the JSON files directly
+(`readTickets`/`writeTickets`, `readRuns`/`writeRuns`); it did not reconstruct live
+state by replaying `events.jsonl`. Current runtime state is read and written through
+the PostgreSQL-backed runtime store (`persistence/postgres/store.js`); the JSON files
+are not live runtime persistence, and event reconstruction remains diagnostic and
+reduced rather than a live read path.
 
 ## 2. What survives a normal restart
 
-All of the following are persisted in the authoritative JSON above and are preserved
-across process restart and startup reconciliation:
+Under the retired adapter, all of the following were persisted in the authoritative
+JSON above and preserved across process restart and startup reconciliation:
 
 - `executionPolicy` (initial value)
 - `maxAttempts` edits (operator control)
@@ -39,9 +49,13 @@ across process restart and startup reconciliation:
 - system logs (`logs.json`)
 - replay snapshots (`replay-snapshots/*.json`)
 
-Normal JSON persistence is sufficient for normal operation. Manual completion gates
-(ticket triage, latest-run status, run triage, verification) are evaluated live from
-`tickets.json`/`runs.json` at request time.
+Under the current PostgreSQL authority, these same state classes are durable in the
+database (see `docs/RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH.md`).
+
+Normal persistence through the runtime store is sufficient for normal operation.
+Manual completion gates (ticket triage, latest-run status, run triage, verification)
+are evaluated live from the authoritative Ticket/Run state — the PostgreSQL
+`tickets`/`runs` relations under the current runtime — at request time.
 
 ## 3. What projection rebuild does
 
@@ -60,7 +74,8 @@ consumers (`scripts/rebuild-tickets-projection.js`, `scripts/rebuild-runs-projec
 
 It is **diagnostic / compare / integrity tooling** — invoked by CLI/tests only. It is
 **not** wired into server startup and is **not** an operational recovery path. The
-server never restores live state from it.
+server never restores live state from it. These scripts consume the disposable JSON
+corpus under `data/` (retired diagnostic input), not current runtime authority.
 
 ## 4. Warning
 
@@ -70,8 +85,8 @@ server never restores live state from it.
 > **preserve** policy and triage annotations rather than reset them.
 
 If such a restore path is ever introduced, it must fold these annotations from the
-authoritative JSON (and from existing `ticket.blocked` / `run.triage_created` events),
-never default them away. Note also that `scripts/projection-integrity-audit.js` proves
+authoritative state records (and from existing `ticket.blocked` / `run.triage_created`
+events), never default them away. Note also that `scripts/projection-integrity-audit.js` proves
 status/lifecycle from events only; it does not currently cover policy/triage fields.
 
 ## 5. Current decision
