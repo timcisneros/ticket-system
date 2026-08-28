@@ -8778,7 +8778,7 @@ a large subsystem.
 | T4 | relationships | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed, runtime cutover verified — see the T4 operational closure entry below) |
 | T5 | waiting / time / fairness / backpressure | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed; no separate operational cutover required — see the T5 operational closure entry below) |
 | T6 | effect boundary | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete via zero runtime delta; independently reviewed; canonical checkpoint passed; no separate operational cutover required — see the T6 operational closure entry below) |
-| T7 | intervention / context | pending |
+| T7 | intervention / context | AUTHORITY BOOTSTRAPPED (semantic kernel UNFROZEN; implementation NOT started; operational closure NOT claimed — see the T7 authority bootstrap entry below) |
 | T8 | operator plane | pending |
 | T9 | external actor / event | pending |
 | T10 | foundation closure | final |
@@ -10608,3 +10608,241 @@ fixed; global exactly-once semantics exist; cross-Run effect deduplication exist
 
 T7 (intervention / context) remains pending on the roadmap table. This record bootstraps no T7
 design.
+
+---
+
+## T7 Intervention / Context — authority bootstrap (recorded 2026-08-28)
+
+**Status:** AUTHORITY-BOOTSTRAP CANDIDATE — RECORDED, NOT YET PUBLISHED.
+
+The CURRENT published T7 status remains `pending` on the roadmap table until this exact
+candidate is independently reviewed and published to authoritative `master`. The prospective
+roadmap-table edit contained in this uncommitted candidate is therefore NOT authority yet.
+Upon publication, the T7 row becomes: AUTHORITY BOOTSTRAPPED; SEMANTIC KERNEL UNFROZEN;
+IMPLEMENTATION NOT STARTED; OPERATIONAL CLOSURE NOT CLAIMED.
+
+This entry is a minimum authority bootstrap, recorded because a fresh repository-only discovery
+pass (2026-08-28) proved broad T7 has no brief, no kernel question, no registered classification
+of the adjacent mechanisms, and no semantic owner, while the roadmap label "intervention /
+context" carries no repository semantics. It was produced by a repository-only discovery pass
+over source, migrations, runtime contracts, evidence surfaces, tests, and register entries.
+
+Recorded explicitly:
+
+- The roadmap label **"intervention / context" confers NO semantics**. No T7 concept may be
+  inferred from those English words.
+- Existing mechanisms are NOT promoted into T7 merely because they look related to
+  "intervention" or "context". This standing rule is load-bearing.
+- This entry authorizes **semantic DESIGN RECOVERY only**.
+- It **freezes NO T7 invariant**.
+- It **authorizes NO implementation**.
+
+### Why this bootstrap exists
+
+The discovery pass found: no T7 brief; no T7 kernel question; no T7 mechanism classification;
+no T7 semantic owner; `context` overloaded across at least seven repository senses; multiple
+predecessor-owned mechanisms adjacent to the label; and several implemented but unclassified
+presentation/information seams. T7 therefore currently has an **AUTHORITY gap, not an
+implementation gap**. The existence of an implementation is NOT evidence that it belongs to T7.
+
+### Frozen predecessor exclusions
+
+T7 semantic design MUST NOT redefine or absorb:
+
+- **T2:** admission; attempt identity; retry/rerun/reassess identity; resume identity;
+  blocker/reason authority; cancellation; max-attempt policy.
+- **T3:** current objective revision; immutable executed intent.
+- **T4:** workflow-spawn relationship provenance; child-result topology.
+- **T5:** dispatch deferral; capacity waiting; backpressure; fairness/time boundaries.
+- **T6:** governed-effect truthfulness; occurrence uncertainty; invocation-local repetition
+  safety; prepared-intent / receipt / reconciliation mechanisms; governed provider/process
+  effect surfaces.
+
+Also NOT silently absorbed: operator workspace recovery mechanics (migration 012);
+structured-allocation planner governance; watcher authority; Work Context grouping/catalog
+semantics; admin/catalog/operator-plane semantics that may belong to T8. T8 remains a separate
+pending tranche whose relationship to T7 is NOT decided here.
+
+### Existing surfaces — candidates, NOT authority
+
+Standing rule: **EXISTENCE OF AN IMPLEMENTED MECHANISM DOES NOT PROMOTE IT TO BROAD-T7 SEMANTIC
+AUTHORITY.** A later registered T7 decision may reclassify with recorded reasons. Compressed
+bootstrap classifications:
+
+**A — PREDECESSOR-OWNED; EXCLUDED FROM T7 REDEFINITION.** Admission/retry/rerun/reassess/resume
+identity and blocker resolution (T2; `docs/TICKET_ATTEMPT_AUTHORITY.md`); objective revision and
+immutable executed intent (T3; migration 042 baseline); capacity waiting/deferral/backpressure
+(T5-I1..I10); governed-effect uncertainty and prepared-intent/receipt/reconciliation (T6);
+relationship provenance (T4-I1..I8).
+
+**B — EXISTING DOMAIN-SPECIFIC AUTHORITY; NOT PROMOTED TO GENERAL T7.** Operator workspace
+recovery (migration 012, append-only `operator_recovery_intents`, confirmed compensating
+workspace effect); watcher proposal approval (migration 023); structured planner request
+context (hash-bound, always governed); Work Context catalog (migration 015; never dereferenced
+during execution); process input materialization (sealed filesystem inputs; never prompt
+content).
+
+**C — EXISTING PRESENTATION / CONTEXT-ASSEMBLY MECHANISMS; CURRENTLY UNCLASSIFIED.** Worker
+prompt/context construction (`buildAgentPrompt`, `compactTicketContextForPrompt`,
+`buildRuntimeEnvelope` in `server.js`); runtime envelope assembly; per-step current-workspace
+re-snapshot; prior-failure context injected only on a `reassess`-mode rerun's first step;
+`recoveryClassification` (computed inline in prompt building, never persisted); prompt
+selection/exclusion rules (no run history, no operator notes, no T4 facts, no evaluation
+feedback). Recorded as EXISTING PRESENTATION FACTS only. NOT declared T7 authority.
+
+**D — DOCUMENTED OPERATOR→AGENT INFORMATION ASYMMETRY; OPEN DESIGN BOUNDARY.** Inbox/triage
+operator notes are durable (`message_threads` / `message_thread_messages`, migration 025);
+blocker-resolution consequences are authoritative under existing T2 rules; note CONTENTS are
+deliberately NOT injected into later agent prompts; no operator→agent mid-run information
+channel exists; `docs/OPERATOR_INBOX.md` records that closing this asymmetry is a design
+decision, not a bug fix. NOT resolved here.
+
+**E — DOCUMENTED FUTURE MODEL→OPERATOR MID-RUN MESSAGING; NOT IMPLEMENTED.** The
+`docs/OPERATOR_INBOX.md` "planned evolution" note (a runtime operation letting the model send
+inbox messages during a run) is a recorded FUTURE surface only. It is NOT current capability
+and confers no T7 or T8 semantics.
+
+**F — `human_confirmed` AUTHORITY DOCTRINE; REGISTERED DOCTRINE, NO IMPLEMENTATION.**
+`docs/decision-memo-objective-interpretation-direction.md` (restated in `docs/DECISION_LOG.md`)
+registers `human_confirmed` as a separately sourced authority class — corroboration or human
+confirmation produce NEW separately sourced records, never provenance upgrade in place.
+Production implementation is absent. No T7 ownership is inferred here. NOT implemented by this
+bootstrap.
+
+**G — LIVE OPERATOR WORKSPACE MUTATION DURING A RUN; EXISTING FACT, OWNERSHIP OPEN.** Operator
+workspace mutation APIs are production-reachable; NO run-status fence prevents mutation during a
+live Run; worker execution re-reads current workspace state per step; therefore an operator
+mutation can become model-visible during the SAME Run. The mutation is authoritative target
+state under the existing workspace/target boundary. No current semantic contract classifies
+this fact as an information/intervention primitive. This is a DISCOVERED OPEN BOUNDARY: it is
+NOT classified here as safe, unsafe, allowed, forbidden, or T7-governed, and it is NOT altered
+by this bootstrap.
+
+### Context terminology disambiguation
+
+`context` is overloaded across at least seven repository senses and MUST NOT become a universal
+object merely from terminology: (1) **Work Context** — grouping/catalog primitive; the runtime
+does not dereference `workContextId` during execution (`docs/WORK_CONTEXT_PRIMITIVE.md`);
+(2) **workspace context** — filesystem snapshots/state presented to execution; (3) **prior-failure
+context** — derived prompt-only reassessment information; (4) **planner request context** —
+domain-specific, hash-bound structured-allocation request; (5) **context window** —
+model/provider capacity/economic concept; (6) **`contextHash`** — evidence/request identity
+concept; (7) **general prose use** of "context". No one of these defines broad T7.
+
+### Nonconflation fences (bootstrap boundaries, not positive semantics)
+
+CONTEXT ≠ AUTHORITY. CONTEXT ≠ EVIDENCE. CONTEXT ≠ EXECUTED INTENT. CONTEXT ≠ CURRENT
+OBJECTIVE. INTERVENTION ≠ RETRY. INTERVENTION ≠ RERUN. INTERVENTION ≠ RESUME. INTERVENTION ≠
+CANCELLATION. INTERVENTION ≠ ASSIGNMENT CHANGE. INTERVENTION ≠ OPERATOR RECOVERY. BLOCKED ≠
+WAITING FOR CAPACITY (already frozen in T5 authority). NEW INPUT ≠ NEW T2 ATTEMPT. MODEL PROMPT ≠ DURABLE
+SYSTEM TRUTH. HISTORY PRESENTATION ≠ PREDECESSOR AUTHORITY TRANSFER.
+
+These fences do NOT themselves define positive T7 semantics. For **NEW INPUT ≠ NEW T2 ATTEMPT**:
+no general new-input primitive currently exists anywhere in the runtime; this is a
+predecessor-preservation boundary for future design, not a claim about a current feature.
+
+### Current trust / provenance facts (minimum constraining authority)
+
+Model prose does not become authority merely by appearing in a prompt or output. Model
+completion claims can be durably recorded while remaining `authority:false`
+(`runtime/completion-decision-contract.js`). Verified-progress and blocker authority require
+repository-designated evidence, never prose alone. Provenance is never silently upgraded.
+`human_confirmed`, if ever realized, is a NEW separately sourced record under the registered
+doctrine. Prompt-visible content is not authoritative merely because the model sees it. The T7
+provenance model itself is NOT designed here.
+
+### Current mid-run fact
+
+There is NO designed same-Run human/model messaging or generic intervention primitive. Same-Run
+continuation/recovery accepts no new semantic input. Known live same-Run information visibility
+currently arises through mutable workspace target state (classification G) and a small number
+of per-step re-read mechanisms, not through an explicit intervention/context contract. This
+observation is NOT promoted to an invariant here.
+
+### Context selection / size boundary
+
+Current context selection/size behavior is distributed across execution-correctness contracts,
+prompt presentation, provider capability/economic constraints, and structured-allocation
+contracts. This bootstrap assigns NO universal context-window or truncation semantics to T7.
+Token fitting/truncation MUST NOT become a T7 invariant merely because the roadmap says
+"context".
+
+### T7 kernel question (DESIGN QUESTION — NOT ITS ANSWER)
+
+WHEN NEW OR CORRECTIVE INFORMATION — FROM AN OPERATOR, THE RUNTIME, RECOVERY, RELATIONSHIP
+WORK, OR OBSERVATION — EXISTS THAT ALREADY-ADMITTED OR FUTURE WORK DOES NOT YET POSSESS, WHAT
+DURABLE FACTS — IF ANY BEYOND FROZEN T2/T3/T4/T5/T6 AUTHORITY AND THE EXISTING WORKSPACE TARGET
+BOUNDARY — GOVERN WHICH AUTHORIZED ACTORS MAY DELIVER SUCH INFORMATION, WHAT PROVENANCE AND
+TRUST CLASSIFICATION IT MUST CARRY, WHETHER AND HOW IT MAY REACH A LIVE RUN VERSUS ONLY A LATER
+RUN, AND HOW IT IS RECORDED AS EVIDENCE — WITHOUT PROMOTING PROMPT-VISIBLE CONTENT INTO
+AUTHORITY, REDEFINING BLOCKER RESOLUTION, ATTEMPT IDENTITY, EXECUTED INTENT, RELATIONSHIP,
+WAITING, OR EFFECT-BOUNDARY SEMANTICS, AND WITHOUT TREATING ANY EXISTING PRESENTATION MECHANISM
+AS SEMANTIC AUTHORITY MERELY BECAUSE IT ALREADY EXISTS?
+
+The T7 semantic design must be recovered from THIS authority through a registered decision of
+its own; nothing in this bootstrap pre-freezes an answer, and no clause of the question is
+answered here.
+
+### Open questions for semantic design (questions only; NOT dispositioned here)
+
+- Q1. Is broad T7 fundamentally an information-delivery/trust boundary, or is that still too
+  broad?
+- Q2. Which, if any, existing prompt/context presentation mechanisms become governed by T7
+  versus remaining presentation-only?
+- Q3. May new authorized information ever enter an already-admitted live Run, or only
+  future/new attempts?
+- Q4. If live delivery exists, what durable pre-delivery fact identifies the source, scope,
+  target Run/attempt, and authority class?
+- Q5. How must operator assertions differ from authoritative observations, deterministic
+  corroboration, and model-derived prose?
+- Q6. Does the existing `human_confirmed` doctrine belong inside T7 realization, remain
+  separate authority doctrine consumed by T7, or stay out of scope?
+- Q7. How should the existing live operator-workspace-mutation visibility fact be classified
+  without redefining workspace target authority?
+- Q8. Does blocker-resolution content ever become information for later work, or does T2
+  blocker resolution remain entirely separate from T7 delivery?
+- Q9. What evidence proves exactly what information was delivered to which execution without
+  making the delivered content itself authoritative?
+- Q10. Which context selection/exclusion behaviors are correctness-protective T7 concerns
+  versus existing presentation/economic/domain-specific rules?
+- Q11. Is model→operator mid-run messaging part of T7, T8 operator plane, or a separate future
+  mechanism?
+- Q12. What must survive crash/restart so intervention/context truth is recoverable without
+  inventing new attempt/effect semantics?
+
+### Implementation prohibition
+
+Until a separate T7 semantic-freeze decision is registered in this register: NO T7 production
+implementation; NO migration; NO new intervention table; NO universal context object; NO
+context provenance schema; NO generic message primitive; NO approval framework; NO
+pause/resume subsystem; NO new T7 event type; and NO promotion of inbox messages, workspace
+mutations, prompt fields, `human_confirmed`, or recovery context into broad-T7 authority. If
+semantic design discovers that a predecessor invariant must change: STOP for explicit
+architecture review.
+
+### Hermeticity rule
+
+After publication, a fresh capable model must be able to recover from the repository alone: why
+T7 exists; what is currently unowned; what is predecessor-owned and excluded; the relevant
+terminology distinctions; the one kernel question; the open design questions; and the
+implementation prohibition. No prior conversation may be necessary.
+
+### Cognitive-efficiency rule
+
+This entry is a navigation/authority map, not a taxonomy of every prompt field. Compact
+pointers: `docs/OPERATOR_INBOX.md` (asymmetry, authorship contract);
+`docs/TICKET_ATTEMPT_AUTHORITY.md` (attempt/continuation identity);
+`docs/decision-memo-objective-interpretation-direction.md` and `docs/DECISION_LOG.md`
+(source-authority doctrine); `docs/EVIDENCE_VS_TELEMETRY.md`;
+`docs/WORK_CONTEXT_PRIMITIVE.md`; the frozen T2–T6 register entries in this document; and named
+production seams only where necessary (`server.js` prompt builders,
+`runtime/completion-decision-contract.js`,
+`runtime/ticket-blocking-authority-composer.js`).
+
+### Deliberately out of scope / separate hygiene
+
+Recorded here ONLY so they are not absorbed into T7; none is repaired by this bootstrap: the
+stale `data/message-threads.json` storage pointer in `docs/OPERATOR_INBOX.md`; the stale
+`oquery update-ticket` route targeting the retired status endpoint; unrelated historical "T7"
+labels (covered by the tranche-numbering disambiguation guard); historical JSON-era storage paths in
+`docs/REMAINING_PRODUCT_UNCERTAINTIES.md`.
