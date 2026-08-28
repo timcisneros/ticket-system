@@ -8777,7 +8777,7 @@ a large subsystem.
 | T3 | objective revisions / immutable executed intent | implemented; FROZEN |
 | T4 | relationships | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed, runtime cutover verified — see the T4 operational closure entry below) |
 | T5 | waiting / time / fairness / backpressure | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed; no separate operational cutover required — see the T5 operational closure entry below) |
-| T6 | effect boundary | SEMANTIC KERNEL FROZEN; IMPLEMENTATION COMPLETE (zero runtime delta; verification registered); OPERATIONAL CLOSURE NOT CLAIMED (see the T6 Effect Boundary — semantic freeze entry below; zero-runtime-delta implementation/verification registration entry below) |
+| T6 | effect boundary | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete via zero runtime delta; independently reviewed; canonical checkpoint passed; no separate operational cutover required — see the T6 operational closure entry below) |
 | T7 | intervention / context | pending |
 | T8 | operator plane | pending |
 | T9 | external actor / event | pending |
@@ -10466,3 +10466,145 @@ verification ownership from THIS record. No upstream record is duplicated; this 
 points. The register's cognitive-efficiency rule is honored: recovery burden is reduced by
 indexing already-registered facts, not by deciding open questions in advance — no T6 semantic
 question is decided here.
+
+---
+
+## T6 Effect Boundary — operational closure (recorded 2026-08-28)
+
+**Status:** OPERATIONAL-CLOSURE CANDIDATE, prepared for independent review. This is a
+status/evidence record only. It changes NO T6 semantic decision, touches NO frozen invariant,
+and adds or removes no governed surface. Until this exact record and the roadmap-row update
+above are published by being committed to this register on authoritative `master`, they are not
+authority (the same convention the semantic freeze, classification, and Phase-A registration
+records state for themselves: an uncommitted working-tree candidate is not authority — the
+working-tree roadmap row above is not authoritative until this exact reviewed candidate is
+published). The CURRENT published T6 status therefore remains: SEMANTIC KERNEL FROZEN;
+IMPLEMENTATION COMPLETE; OPERATIONAL CLOSURE NOT CLAIMED. Upon publication of this exact
+reviewed record: T6 — OPERATIONALLY CLOSED.
+
+### Closure basis
+
+1. T6 semantic kernel frozen and published (T6 Effect Boundary — semantic freeze).
+2. Governed membership frozen: workspace target mutations; governed provider requests; process
+   operations (frozen governed-surface list; not restated or extended here).
+3. Ordinary/non-structured worker provider transport explicitly classified OUTSIDE CURRENT T6
+   GOVERNANCE (T6 provider-surface classification record; unchanged).
+4. Phase-A zero-runtime-delta implementation/verification registration independently reviewed
+   (HIGH = 0, MEDIUM = 0, LOW = 0) and published (below).
+5. All 15 T6-I1..T6-I5 × governed-domain implementation cells PASS (Phase-A registration's
+   15-cell compliance matrix; pointed to, not duplicated).
+6. Required verification ownership is repository-indexed (`scripts/test-manifest.js`,
+   `scripts/release-checkpoint.js`) and checkpoint-owned: every required suite runs in the
+   canonical release checkpoint.
+7. A fresh canonical checkpoint PASSED against the exact published Phase-A
+   implementation-registration commit (evidence below).
+8. No runtime/schema/migration/provider/process/workspace delta exists (Phase-A zero-delta
+   evidence; nothing has changed since).
+9. No separate operational cutover is required (no-cutover record below).
+
+### Phase-A publication identity
+
+- Phase-A commit: `59807e1f84364cb9e0fa657da0da16cc65dacbf2`
+- Phase-A tree (resolved from that commit): `64551251edde676b28289dd1f1692ede5a944a4e`
+- Commit purpose: "Register T6 zero-delta implementation verification"
+- The canonical checkpoint below was run AFTER this commit became authoritative
+  (HEAD = origin/master = this commit at checkpoint start and completion).
+
+### Independent review evidence (publication gate, not semantic authority)
+
+The Phase-A zero-runtime-delta implementation/verification registration completed a fresh
+independent review with HIGH: 0, MEDIUM: 0, LOW: 0, verdict in substance: the T6
+zero-runtime-delta implementation/verification registration passes independent review;
+implementation-complete status is truthful; frozen semantics unchanged. That review is
+publication-gate evidence for this record; no repository artifact exists for it and none is
+invented; it creates no semantic authority.
+
+### Canonical checkpoint evidence
+
+Exactly one completed canonical checkpoint supports this closure:
+
+- checkpointRunIdentity: `934d60a3-a387-4b9e-9d41-6c51a71bbc9d`
+- state: PASSED
+- registryHash: `2a0b397b73971d7a47163b335457ecb40273f5d240ff946f23c6c8e4e33b1a74`
+- repositoryCommit: `59807e1f84364cb9e0fa657da0da16cc65dacbf2` (Phase-A tree resolved from that
+  commit: `64551251edde676b28289dd1f1692ede5a944a4e`)
+- passedCount: 253; totalCount: 253 (passedCount = totalCount)
+- startedAt: 2026-08-28T17:06:07.732Z; completedAt: 2026-08-28T18:03:26.831Z
+- Canonical result root:
+  `.local-artifacts/release-checkpoint-results/20260828T170607732Z-934d60a3-a387-4b9e-9d41-6c51a71bbc9d`
+
+The canonical result records no separate repository-tree field; it binds to `repositoryCommit`,
+whose tree is recorded above. No checkpoint field is fabricated here.
+
+### Abandoned earlier execution (truthful provenance; NOT closure evidence)
+
+An earlier checkpoint execution (checkpointRunIdentity
+`f848da33-1a07-4fa2-a9e2-d5690152cf81`, started 2026-08-28T16:03:59.013Z, against the same
+Phase-A commit) was terminated by the execution environment before completion while still
+RUNNING: 248 owners had completed PASS, ordinal 249 was in flight, and it produced no
+`checkpoint-terminal.json` and no terminal verdict. Disposition: ABANDONED / INCOMPLETE — NOT
+PASS, NOT FAIL, NOT T6 CLOSURE EVIDENCE. The successful `934d60a3…` execution above is the only
+checkpoint result used for the closure claim.
+
+### PostgreSQL test boundary
+
+Canonical checkpoint PostgreSQL target (repository-approved non-secret identity, as recorded in
+the checkpoint result): protocol `postgresql:`, hostname `127.0.0.1`, port `5432`, database
+`ticket_system`. PostgreSQL-category checkpoint suites isolate themselves in uniquely named
+`tstharness_*` schemas and own their migration/drop lifecycle
+(`scripts/postgres-test-harness.js`); the operational runtime schema was not the per-suite
+mutation target. No credentials are recorded here.
+
+Interrupted-run residue (nonblocking evidence note): one harness-owned `tstharness_*` schema
+created by the abandoned execution existed after the successful checkpoint (verified current
+fact). It is test-harness-owned residue outside operational runtime authority, governed by the
+harness's stale-reaping rule (prefix-bounded, age-bounded); it is not closure evidence, not a
+T6 semantic/runtime state, and it does not invalidate the successful isolated checkpoint. It was
+not manually removed, so the test environment is not claimed perfectly clean. No repository
+authority makes its manual deletion a T6 closure requirement.
+
+### No-cutover record
+
+OPERATIONAL CUTOVER REQUIRED: NO. T6 closure requires NO migration, NO schema change, NO
+table/column/event addition, NO backfill, NO runtime behavior change, NO provider change, NO
+process-launcher change, NO workspace-target change, NO DB operational migration, and NO runtime
+restart. Operational closure is recognition that the published implementation already satisfies
+the frozen boundary and passed canonical verification — not a change to operational state.
+
+### Residuals (nonblocking, carried forward unchanged)
+
+1. Workspace positive `not_applied` → safe re-execution still lacks a dedicated end-to-end
+   pre-effect crash-injection wrapper. NONBLOCKING (Phase-A registration, RESIDUAL 1).
+2. "External effects (N)" presentation wording remains presentation hygiene and means recorded
+   evidence, not proof of occurrence. NONBLOCKING (semantic-freeze residual boundary 1; Phase-A
+   registration, RESIDUAL 2).
+
+No additional residual is introduced by closure and none is repaired here. Operationally closed
+means no unresolved closure-blocking obligation remains — not that all optional hygiene is
+complete, and not that T6 is flawless.
+
+### Frozen authority nonchange
+
+T6-I1 unchanged. T6-I2 unchanged. T6-I3 unchanged. T6-I4 unchanged. T6-I5 unchanged. Governed
+membership rule unchanged. Governed surface list unchanged: 1. workspace target mutations;
+2. governed provider requests; 3. process operations. Ordinary worker provider transport
+classification unchanged. Browser v1 classification unchanged. Cross-Run boundary unchanged.
+`external.effect` disposition unchanged. T2/T3/T4/T5 unchanged. This record adds closure
+STATUS/EVIDENCE ONLY.
+
+### What operational closure means here
+
+T6 OPERATIONALLY CLOSED means exactly: semantics frozen; implementation realization registered;
+implementation independently reviewed; repository-owned deterministic verification indexed; the
+exact published Phase-A state passed the canonical checkpoint; no operational cutover is
+required; no unresolved HIGH/MEDIUM closure blocker remains.
+
+It does NOT mean: every external effect in the product is T6-governed; the ordinary worker
+provider transport is governed; the browser read-tier is governed; all presentation hygiene is
+fixed; global exactly-once semantics exist; cross-Run effect deduplication exists; or
+`external.effect` became authoritative.
+
+### Tranche boundary
+
+T7 (intervention / context) remains pending on the roadmap table. This record bootstraps no T7
+design.
