@@ -10164,3 +10164,131 @@ proves nothing by itself (I3); unresolved stays unresolved until evidence or exp
 authorized adjudication resolves it (I4); never repeat an unresolved invocation in a way that
 can add an effect (I5) — invocation-local, no cross-Run equivalence. Domain mechanisms are
 needed only to learn HOW to comply, not WHETHER a claim is truthful.
+
+## T6 provider-surface classification — ordinary worker transport (recorded 2026-08-27)
+
+**Status of this record:** classification-clarification CANDIDATE, prepared for independent review.
+This record is an APPLICATION of the already-frozen T6 membership rule to one previously unnamed
+live provider path. It makes explicit what current repository authority already determines. It is
+NOT a T6 semantic amendment, NOT a new invariant, NOT a governed-surface addition or removal, and
+NOT an implementation change. Until it is published by being committed to this register on
+authoritative `master`, it is not authority (the same convention the semantic-freeze record states
+for itself: an uncommitted working-tree candidate is not authority).
+
+### Question and classification
+
+One classification seam remained implicit in the published T6 authority: whether the live
+ordinary (non-structured) worker provider transport — `callOpenAI` / `callOllama`, reached
+through the ungoverned provider path selected by `selectRunProviderPath`
+(`runtime/governed-leaf-orchestration.js:116-130`; `server.js:12722-12727`) — is subject to
+T6-I1..T6-I5.
+
+**Classification: NO. The ordinary worker provider transport is currently OUTSIDE T6 governance.**
+
+The authority chain, each link already in the repository:
+
+1. **Frozen membership rule** (T6 Effect Boundary — semantic freeze, "Governed membership rule"):
+   "Governed membership is by explicit repository classification ONLY — never inferred merely from
+   mutation, externality, browser operation, being outside PostgreSQL, or implementation
+   existence."
+2. **Frozen governed-surface list** (same record, "Governed membership rule"): item 2 names
+   "Governed provider requests" and cites "T6 bootstrap, provider transport surface".
+3. **T6 bootstrap provider surface** (T6 Effect Boundary — authority bootstrap, "Existing effect
+   surfaces" item 2): the cited surface is "Governed provider transport. A separate durable
+   request/delivery uncertainty protocol (reservation → request_started → transport uncertainty
+   window → response_persisted → settled/released; no retransmission after delivery uncertainty
+   …)". The frozen item therefore names the reservation-based governed protocol.
+4. **Repository term of art** (`docs/ARCHITECTURE_INVARIANTS.md` §10 "Governed Execution
+   (Tranche 4)"): "No governed provider request may occur before a durable reservation exists and
+   a one-winner start transition has been won", and "A structured leaf Run with complete governed
+   authority cannot reach an ungoverned provider adapter" — the worker adapters are the named,
+   deliberate counterpart family.
+5. **Existing records preserving the historical ungoverned provider family**:
+   `docs/DECISION_LOG.md` ("Ollama cannot be governed. … Ollama remains fully supported on
+   historical ungoverned paths"); the ungoverned-path pre-transport transaction record
+   (`docs/ARCHITECTURAL_DECISIONS_PENDING.md`, Tight-Budget Postcondition Liveness Regression:
+   "… one pre-transport transaction on the ungoverned path"); and the registered distinct
+   ungoverned execution family in the structured-evaluation record (direct arms, "multi-agent but
+   ungoverned").
+6. **The frozen I5 implementation fact** (semantic freeze, invariant T6-I5: "current governed
+   domains satisfy T6-I5 through durable no-effect proof or by never repeating an unresolved
+   invocation") holds as written only under this classification, because the ordinary worker path
+   does repeat interrupted requests (see the implementation fact below). The frozen factual record
+   is true exactly when this path is outside the current governed set.
+
+The result is NOT inferred from the word "ungoverned"; it follows from the frozen membership rule
+operating over the chain above. No repository authority anywhere classifies the ordinary worker
+provider path as T6-governed.
+
+### Operator-contract relation
+
+`docs/OPERATOR_CONTRACT.md` "External Side-Effect Boundary" states that model-provider calls are
+an external runtime surface, recorded in replay as provider requests/responses. That statement
+describes the external side-effect/recording boundary. It is NOT, by itself, the T6
+governed-membership enumeration: T6 membership is controlled by the later frozen
+explicit-classification rule. The boundary description is not invalid and is not superseded; the
+two authorities operate at different layers, and the frozen record itself cites the boundary for
+both workspace and provider surfaces. The ordinary worker path satisfies the boundary's recording
+regime as written: request evidence is committed before transport and result/failure evidence
+afterward.
+
+### Current runtime fact (implementation fact, NOT semantic authority)
+
+For the ordinary worker provider path, as implemented today:
+
+- request evidence (`provider.request.persisted`) is durably recorded before any byte leaves —
+  one pre-transport transaction with the budget charge (`server.js`: `onRequest` is awaited
+  before the platform call; registered in the Tight-Budget Postcondition Liveness Regression
+  record);
+- if request evidence exists but response evidence does not after an interruption, the same
+  logical worker request may be issued again during continuation (the resume contract treats the
+  re-entered turn as the same request being finished; `server.js:23228-23244`, `23443-23455`);
+- no reservation / `request_started` no-retransmit authority exists on this path (the registered
+  no-retransmit fence, Governed Request Delivery Uncertainty record, is scoped to governed
+  requests).
+
+Because this path is outside current T6 governance, that behavior is NOT a violation of T6-I5.
+T6 currently imposes no judgment on that behavior. This clarification neither endorses nor
+changes it under any other current or future authority.
+
+### Invocation-identity note
+
+The ordinary worker path already possesses a durable logical request identity — the Run plus the
+model-call key, materialized as the provider-request evidence key and the runtime-budget source
+identity (`server.js:12710`, `12732`, `23441`). That fact does NOT make the path T6-governed, and
+identity alone does NOT establish repetition safety. No new effect ID or cross-domain identity
+contract is created by this record.
+
+### Future-classification fence (forward guidance only)
+
+If a future registered decision classifies the ordinary worker provider path under T6, its
+interrupted-request reissue behavior must be evaluated against the frozen kernel BEFORE such
+classification becomes operational. In particular, T6-I5 would require durable domain authority
+establishing that repetition of an unresolved invocation cannot create an additional real effect;
+the ordinary worker path has no such no-additional-effect authority today. This record does not
+classify the path into T6, does not design a fix, does not authorize migration or schema work,
+does not copy the governed reservation protocol into the worker path, and does not prohibit the
+path's current behavior. Forward guidance only.
+
+### No semantic change
+
+This record changes nothing frozen:
+
+- T6-I1, T6-I2, T6-I3, T6-I4, T6-I5: unchanged.
+- Governed membership rule: unchanged.
+- Current governed surface list: unchanged — workspace target mutations; governed provider
+  requests; process operations.
+- Browser v1 classification: unchanged (read-tier outside T6).
+- Cross-Run boundary: unchanged (no cross-Run equivalence, no global effect ID, no global
+  business-level deduplication).
+- `external.effect` disposition: unchanged (reserved, non-authoritative, no producer).
+- T2/T3/T4/T5 authority: unchanged.
+
+T6 remains: SEMANTIC KERNEL FROZEN; IMPLEMENTATION NOT STARTED; OPERATIONAL CLOSURE NOT CLAIMED.
+This record claims no implementation progress and no operational closure.
+
+### Deliberately out of scope
+
+Not addressed here, each a separate question: `docs/OPERATOR_CONTRACT.md` enumeration drift;
+"External effects (N)" presentation wording; the workspace not-applied crash-window test; the
+orphaned `event-chain-restart-test.js`; any T6 verification indexing.
