@@ -8777,7 +8777,7 @@ a large subsystem.
 | T3 | objective revisions / immutable executed intent | implemented; FROZEN |
 | T4 | relationships | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed, runtime cutover verified — see the T4 operational closure entry below) |
 | T5 | waiting / time / fairness / backpressure | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed; no separate operational cutover required — see the T5 operational closure entry below) |
-| T6 | effect boundary | AUTHORITY BOOTSTRAPPED; SEMANTIC KERNEL UNFROZEN; IMPLEMENTATION NOT STARTED; OPERATIONAL CLOSURE NOT CLAIMED (see the T6 Effect Boundary — authority bootstrap entry below) |
+| T6 | effect boundary | SEMANTIC KERNEL FROZEN; IMPLEMENTATION NOT STARTED; OPERATIONAL CLOSURE NOT CLAIMED (see the T6 Effect Boundary — semantic freeze entry below) |
 | T7 | intervention / context | pending |
 | T8 | operator plane | pending |
 | T9 | external actor / event | pending |
@@ -9867,3 +9867,300 @@ Nonblocking residuals, explicitly NOT claimed closed by this record:
 
 The closure claim is narrow: the specific recorded T6 pre-design stale-JSON authority
 obligation is closed.
+
+## T6 Effect Boundary — semantic freeze (recorded 2026-08-27)
+
+**Status of this record:** semantic-freeze CANDIDATE, prepared for independent review. This
+record freezes the T6 semantic kernel only when this exact record — together with the
+roadmap-row update above — is published by being committed to this register on the
+authoritative `master`. Publication means exactly that: this exact semantic-freeze record and
+roadmap update committed into the canonical register on authoritative `master`. An
+uncommitted working-tree candidate is not authority, and a commit on a local or
+non-authoritative branch is not publication by this wording. Until that publication the
+operative T6 status
+remains: AUTHORITY BOOTSTRAPPED; SEMANTIC KERNEL UNFROZEN; IMPLEMENTATION NOT STARTED;
+OPERATIONAL CLOSURE NOT CLAIMED. Upon publication of this exact record: SEMANTIC KERNEL
+FROZEN; IMPLEMENTATION NOT STARTED; OPERATIONAL CLOSURE NOT CLAIMED. The implementation
+prohibition recorded in the T6 authority bootstrap remains binding until a separate
+implementation decision is registered.
+
+This record was derived from the authority bootstrap's open questions (above) by read-only
+semantic design passes over the repository's effect-related mechanisms. It freezes boundary
+invariants only; it promotes no single per-domain mechanism into broad authority; it
+redefines no frozen T2/T3/T4/T5 semantics.
+
+### Decision summary
+
+T6 is a **TRUTHFULNESS BOUNDARY** over explicitly governed real-effect surfaces. When an
+admitted Run causes, or may have caused, a real effect outside authoritative runtime
+persistence, T6 ensures that crash, restart, or partial failure always yields either
+supported truth about what happened or a truthful refusal to claim it.
+
+T6 is NOT: a generic effect subsystem; a universal effect entity; a lifecycle; a universal
+receipt model; a universal reconciliation protocol; a universal idempotency protocol. The
+persistence boundary LOCATES the truth problem; it does not define a positive ontology.
+EFFECT ≠ "anything outside PostgreSQL". T6 freezes boundary invariants, not a universal
+EFFECT object.
+
+Scope sentence: T6 governs real effects outside authoritative runtime persistence that an
+admitted Run causes or may cause, on the governed effect surfaces designated below. It
+defines no effect ontology, no lifecycle state, no event type, and no table.
+
+### Terminology — governed effect invocation ≠ T2 Ticket attempt
+
+The T6-local unit is the **governed effect invocation** (short: governed invocation). A
+governed effect invocation is NOT a T2 Ticket attempt. It is the domain-local external-action
+identity/recovery boundary already provided by the applicable domain mechanism — for example
+workspace operation identity, provider reservation/request identity, or process-operation
+identity. T6 does NOT create a new universal effect-ID object. T6 does NOT redefine T2
+`attempt`, `admission`, `membership`, `ordinal`, `retry`, `rerun`, or `resume`.
+
+### Governed membership rule
+
+Governed membership is by explicit repository classification ONLY — never inferred merely
+from mutation, externality, browser operation, being outside PostgreSQL, or implementation
+existence. EFFECT ≠ MUTATION.
+
+Currently governed surfaces (repository authority already classifies their real-effect
+boundary):
+
+1. Workspace target mutations (`docs/OPERATOR_CONTRACT.md` "External Side-Effect Boundary";
+   T6 authority bootstrap, workspace surfaces).
+2. Governed provider requests (same operator-contract boundary; T6 bootstrap, provider
+   transport surface).
+3. Process operations (T6 bootstrap, process-operations surface).
+
+A future surface becomes T6-governed ONLY through explicit repository classification under
+the External Side-Effect Boundary because its repetition or unsupported occurrence claims
+present the T6 truth problem. That classification must precede or accompany implementation
+(the boundary's pre-effect recording duty attaches at the surface's first effect).
+
+Browser v1 read-tier is NOT currently T6-governed (read-tier/evidence regime; registered
+asymmetry is fact, not defect). If a browser mutation tier is later implemented,
+implementation alone does NOT make it T6-governed; it requires explicit repository
+classification. Not currently governed: operator/human actions (not Run-caused),
+notifications, logs/telemetry/metrics, replaceable artifacts, evaluation fixtures.
+
+### Frozen invariants (T6-I1..T6-I5, canonical order)
+
+**T6-I1 — Pre-effect durable invocation record.** *Positive authority.*
+
+A governed effect invocation must not be performed before authoritative persistence contains
+a durable record sufficient, under the domain's own contract, to identify that invocation and
+to support truthful post-hoc reasoning about its outcome.
+
+Necessity: the record is the enabling fact for T6-I4 and T6-I5. Without the pre-effect
+durable record, a crash during the external action can leave no authoritative trace from
+which recovery can distinguish an already performed invocation from one that never occurred,
+allowing recovery to re-perform an effect without sufficient truth authority. In the
+workspace domain specifically, this can manifest as post-effect state being mistaken for the
+invocation's starting state and the mutation being applied again. Current domain evidence:
+workspace prepared intent +
+event before the action; provider reservation and one-winner start before any byte leaves;
+process intent before launcher contact; `docs/OPERATOR_CONTRACT.md` requires pre-recording
+for future irreversible-effect surfaces.
+
+Does NOT mean: record shape/content is domain-specific (this does NOT generalize
+`target_operation_intents`, its SQL shape, or its preState mechanism); the record is
+evidence, NOT T2 admission; it creates no Ticket lifecycle or wait state; browser v1 reads
+(ungoverned) need no such record.
+
+**T6-I2 — Supported positive effect claims.** *Truthfulness requirement.*
+
+No authoritative repository claim may state or imply that a governed real effect occurred
+unless repository-owned durable evidence sufficient under the applicable domain contract
+supports that claim.
+
+Authoritative carriers include receipts; authoritative events/evidence records; consequence
+records when making an effect claim; evaluations/completion decisions when making an effect
+claim; recovery records; decisions of record. Presentation/diagnostic surfaces are NOT
+promoted into semantic authority.
+
+RECEIPT ≠ EFFECT. The existing receipt-kind nonconflations (operation receipt ≠ read receipt
+≠ mutation receipt ≠ economic settlement receipt) are preserved. This subsumes and generalizes
+the never-fabricate rules: positive effect evidence is never fabricated.
+
+**T6-I3 — Absence is not proof of absence.** *Negative/non-authority.*
+
+Absence of post-effect evidence alone must never be treated as proof that a governed effect
+did not occur. Non-occurrence may be established only through domain-designated evidence:
+positive observation of unchanged state, or demonstrated absence of a record whose existence
+the domain mechanism guarantees when the effect occurred.
+
+This does NOT mean non-occurrence can never be established; it prohibits bare-absence
+inference. Current domain evidence: workspace `not_applied` requires pre-state-match
+observation, never receipt-absence; provider observation absence is UNKNOWN, never proof of
+non-invocation; process unlaunched conclusions require the launcher's guaranteed-complete
+durable registry.
+
+**T6-I4 — Effect-occurrence uncertainty remains unresolved.** *Truthfulness requirement;
+effect-truth dimension only.*
+
+When repository-owned durable evidence cannot safely distinguish whether a governed effect
+occurred, authoritative effect-occurrence truth must remain unresolved. The runtime must
+preserve enough durable uncertainty to prevent an unsupported occurred claim, an unsupported
+not-occurred claim, and unsafe repetition under T6-I5. Effect-occurrence uncertainty may be
+resolved only by evidence or by a domain-designated adjudication authority explicitly
+authorized to establish that fact. Domain policy may act conservatively while uncertainty
+remains, but such policy action does NOT itself resolve effect occurrence.
+
+Current resolution classifications, recorded precisely: workspace operator recovery
+authorizes a resolution process, while actual occurrence/non-occurrence remains
+evidence-established (recovery completes evidence only when classification proves the fact,
+and refuses what it cannot prove); launcher facts are evidence; conservative provider
+economic settlement is policy acting while delivery occurrence remains unresolved (the
+settlement receipt never claims an unreceived response). No current authority establishes
+occurrence by declaration.
+
+UNCERTAIN ≠ FAILED and UNCERTAIN ≠ NOT_APPLIED are preserved. The words `uncertain`,
+`applied`, `not_applied` are NOT frozen as broad-T6 vocabulary; they remain workspace-domain
+terms. T6-I4 does NOT redefine FAILED, INTERRUPTED, BLOCKED, T5 UNKNOWN (cause
+classification), Ticket lifecycle, or waiting/deferral: a Run may fail or be interrupted
+while effect occurrence remains unresolved, and effect uncertainty never becomes a lifecycle
+state, blocker, or churn outcome.
+
+**T6-I5 — No additional effect from repeating an unresolved governed invocation.**
+*Negative rule; invocation-local.*
+
+Within the identity and recovery boundary of the SAME governed effect invocation under the
+applicable domain mechanism, an invocation whose occurrence remains unresolved must not be
+invoked again in a way that can produce an additional real effect. Such repetition is
+permitted only when durable domain authority sufficient under that domain's contract
+establishes that no additional effect can result. Reuse of an operation key, identical
+inputs, a matching objective, a matching path, matching provider-request bytes, or assumed
+target idempotency do not by themselves establish repetition safety.
+
+Cross-Run boundary (explicit): an independently admitted new Run or T2 attempt is NOT
+automatically the same governed effect invocation merely because its objective, inputs, path,
+provider request, process, or real-world consequence resembles an earlier unresolved
+invocation. T6 creates NO cross-Run effect equivalence, NO global effect ID, and NO global
+business-level deduplication.
+
+Current implementation fact (recorded OUTSIDE the invariant, not part of it): current
+governed domains satisfy T6-I5 through durable no-effect proof or by never repeating an
+unresolved invocation; no current domain uses participant-side deduplication as the
+establishment authority. A future explicitly classified domain may use a durable
+deduplication authority only if its separately registered domain contract is sufficient to
+establish the required no-additional-effect fact; T6-I5 itself neither grants nor forbids
+such a mechanism.
+
+### New Run / retry / rerun / resume fence (load-bearing)
+
+T6 governed effect invocation ≠ T2 Ticket attempt. Existing predecessor authority remains
+exactly as registered: retry/rerun/reassess admit a NEW T2 attempt; lease reclaim, replay
+continuation, terminal repair, and resume retain the existing Run/attempt identity
+(`docs/TICKET_ATTEMPT_AUTHORITY.md`; `docs/PRIMITIVE_GLOSSARY.md`). Admission copies no
+effect state, and T6 does NOT gate or condition new-attempt admission on predecessor effect
+uncertainty ("admission" remains T2 vocabulary with no effect inputs).
+
+An independently admitted new Run starts its OWN T6 chain for each governed effect invocation
+it performs — its own T6-I1 record, T6-I2 claim gate, T6-I3 absence rule, T6-I4 unresolved
+handling, and T6-I5 invocation-local repetition safety. The predecessor Run's unresolved
+effect evidence remains durably visible and independently recoverable (run-scoped recovery
+does not touch the new Run's evidence).
+
+Deliberate product boundary, recorded explicitly: T6 prevents crash/restart/partial-failure
+recovery from silently duplicating the same governed effect invocation. It does NOT prevent
+an operator or separately admitted new Run from deliberately initiating another similar
+real-world effect. Cross-Run/business-level effect deduplication, if ever wanted, is a
+separate future decision requiring its own identity seam and must not be inferred from T6.
+
+### Registered open questions — disposition (all closed by this record)
+
+- Q1 One EFFECT concept? NO. Boundary invariants only.
+- Q2 Workspace generalization? Only the semantic shape: pre-effect durability; supported
+  claims; no bare-absence inference; unresolved preservation; no additional effect from
+  same-invocation repetition. Workspace preState/`not_applied` machinery remains
+  domain-specific (workspace reapplies only after durable not_applied proof — that is the
+  domain's exemplar of the T6-I5 establishment gate, not the gate itself).
+- Q3 Positive occurrence claim? Requires domain-designated repository-owned durable evidence.
+- Q4 Missing evidence proves? Nothing by itself.
+- Q5 UNKNOWN/UNCERTAIN? Freeze unresolved-preservation behavior, not a universal word;
+  settlement does not resolve occurrence.
+- Q6 Target-side idempotency? Not a broad obligation; may be a separately authorized domain
+  capability; never assumed.
+- Q7 Governed domains? Explicit repository classification only.
+- Q8 Attempted vs committed consequence? Truthful durable projection, not new semantic
+  authority.
+- Q9 Completion target-state evidence? Completion truth only; does not independently own
+  effect truth.
+- Q10 `external.effect`? Reserved, non-authoritative vocabulary; no semantic role frozen; no
+  emitter authorized.
+- Q11 Operation keys? Remain domain-specific; no broad identity contract.
+- Q12 Restart truth? T6-I1 records, T6-I2 evidence, T6-I4 unresolved truth, and the authority
+  required for T6-I5 must survive where losing them could cause false claims or unsafe
+  same-invocation repetition; live-only state may disappear where that cannot happen.
+
+### Rejected generalizations (not frozen)
+
+Universal prepared-intent machinery; universal receipt shape; universal reconciliation state
+machine; universal operation-key identity; universal target idempotency; universal
+`external.effect` event; universal attempted/committed consequence schema; browser using
+workspace recovery; provider using workspace recovery; effect = mutation; effect =
+irreversible action; effect = anything outside PostgreSQL; global/cross-Run effect
+deduplication.
+
+### `external.effect` disposition
+
+`external.effect` remains reserved and non-authoritative. No producer currently exists. T6
+creates no emitter and freezes no semantic role for it. Its current consequence/presentation
+consumers do not grant semantic authority. Empty current external-effect evidence means "no
+recorded external-effect evidence", NOT "no external effect occurred". The vocabulary is not
+retired in this semantic-freeze step (a future disposition, if ever wanted, is a separate
+registered decision; the sibling reserved type `notification.sent` is notification vocabulary
+and is not decided by T6).
+
+### Attempted-vs-committed disposition
+
+Attempted-vs-committed consequence data remains a truthful durable projection, not new broad
+authority. "Attempted" means an invocation/action was attempted; it MUST NOT be read as proof
+that the real effect occurred. A committed consequence read as an occurrence claim remains
+subject to T6-I2 and therefore must be backed by the domain's authoritative durable evidence.
+No universal consequence schema is frozen.
+
+### Target-side idempotency / deduplication disposition
+
+Target-side idempotency is NOT a broad T6 obligation. Safety may not be inferred from
+operation key, same request bytes, same inputs, or assumed target behavior. A future
+domain-specific durable deduplication authority may satisfy T6-I5 only through a separately
+registered contract sufficient to establish that replay cannot create an additional effect.
+No current domain has such an exemplar.
+
+### Predecessor fences preserved (not rewritten)
+
+T2: lifecycle / attempt / admission / completion / cancellation / blocker authority. T3:
+objective revision / immutable executed intent / retry-rerun-resume identity. T4:
+relationship authority; kind has no effect authority. T5: waiting / deferral / backpressure /
+time / fairness; UNKNOWN cause classification; noninterference. Also preserved: provider
+no-retransmit; process-output-is-evidence; availability-is-not-write-authority;
+required-persistence fail-closed behavior; runtime budgets; lease fencing; mutation
+admission. No T6 invariant may become authority over those mechanisms.
+
+### Residual boundaries (non-blocking)
+
+1. Presentation wording: "External effects (0)" / "none" can only mean no recorded evidence,
+   not proof that none occurred. Presentation hygiene, not a freeze blocker.
+2. `notification.sent` remains separate notification vocabulary; T6's disposition of
+   `external.effect` does not decide it.
+3. Workspace `applied` / `not_applied` / `uncertain` remain workspace-domain vocabulary, NOT
+   broad-T6 semantic terms.
+4. Cross-Run/business-level effect deduplication is explicitly outside this T6 kernel and
+   would require a separate future decision.
+
+### Implementation consequences
+
+The semantic design requires no new persistence concept, event type, universal receipt, or
+universal schema. Current domain mechanisms appear capable of satisfying the frozen kernel.
+That statement does NOT mean T6 implementation is complete. Implementation remains NOT
+STARTED. No implementation steps are authorized by this record; no migration is authorized or
+numbered; no schema work is authorized. Implementation requires its own separately registered
+decision.
+
+### Cognitive-efficiency note
+
+A fresh capable model can recover the T6 answer from this record plus the governed-membership
+rule alone: record before invocation (I1); claim only with durable evidence (I2); absence
+proves nothing by itself (I3); unresolved stays unresolved until evidence or explicitly
+authorized adjudication resolves it (I4); never repeat an unresolved invocation in a way that
+can add an effect (I5) — invocation-local, no cross-Run equivalence. Domain mechanisms are
+needed only to learn HOW to comply, not WHETHER a claim is truthful.
