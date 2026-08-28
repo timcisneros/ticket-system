@@ -8777,7 +8777,7 @@ a large subsystem.
 | T3 | objective revisions / immutable executed intent | implemented; FROZEN |
 | T4 | relationships | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed, runtime cutover verified — see the T4 operational closure entry below) |
 | T5 | waiting / time / fairness / backpressure | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed; no separate operational cutover required — see the T5 operational closure entry below) |
-| T6 | effect boundary | SEMANTIC KERNEL FROZEN; IMPLEMENTATION NOT STARTED; OPERATIONAL CLOSURE NOT CLAIMED (see the T6 Effect Boundary — semantic freeze entry below) |
+| T6 | effect boundary | SEMANTIC KERNEL FROZEN; IMPLEMENTATION COMPLETE (zero runtime delta; verification registered); OPERATIONAL CLOSURE NOT CLAIMED (see the T6 Effect Boundary — semantic freeze entry below; zero-runtime-delta implementation/verification registration entry below) |
 | T7 | intervention / context | pending |
 | T8 | operator plane | pending |
 | T9 | external actor / event | pending |
@@ -10292,3 +10292,177 @@ This record claims no implementation progress and no operational closure.
 Not addressed here, each a separate question: `docs/OPERATOR_CONTRACT.md` enumeration drift;
 "External effects (N)" presentation wording; the workspace not-applied crash-window test; the
 orphaned `event-chain-restart-test.js`; any T6 verification indexing.
+
+---
+
+## T6 Effect Boundary — zero-runtime-delta implementation / verification registration (recorded 2026-08-27)
+
+**Status of this record:** Phase-A implementation-registration CANDIDATE, prepared for
+independent review. It registers that the already-frozen T6 semantic kernel is REALIZED by
+existing predecessor-owned governed-domain mechanisms, requires ZERO runtime implementation
+delta, and that repository-owned deterministic verification ownership is now explicitly
+indexed. It is NOT a T6 semantic amendment, NOT a new invariant, NOT a governed-surface
+addition or removal, NOT an implementation code change, and NOT operational closure. Until
+this exact record and the roadmap-row update above are published by being committed to this
+register on authoritative `master`, they are not authority (the same convention the semantic
+freeze and classification records state for themselves: an uncommitted working-tree candidate
+is not authority). The CURRENT published T6 status therefore remains: SEMANTIC KERNEL FROZEN;
+IMPLEMENTATION NOT STARTED; OPERATIONAL CLOSURE NOT CLAIMED. Upon publication of this exact
+reviewed record: SEMANTIC KERNEL FROZEN; IMPLEMENTATION COMPLETE (zero runtime delta;
+verification registered); OPERATIONAL CLOSURE NOT CLAIMED. Operational closure is NOT claimed
+by this record; it requires its own Phase-B evidence record and a fresh canonical checkpoint
+after this Phase-A publication.
+
+### Zero-runtime-delta decision
+
+T6 requires NO new runtime mechanism. The frozen invariants (T6-I1..T6-I5, semantic freeze
+entry above; semantics not re-specified here) are already realized by the existing governed
+surfaces:
+
+WORKSPACE TARGET MUTATIONS
+
+- durable target operation intent before effect (`target_operation_intents`, migration 004,
+  append-only);
+- receipt/evidence ownership committed atomically with replay/event evidence;
+- positive post-state classification (`classifyPreparedWorkspaceMutation`, `server.js` —
+  classification by observation, never by receipt-absence);
+- unresolved refusal (`workspace.operation_reconciliation_required`; manufacture nothing);
+- safe same-invocation repetition gate (re-execution only after durable `not_applied` proof).
+
+GOVERNED PROVIDER REQUESTS
+
+- durable reservation with ordinal and budget charge;
+- one-winner `request_started` before any byte leaves
+  (`runtime/governed-leaf-orchestration.js` `markEconomicRequestStarted`);
+- durable response/settlement evidence (settlement reconstructible from the durable response);
+- uncertainty preservation (started-without-response is UNDECIDABLE, fail-closed
+  `governed_request_delivery_uncertain`);
+- never retransmit an unresolved governed request.
+
+PROCESS OPERATIONS
+
+- durable process intent before launcher contact (`process_operations`, migration 029, with
+  hash-pinned launch/containment identity, `runtime/process-execution-contract.js`);
+- launcher registry/evidence authority (output is evidence, not authority);
+- fail-closed absence handling (unlaunched conclusions require the launcher's
+  guaranteed-complete durable registry);
+- truthful interruption/reconciliation (launcher facts are evidence);
+- accepted operation never relaunched (exactly-once lifecycle, closed terminal outcomes).
+
+### 15-cell compliance result
+
+```
+             WORKSPACE   PROVIDER   PROCESS
+T6-I1        PASS        PASS       PASS
+T6-I2        PASS        PASS       PASS
+T6-I3        PASS        PASS       PASS
+T6-I4        PASS        PASS       PASS
+T6-I5        PASS        PASS       PASS
+```
+
+PASS means: current repository implementation satisfies the frozen invariant for that
+explicitly governed surface. This matrix is implementation/verification status. It is NOT new
+semantic authority and creates none.
+
+### Verification index (navigation only — pointers, not copied prose)
+
+All suites named REQUIRED below are registered `status: "required"` in
+`scripts/test-manifest.js` and therefore run in the canonical release checkpoint (PostgreSQL
+suites gated by `TEST_DATABASE_URL`).
+
+| Invariant | Workspace | Governed provider | Process |
+| --- | --- | --- | --- |
+| T6-I1 | Owner: `target_operation_intents` intent-before-effect + preState capture (`server.js`, `persistence/postgres/store.js`). Direct: `target-operation-reconciliation-test.js`, `operation-poststate-observation-test.js`. Supporting: `reconciliation-evidence-failure-test.js` | Owner: reservation + one-winner start (`runtime/governed-leaf-orchestration.js`, `markEconomicRequestStarted`). Direct: `governed-pre-transport-restart-postgres-test.js` (zero bytes sent). Supporting: `governed-required-persistence-postgres-test.js` | Owner: intent-before-launcher-contact, hash-pinned identity (`runtime/process-execution-contract.js`, migration 029). Direct: `process-runtime-lifecycle-postgres-test.js`, `process-launcher-foundation-contract-test.js` |
+| T6-I2 | Owner: receipt atomic with replay/event evidence. Direct: `target-operation-reconciliation-test.js` (exactly one recovery receipt), `reconciliation-evidence-failure-test.js` (refusal on persistence failure) | Owner: settlement from durable response; receipt never claims unreceived response. Direct: `economic-settlement-receipt-contract-test.js` | Owner: output-is-evidence consequence reconstruction. Direct: `process-consequence-reconstruction-test.js` |
+| T6-I3 | Owner: positive pre-state-match classifier (`classifyPreparedWorkspaceMutation`). Direct: `operation-poststate-observation-test.js` | Owner: `transport.absenceMeans` = UNKNOWN carried beside projection value. Direct: `provider-transport-observation-test.js` | Owner: guaranteed-complete launcher registry gate. Direct: `process-runtime-fault-recovery-test.js` |
+| T6-I4 | Owner: divergence refusal + `workspace.operation_reconciliation_required`. Direct: `target-operation-reconciliation-test.js` (UNCERTAIN branch) | Owner: UNDECIDABLE fail-closed `governed_request_delivery_uncertain`. Direct: `governed-post-transport-restart-postgres-test.js`. Supporting: `provider-response-recovery-postgres-test.js` | Owner: launcher facts as evidence; truthful interruption. Direct: `process-runtime-fault-recovery-test.js`. Supporting: `process-supervision-postgres-test.js` |
+| T6-I5 | Owner: reapply gate — recovery effect only after durable `not_applied` proof (`server.js`). Direct: `target-operation-reconciliation-test.js` (applied side: no re-apply, no second receipt). Supporting (mutation shield, NOT a required owner): `suite-mutation-test.js` — registered `status: "excluded", reason: "mutation-tool"`, deliberately outside the checkpoint; it exists to prove the required suites' sensitivity to classifier/refusal regressions | Owner: never retransmit an unresolved governed request. Direct: `governed-pre-transport-restart-postgres-test.js` + `governed-post-transport-restart-postgres-test.js` (both crash points: one ordinal, one charge, no second transport) | Owner: exactly-once lifecycle, accepted operation never relaunched, closed terminal outcomes. Direct: `process-runtime-fault-recovery-test.js`. Supporting: `process-execution-runtime-test.js`, `process-launcher-foundation-deployment-test.js` |
+
+Supporting workspace/admission context (all REQUIRED, indirect for the kernel):
+`mutation-admission-contract-test.js`, `mutation-admission-scheduler-test.js`,
+`mutation-admission-backpressure-test.js`. Required launcher/foundation ownership for the
+process column: `process-launcher-foundation-{contract,cross-uid,deployment,native}-test.js`,
+`process-materializer-{contract,cross-uid,deployment,linux,native}-test.js`,
+`process-launcher-retention-test.js` (infrastructure beneath the I1/I3/I5 owners).
+
+### Zero-delta implementation evidence
+
+Independently recomputed from current history (2026-08-27): `git diff 0a947d1..HEAD
+--name-only` contains ONLY `AGENTS.md` and four documentation files
+(`docs/ARCHITECTURAL_DECISIONS_PENDING.md`, `docs/AUTHORITY_AND_DURABILITY.md`,
+`docs/EVIDENCE_VS_TELEMETRY.md`, `docs/EXECUTION_SEMANTICS.md`); zero changed paths under
+`server.js`, `runtime/`, `persistence/` (including migrations), `scripts/test-manifest.js`,
+or `scripts/release-checkpoint.js`. Base identity `0a947d1272098604f102405b2a6943c3d24822a9`
+is the published T5 implementation commit against which the register's T5 operational-closure
+entry records canonical checkpoint evidence (253/253). That recorded T5 checkpoint evidence is
+NOT claimed as T6 closure evidence; T6's own closure checkpoint is PENDING (below). No "T6
+implementation commit" containing runtime code exists or is invented: this Phase-A publication
+itself is the registered decision recognizing the already-existing implementation.
+
+### Schema / migration / behavior delta
+
+SCHEMA DELTA: NONE. MIGRATION: NONE. NEW TABLE/COLUMN/EVENT TYPE: NONE. BACKFILL: NONE.
+RUNTIME BEHAVIOR CHANGE: NONE. PROVIDER CHANGE: NONE. PROCESS-LAUNCHER CHANGE: NONE.
+WORKSPACE-TARGET CHANGE: NONE.
+
+### Ordinary worker provider transport
+
+The published classification record above governs: the ordinary/non-structured worker provider
+transport (`callOpenAI` / `callOllama` via the ungoverned `selectRunProviderPath`) remains
+OUTSIDE CURRENT T6 GOVERNANCE. It is therefore not part of the 15-cell implementation matrix.
+The derivation is not repeated and not reopened.
+
+### Residuals (nonblocking, carried for future reviewers)
+
+- RESIDUAL 1 — workspace positive `not_applied` → safe re-execution has no dedicated
+  end-to-end crash-injection suite. NONBLOCKING: the property is deterministically recoverable
+  from the positive pre-state-match classifier, the required reconciliation verification, the
+  classifier mutation shield, and the registered workspace recovery fact; no separate
+  crash-injection suite is required for truthful closure.
+- RESIDUAL 2 — "External effects (N)" presentation wording. NONBLOCKING PRESENTATION HYGIENE:
+  the frozen record already states it means recorded evidence, not proof of effect occurrence.
+  Presentation cannot become semantic authority (T6-I2).
+
+Orphaned-test boundary: `event-chain-restart-test.js` remains registered
+`orphaned/cutover-orphan` in `scripts/test-manifest.js` and is NOT a T6 closure dependency;
+its relevant property has successor required ownership. Not repaired here.
+
+### Frozen semantic nonchange
+
+T6-I1 unchanged. T6-I2 unchanged. T6-I3 unchanged. T6-I4 unchanged. T6-I5 unchanged. Governed
+membership rule unchanged. Governed surface list unchanged: 1. workspace target mutations;
+2. governed provider requests; 3. process operations. Ordinary worker provider transport
+classification unchanged. Browser v1 classification unchanged. Cross-Run boundary unchanged.
+`external.effect` disposition unchanged. T2/T3/T4/T5 unchanged. This record adds
+IMPLEMENTATION / VERIFICATION STATUS ONLY.
+
+### Checkpoint status
+
+CANONICAL CHECKPOINT FOR T6 OPERATIONAL CLOSURE: PENDING. It must be run only after (1) this
+Phase-A candidate is independently reviewed, and (2) this exact reviewed Phase-A candidate is
+published to authoritative `master`. No prior checkpoint evidence is claimed to close T6 and
+no T6 checkpoint identity/hash/counts are claimed here.
+
+### Cutover status
+
+OPERATIONAL CUTOVER REQUIRED: NO. Phase A changes no runtime, schema, migration, provider
+behavior, process behavior, workspace behavior, or DB state. This does not itself claim
+operational closure.
+
+### Implementation-complete claim scope
+
+"IMPLEMENTATION COMPLETE" here means exactly: the frozen T6 invariants are realized by
+existing governed-domain mechanisms, and repository-owned deterministic verification ownership
+is now explicitly registered. It does NOT mean: new T6 runtime code was written; a checkpoint
+has passed for T6 closure; operational closure is complete; the presentation residual is
+fixed; or the ordinary worker provider transport was brought under T6.
+
+### Hermeticity / cognitive-efficiency note
+
+After publication, a fresh capable model can recover, without broad source rediscovery: frozen
+semantics from the freeze entry; governed membership from the freeze; the ordinary worker
+exclusion from the published classification record; and implementation realization plus
+verification ownership from THIS record. No upstream record is duplicated; this record only
+points. The register's cognitive-efficiency rule is honored: recovery burden is reduced by
+indexing already-registered facts, not by deciding open questions in advance — no T6 semantic
+question is decided here.
