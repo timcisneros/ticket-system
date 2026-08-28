@@ -8778,7 +8778,7 @@ a large subsystem.
 | T4 | relationships | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed, runtime cutover verified — see the T4 operational closure entry below) |
 | T5 | waiting / time / fairness / backpressure | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed; no separate operational cutover required — see the T5 operational closure entry below) |
 | T6 | effect boundary | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete via zero runtime delta; independently reviewed; canonical checkpoint passed; no separate operational cutover required — see the T6 operational closure entry below) |
-| T7 | intervention / context | AUTHORITY BOOTSTRAPPED (semantic kernel UNFROZEN; implementation NOT started; operational closure NOT claimed — see the T7 authority bootstrap entry below) |
+| T7 | intervention / context | SEMANTIC KERNEL FROZEN (implementation NOT started; operational closure NOT claimed — see the T7 semantic freeze entry below) |
 | T8 | operator plane | pending |
 | T9 | external actor / event | pending |
 | T10 | foundation closure | final |
@@ -10846,3 +10846,299 @@ stale `data/message-threads.json` storage pointer in `docs/OPERATOR_INBOX.md`; t
 `oquery update-ticket` route targeting the retired status endpoint; unrelated historical "T7"
 labels (covered by the tranche-numbering disambiguation guard); historical JSON-era storage paths in
 `docs/REMAINING_PRODUCT_UNCERTAINTIES.md`.
+
+---
+
+## T7 Intervention / Context — semantic freeze (recorded 2026-08-28)
+
+**Status:** SEMANTIC-FREEZE CANDIDATE — NOT AUTHORITY UNTIL INDEPENDENT REVIEW AND PUBLICATION.
+
+The CURRENT published T7 status remains: AUTHORITY BOOTSTRAPPED; SEMANTIC KERNEL UNFROZEN;
+IMPLEMENTATION NOT STARTED; OPERATIONAL CLOSURE NOT CLAIMED. The prospective roadmap-table edit
+in this uncommitted candidate is NOT authority yet. Upon independent review and publication to
+authoritative `master`, the T7 row becomes: SEMANTIC KERNEL FROZEN; IMPLEMENTATION NOT STARTED;
+OPERATIONAL CLOSURE NOT CLAIMED.
+
+This entry is the registered semantic design recovered from the published T7 authority
+bootstrap. It freezes the T7 semantic kernel below. It authorizes NO implementation: the
+bootstrap's implementation prohibition stands until a separate implementation decision is
+registered for each surface, and no implementation obligation is created by this freeze.
+
+### The kernel answer (compressed)
+
+T7 is the **information-delivery and trust boundary** for new or corrective information
+reaching admitted or future work — NOT a context-construction authority. Recovered from
+repository evidence:
+
+- Every path by which information currently reaches work is predecessor- or boundary-owned:
+  executed-intent snapshots and objective revision (T3), admission and reassess presentation of
+  durable history (T2), relationship provenance (T4), governed request/effect evidence (T6),
+  and the workspace target boundary.
+- The genuinely unowned seams are DELIVERY/TRUST seams: the operator→agent information
+  asymmetry (bootstrap D), `human_confirmed` doctrine without implementation (F), and the
+  same-Run visibility of externally changed workspace state (G).
+- Therefore T7 requires **no new durable substrate today**. It freezes the trust rules, the
+  delivery-truth vocabulary, the no-same-Run-delivery-authorization boundary, correction
+  semantics, and the unassigned-channel boundaries that any future delivery design must
+  satisfy.
+
+No T7 invariant below redefines frozen T2/T3/T4/T5/T6 authority, the workspace target
+boundary, operator workspace recovery, watcher authority, structured-allocation planner
+governance, Work Context semantics, process input materialization, admin/catalog surfaces, or
+T8 territory.
+
+### Frozen invariants
+
+**T7-I1 — Subject boundary.** T7's subject is the semantic act of DELIVERING new or corrective
+information to admitted or future work, and the trust classification of that act.
+*Necessity:* the unowned seams are delivery/trust seams; context construction already has
+owners or is presentation. *Positive:* future delivery designs may be governed by T7.
+*Negative/non-authority:* GENERIC prompt/context construction (`buildAgentPrompt`,
+`compactTicketContextForPrompt`, `buildRuntimeEnvelope`), workload-profile guidance, phase
+gating, workspace anchoring, and every predecessor-owned surface remain outside T7; generic
+prompt content is presentation whose recording as evidence is owned by existing
+replay/evidence authority. A separately authorized T7 delivery contract MAY constrain
+whether/how a SPECIFIC delivered fact is included in an execution request; that authority
+attaches to the specific T7 delivery fact/contract, never to the generic assembly mechanism,
+and does NOT make the prompt builder, runtime envelope, generic context selection, or all
+prompt content into T7 authority. *Predecessor interaction:* none redefined. *Implementation consequence:* no prompt
+builder becomes T7 authority; any future delivery mechanism is a new, separately designed and
+registered surface.
+
+**T7-I2 — Trust boundary.** Delivered information carries exactly the authority class of its
+separately sourced record under registered doctrine; inclusion in a prompt or request NEVER
+upgrades provenance; model-derived prose remains advisory permanently
+(`runtime/completion-decision-contract.js` `authority:false`;
+`docs/decision-memo-objective-interpretation-direction.md`). ACTOR AUTHORIZATION IS NOT CLAIM
+AUTHORITY: an authorized actor's stored assertion is authoritative only as a durable record of
+what that actor asserted — not as truth about the world — and yields hard outcomes only
+through the authority path its own doctrine provides (e.g., T2 blocker-resolution effect) or
+through a future design that creates separately sourced records under registered doctrine.
+*Negative:* T7 creates no trust lattice; it consumes the source classes existing authority
+already defines (operator assertion, deterministic corroboration, repository observation,
+external observation, model-derived prose, derived/summarized presentation). *Predecessor
+interaction:* codifies existing doctrine; changes nothing.
+
+**T7-I3 — No same-Run T7 delivery authorized by this kernel.** THIS semantic freeze creates
+and authorizes NO same-Run T7 delivery channel, and none exists today: no T7 primitive
+introduces new semantic information into an already-admitted live Run, and this kernel
+defines no generic delivery channel for either live or later work. Same-Run model visibility
+of externally changed workspace target state (bootstrap G) is TARGET-BOUNDARY TRUTH, not T7
+delivery: T7 neither authorizes nor prohibits operator workspace mutation during a Run, owns
+no fence for it, and does not reclassify that visibility. *Necessity:* the only documented
+same-Run information gap (bootstrap D) is recorded by `docs/OPERATOR_INBOX.md` as a design
+decision with prompt-injection/boundedness implications requiring its own registered design.
+*Negative:* this invariant does NOT resolve bootstrap D, does NOT freeze any workspace
+behavior, and does NOT permanently forbid same-Run delivery. *Predecessor interaction:*
+preserves T2 same-attempt recovery (which accepts no new input), T3 revision guards, T5
+waiting, T6 effect boundaries. *Implementation consequence:* a future same-Run T7 delivery
+mechanism is NOT authorized by this freeze and may be proposed ONLY through a separate
+registered semantic decision — an explicit T7 semantic extension/amendment, not merely an
+implementation decision — consistent with T7-I2, T7-I5, and T7-I6.
+
+**T7-I4 — No new substrate required today; future-delivery durability requirement.** T7
+requires NO new durable substrate today. TODAY, delivery of information to future work occurs
+only through already-owned mechanisms, and this freeze creates no new T7 mechanism; a future
+T7-governed later-work/later-attempt delivery mechanism MAY be proposed through a separate
+registered semantic decision consistent with the frozen kernel — this freeze does NOT
+authorize one. IF a future registered design creates a T7-governed delivery mechanism, that
+design must durably establish — no later than the point at which the delivery is authorized
+or performed — the SOURCE IDENTITY AND PROVENANCE of the information (information sources may
+be actors, runtime, recovery, relationship work, or observation, and are not necessarily
+actors), a content binding for the delivered information, the intended target (work/attempt/
+run scope), and the authority that permits the delivery; a delivering actor's authorization,
+where an actor is involved, is distinct from the source identity. It must additionally prove
+delivery occurrence durably under T7-I5. *Necessity:* crash/restart truthfulness and T7-I5
+evidence require durable delivery facts; today no delivery mechanism exists that needs them.
+*Negative:* no table, column, event type, API, or schema is frozen by this invariant; the
+requirement is semantic only; no T6 prepared-intent state machine is imported, and delivery
+is not an "effect." *Predecessor interaction:* source-record durability remains owned by each
+record's own authority.
+
+**T7-I5 — Delivery truth vocabulary.** For any T7-governed delivery, authoritative claims
+must distinguish AT LEAST: (1) INFORMATION AUTHORITY — the authority/provenance of the
+separately sourced information record; (2) DELIVERY AUTHORIZATION — why this delivery was
+permitted; (3) DELIVERY OCCURRENCE — durable evidence, defined by the delivery contract, that
+the intended work or execution surface was actually made able to access the exact delivered
+information; (4) any OBSERVABLE DOWNSTREAM OUTPUT/RESPONSE — only to the extent independently
+evidenced by the relevant execution contract. This is a minimum distinction set, not an
+exhaustive rule that future protocols may prove nothing else. Essential negative rule:
+evidence that information was made available to an execution does NOT by itself prove opaque
+internal model attention, cognitive uptake, reasoning, or causal use; request inclusion
+proves availability/inclusion according to the request evidence — nothing more. Observable
+transport/protocol facts remain provable when independently evidenced. Absence of a delivery
+record never proves information was unknown, unavailable, or not considered. For TODAY'S
+existing non-T7 model requests, hash-bound provider-request/replay evidence
+(`providerRequests`, `systemInstructionSnapshot`) proves exact request inclusion/content
+according to its existing authority; for a FUTURE T7-governed model delivery that request
+evidence may satisfy the DELIVERY OCCURRENCE portion, but the delivery design must still
+provide whatever source/provenance/authorization binding T7-I4 requires. Request-inclusion
+evidence is one DOMAIN-SPECIFIC satisfaction of delivery occurrence, not its universal
+definition; future non-model T7 delivery surfaces may define their own repository-owned
+occurrence evidence consistent with this invariant. Occurrence evidence may naturally be
+produced at or after the delivery act; crash/restart must not permit occurrence to be claimed
+solely from the pre-delivery authorization record. T7 DELIVERY OCCURRENCE ≠ T6 EFFECT
+OCCURRENCE: delivery occurrence states only that information was made available under a T7
+delivery contract; it does NOT state that an external or governed real-world effect occurred
+and does not alter T6-I1..I5. *Necessity:* prevents false "the model used it" claims, false
+negative claims, and collapse of delivery truth into one protocol. *Predecessor interaction:*
+consumes existing evidence authority; changes nothing.
+
+**T7-I6 — Correction semantics.** Correction of delivered information is a NEW separately
+sourced record that references the prior record. Historical provenance, immutable executed
+intent, and source records are NEVER mutated in place. T7 defines no supersession or
+revocation machinery today; later delivery simply carries newer source records. T2/T3/T6
+supersession and repair rules are unaffected. *Necessity:* the kernel covers CORRECTIVE
+information; without this rule correction would tempt in-place provenance upgrades that
+registered doctrine forbids. *Predecessor interaction:* preserves T3 immutability and T6
+evidence immutability exactly.
+
+**T7-I7 — Model→operator messaging ownership unassigned.** This freeze assigns NO T7
+ownership to the planned mid-run model→operator inbox operation (`docs/OPERATOR_INBOX.md`
+"planned evolution"). T7 does not own this surface under this freeze; ownership remains
+UNASSIGNED, and T7, T8, or another future mechanism remain possible outcomes of a separate
+registered decision. No T7 authority may be inferred today. *Necessity:* the bootstrap
+requires exactly this negative boundary.
+
+**T7-I8 — `human_confirmed` boundary.** `human_confirmed` remains SEPARATE registered authority
+doctrine (`docs/decision-memo-objective-interpretation-direction.md`); T7 does not create its
+authority and does not realize it. If such records ever exist under that doctrine, T7-governed
+delivery may carry them like any separately sourced record — carrying never upgrades them.
+*Negative:* no `human_confirmed` implementation is authorized by T7.
+
+### Final classification of bootstrap families
+
+- **A — predecessor-owned; EXCLUDED.** Unchanged; T7 consumes T2 reassess admission (which
+  determines WHEN prior-failure presentation is included) without redefining it.
+- **B — domain-specific authority; NOT PROMOTED.** Consumed/referenced by T7 where noted;
+  owned elsewhere.
+- **C — presentation-only; OUTSIDE T7.** All items remain presentation implementation:
+  prompt builders, runtime envelope, per-step workspace re-snapshot, `priorFailureContext`
+  (durable-history-derived, `reassess`-first-step-only, prompt-transient),
+  `recoveryClassification` (inline, unpersisted), and prompt selection/exclusion rules.
+  Correctness-protective rules among them (bounded action batches, truncated-batch-not-
+  complete, snapshot availability fail-closed) are owned by their existing contracts; T7 owns
+  none of them. T7 does NOT upgrade any C item into durable T7 fact. Generic assembly remains
+  presentation-owned even where a future separately authorized T7 delivery contract constrains
+  inclusion of a SPECIFIC delivered fact (T7-I1); family C is NOT promoted into T7.
+- **D — open design boundary; BOUNDED, NOT RESOLVED.** Blocker-resolution note content
+  remains a T2 operator annotation; it does not become deliverable information by resolution
+  itself; any future delivery of it requires its own registered design satisfying
+  T7-I2/T7-I4/T7-I5/T7-I6.
+- **E — future/unimplemented; OWNERSHIP UNASSIGNED** (T7-I7).
+- **F — registered doctrine; SEPARATE** (T7-I8).
+- **G — existing fact; TARGET-BOUNDARY TRUTH, OUTSIDE T7 DELIVERY** (T7-I3); mutation
+  authority untouched.
+
+### Dispositions
+
+Q1: A (information-delivery/trust boundary), narrowed by E (presentation stays outside).
+Q2: all C items presentation-only outside T7; nothing promoted.
+Q3: C/D combined — this freeze authorizes no same-Run T7 delivery and none exists today;
+     workspace visibility is outside T7; a future same-Run T7 delivery mechanism may be
+     proposed only through a separate registered semantic decision (T7-I3).
+Q4: conditional — no pre-delivery fact required today; T7-I4 semantic requirements bind any
+     future delivery design.
+Q5: B/C — source classification consumed from existing authority; actor-authorization ≠
+     claim-authority frozen in T7-I2; no new lattice.
+Q6: B — separate doctrine; T7 carries, never creates (T7-I8).
+Q7: A — workspace target changes are not T7 delivery; visibility is target-boundary truth.
+Q8: blocker resolution stays T2 annotation; content becomes deliverable only via a future
+     registered design (bounded by T7-I2/I4/I5/I6).
+Q9: for today's existing non-T7 model requests, provider-request/replay evidence proves exact
+     request inclusion/content; for a future T7-governed model delivery, that evidence may
+     satisfy DELIVERY OCCURRENCE but the design must also satisfy T7-I4
+     source/provenance/authorization binding; opaque cognition/use claims remain forbidden.
+Q10: correctness rules → existing contracts; selection/exclusions → presentation;
+     economics → T6-adjacent authority; NO universal T7 selection invariant.
+Q11: ownership unassigned; negative boundary frozen (T7-I7).
+Q12: source records, delivery authorization/binding, and delivery-occurrence evidence
+     survive (owner-owned durability, as applicable); prompt-derived presentation may
+     disappear and be recomputed from durable history; nothing may be reconstructed from
+     model prose.
+
+13. Universal context primitive: NO. 14. Universal intervention primitive: NO.
+15. New durable T7 substrate: NO (conditional requirements in T7-I4 only).
+16. Same-Run T7 delivery: NOT AUTHORIZED by this kernel and none exists today (T7-I3);
+    future proposals require a registered semantic extension, not merely an implementation
+    decision. 17. Later-attempt T7 delivery: TODAY only through already-owned mechanisms;
+    this freeze creates no new T7 mechanism; a future T7-governed mechanism may be proposed
+    via separate registered semantic decision (T7-I4). 18. T7 creates authority: NO — carries
+    and bounds existing authority classes. 19. T7 owns human_confirmed creation: NO. 20. T7
+    governs operator workspace mutations: NO. 21. T7 governs visibility of workspace changes: NO.
+22. T7 ownership of model→operator messaging: NONE assigned under this freeze; ownership
+    unassigned (T7-I7). 23. Proof of request inclusion/delivery: YES for any T7-governed
+    delivery via durable occurrence evidence defined by its delivery contract; today's
+    existing request evidence proves request inclusion for existing non-T7 requests (T7-I5).
+    24. Proof of model consumption: NO — opaque cognition/uptake/reasoning/causal use is not
+    proved by availability evidence. 25. Universal
+truncation/selection semantics: NO. 26. New lifecycle state: NO. 27. T2 attempt identity:
+UNCHANGED. 28. T3 executed intent: UNCHANGED. 29. T4 relationships: UNCHANGED. 30. T5 waiting:
+UNCHANGED. 31. T6 effect truth: UNCHANGED. 32. Must survive restart: source records (owner-
+owned) and delivery-occurrence evidence (existing replay/event evidence); nothing else is a
+T7 fact today.
+
+### Terminology preservation
+
+Work Context ≠ T7 context: the Work Context grouping/catalog primitive is unchanged and is
+NOT reinterpreted as T7 substrate. The seven recorded `context` senses retain their separate
+meanings; none is promoted.
+
+### Information identity decision
+
+No universal context ID. Where a future delivery design needs identity, the source record's
+own identity plus a content binding (hash) of the delivered information is sufficient to
+identify the INFORMATION being delivered — matching the existing `requestHash` precedent.
+This does NOT prohibit a future delivery mechanism from defining a distinct
+delivery/occurrence identity where needed to distinguish multiple deliveries of the same
+information to different Runs, attempts, work surfaces, or request turns. INFORMATION
+IDENTITY ≠ DELIVERY IDENTITY; no universal delivery ID is required or created. Information
+identity is also distinct from T2 attempt identity and T6 invocation identity and must never
+be conflated with either.
+
+### Strongest competing architecture (rejected)
+
+**Alternative:** make T7 govern all execution context construction (`buildAgentPrompt` and
+kin as T7 authority). **Rejection evidence:** (1) the repository's own doctrine states
+prompt-level rules are presentation, not the authority boundary
+(`docs/ALLOWED_OPERATIONS_AUTHORITY.md`); (2) every correctness-relevant selection rule
+already has an owner with tests (bounded batches, truncation guard, snapshot availability);
+(3) prompt construction embeds domain-specific guidance (workload profiles, phase gating,
+workspace anchoring) owned by existing contracts; (4) the context window is the basis of the
+T6 economic liability bound — pulling it into T7 would collide with frozen T6; (5) it would
+force every future presentation edit through tranche authority for zero truth benefit.
+The inverse alternative ("T7 needs no kernel at all") is also rejected: the trust
+non-upgrade rule, actor-authorization ≠ claim-authority distinction, delivery-truth
+vocabulary, and correction semantics are real unowned seams that must be frozen to prevent
+future designs from claiming false authority. The recommended kernel is the minimum that
+closes those seams.
+
+### Crash / restart boundary
+
+T7 adds no recovery machinery. The durable facts a future T7 delivery mechanism must
+preserve, as applicable, are: the source record; the delivery authorization/binding (source
+identity, provenance, content binding, target, and the authority permitting delivery —
+durably established no later than authorization/performance, per T7-I4); and durable
+domain-designated delivery-occurrence evidence (producible at or after the delivery act;
+occurrence must never be claimed solely from the pre-delivery authorization record after
+crash/restart). Existing source records and request evidence survive under their existing
+owners. Prompt-derived presentation is recomputable and MUST NOT be reconstructed from model
+prose. T2 same-attempt/new-attempt rules and T6 effect uncertainty are untouched; delivery is
+not an effect and no T6 state machine is imported.
+
+### Implementation prohibition (unchanged)
+
+The bootstrap's implementation prohibition stands: until a separate implementation decision
+is registered for a specific surface, NO runtime change, migration, table/schema, event type,
+API, prompt change, inbox change, workspace fencing, `human_confirmed` implementation,
+context object, or test change is authorized by T7.
+
+### Hermeticity statement
+
+With publication, a fresh capable model can determine from the register alone: what T7
+governs (delivery/trust), what it does not govern (presentation, target boundary,
+predecessor surfaces), which bootstrap families fall inside/outside, that no same-Run T7
+delivery is authorized by this kernel and none exists today, what authority/provenance means
+here (T7-I2), how delivery truth is proven
+(T7-I5), how correction works (T7-I6), what survives restart, how T7 differs from T2–T6 and
+T8, and what implementation remains prohibited — without this design conversation.
