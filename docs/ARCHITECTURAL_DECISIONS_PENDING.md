@@ -9773,9 +9773,10 @@ mechanism, vocabulary, or storage generalizes.
   `docs/AUTHORITY_AND_DURABILITY.md`, `docs/EVIDENCE_VS_TELEMETRY.md`, and
   `docs/EXECUTION_SEMANTICS.md` contain discoverable JSON-era/storage authority statements that
   conflict with current PostgreSQL authority unless a superseding document is also read.
-  Disposition: OPEN PRE-DESIGN HERMETICITY OBLIGATION. It MUST be resolved before T6 semantic
-  design begins. The future correction must preserve useful historical content while ensuring a
-  fresh model cannot mistake retired JSON authority for current runtime truth.
+  Disposition: CLOSED — see the "T6 pre-design hermeticity obligation — closure" record below.
+  (Originally recorded as an OPEN PRE-DESIGN HERMETICITY OBLIGATION at discovery; the published
+  correction preserved useful historical content so a fresh model cannot mistake retired JSON
+  authority for current runtime truth.)
 - **MEDIUM-2 — Crash-window contract lived primarily in a test comment.**
   Disposition: CLOSED by the EXISTING WORKSPACE RECOVERY FACT section above, which records the
   current behavior in repository authority and names its executable owner, without freezing the
@@ -9792,6 +9793,9 @@ T6 semantic design MUST NOT begin until BOTH:
 1. this authority-bootstrap record is published; AND
 2. the OPEN PRE-DESIGN HERMETICITY OBLIGATION for the stale JSON-era authority documents is
    closed.
+
+Both conditions are now SATISFIED — see the "T6 pre-design hermeticity obligation — closure"
+record below; the prohibition text above is retained for chronology.
 
 This gate is about repository self-sufficiency, not semantic review. The `external.effect` open
 question does NOT block design. No source implementation is permitted before semantic freeze
@@ -9820,3 +9824,46 @@ burden consistent with understanding the system. Facts, authorities, boundaries,
 preserved here so the future design does not need to re-derive them; they are NOT precomputed
 into design decisions. Do not freeze accidental topology or implementation. Recovery burden must
 not be reduced by silently deciding open questions in advance.
+
+## T6 pre-design hermeticity obligation — closure (recorded 2026-08-27)
+
+The MEDIUM-1 discovery finding (stale JSON-era authority documents) is CLOSED.
+
+- Scope: the stale JSON-era authority-document obligation only.
+- Affected documents: `docs/AUTHORITY_AND_DURABILITY.md`, `docs/EVIDENCE_VS_TELEMETRY.md`, and
+  `docs/EXECUTION_SEMANTICS.md`.
+- Correction commit: `c1a39aa682989583ee2ff9d203e65b051a46c036` (parent
+  `42d9091e85bebf3b171c586565bfbbe4da73217d`, tree `8a3b9d1e52c52e7df9634f1d6bbb6654b767cfed`).
+- The correction was independently reviewed before publication; review result: HIGH=0, MEDIUM=0
+  (one nonblocking LOW residual, not claimed resolved here).
+- All eight recorded false-current-authority inference probes (retired JSON ticket/run/event/
+  lease/log/operation-history authority; supported-adapter path; five-state Ticket vocabulary)
+  were unsupported after correction.
+- PostgreSQL remains the sole current runtime persistence authority.
+- Useful historical/storage-independent material was retained under explicit retired-adapter
+  framing.
+- No T6 semantic question was answered and no T6 invariant was frozen by this closure or by the
+  correction.
+- No source/runtime/schema/migration/API/event/table behavior changed; the correction is
+  docs-only and no checkpoint was required or run.
+
+Pre-design gate status: SATISFIED.
+
+- Bootstrap publication condition: satisfied by `42d9091e85bebf3b171c586565bfbbe4da73217d`.
+- Stale-JSON hermeticity condition: satisfied by `c1a39aa682989583ee2ff9d203e65b051a46c036`.
+
+Therefore T6 semantic design is now PERMITTED by the recorded pre-design gate. PERMITTED does
+NOT mean STARTED. The T6 status remains: AUTHORITY BOOTSTRAPPED; SEMANTIC KERNEL UNFROZEN;
+IMPLEMENTATION NOT STARTED; OPERATIONAL CLOSURE NOT CLAIMED. The implementation prohibition and
+all open T6 semantic questions are unchanged.
+
+Nonblocking residuals, explicitly NOT claimed closed by this record:
+
+- the stale AGENTS.md citation inside `docs/EVIDENCE_VS_TELEMETRY.md`;
+- stale JSON-era wording in `docs/OPERATIONAL_TELEMETRY.md`;
+- historical references in `docs/archive/README.md`;
+- other historical JSON-era references;
+- `docs/RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH.md` wording noted by the reviewer.
+
+The closure claim is narrow: the specific recorded T6 pre-design stale-JSON authority
+obligation is closed.
