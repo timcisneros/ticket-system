@@ -8779,7 +8779,7 @@ a large subsystem.
 | T5 | waiting / time / fairness / backpressure | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed; no separate operational cutover required — see the T5 operational closure entry below) |
 | T6 | effect boundary | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete via zero runtime delta; independently reviewed; canonical checkpoint passed; no separate operational cutover required — see the T6 operational closure entry below) |
 | T7 | intervention / context | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete via zero production runtime delta; independently reviewed; canonical checkpoint passed; no separate operational cutover required — see the T7 operational closure entry below) |
-| T8 | operator plane | pending |
+| T8 | operator plane | SEMANTIC KERNEL FROZEN (implementation NOT started; operational closure NOT claimed — see the T8 semantic freeze entry below) |
 | T9 | external actor / event | pending |
 | T10 | foundation closure | final |
 
@@ -11507,3 +11507,261 @@ After publication, a fresh capable model can recover from the register alone: wh
 verification index); what exact checkpoint passed and which commit it binds to (this record);
 why no cutover was required; what remains intentionally deferred; and why T7 can truthfully be
 called OPERATIONALLY CLOSED. No conversational context is required; this record only points.
+
+---
+
+## T8 Operator Plane — semantic freeze (recorded 2026-08-29)
+
+**Status:** SEMANTIC-FREEZE CANDIDATE — NOT AUTHORITY UNTIL INDEPENDENT REVIEW AND PUBLICATION. This
+candidate carries no authority until it is independently reviewed and published by being committed
+to this register on authoritative `master` (the same uncommitted-candidate convention the T7
+semantic freeze states for itself).
+
+The CURRENT published T8 status remains: pending — no T8 brief, kernel question, or semantics exist
+in this register; the roadmap label "operator plane" confers no semantics (Broad Ticket-Kernel
+Roadmap guard). The prospective roadmap-table edit in this uncommitted candidate is NOT authority
+yet. Upon independent review and publication to authoritative `master`, the T8 row becomes:
+SEMANTIC KERNEL FROZEN; IMPLEMENTATION NOT STARTED; OPERATIONAL CLOSURE NOT CLAIMED.
+
+**Provenance.** This entry is the registered semantic design prepared from a repository-only T8
+pre-design discovery pass over the operator-facing and governance surfaces of this repository at
+commit `ddec9599b076de89465b10bd1f524514f058cc39` (HTTP routes and views in `server.js` /
+`views/`, the `scripts/oquery.js` CLI surface, `persistence/postgres/store.js` and the canonical
+migrations, `runtime/` authority contracts, and the operator/governance documentation). An
+independent semantic review of the pre-correction design returned B with narrow corrections only;
+the corrected kernel below incorporates those corrections verbatim as T8-I1..T8-I5. No repository
+artifact exists for that review and none is invented; it is publication-gate evidence only. The
+published bytes are the durable authority. This freeze authorizes NO implementation.
+
+### Subject boundary
+
+T8 governs truthful human observation and exercise of already-governed authority. It owns no
+predecessor authority. The operator plane is an observation/control-surface subject — the plane
+over what a human can correctly KNOW about governed state and how a human INVOKES authority that
+already exists — not a lifecycle, retry, recovery, evidence, intervention, mutation, permission,
+or catalog authority.
+
+### Frozen invariants
+
+**T8-I1 — Subject boundary.** T8 governs truthful human observation and exercise of
+already-governed authority; it owns no predecessor authority.
+
+**T8-I2 — Control-surface non-authority.** Operator-facing control surfaces create no authority.
+A control surface: (a) gates access to itself using the access-catalog permission(s) its owning
+surface designates; and (b) performs every governed act only through the canonical authority path
+of the domain that owns the act. No surface may bypass, duplicate, or re-declare that domain's
+authority. Access permission to a surface is distinct from, and never substitutes for, the owning
+domain's authorization or admission of the act.
+
+**T8-I3 — Operator-attention projection constraints.** Any operator-attention projection is
+deterministic over its declared bounded window/inputs, derived only from durable authority as
+designated by the canonical storage map, read-only and ledger-free, owns no lifecycle/status
+truth, and absence from it cannot negate underlying truth. This is a presentation-reader rule; it
+neither restates nor alters T6-I3.
+
+**T8-I4 — Presentation truthfulness obligations.** Operator presentation may not present, as one
+state, what an existing authority contract distinguishes, nor present as authoritative any
+distinction that authority does not make; it creates no new status model. Relevant distinctions
+are those already represented by owning contracts, including attempted vs committed; blocked vs
+waiting; recorded occurrence vs occurred effect; advisory model prose vs authority; operational
+history vs workspace materialization; evidence vs diagnostic narrative.
+
+**T8-I5 — Operator target-mutation occurrence evidence.** A successful operator-initiated
+governed-target mutation, including whole-workspace fixture reset, requires canonical durable
+occurrence evidence recording the minimum occurrence truth: act, target and paths, actor identity,
+time, outcome. Evidence shape and mechanism are not frozen. Mutation authority, locking, T6 effect
+semantics, T7 delivery semantics, and same-Run target visibility remain unchanged. Operator acts
+remain outside T6 governed membership. Because the target effect precedes any durable record,
+recording failure after the effect preserves truthful uncertainty under the existing
+post-external-side-effect required-persistence doctrine: neither false success nor false failure,
+and no unsupported repetition.
+
+### Predecessor fences (frozen exclusions)
+
+T8 MUST NOT redefine or absorb:
+
+- **T2:** admission; attempt identity; retry/rerun/reassess/resume identity; blocker/reason
+  authority; cancellation; max-attempt policy; triage annotation semantics; the five-state
+  lifecycle and its canonical precedence.
+- **T3:** current objective revision; immutable executed intent.
+- **T4:** workflow-spawn relationship provenance; child-result topology.
+- **T5:** dispatch deferral; capacity waiting; backpressure; fairness/time boundaries; the
+  release-admission blocker/intent matrix.
+- **T6:** governed-effect truthfulness; occurrence uncertainty; invocation-local repetition
+  safety; prepared-intent / receipt / reconciliation mechanisms; governed provider/process effect
+  surfaces; T6-I3 (referenced by T8-I3, never restated or altered).
+- **T7:** T7-I1..I8 (the T7-adjacent delivery/trust boundaries) — T7-I1 (presentation stays outside T7),
+  T7-I2 (trust; actor authorization ≠ claim authority), T7-I3 (no same-Run delivery; workspace
+  visibility is target-boundary truth), T7-I4/I5 (future-delivery durability and truth
+  vocabulary), T7-I6 (correction), T7-I7 (model→operator ownership unassigned), T7-I8
+  (`human_confirmed` separate).
+- **Workspace target boundary:** target mutation authority and the `withTargetOperationLock`
+  serialization (`workspaceMutationBoundary`); workspace ownership authority (migration 011).
+  T8-I5 adds a recording obligation only; it does not move, widen, or fence mutation authority.
+- **Operator workspace recovery:** the `operatorRecovery` contract (migration 012), including its
+  prepared-intent/receipt machinery, is a separate domain authority that T8-I5 must not redesign.
+- **Access catalog and catalogs:** permission vocabulary and semantics (migration 019) and every
+  catalog authority (migrations 016–024) own their domains; T8 surfaces consume them.
+- **Canonical storage map:** event/receipt/replay/log authority split
+  (`docs/RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH.md`) is unchanged; T8 projections and evidence
+  derive from it, never redefine it.
+
+### Nonconflation fences
+
+CONTROL SURFACE ≠ AUTHORITY. SURFACE ACCESS PERMISSION ≠ DOMAIN AUTHORIZATION/ADMISSION. ATTENTION
+PROJECTION ≠ STATUS/LIFECYCLE AUTHORITY. PRESENTATION VOCABULARY ≠ NEW STATUS MODEL. OPERATOR
+OCCURRENCE EVIDENCE ≠ T6 EFFECT OCCURRENCE (operator acts are outside T6 governed membership).
+OPERATOR OCCURRENCE EVIDENCE ≠ T7 DELIVERY OCCURRENCE. SAME-RUN TARGET VISIBILITY ≠ T8 DELIVERY
+(T7-I3/bootstrap-G classification unchanged by this freeze). ABSENCE FROM A PROJECTION ≠ NON-
+EXISTENCE OF UNDERLYING TRUTH. RECORDING FAILURE AFTER THE EFFECT ≠ FALSE SUCCESS AND ≠ FALSE
+FAILURE. DIAGNOSTIC NARRATIVE ≠ EVIDENCE. DASHBOARD LAYOUT/RANKING/FILTERING ≠ SEMANTICS.
+
+### Rationale and repository evidence
+
+**Why T8 exists.** The discovery pass found that every operator decision/action already has a
+canonical owner, and that the genuinely unowned seams are exactly four: observation coherence,
+control-surface closure, presentation truthfulness, and one recording hole. Owners found: ticket
+lifecycle/assignment (`createTicketWithEvent`/`reassignTicket`, `persistence/postgres/store.js`),
+cancellation (`runtime/ticket-cancellation-authority-contract.js`; write-once authority column,
+migration 040), rerun/retry/reassess admission (`TICKET_ATTEMPT_AUTHORITY.md:22-36`),
+triage annotation (`scripts/triage-resolution-test.js` pins annotate-only), objective revision
+(`runtime/ticket-objective-revision-contract.js`), release-admission
+(`runtime/ticket-blocking-authority-composer.js`), run stop (operator-cancellation evidence bundle
++ interruption terminalization, `server.js`), recovery (`operatorRecovery`, migration 012), target
+mutations (`withTargetOperationLock`, `persistence/postgres/store.js`; `docs/TARGET_PROVIDER_CONTRACT.md`),
+permissions (access catalog, migration 019), catalogs (migrations 016-024), message threads
+(migration 025, append-only).
+
+**T8-I2 evidence.** Permission checks are server-side (`hasPermission`, `server.js`; access-catalog
+load in the global preHandler); template flags such as `canUpdateTickets` are cosmetic. Every
+operator endpoint delegates to its owning contract; none creates authority. Recorded asymmetries
+that motivated the rule: canonical cancellation authority has NO UI/CLI surface; objective revision
+is API-only (the ticket-detail simulation output instructs the operator to hand-write the POST);
+watcher observe/approve endpoints exist without controls.
+
+**T8-I3 evidence.** The no-ledger reader pattern is established by the ticket timeline
+(`docs/TICKET_TIMELINE_AND_AUTHORITY_VISIBILITY.md`), operational transparency
+(`docs/OPERATIONAL_TRANSPARENCY.md`: reading writes nothing), and the event journal; reader field
+ownership is strict (`docs/TERMINAL_PROJECTION_READER_CONTRACTS.md`: no cell may be filled from
+another reader's evidence); recorded state-understanding failures are compression failures, not
+authority failures (`docs/OPERATIONAL_PRESSURES.md`: completed-noop vs completed-work, proposed vs
+executed vs blocked, overloaded `outcome`).
+
+**T8-I4 evidence.** Existing authority already records the distinctions operators need; the
+failures are presentation collapsing them (evidence above). Existing honest renderings
+("Reconstructed, not originally persisted" consequence mode; "recorded intent · not implemented"
+policy fields; "Run completed ≠ objective verified") prove the vocabulary can bind to existing
+facts without new state.
+
+**T8-I5 evidence.** Operator workspace file/folder/rename/delete and whole-workspace fixture reset
+are successful, destructive, potentially same-Run-visible mutations whose only durable record is a
+diagnostic system log (`appendSystemLog('workspace:operator_mutation')`, `server.js`) — no event,
+no receipt. This is the sole authority-exercising mutation class without canonical evidence,
+against the repository doctrine that required-persistence failure must never produce false success
+(`docs/GOVERNED_REQUIRED_PERSISTENCE_MATRIX.md`) and that sanctioned surfaces must not bypass the
+record pipeline (`docs/OPERATOR_CONTRACT.md`). The operator-recovery precedent (migration 012)
+already records an operator-initiated workspace effect canonically (intent + receipt + replay
+evidence), so recording plain operator mutations is consistency, not invention. The canonical
+`events` store natively supports non-run-scoped events (`persistence/postgres/migrations/
+001_runtime_core.sql` chain-shape CHECK), while `operation_receipts` requires run/ticket identity
+(migration 002) — so the mechanism space is real and deliberately NOT frozen. T7 deliberately left
+the live operator-workspace-mutation fact (bootstrap G) unclassified and outside T7 delivery
+(T7-I3); this freeze closes the RECORDING gap only and does not resolve G's classification, fence
+the mutation, or import T6/T7 semantics. The post-effect uncertainty window is governed by the
+existing required-persistence doctrine: neither false success nor false failure, and no
+unsupported repetition (`docs/GOVERNED_REQUIRED_PERSISTENCE_MATRIX.md`).
+
+**Rejected alternatives.** (1) T8 owns operator-plane authority (rejected: duplicates T2-T7; every
+act already has an owner). (2) Register diagnostic-only recording as intentional (rejected: it
+would formalize the sole violation of the repository's own required-evidence doctrine and make
+"truthful exercise" self-contradictory). (3) Defer recording to the target boundary or T6
+(rejected: mutation authority is owned elsewhere, but the gap is an operator-observation/recording
+gap — T8's subject; a deferral would leave the hole unowned). (4) A universal attention entity,
+ID, or ledger (rejected: violates T8-I3 and the established reader pattern). (5) A new status
+model (rejected: T8-I4 binds renderers to existing distinctions only).
+
+### Deferred decisions remain deferred/unowned
+
+- **Operator→agent same-Run delivery** (T7 bootstrap D): remains bounded by T7-I2/T7-I3; reserved
+  to a registered T7 semantic extension. Inbox/triage note content remains a T2 annotation.
+- **Model→operator mid-run messaging** (T7-I7): ownership remains UNASSIGNED (T7, T8, or a future
+  mechanism). T8 does not claim it: it is an agent→human delivery mechanism, not a human
+  observation/exercise surface.
+- **`human_confirmed` realization** (T7-I8): separate registered doctrine; no T8 ownership.
+- **Permission-model redesign:** owned by the access-catalog authority; T8 consumes permissions
+  and adds none. Deferred.
+- **Catalog-domain semantics** (process templates, work contexts, model routing, connectors,
+  watchers, runtime limits, workflows): owned by their catalog authorities; T8's control-surface
+  rule applies to their surfaces without owning their semantics.
+
+### Implementation prohibition
+
+Until a separate implementation decision is registered for a specific surface: NO production
+implementation; NO runtime change; NO migration; NO table/schema change; NO frozen event type or
+payload shape; NO API shape change; NO permission vocabulary change; NO prepared-intent machinery;
+NO pre/post-state representation freeze; NO views/CLI/test change; NO attention-projection
+implementation; NO dashboard implementation; and NO generic governance, attention, evidence,
+intervention, or status ontology. If implementation discovery finds that a predecessor invariant
+must change: STOP for explicit architecture review.
+
+### Expected implementation-obligation discovery after freeze
+
+A separate, post-freeze implementation-obligation discovery pass must map, per invariant:
+
+- **T8-I5:** choose and register the evidence mechanism (non-run-scoped event type(s) vs a
+  receipt-shaped record), its minimum payload, actor-identity binding via the existing
+  session/user context, the concrete handling of the post-effect recording-failure uncertainty
+  window while preserving neither false success nor false failure and permitting no unsupported
+  repetition, and
+  whether a migration is required; verification suites; a canonical checkpoint is expected for any
+  runtime/persistence delta.
+- **T8-I3:** the attention projection's declared bounded window/inputs, its canonical storage-map
+  designation, and a field-ownership matrix in the `docs/TERMINAL_PROJECTION_READER_CONTRACTS.md`
+  style (including the recorded CLI/API/page reader asymmetries).
+- **T8-I2:** the surface-closure inventory (cancellation surface; objective-revision surface;
+  watcher observe/approve controls), each mapped to its existing canonical endpoint; separate
+  small registrations for the recorded hygiene defects (stale `oquery update-ticket` targeting the
+  retired status endpoint; stale `data/message-threads.json` pointer in `docs/OPERATOR_INBOX.md`;
+  connector write-scope checkbox; work-context archive `expectedRevision` gap) — hygiene is not
+  T8 semantics.
+- **T8-I4:** the presentation-distinction inventory per operator surface, verified by render and
+  clarity regression.
+- No implementation obligation exists for the deferred decisions above.
+
+### Dispositions (compressed)
+
+1. T8 creates authority: NO. 2. Control surfaces create authority: NO (T8-I2). 3. Surface access
+permission substitutes for domain authorization/admission: NEVER. 4. Attention projection in T8:
+YES — presentation-reader constraints only (T8-I3). 5. Attention projection owns status truth: NO.
+6. Absence from a projection negates truth: NO. 7. Status-truthfulness vocabulary: presentation
+vocabulary over existing authority; the obligations are T8-I4; no new status model. 8. Operator
+target-mutation occurrence evidence: REQUIRED (T8-I5), bounded, shape/mechanism not frozen.
+9. Operator acts inside T6 governed membership: NO. 10. T6-I3 restated or altered: NO.
+11. Same-Run target visibility changed: NO. 12. T7-I3/T7-I7/T7-I8 resolved by T8: NO.
+13. New lifecycle/status state: NO. 14. Schema/table/event type/API/permission vocabulary frozen
+by T8: NO. 15. Must survive restart: whatever each owner already owns — plus, once implemented,
+I5 occurrence evidence under its own registered mechanism; nothing else becomes a T8 fact.
+
+### Hermeticity statement
+
+After publication, a fresh capable model can determine from this register alone: what T8 governs
+(truthful observation and exercise of already-governed authority), what it does not govern (every
+predecessor authority listed above), the five invariants, the nonconflation fences, why each
+invariant is necessary (evidence section), what stays deferred, what implementation remains
+prohibited, and what the post-freeze implementation-obligation discovery must cover — without this
+design conversation and without any prior discovery report.
+
+### Cognitive-efficiency rule
+
+This entry is a navigation/authority map, not a taxonomy of every operator surface. Compact
+pointers: `docs/OPERATOR_CONTRACT.md`, `docs/OPERATOR_GUIDE.md`, `docs/OPERATOR_INBOX.md`,
+`docs/TICKET_TIMELINE_AND_AUTHORITY_VISIBILITY.md`,
+`docs/TERMINAL_PROJECTION_READER_CONTRACTS.md`, `docs/STATE_SURFACES.md`,
+`docs/OPERATIONAL_TRANSPARENCY.md`, `docs/OPERATIONAL_PRESSURES.md`,
+`docs/RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH.md`, `docs/GOVERNED_REQUIRED_PERSISTENCE_MATRIX.md`,
+`docs/TARGET_PROVIDER_CONTRACT.md`, `docs/EVIDENCE_VS_TELEMETRY.md`,
+`docs/TICKET_ATTEMPT_AUTHORITY.md`; the frozen T2-T7 register entries in this document; the
+operator endpoints and `operatorWorkspaceMutationApi` in `server.js`;
+`runtime/ticket-cancellation-authority-contract.js`; `runtime/ticket-objective-revision-contract.js`;
+`persistence/postgres/store.js` and migrations 001, 002, 011, 012, 019, 025, 040. Where a surface
+name appears without a pointer, its owner is defined by the fences above, not by this entry.
