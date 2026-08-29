@@ -8778,7 +8778,7 @@ a large subsystem.
 | T4 | relationships | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed, runtime cutover verified — see the T4 operational closure entry below) |
 | T5 | waiting / time / fairness / backpressure | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed; no separate operational cutover required — see the T5 operational closure entry below) |
 | T6 | effect boundary | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete via zero runtime delta; independently reviewed; canonical checkpoint passed; no separate operational cutover required — see the T6 operational closure entry below) |
-| T7 | intervention / context | SEMANTIC KERNEL FROZEN (implementation NOT started; operational closure NOT claimed — see the T7 semantic freeze entry below) |
+| T7 | intervention / context | SEMANTIC KERNEL FROZEN (implementation COMPLETE via zero production runtime delta; verification registered; operational closure NOT claimed — see the T7 zero-runtime-delta implementation/verification registration below) |
 | T8 | operator plane | pending |
 | T9 | external actor / event | pending |
 | T10 | foundation closure | final |
@@ -11142,3 +11142,235 @@ delivery is authorized by this kernel and none exists today, what authority/prov
 here (T7-I2), how delivery truth is proven
 (T7-I5), how correction works (T7-I6), what survives restart, how T7 differs from T2–T6 and
 T8, and what implementation remains prohibited — without this design conversation.
+
+---
+
+## T7 Intervention / Context — zero-runtime-delta implementation / verification registration (recorded 2026-08-29)
+
+**Status of this record:** implementation/verification-registration CANDIDATE, prepared from a
+repository-only implementation-obligation discovery pass for independent review. It registers
+that the published, frozen T7 semantic kernel (T7-I1..T7-I8) is REALIZED by existing
+predecessor, domain, target, provenance, replay, and negative boundaries; that T7 requires
+ZERO production/runtime implementation delta; and that verification ownership is explicitly
+indexed. It is NOT a T7 semantic amendment, NOT a new invariant, NOT a delivery-mechanism
+addition, NOT an implementation code change, and NOT operational closure. Until this exact
+record and the roadmap-row update above are published by being committed to this register on
+authoritative `master`, they are not authority (the same uncommitted-candidate convention the
+T7 semantic freeze states for itself). The CURRENT published T7 status therefore remains:
+SEMANTIC KERNEL FROZEN; IMPLEMENTATION NOT STARTED; OPERATIONAL CLOSURE NOT CLAIMED. Upon
+publication of this exact reviewed record: SEMANTIC KERNEL FROZEN; IMPLEMENTATION COMPLETE
+(zero production runtime delta; verification registered); OPERATIONAL CLOSURE NOT CLAIMED.
+
+### Zero-runtime-delta decision
+
+T7 requires NO production/runtime implementation delta at this stage. This is not
+"implementation skipped": it is the implementation disposition of the frozen kernel. The
+current repository already satisfies the present T7 obligations through existing
+predecessor/domain/target/provenance/replay boundaries and through negative boundaries; no
+T7-governed delivery mechanism exists today, and none is required, created, or authorized by
+this registration. The intentionally absent mechanisms (delivery contracts, `human_confirmed`
+realization, model→operator send) impose no implementation obligation.
+
+### Per-invariant implementation map (one primary class each)
+
+Primary classes: **A** = already satisfied by existing authority/behavior; **B** = satisfied
+by a current negative boundary; no implementation required.
+
+**T7-I1 = A.** Generic prompt/context construction is presentation-owned:
+`buildAgentPrompt`, `compactTicketContextForPrompt`, `buildRuntimeEnvelope` (`server.js`);
+generic prompt content is recorded as evidence by existing replay authority
+(`systemInstructionSnapshot` into the Run replay snapshot, `server.js`). Generic prompt
+inclusion is not authority: `docs/ALLOWED_OPERATIONS_AUTHORITY.md` fixes the runtime envelope
+as a primitive capability contract while the runtime independently validates every proposed
+operation; prompt-level rules are presentation. No T7 delivery contract exists today — as the
+freeze expects — and none is created.
+
+**T7-I2 = A.** Model-derived prose remains advisory permanently
+(`runtime/completion-decision-contract.js` `authority:false`; required verification:
+`completion-decision-contract-test.js`). Hard outcomes arise only through doctrine-owned
+paths: T2 blocker resolution acts through the lifecycle authority
+(`resolveTicketTriageAndReproject` via the ticket/run lifecycle repository; annotation-only
+side effects pinned by `scripts/triage-resolution-test.js`). Separately sourced
+corroboration/confirmation doctrine intact (`docs/decision-memo-objective-interpretation-direction.md`
+§4: new records with `derivedFrom` references, never in-place promotion). Actor authorization
+≠ claim/world-truth authority already holds; no new trust mechanism exists or is created.
+
+**T7-I3 = B.** No same-Run T7 delivery channel exists; the negative boundary is structural.
+Source-proof points: objective revision is refused while the Ticket's current attempt is
+unsettled (`TICKET_ATTEMPT_UNSETTLED`, `persistence/postgres/store.js`; the revision surface
+delegates all semantic authority to the store kernel, `server.js` `/api/tickets/:id/objective-revisions`);
+live-run prompts read the admitted/executed projection of the Run, not live ticket fields
+(`buildAdmittedTicketProjection`; required readers fail closed,
+`t3c-reader-closure-postgres-test.js`); inbox reply/resolution note content is never injected
+into any Run (no injection path exists anywhere in `server.js`; resolution effects are
+annotation + T2 reprojection only); recovery/reclaim/resume reconstructs already-durable state
+and finishes already-durable requests, adding no semantic input; workspace live visibility
+remains TARGET-BOUNDARY TRUTH, outside T7 delivery (T7-I3; mutation authority untouched);
+feature/config re-reads remain presentation/capability visibility. No dedicated T7 negative
+test is required (see "No-new-test decision").
+
+**T7-I4 = B.** No T7 durable substrate exists or is required today. Current future-work
+information paths remain owner-owned: objective/acceptance revision and immutable executed
+intent (T3 revision kernel, `reviseTicketObjective`); reassess prior-failure presentation
+(T2 reassess admission; presentation derived from durable history); blocker consequences and
+rerun-gate reopening (T2); relationship/work artifacts (T4); durable source records
+(`message_threads` migration 025, `operator_recovery_intents` migration 012, watchers
+migration 023, work contexts migration 015); sealed process inputs (process input
+materialization). Future T7 mechanisms remain conditional future semantic designs bound by
+T7-I4's durability requirements; this registration creates no schema/event/table/API
+requirement.
+
+**T7-I5 = B.** PRIMARY CLASS B: no T7-governed delivery exists today, so the delivery-truth
+vocabulary binds nothing current and requires no implementation; the absence is a negative
+boundary, not an unfinished build. Secondary characteristics (recorded, not primary): A-like —
+it consumes existing request/replay evidence authority; forward-constraining — its positive vocabulary
+constrains future delivery designs. Production makes no unsupported model-cognition claim from
+inclusion: model prose is `authority:false`, and the inbox authorship contract forbids
+fabricating agent-attributed prose (`docs/OPERATOR_INBOX.md`). Ordinary current
+provider-request/replay evidence proves only what its existing authority proves — exact
+request inclusion/content, run/slot binding, sha256 `requestHash`, `systemInstructionSnapshot`,
+pre-transport durability (`runtime` governed provider request contract; replay items and
+`provider.request.persisted` events in `server.js`). That capability may later satisfy part of
+a future T7 delivery-occurrence contract; it is NOT itself such a contract, and ordinary
+requests are not T7 deliveries.
+
+**T7-I6 = A.** Correction is already separately sourced everywhere: the T3 objective-revision
+chain creates NEW revision records with an immutable executed-intent pointer (required
+verification: `t3-objective-revision-contract-test.js`, `t3-objective-revision-postgres-test.js`,
+`t3b-objective-revision-surface-test.js`); corroboration/confirmation doctrine creates NEW
+records with `derivedFrom` references; run evidence and thread message history are append-only.
+No in-place provenance upgrade exists. No new correction machinery is required or created.
+
+**T7-I7 = B.** No implemented model→operator send primitive exists; the inbox reconciler
+derives threads from terminal evidence and the reply/resolve/acknowledge endpoints are
+operator-facing actions. Ownership remains unassigned exactly as frozen (T7-I7). No
+implementation is required or authorized.
+
+**T7-I8 = B.** `human_confirmed` doctrine exists
+(`docs/decision-memo-objective-interpretation-direction.md`; restated in `docs/DECISION_LOG.md`);
+production realization is absent — zero occurrences in `runtime/`, `persistence/`, `server.js`,
+`scripts/`, and tests. The absence is intentional under frozen authority; T7 neither creates
+nor realizes it.
+
+### Final I1–I8 primary-class vector
+
+```
+T7-I1=A  T7-I2=A  T7-I3=B  T7-I4=B  T7-I5=B  T7-I6=A  T7-I7=B  T7-I8=B
+```
+
+### Verification index (navigation only — pointers, not copied prose)
+
+**A. Deterministic checkpoint-owned evidence already present** (each named suite is
+registered `status: "required"` in `scripts/test-manifest.js` and runs in the canonical
+release checkpoint; PostgreSQL suites gated by `TEST_DATABASE_URL`):
+
+- T2 lifecycle/admission/blocking authority: `t2-tranche5-blocking-authority-test.js` and the
+  registered T2 suite family.
+- T3 revision guards, admitted projection, immutable executed-intent readers:
+  `t3-objective-revision-contract-test.js`, `t3-objective-revision-postgres-test.js`,
+  `t3b-objective-revision-surface-test.js`, `t3c-reader-closure-postgres-test.js`.
+- Completion-authority/trust boundary: `completion-decision-contract-test.js`.
+- Declared-work authority: `declared-work-contract-test.js`,
+  `declared-completion-authority-binding-test.js`.
+- Governed provider request hashing/evidence and transport:
+  `governed-provider-request-contract-test.js`, `governed-provider-transport-test.js`,
+  `governed-openai-transport-hermetic-test.js`.
+- Workspace snapshot fail-closed/recovery: `workspace-snapshot-availability-test.js`,
+  `workspace-snapshot-recovery-test.js`.
+- Recovery reconstruction: `recovery-state-reconstruction-test.js`,
+  `recovery-regression-test.js`.
+- Bounded action batches: `action-batch-preflight-test.js`. Admission/boundedness context:
+  `mutation-admission-contract-test.js`.
+
+**B. Structural/source-proof negative boundaries** (proof class: source/authority
+inspection; deliberately NOT deterministic tests):
+
+- No same-Run T7 delivery channel exists (T7-I3 map above).
+- No T7 durable substrate exists (T7-I4 map above).
+- No T7-governed delivery exists; ordinary requests are not T7 deliveries (T7-I5 map above).
+- No model→operator send primitive exists; ownership unassigned (T7-I7).
+- No `human_confirmed` realization exists (T7-I8).
+
+Orphaned-test boundary (unchanged, not repaired here): `inbox-messaging-test.js`,
+`triage-inbox-test.js`, and `triage-resolution-test.js` remain registered
+`orphaned/cutover-orphan` in `scripts/test-manifest.js` and are NOT T7 registration or closure
+dependencies; they are cited above only as repository inspection evidence.
+
+### No-new-test decision
+
+No new deterministic test is required for T7 zero-delta implementation registration, and no
+test file, `scripts/test-manifest.js`, or `scripts/release-checkpoint.js` byte is changed by
+this registration. Reasons: (1) the missing mechanisms are intentionally absent and structural
+— a test of absence would test a non-existent feature; (2) the frozen semantic boundary does
+not authorize T7 to pin generic presentation implementation details, which would incorrectly
+promote them into T7 authority; (3) the positive predecessor/runtime contracts that T7 relies
+upon already have required owner verification (index above). If a future registered design
+implements a T7 delivery surface, that design registers its own deterministic verification
+under T7-I4/I5.
+
+### Checkpoint authority basis
+
+Pre-existing repository authority does NOT independently mandate a fresh canonical checkpoint
+for this docs-only, zero-runtime-delta registration: the published T7 freeze imposes no such
+requirement, and no general repository rule requires a checkpoint for docs-only zero-delta
+work. The T5 and T6 operational closures provide established precedent: both recorded a fresh
+canonical checkpoint as closure evidence, and the T6 zero-delta closure explicitly
+self-imposed its checkpoint requirement in its own registration. **T7 adopts the T5/T6 closure
+precedent and therefore requires, for its OWN operational-closure claim, a fresh canonical
+checkpoint against the published T7 implementation/verification registration commit.** This is
+a newly registered T7 closure requirement adopted by precedent — not a claim that repository
+authority already required it — and it becomes authoritative only if this registration is
+independently reviewed and published. No checkpoint is run as part of preparing this
+candidate.
+
+### Checkpoint evidence limit
+
+The future T7 canonical checkpoint WILL prove: the existing canonical
+runtime/predecessor/deterministic/PostgreSQL regression suites remain green against the exact
+published T7 implementation/verification registration commit. It WILL NOT by itself prove:
+the structural absence of a T7 delivery mechanism, the absence of a `human_confirmed`
+realization, or the absence of a model→operator send primitive. Those structural-negative
+claims are carried by the source/evidence maps in this record, not by the checkpoint.
+
+### No-cutover classification (prospective)
+
+Because the current production delta is zero, T7 operational closure is expected to require:
+NO schema migration; NO data migration; NO runtime change; NO provider change; NO
+process/workspace cutover; NO restart; and NO separate operational cutover step. Operational
+closure would still require the registered evidence gates (published registration, independent
+review, the T7-adopted canonical checkpoint). This record does NOT claim closure.
+
+### Deferred decisions remain deferred
+
+Zero-runtime implementation completion does NOT resolve, and this registration does not
+touch: the bootstrap-D operator→agent delivery product decision (blocker-resolution note
+content remains a T2 annotation); the possibility of a future same-Run T7 delivery semantic
+extension/amendment; future later-run T7 mechanisms; model→operator ownership (unassigned,
+T7-I7); `human_confirmed` realization (separate doctrine, T7-I8); the workspace
+target-visibility classification (G remains target-boundary truth under its own authority).
+
+### Frozen semantic nonchange
+
+T7-I1..T7-I8 unchanged (semantics not re-specified here). Families A–G classifications
+unchanged. Q1–Q32 dispositions unchanged. The implementation prohibition stands unchanged:
+this registration authorizes NO runtime change, migration, table/schema, event type, API,
+prompt change, inbox change, workspace change, `human_confirmed` implementation, context
+object, or test change. T2/T3/T4/T5/T6 unchanged. This record adds IMPLEMENTATION /
+VERIFICATION STATUS ONLY.
+
+### Implementation-complete claim scope
+
+"IMPLEMENTATION COMPLETE" here means exactly: the frozen T7 invariants are realized by
+existing boundaries (primary classes above), and verification ownership is explicitly
+registered. It does NOT mean: new T7 runtime code was written; a checkpoint has passed for T7
+closure; operational closure is complete; a T7 delivery mechanism exists; `human_confirmed`
+is realized; model→operator messaging is implemented; or any deferred decision was resolved.
+
+### Hermeticity / cognitive-efficiency note
+
+After publication, a fresh capable model can recover from this record plus the freeze entry,
+without broad source rediscovery: why T7 required zero runtime code (per-invariant map);
+the one primary implementation class per invariant; the evidence owners; which claims are
+test-owned versus source-proof; what is intentionally absent; what remains deferred; why a
+canonical checkpoint will be run (T7-adopted closure gate by precedent); and why no
+operational cutover exists. No upstream record is duplicated; this record only points.
