@@ -139,6 +139,15 @@ Every durable write in the real lifecycle, with its classification.
 | 22 | terminal | terminal event | `terminalizeRun` | REQUIRED — SAME TRANSACTION | n/a | no | atomic | **8.1** |
 | 23 | integrity | containment status + code + event | `terminalizeRunForReplayIntegrityFailure` | REQUIRED — SAME TRANSACTION | n/a | no | containment **not claimed**; corruption left intact | **9.1** |
 | 24 | observability | `run:completed`, `run:verification_failed`, `run:failed`, `run:failed_auto_retried`, `run:interrupted` | `appendRunLog` | BEST EFFORT — NON-AUTHORITATIVE | n/a | n/a | tolerated post-terminal only | **Phase 10** |
+| 25 | operator plane (T8-I5) | `workspace.operator_mutation` occurrence event (non-run-scoped) | `operatorWorkspaceMutationApi` and the fixture-reset route, via the server `appendEvent` | REQUIRED — POST-EXTERNAL-SIDE-EFFECT, UNCERTAINTY ON FAILURE | **yes** (the filesystem mutation precedes the record) | no | latches fail-closed (readiness cleared, schedulers stopped); truthful occurred-but-unrecorded response; further operator mutations refused while latched; diagnostic log retained best-effort | `operator-occurrence-evidence-test.js` |
+
+Row 25 is the operator-plane occurrence write (T8-I5). It is not a Run lifecycle write — operator
+acts remain outside T6 governed membership — but it is a required durable write against the same
+governing principle, so it is inventoried here rather than left unowned. The filesystem effect
+precedes the record and cannot be reconstructed from anything else: a recording failure after the
+effect yields truthful uncertainty (neither false success nor false failure, no unsupported
+repetition), and the mutation authority, `withTargetOperationLock` serialization, and same-Run
+target visibility are unchanged.
 
 ---
 

@@ -360,6 +360,31 @@ async function main() {
     await assertPage(cookie, '/process-templates', 'Process Templates');
     await assertPage(cookie, '/model-routing-policies', 'Model Routing');
     await assertPage(cookie, '/connectors', 'Connectors');
+    const connectorCreate = await request('POST', '/api/connectors', {
+      cookie,
+      body: {
+        name: 'Page Render Connector',
+        workContextId: fixture.context.id,
+        allowedScopes: ['read', 'write'],
+        sourceRoots: ['inbox'],
+        targetRoots: []
+      }
+    });
+    assert(connectorCreate.statusCode === 200,
+      `connector create returned HTTP ${connectorCreate.statusCode}: ${connectorCreate.body}`);
+    const createdConnector = JSON.parse(connectorCreate.body).connector;
+    assert(createdConnector.allowedScopes.includes('write'),
+      'connector API must keep accepting recorded write scopes (catalog semantics unchanged)');
+    const connectorsPage = await assertPage(cookie, '/connectors', 'Connectors');
+    assert(!connectorsPage.body.includes('name="allowedScopes" value="write"'),
+      'connector create form must not offer the write scope');
+    const connectorDetail = await assertPage(cookie, `/connectors/${createdConnector.id}`, 'Allowed scopes');
+    assert(!connectorDetail.body.includes('name="allowedScopes" value="write"'),
+      'connector edit form must not offer the write scope');
+    assert(connectorDetail.body.includes('not effective: connector writes are refused'),
+      'a recorded write scope must render as non-effective and writes-refused');
+    assert(connectorDetail.body.includes('(writes refused)'),
+      'connector detail must retain the writes-refused write-policy disclosure');
     await assertPage(cookie, '/watchers', 'Watchers');
     await assertPage(cookie, '/workspace', 'Workspace');
 

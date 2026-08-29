@@ -283,6 +283,7 @@ const TESTS = Object.freeze([
   { file: "operation-poststate-observation-test.js", status: "required" },
   { file: "operation-receipt-projection-test.js", status: "required" },
   { file: "operational-abuse-test.js", status: "excluded", reason: "superseded" },
+  { file: "operator-occurrence-evidence-test.js", status: "required" },
   { file: "operator-visibility-test.js", status: "required" },
   { file: "operator-workflow-test.js", status: "excluded", reason: "source-coupled-other" },
   { file: "oquery-cli-parity-test.js", status: "orphaned", reason: "cutover-orphan" },

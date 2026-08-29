@@ -30225,6 +30225,10 @@ async function operatorWorkspaceMutationApi(request, reply, operationName, args,
     reply.code(403);
     return { error: 'Permission denied' };
   }
+  if (evidencePersistenceFailure) {
+    reply.code(503);
+    return { error: `Workspace mutations are disabled because event persistence failed: ${evidencePersistenceFailure.message}` };
+  }
 
   const requestedBy = request.user ? request.user.username : String(request.session.userId);
   return getWorkspaceMutationBoundaryRepository().withTargetOperationLock({
@@ -30234,15 +30238,32 @@ async function operatorWorkspaceMutationApi(request, reply, operationName, args,
     const preState = captureOperatorWorkspaceState(affectedPaths);
     let result = null;
     let error = null;
+    let evidenceError = null;
 
     try {
       result = operation();
-      return result;
     } catch (operationError) {
       error = operationError;
-      reply.code(400);
-      return { error: error.message || 'Workspace operation failed' };
-    } finally {
+    }
+
+    if (!error) {
+      try {
+        await appendEvent({
+          type: 'workspace.operator_mutation',
+          payload: {
+            act: operationName,
+            target: { id: workspaceProvider.id, kind: workspaceProvider.kind },
+            paths: affectedPaths,
+            actor: requestedBy,
+            outcome: 'succeeded'
+          }
+        });
+      } catch (eventAppendError) {
+        evidenceError = eventAppendError;
+      }
+    }
+
+    try {
       const postState = captureOperatorWorkspaceState(affectedPaths);
       await appendSystemLog('workspace:operator_mutation', `Operator workspace ${operationName} by ${requestedBy}`, {
         operation: operationName,
@@ -30256,9 +30277,30 @@ async function operatorWorkspaceMutationApi(request, reply, operationName, args,
         preState,
         postState,
         result: result ? sanitizeSnapshotValue(result) : null,
-        error: error ? (error.message || String(error)) : null
+        error: error ? (error.message || String(error)) : null,
+        occurrenceEvidenceCommitted: error ? null : !evidenceError
       });
+    } catch (diagnosticError) {
+      if (evidenceError) {
+        process.stderr.write(`[best-effort-log-failed] workspace:operator_mutation ${operationName}: ${diagnosticError && diagnosticError.message}\n`);
+      } else {
+        throw diagnosticError;
+      }
     }
+
+    if (error) {
+      reply.code(400);
+      return { error: error.message || 'Workspace operation failed' };
+    }
+    if (evidenceError) {
+      reply.code(500);
+      return {
+        error: `Workspace ${operationName} of ${affectedPaths.join(', ')} occurred, but its canonical occurrence evidence could not be committed: ${evidenceError.message || String(evidenceError)}`,
+        mutation: { occurred: true, act: operationName, paths: affectedPaths },
+        occurrenceEvidence: { committed: false, recoverable: false }
+      };
+    }
+    return result;
   });
 }
 
@@ -30347,7 +30389,12 @@ fastify.post('/api/workspace/fixture', { preHandler: fastify.requireAuth }, asyn
     reply.code(403);
     return { error: 'Permission denied' };
   }
+  if (evidencePersistenceFailure) {
+    reply.code(503);
+    return { error: `Workspace mutations are disabled because event persistence failed: ${evidencePersistenceFailure.message}` };
+  }
 
+  let evidenceError = null;
   try {
     const fixtureId = String(request.body.fixtureId || '').trim();
     const fixture = WORKSPACE_FIXTURES.find(item => item.id === fixtureId);
@@ -30364,15 +30411,50 @@ fastify.post('/api/workspace/fixture', { preHandler: fastify.requireAuth }, asyn
       const preState = captureWorkspaceRootListing();
       applyWorkspaceFixture(fixtureId);
       const postState = captureWorkspaceRootListing();
-      await appendSystemLog('workspace:fixture', `Workspace fixture reset: ${fixture.name}`, {
-        operation: 'resetWorkspaceFixture',
-        args: { fixtureId, workspaceRoot: workspaceProvider.root }
-      }, {
-        source: 'operator_workspace_fixture',
-        requestedBy,
-        preState,
-        postState
-      });
+
+      try {
+        await appendEvent({
+          type: 'workspace.operator_mutation',
+          payload: {
+            act: 'resetWorkspaceFixture',
+            target: { id: workspaceProvider.id, kind: workspaceProvider.kind },
+            paths: [''],
+            actor: requestedBy,
+            outcome: 'succeeded',
+            fixtureId
+          }
+        });
+      } catch (eventAppendError) {
+        evidenceError = eventAppendError;
+      }
+
+      try {
+        await appendSystemLog('workspace:fixture', `Workspace fixture reset: ${fixture.name}`, {
+          operation: 'resetWorkspaceFixture',
+          args: { fixtureId, workspaceRoot: workspaceProvider.root }
+        }, {
+          source: 'operator_workspace_fixture',
+          requestedBy,
+          preState,
+          postState,
+          occurrenceEvidenceCommitted: !evidenceError
+        });
+      } catch (diagnosticError) {
+        if (evidenceError) {
+          process.stderr.write(`[best-effort-log-failed] workspace:fixture ${fixtureId}: ${diagnosticError && diagnosticError.message}\n`);
+        } else {
+          throw diagnosticError;
+        }
+      }
+
+      if (evidenceError) {
+        reply.code(500);
+        return {
+          error: `Workspace fixture reset (${fixture.name}) occurred, but its canonical occurrence evidence could not be committed: ${evidenceError.message || String(evidenceError)}`,
+          mutation: { occurred: true, act: 'resetWorkspaceFixture', paths: [''] },
+          occurrenceEvidence: { committed: false, recoverable: false }
+        };
+      }
 
       return workspaceProvider.list('');
     });

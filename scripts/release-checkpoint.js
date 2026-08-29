@@ -323,6 +323,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // A20 — authority/gate residue split out of operational-abuse-test.js. Protected-path
   // and containment refusal had only pure-classifier coverage before this.
   'workspace-authority-gate-test.js',
+  // T8-I5 — canonical non-run-scoped occurrence evidence for operator workspace
+  // mutations and fixture reset, including the truthful post-effect
+  // evidence-persistence failure response and the latched fail-closed refusal.
+  'operator-occurrence-evidence-test.js',
   // A20 — replacements for the last two silent orphans. Workflow composition
   // (executeActionPlan / executeTicketPlan) had NO registered coverage at all before
   // these, and no suite asserted prompt content.

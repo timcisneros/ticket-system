@@ -12,7 +12,7 @@
     <tr><th>Kind</th><td class="text-muted"><%= connector.kind %></td></tr>
     <tr><th>Work Context</th><td><a href="/work-contexts/<%= connector.workContextId %>">#<%= connector.workContextId %></a></td></tr>
     <tr><th>Credential</th><td class="text-muted"><%= connector.credentialRef ? ('ref: ' + connector.credentialRef) : 'none' %> <em>(reference only — no secret value)</em></td></tr>
-    <tr><th>Allowed scopes</th><td class="text-muted"><%= (connector.allowedScopes || []).join(', ') || 'none' %></td></tr>
+      <tr><th>Allowed scopes</th><td class="text-muted"><%= (connector.allowedScopes || []).join(', ') || 'none' %><% if ((connector.allowedScopes || []).includes('write')) { %> — recorded <code>write</code> scope is not effective: connector writes are refused<% } %></td></tr>
     <tr><th>Source roots</th><td class="text-muted"><%= (connector.sourceRoots || []).join(', ') || 'none' %></td></tr>
     <tr><th>Target roots</th><td class="text-muted"><%= (connector.targetRoots || []).join(', ') || 'none' %></td></tr>
     <tr><th>Write policy</th><td class="text-muted"><%= connector.writePolicy && connector.writePolicy.mode %> (writes refused)</td></tr>
@@ -40,7 +40,6 @@
     <div class="form-group">
       <label>Allowed scopes</label>
       <label class="checkbox-label"><input type="checkbox" name="allowedScopes" value="read" <%= (connector.allowedScopes || []).includes('read') ? 'checked' : '' %>> read</label>
-      <label class="checkbox-label"><input type="checkbox" name="allowedScopes" value="write" <%= (connector.allowedScopes || []).includes('write') ? 'checked' : '' %>> write</label>
     </div>
     <div class="form-group">
       <label for="conn-src">Source roots (one per line)</label>

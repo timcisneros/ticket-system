@@ -11765,3 +11765,161 @@ operator endpoints and `operatorWorkspaceMutationApi` in `server.js`;
 `runtime/ticket-cancellation-authority-contract.js`; `runtime/ticket-objective-revision-contract.js`;
 `persistence/postgres/store.js` and migrations 001, 002, 011, 012, 019, 025, 040. Where a surface
 name appears without a pointer, its owner is defined by the fences above, not by this entry.
+
+## T8 Operator Plane — implementation / verification candidate (prepared 2026-08-29)
+
+**Status:** IMPLEMENTATION/VERIFICATION CANDIDATE — NOT AUTHORITY UNTIL INDEPENDENT REVIEW AND
+PUBLICATION. This candidate carries no authority until it is independently reviewed and published
+by being committed to this register on authoritative `master` (the same uncommitted-candidate
+convention the T8 semantic freeze states for itself). The T8 roadmap row above is UNCHANGED and
+remains explicitly prospective: no implementation-complete or operational-closure claim is made
+here, and none may be inferred. Prepared at `6ab511b4748a4cfaa843b6d2a5210fa1f2454c4b` (clean
+tree); the independent implementation-obligation review returned A. The full canonical release
+checkpoint has NOT been run for this candidate and is REQUIRED before publication.
+
+### Per-invariant implementation disposition
+
+- **T8-I1 — zero production delta; source-proof/registration only.** The frozen kernel assigns I1
+  no implementation obligation (the kernel's expected-discovery list covers I2, I3, I4, I5 only).
+  This section is the registration. No production path changed for I1.
+- **T8-I2 — zero mandatory production delta.** T8-I2 constrains control surfaces (access-catalog
+  gating + canonical authority path; access permission never substitutes for domain
+  authorization/admission); it does not mandate that surfaces exist. The recorded asymmetries —
+  cancellation authority with no ticket-detail cancel control and no `oquery cancel` command
+  (register: T2 Tranche 5 entry), objective revision API-only with the ticket-detail page
+  instructing a hand-written POST, watcher observe/approve endpoints without controls — are
+  product surface choices, not T8 implementation obligations. The I2 implementation deliverable is
+  this surface-closure inventory, each mapped to its existing canonical endpoint: cancellation →
+  `POST /api/tickets/:id/cancel` (`runtime/ticket-cancellation-authority-contract.js`, migration
+  040); objective revision → `POST /api/tickets/:id/objective-revisions`
+  (`runtime/ticket-objective-revision-contract.js`); watcher observe/approve →
+  `POST /api/watchers/:id/observe`, `POST /api/watcher-proposals/:id/approve` (permission-gated;
+  `ticket:create` for approval). Separate hygiene registrations (recorded defects, NOT T8
+  semantics, still owed their own small registrations): stale `oquery update-ticket` targeting the
+  retired generic lifecycle PATCH with the six-status vocabulary
+  (`scripts/oquery.js`); stale `data/message-threads.json` pointer in `docs/OPERATOR_INBOX.md`
+  (message threads are PostgreSQL-owned, migration 025); connector write-scope checkbox (fixed in
+  this candidate under I4 — see below); work-context archive `expectedRevision` gap (no
+  `expectedRevision` sent by any work-context view while sibling catalog views send it).
+- **T8-I3 — no attention projection created; classification recorded.** T8-I3 is conditional ("ANY
+  operator-attention projection is …"): it constrains projections if present and requires none; the
+  kernel rejects a universal attention entity/ID/ledger. No projection was implemented. Existing
+  qualifying readers (ticket timeline; the read-only operational summary pinned by
+  `operational-summary-readonly-test.js`; the terminal-projection readers with their strict
+  field-ownership matrix) satisfy the constraints and remain the pattern. **Classification:** the
+  operator inbox (`/inbox`, message threads migration 025) and the operator-recovery reconciler
+  (`operatorRecovery`, migration 012) are owner-owned control-surface/application-state behavior —
+  durable, operator-authored, lifecycle-bearing messaging and recovery state — NOT I3 read-only
+  ledger-free attention projections, and nothing in this candidate reclassifies their ownership.
+- **T8-I4 — one mandatory current violation fixed; inventory carried (below).**
+- **T8-I5 — implemented (below).**
+
+### T8-I4 fix and presentation-distinction inventory
+
+**Fix (smallest, view-only).** `views/connectors.ejs` (create form) and
+`views/connector-detail.ejs` (edit form) no longer offer a grantable `write` scope. Connector
+catalog/storage semantics are unchanged: `CONNECTOR_SCOPES`, `validateConnectorInput`, migration
+022, and the API still accept recorded `write` values (pinned by the candidate's render assertions).
+No stored value was migrated or normalized. Existing recorded `write` scopes remain visible only
+truthfully: the detail page now annotates a recorded `write` scope as "not effective: connector
+writes are refused", alongside the existing "(writes refused)" write-policy disclosure.
+
+**Frozen distinction inventory (per T8-I4), each mapped to its owning authority and current
+rendering surfaces.** This inventory is the I4 baseline for the render/clarity verification; the
+connector checkbox was the only recorded mandatory current violation.
+
+| Frozen distinction | Owning authority | Current rendering surfaces | Inventory status |
+|---|---|---|---|
+| attempted vs committed | T6 request/reservation/receipt authority (`reserved` vs `response_persisted` vs settled; operation receipts) | run detail/timeline via events + receipts (`timeline-authority-evidence-test.js`, required) | distinguished by owning contracts; renders read the recorded distinctions; no recorded collapse |
+| blocked vs waiting | T2 blocker/reason authority + T5 release-admission blocker/intent matrix | ticket/run status surfaces; `/ops` waiting/backpressure items | distinguished by the frozen T5 matrix; recorded clarity pressure below |
+| recorded occurrence vs occurred effect | T6 occurrence-uncertainty doctrine + T8-I5 occurrence evidence | operation receipts; the T8-I5 post-effect response ("occurred, but its canonical occurrence evidence could not be committed"); operator diagnostic logs now carry `occurrenceEvidenceCommitted` | enforced by the I5 response contract and latched refusal; precedent renderings ("recorded intent · not implemented") retained |
+| advisory model prose vs authority | evidence authority; inbox authorship contract (verbatim model output; system-attributed gate text) | inbox threads (agent/system/operator authorship); run detail | contract recorded in `docs/OPERATOR_INBOX.md`; rendering is attribution-honest; the pinning suite (`inbox-messaging-test.js`) is manifest-orphaned (A20), not a render defect |
+| operational history vs workspace materialization | run evidence (events/receipts/replay) vs the workspace target boundary (`withTargetOperationLock`; T7-I3 same-Run visibility unchanged) | run detail evidence zone; workspace page current listing; artifact status projections | distinguished; bootstrap G classification unchanged by T8 |
+| evidence vs diagnostic narrative | canonical storage map (events/receipts/replay = evidence; `diagnostic_logs` = telemetry) | `/event-journal` + timeline (evidence) vs `/logs` (diagnostic) | separation maintained; the I5 canonical event and the retained diagnostic log stay separate records |
+
+**Recorded residuals (named, not expanded into product scope):** the `oquery
+connectors create` `--allowed-scopes` flag can still grant `write` through the CLI input surface
+(the freeze registers only the checkbox; the scope vocabulary is connector-catalog-owned, so a CLI
+change is not view-only and is not taken); stored `write` values render annotated non-effective;
+the recorded `outcome` term overload across views (`docs/OPERATIONAL_PRESSURES.md`) remains a
+clarity pressure for I4 render/clarity regression work; the stale `oquery update-ticket` and
+work-context archive `expectedRevision` defects are I2/hygiene control-path defects, not I4
+presentation violations.
+
+### T8-I5 implementation
+
+**Mechanism (registered).** One canonical durable NON-RUN-SCOPED occurrence event per successful
+operator-initiated governed-target mutation, appended through the EXISTING server `appendEvent`
+into the existing `events` store — event type `workspace.operator_mutation`, payload recording the
+frozen minimum occurrence truth: `act` (`createFile`, `createFolder`, `writeFile`, `renamePath`,
+`deletePath`, `resetWorkspaceFixture`), `target` (`{id, kind}` of the local workspace target),
+`paths` (provider-relative affected paths; whole-root `['']` for fixture reset), `actor` (existing
+session/user context — username or session user id), `outcome` (`succeeded`; failed/refused
+mutations record no occurrence event), with the canonical time carried by the event envelope `ts`.
+No Run/Ticket binding: `run_id`, `ticket_id`, `step_id`, `seq`, `prev_hash`, `hash` all NULL — the
+shape already admitted by the `events_chain_shape` CHECK (migration 001), `buildEventEnvelope`,
+and `validateCurrentEventEnvelope`, proven live by the existing `runtime_limits.updated` event.
+Fixture reset is in the same class (kernel: "including whole-workspace fixture reset"). Beyond the
+minimum, the payload may carry `fixtureId`; pre/post-state binding remains OPTIONAL implementation
+detail (the diagnostic log retains pre/post capture as before; neither is a frozen requirement).
+Existing diagnostic logging is retained unchanged in role (`workspace:operator_mutation`,
+`workspace:fixture` stay BEST-EFFORT diagnostic narrative). No prepared-intent/reconciliation
+machinery; no T6 membership change; mutation authority, `withTargetOperationLock` serialization,
+and T7 same-Run visibility unchanged; no migration, schema, store-contract, or permission change;
+no new endpoint.
+
+**Truthful post-effect failure contract (registered).** Because the filesystem effect precedes any
+durable record, a recording failure after the effect preserves truthful uncertainty under the
+existing post-external-side-effect required-persistence doctrine (matrix row 25): the response
+MUST state that the mutation occurred but its canonical occurrence evidence could not be committed
+(structured body: `mutation.occurred === true`, `occurrenceEvidence.committed === false`), MUST NOT
+return an unqualified success, MUST NOT report the filesystem mutation as failed, MUST offer no
+repetition/retry and make no claim of later recovery. The existing evidence-persistence
+containment is preserved and relied upon: the server `appendEvent` latches
+`evidencePersistenceFailure`, clears readiness, and stops both schedulers. While latched, further
+operator workspace mutations and fixture resets are refused BEFORE any filesystem effect (the
+repository boundary that required evidence must be committable before mutation work proceeds),
+creating no additional unrecorded effects; a refused request records no event. The best-effort
+diagnostic log write is contained so it can never mask the truthful canonical-evidence outcome.
+
+### Verification ownership
+
+- **New required suite:** `scripts/operator-occurrence-evidence-test.js` (PostgreSQL; registered in
+  `scripts/test-manifest.js` as required and in the `POSTGRES_INTEGRATION_SCRIPTS` release-checkpoint
+  list). Covers: one occurrence event per successful operator mutation class plus fixture reset;
+  minimum occurrence-truth fields; null Run/Ticket/chain attribution; exactly-once recording per
+  successful request; no event for refused mutations; the truthful post-effect evidence-persistence
+  failure response against a real server (fault-injected BEFORE INSERT trigger in the test's own
+  isolated schema — no production source is conditional on testing); filesystem effect present;
+  no partial event committed; diagnostic log retained with the not-committed marker; fail-closed
+  degraded health; latched refusal of further mutations and fixture reset with no new filesystem
+  effect and no event.
+- **Extended required suite:** `scripts/page-render-regression-test.js` now creates a connector via
+  the API with `allowedScopes: ['read','write']` (proving catalog/API semantics unchanged), then
+  asserts the create and edit forms offer no `write` scope and a recorded `write` scope renders as
+  non-effective/writes-refused.
+- **NOT counted as running verification owners (manifest-orphaned, cutover-orphan):**
+  `agent-regression-test.js`, `local-connector-contract-test.js`, `inbox-messaging-test.js`. Their
+  recorded contracts are documentation of behavior, not running coverage; reclassification is a
+  separate A20 disposition.
+- **Existing required owners that must keep passing:** `process-workspace-mutation-boundary-test.js`,
+  `workspace-authority-gate-test.js`, `workspace-fixture-catalog-test.js`,
+  `event-integrity-negative-test.js`, `timeline-authority-evidence-test.js`,
+  `operational-summary-readonly-test.js`, `permission-escalation-boundary-test.js`.
+
+### Checkpoint / cutover disposition
+
+The full canonical release checkpoint (`TEST_DATABASE_URL=... npm run checkpoint:release`) is
+REQUIRED before this candidate can be published — T8-I5 is a runtime delta, and the freeze states
+a canonical checkpoint is expected for any runtime/persistence delta. It has NOT been run for this
+candidate. No cutover: no storage-engine change, no dual-write, no new store; the
+`postgres-runtime-cutover-test` boundary is not implicated (T5/T6/T7 precedent: no separate
+operational cutover required).
+
+### Boundaries honored
+
+No migration; no schema/table change; no store-contract redesign; no runtime authority redesign; no
+new endpoint; no permission change; no T6/T7 semantic change; no new attention projection; no
+optional control-surface construction; no frozen event vocabulary beyond the registered mechanism
+above (the kernel's "shape/mechanism are not frozen" survives: this registration binds the
+implementation, not the T8 semantics).
