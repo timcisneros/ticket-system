@@ -8778,7 +8778,7 @@ a large subsystem.
 | T4 | relationships | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed, runtime cutover verified — see the T4 operational closure entry below) |
 | T5 | waiting / time / fairness / backpressure | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed; no separate operational cutover required — see the T5 operational closure entry below) |
 | T6 | effect boundary | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete via zero runtime delta; independently reviewed; canonical checkpoint passed; no separate operational cutover required — see the T6 operational closure entry below) |
-| T7 | intervention / context | SEMANTIC KERNEL FROZEN (implementation COMPLETE via zero production runtime delta; verification registered; operational closure NOT claimed — see the T7 zero-runtime-delta implementation/verification registration below) |
+| T7 | intervention / context | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete via zero production runtime delta; independently reviewed; canonical checkpoint passed; no separate operational cutover required — see the T7 operational closure entry below) |
 | T8 | operator plane | pending |
 | T9 | external actor / event | pending |
 | T10 | foundation closure | final |
@@ -11374,3 +11374,136 @@ the one primary implementation class per invariant; the evidence owners; which c
 test-owned versus source-proof; what is intentionally absent; what remains deferred; why a
 canonical checkpoint will be run (T7-adopted closure gate by precedent); and why no
 operational cutover exists. No upstream record is duplicated; this record only points.
+
+---
+
+## T7 Intervention / Context — operational closure (recorded 2026-08-29)
+
+**Status of this record:** OPERATIONAL-CLOSURE CANDIDATE, prepared for independent review. It
+is a status/evidence record only. It changes NO T7 semantic decision, touches NO frozen
+invariant (T7-I1..T7-I8), alters NO family A–G classification, NO Q1–Q32 disposition, NO
+information/delivery-identity decision, NO crash/restart boundary, NO trust/provenance
+semantics, and NO implementation-prohibition or future-extension rule. Until this exact record
+and the roadmap-row update above are published by being committed to this register on
+authoritative `master`, they are not authority (the same uncommitted-candidate convention the
+T7 semantic freeze and registration records state for themselves). The CURRENT published T7
+status therefore remains: SEMANTIC KERNEL FROZEN; IMPLEMENTATION COMPLETE via zero production
+runtime delta; VERIFICATION REGISTERED; T7-ADOPTED CANONICAL CHECKPOINT PASSED; OPERATIONAL
+CLOSURE NOT CLAIMED. Upon publication of this exact reviewed record: T7 — OPERATIONALLY
+CLOSED.
+
+### Closure basis
+
+1. T7 semantic kernel frozen and published (T7 Intervention / Context — semantic freeze;
+   publication commit `ffe5837fc30c2e7393f56828d89fde2ede146556`).
+2. Implementation disposition independently established as ZERO production/runtime delta and
+   registered: T7-I1..T7-I8 realized by existing predecessor, domain, target, provenance,
+   replay, and negative boundaries (primary-class vector `A A B B B A B B`); no runtime,
+   persistence, migration, schema/table/event/API, prompt, inbox, workspace, or provider
+   change; no new T7 delivery mechanism, no `human_confirmed` realization, no model→operator
+   send primitive (T7 Intervention / Context — zero-runtime-delta implementation /
+   verification registration; publication commit `0c59766f215215442f2b91a838c9541883822a89`,
+   tree `d7d68b59706d6208b4aab7372832fb61c16957f0`).
+3. Deterministic versus structural/source-proof verification ownership explicitly registered
+   by that record (checkpoint-owned required suites indexed in `scripts/test-manifest.js` /
+   `scripts/release-checkpoint.js`; structural negatives carried by source/authority maps;
+   orphaned inbox/triage suites remain `orphaned/cutover-orphan`, not closure dependencies).
+4. The T7-specific canonical checkpoint gate was adopted by published registration authority
+   (precedent-based, not a pre-existing repository mandate), binding closure to a fresh
+   canonical checkpoint against the published registration commit.
+5. That canonical checkpoint PASSED against the exact published registration commit
+   (evidence below).
+6. No operational cutover is required because the production delta was zero (no-cutover
+   record below).
+7. Deferred product/semantic decisions remain explicitly deferred (below).
+
+### Independent review history (publication-gate facts; not semantic authority)
+
+The zero-runtime disposition was independently reviewed (finding set HIGH 0 / MEDIUM 0 / LOW 2,
+both LOWs being discovery-plan corrections applied before registration preparation). The
+implementation/verification registration candidate completed independent review (HIGH 0 /
+MEDIUM 0 / LOW 2, both wording-only) and, after those two wording corrections, a narrow
+low-closure review returned HIGH 0 / MEDIUM 0 / LOW 0 before publication. No repository
+artifact exists for these reviews and none is invented; they are publication-gate evidence
+only, recorded here so closure does not depend on session memory. The published bytes and the
+repository-owned checkpoint result are the durable authority.
+
+### Canonical checkpoint evidence
+
+Exactly one completed canonical checkpoint supports this closure, recovered from its durable
+repository-owned result
+(`.local-artifacts/release-checkpoint-results/20260829T120026183Z-f967cd02-e9bd-4933-98c5-f10b4e802322/`):
+
+- state: PASSED
+- repositoryCommit: `0c59766f215215442f2b91a838c9541883822a89` (the published T7
+  implementation/verification registration commit; tree
+  `d7d68b59706d6208b4aab7372832fb61c16957f0`)
+- checkpointRunIdentity: `f967cd02-e9bd-4933-98c5-f10b4e802322`
+- registryHash: `2a0b397b73971d7a47163b335457ecb40273f5d240ff946f23c6c8e4e33b1a74`
+- startedAt 2026-08-29T12:00:26.183Z; completedAt 2026-08-29T13:00:00.795Z
+- passedCount 253; totalCount 253; firstFailedOrdinal/Owner: none; exit 0
+
+Registry category decomposition, recovered from the checkpoint registry artifact (not
+recomputed by hand): 1 syntax owner + 123 deterministic checks + 129 PostgreSQL checks =
+253 total. All 253 owned checks passed.
+
+What the checkpoint establishes: the exact published T7 implementation/verification
+registration commit was tested; the canonical registry at the recorded registryHash passed;
+PostgreSQL checkpoint suites passed within the repository harness (per-suite `tstharness_*`
+isolation; operational runtime schema untouched); repository regression health remained green.
+
+What the checkpoint does NOT establish (and no closure claim rests on it): it does not itself
+prove structural absence of a T7 delivery mechanism, absence of `human_confirmed`
+realization, or absence of model→operator messaging. Those remain source-proof claims already
+registered by the T7 registration record.
+
+### No-cutover record
+
+OPERATIONAL CUTOVER REQUIRED: NO. T7's implementation disposition is ZERO production/runtime
+delta: NO runtime implementation, NO persistence implementation, NO migration, NO schema/data
+migration, NO provider change, NO process/workspace cutover, NO restart, and NO separate
+operational cutover was required or performed. Operational closure is recognition that the
+published implementation already satisfies the frozen boundary and passed canonical
+verification — not a change to operational state.
+
+### Deferred decisions remain deferred
+
+T7 operational closure completes the CURRENT tranche obligations only. It does NOT implement,
+resolve, or permanently prohibit: the bootstrap-D operator→agent delivery product decision
+(blocker-resolution note content remains a T2 annotation); a separately authorized future
+same-Run T7 semantic extension/amendment (T7-I3); possible future later-work/later-attempt
+T7 delivery mechanisms bound by T7-I4/T7-I5 (T7-I4); model→operator ownership (unassigned,
+T7-I7); `human_confirmed` realization (separate doctrine, T7-I8); the workspace
+target-visibility classification (TARGET-BOUNDARY TRUTH under its existing owner, T7-I3/G).
+The implementation prohibition stands unchanged: until a separate implementation decision is
+registered for a specific surface, no runtime change, migration, table/schema, event type,
+API, prompt change, inbox change, workspace change, `human_confirmed` implementation, context
+object, or test change is authorized by T7.
+
+### What operational closure means here
+
+T7 OPERATIONALLY CLOSED means exactly: semantics frozen; implementation realization registered
+(zero production runtime delta); registration independently reviewed; deterministic versus
+source-proof verification ownership registered; the T7-adopted canonical checkpoint PASSED
+against the exact published registration commit; no operational cutover required; no
+unresolved HIGH/MEDIUM closure blocker remains.
+
+It does NOT mean: a T7 delivery mechanism exists; `human_confirmed` is realized; model→operator
+messaging is implemented; the deferred decisions were resolved; future registered T7
+extensions are prohibited; or every prompt/context presentation concern is T7-governed.
+
+### Frozen authority nonchange
+
+T7-I1..T7-I8 unchanged. Families A–G unchanged. Q1–Q32 unchanged. Information identity and
+delivery identity unchanged. Crash/restart boundary unchanged. Trust/provenance semantics
+unchanged. Implementation prohibition and future-extension rules unchanged. T2/T3/T4/T5/T6
+unchanged. This record adds closure STATUS/EVIDENCE ONLY.
+
+### Hermeticity / cognitive-efficiency note
+
+After publication, a fresh capable model can recover from the register alone: what T7 means
+(freeze entry); why zero production code was correct and per-invariant evidence ownership
+(registration entry); which verification is deterministic versus source-proof (registration
+verification index); what exact checkpoint passed and which commit it binds to (this record);
+why no cutover was required; what remains intentionally deferred; and why T7 can truthfully be
+called OPERATIONALLY CLOSED. No conversational context is required; this record only points.
