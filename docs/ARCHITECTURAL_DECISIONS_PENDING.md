@@ -1,6 +1,6 @@
-## T10 run-counter derived-state drift — narrow reconciliation candidate, authorization record prepared, execution not yet permitted (2026-08-30)
+## T10 run-counter derived-state drift — narrow reconciliation candidate, authorization published, repair not executed (2026-08-30)
 
-**Status: AUTHORIZATION RECORD PREPARED — EXECUTION NOT YET PERMITTED.**
+**Status: AUTHORIZATION PUBLISHED — REPAIR NOT EXECUTED.**
 
 T10 discovered derived-state drift in the trigger-maintained `runtime_status_counts`
 operational projection (persistence/postgres/migrations/009_operational_status.sql): the
@@ -104,7 +104,7 @@ canonical published master containing the authorization. The record originally s
 this candidate was a NON-AUTHORIZING contract example (`authorizationState` `NOT_AUTHORIZED`,
 digest and authorizer fields `null`) proving shape and location without granting authority;
 it has since been prepared as AUTHORIZED with exactly the independently issued values (see
-the final-preflight/authorization record below) and remains unpublished worktree bytes.
+the final-preflight/authorization record below) and is now published on canonical master.
 
 PREFLIGHT CORRECTION RECORD (2026-08-30): the first separately bounded non-mutating
 operational preflight of the superseded script bytes (sha256
@@ -182,12 +182,41 @@ implementation session has MECHANICALLY PREPARED them into
 `config/repair-authorization.t10-run-counter-reconciliation-v1.json` exactly as issued. That
 preparation is NOT execution: the repair has NOT executed, no repair occurrence evidence
 exists yet, T10 remains open, and the current operational Run counters are NOT repaired.
-These authorization bytes are NOT yet published authority: the prepared record and register
-update must next receive independent exact-byte review, and after that review publication to
-canonical master is still required; execution remains forbidden until publication AND all
-execute-time gates pass (committed AUTHORIZED record, clean tree, fresh-remote master
+These authorization bytes were not yet published authority at that milestone (the prepared
+record and register update still required independent exact-byte review, followed by
+publication to canonical master; execution remained forbidden until publication AND all
+execute-time gates pass — committed AUTHORIZED record, clean tree, fresh-remote master
 equality, authorized baseline ancestry, script-sha and full-state digest binding, enabled
-trigger, current schema, exact operational target, and the fail-closed fence).
+trigger, current schema, exact operational target, and the fail-closed fence). Their
+subsequent independent
+exact-byte review, temporal-wording correction, confirmation, and publication are recorded in
+the next subsection.
+
+AUTHORIZATION EXACT-BYTE REVIEW AND PUBLICATION — COMPLETE (2026-08-30): the prepared
+authorization/register bytes subsequently received the required independent exact-byte
+authorization review. The script remained exactly
+`53bdcc905a0558f83e457f79750ed562e1e9f7b26a4cfaa308d7dd1b14b009db`; the prepared
+authorization record remained exactly
+`7f2944dd7f9eea6e2e390c6e2c8d1e081e58fb30e312aa1443506eee8796f351`; the reviewed
+register-before-publication was
+`67a5d9570d73168d3dd980f2e2345fe909e6a713d69f69e96de5ebb7c24ae85b`. The review found the
+authorization record EXACT (all 13 issued fields byte-equal to the independently issued
+values); a narrow register-only temporal-wording correction followed (historical-tense and
+milestone-accuracy fixes; script and record untouched), and the corrected register then
+received narrow independent confirmation with no remaining findings blocking publication.
+PUBLICATION: commit `34061c852ba0e9906f46cefffb971bfbe408fe35` (parent, and verified fresh
+pre-publication remote master, `1e8dc3e225100f69aa54cd956ef129ec2dda4114`) published exactly
+three paths — `docs/ARCHITECTURAL_DECISIONS_PENDING.md`,
+`config/repair-authorization.t10-run-counter-reconciliation-v1.json`,
+`scripts/operational-repair-t10-run-counters.js` — with blob hashes script
+`53bdcc905a0558f83e457f79750ed562e1e9f7b26a4cfaa308d7dd1b14b009db`, authorization record
+`7f2944dd7f9eea6e2e390c6e2c8d1e081e58fb30e312aa1443506eee8796f351`, register-at-publication
+`67a5d9570d73168d3dd980f2e2345fe909e6a713d69f69e96de5ebb7c24ae85b`; the push was a non-force
+fast-forward; fresh post-push origin/master equaled
+`34061c852ba0e9906f46cefffb971bfbe408fe35`; `authorizedBaselineHead` was verified an ancestor
+of the publication HEAD; the post-publication worktree was clean. The independently reviewed
+AUTHORIZED record and the independently reviewed script are therefore published byte-exactly
+on canonical master.
 
 Independently reviewed candidate artifact:
 `scripts/operational-repair-t10-run-counters.js`
@@ -208,28 +237,36 @@ closed on contention, mutates nothing, and prints observed digests as evidence o
 `--execute` takes no authorization CLI values at all and establishes fresh remote master
 authority before any database contact). The authorization-contract record is
 `config/repair-authorization.t10-run-counter-reconciliation-v1.json`
-— now PREPARED as `AUTHORIZED` with exactly the issued values, sha256
+— now PUBLISHED as `AUTHORIZED` on canonical master with exactly the issued values, sha256
 `7f2944dd7f9eea6e2e390c6e2c8d1e081e58fb30e312aa1443506eee8796f351` (the originally shipped
 NON-AUTHORIZING contract example, sha256
 `8826efff69febf0b872c1c1848c5d090b3f091d987f9b9c5193c5b768a333b75`, is superseded history);
 it binds the repair id, the reviewed script sha256,
 the authorized baseline, the two reviewed full-state digests, the exact operational target,
 the reconstruction-rule identity, and the lock relations.
-The repair semantics and the script's exact bytes were independently reviewed; this updated
-entry and the prepared AUTHORIZATION BYTES still require independent exact-byte review, after
-which publication to canonical master remains required before any execution. The script
+The repair semantics, the script's exact bytes, the prepared authorization record, and the
+register bytes carrying this authorization history were each independently reviewed at their
+respective milestones (see the exact-byte review and publication record above); publication to
+canonical master is COMPLETE. The script
 binds its own sha256 against the authorization record at execution time, so any byte change
-invalidates the candidate until the authorizing review re-pins it.
+invalidates the authorization until the authorizing review re-pins it.
 Occurrence evidence will be two append-only deployment-scope `diagnostic_logs` rows created
 only by an authorized execution (the first commits atomically with the repair and records
 the authorization record identity; the second records post-commit verification); none exist
-yet. The PREPARED AUTHORIZED record is NOT YET PUBLISHED AUTHORITY: it is uncommitted,
-unreviewed as exact bytes, and execution remains forbidden until publication AND all
-execute-time gates pass.
+yet.
 
-Execution is **not yet permitted** merely because a PREPARED AUTHORIZED record exists in this
-uncommitted worktree. The defect is **not repaired** and T10 is **not closed** by this entry;
-a later entry must record the authorized execution, its occurrence evidence, and the
+The published AUTHORIZED record makes the repair ELIGIBLE for its separate
+execution-authorization step; publication itself implies no execution. Execution requires
+that separate step and must independently satisfy the repository-owned execute-time gates:
+clean repository; HEAD equal to freshly queried origin/master; `authorizedBaselineHead` an
+ancestor of fresh master; the published AUTHORIZED record; the exact authorized script SHA;
+the exact operational target; schema currency; enabled trigger; lock acquisition; live
+full-state digests equal to the authorized digests; and the exact fail-closed structural
+fence.
+
+The defect is **not repaired** and T10 is **not closed** by this entry: no reconstruction has
+occurred, no occurrence evidence exists, and no post-commit repair verification exists; a
+later entry must record the authorized execution, its occurrence evidence, and the
 verification result before any repaired/closed status may be claimed.
 
 ---
