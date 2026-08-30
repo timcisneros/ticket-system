@@ -99,6 +99,25 @@ class EvaluationRunnerError extends Error {
   }
 }
 
+// The ZERO-DRIFT failure must be diagnosable from the failure OUTPUT alone, so
+// the message carries all three fingerprints, each serialized under a fixed
+// bound. The structured detail object retains the raw values.
+const ZERO_DRIFT_FINGERPRINT_JSON_LIMIT = 1024;
+
+function serializeFingerprintBounded(fingerprint) {
+  let serialized;
+  try {
+    serialized = JSON.stringify(fingerprint);
+  } catch (_) {
+    serialized = String(fingerprint);
+  }
+  if (serialized === null || serialized === undefined) return 'null';
+  if (serialized.length > ZERO_DRIFT_FINGERPRINT_JSON_LIMIT) {
+    return `${serialized.slice(0, ZERO_DRIFT_FINGERPRINT_JSON_LIMIT)}…[truncated]`;
+  }
+  return serialized;
+}
+
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
 function parseArguments(argv) {
@@ -701,6 +720,18 @@ async function runTrial({
   // durable identities, allowing tests to invoke normal public interruption or
   // recovery routes without sleeps or direct state fabrication.
   afterTicketCreated = null,
+  // TEST-ONLY zero-drift adversarial probe. Default-null; production, scored
+  // and rehearsal callers never supply it. It is invoked at exactly two named
+  // phases, in this order:
+  //   'after_server_stop_before_first_fingerprint' — the product server has
+  //     been stopped (process exited) and the ZERO-DRIFT measurement has not
+  //     begun; the probe receives { server, store, ticketId } and is how a
+  //     test proves the product process exited before measurement;
+  //   'after_first_report_before_between_fingerprint' — between the two
+  //     read-only reports, where a test may deliberately commit a ticket-scoped
+  //     durable write that ZERO-DRIFT must catch.
+  // No other phases exist and no general hook framework is introduced.
+  zeroDriftProbe = null,
   // Scored REAL candidates that fail the shared domain are retained outside
   // the corpus in repository-associated, ignored diagnostic storage. A caller
   // may redirect this only for controlled tests.
@@ -711,6 +742,11 @@ async function runTrial({
   historicalStructuredDispatchRehearsalAuthority = null
 }) {
   assertMode(mode);
+  if (zeroDriftProbe !== null && typeof zeroDriftProbe !== 'function') {
+    throw new EvaluationRunnerError(
+      'zeroDriftProbe must be null or a test-only function',
+      { code: 'EVALUATION_ZERO_DRIFT_PROBE_INVALID' });
+  }
   if (historicalStructuredDispatchRehearsalAuthority !== null &&
       historicalStructuredDispatchRehearsalAuthority !==
         HISTORICAL_STRUCTURED_DISPATCH_REHEARSAL_AUTHORITY) {
@@ -1229,6 +1265,20 @@ async function runTrial({
 
     const pathProof = await proveDurablePath(store, ticketId, arm);
 
+    // DETERMINISTIC FREEZE BARRIER. The ZERO-DRIFT measurement may begin only
+    // after the product server — the only process that can legitimately write
+    // the measured ticket-scoped durable state — has fully exited. Quiescence
+    // observes quietness; it does not stop the writer, so it cannot provide
+    // this guarantee. The stop is REQUIRED, not best-effort: a stop failure
+    // propagates and fails the trial rather than permitting a measurement that
+    // a still-alive writer could invalidate. The existing finally stop below
+    // remains and is idempotent for an already-exited child.
+    await server.stop();
+    if (zeroDriftProbe !== null) {
+      await zeroDriftProbe('after_server_stop_before_first_fingerprint',
+        { server, store, ticketId });
+    }
+
     // ZERO DRIFT: fingerprint, report, fingerprint, report, fingerprint.
     const before = await durableFingerprint(store, ticketId);
     const pricingInputs = {
@@ -1237,6 +1287,10 @@ async function runTrial({
     };
     const firstReport = await collectTrialObservations(store, {
       ticketId, armId: arm.armId, pricingInputs });
+    if (zeroDriftProbe !== null) {
+      await zeroDriftProbe('after_first_report_before_between_fingerprint',
+        { server, store, ticketId });
+    }
     const between = await durableFingerprint(store, ticketId);
     const secondReport = await collectTrialObservations(store, {
       ticketId, armId: arm.armId, pricingInputs });
@@ -1245,7 +1299,11 @@ async function runTrial({
       JSON.stringify(between) !== JSON.stringify(after);
     if (drift) {
       throw new EvaluationRunnerError(
-        'the read-only report changed durable state', { before, between, after });
+        'the read-only report changed durable state ' +
+        `before=${serializeFingerprintBounded(before)} ` +
+        `between=${serializeFingerprintBounded(between)} ` +
+        `after=${serializeFingerprintBounded(after)}`,
+        { before, between, after });
     }
 
     // ── THE INDEPENDENT ORACLE, one of two kinds ─────────────────────────
@@ -1333,6 +1391,14 @@ async function runTrial({
     try { if (mode !== 'live') assertAllWorkerResponsesConsumed(namespace.dir); }
     catch (error) { warnings.push(error.message); }
     if (quiescence.timedOut) warnings.push('trial timed out before quiescence');
+    // ARTIFACT TRUTHFULNESS. The ZERO-DRIFT measurement ran only after the
+    // product server process had been stopped and had exited — the deterministic
+    // freeze barrier above — and NOT because quiescence alone guaranteed
+    // quietness. The artifact must say so rather than leave the guarantee
+    // implied.
+    warnings.push('the product server was stopped (process exited) before the ' +
+      'read-only ZERO-DRIFT measurement; quiescence alone did not provide that ' +
+      'guarantee');
 
     artifact = buildTrialArtifact({
       ...(scoredIdentity || {}),

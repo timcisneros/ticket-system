@@ -11923,3 +11923,80 @@ new endpoint; no permission change; no T6/T7 semantic change; no new attention p
 optional control-surface construction; no frozen event vocabulary beyond the registered mechanism
 above (the kernel's "shape/mechanism are not frozen" survives: this registration binds the
 implementation, not the T8 semantics).
+
+## Checkpoint harness — zero-drift freeze-barrier correction candidate (prepared 2026-08-29)
+
+**Status:** CORRECTION CANDIDATE — NOT AUTHORITY UNTIL INDEPENDENT REVIEW AND PUBLICATION. The
+required ordering is: (1) the correction candidate passes independent review; (2) the exact
+reviewed correction is committed locally on top of the intact T8 implementation commit
+`38ce3f5d741869eab9fbd3dabc5fd16289d3a2bc`; (3) with a clean working tree, the canonical release
+checkpoint runs commit-bound against that exact local commit — it must never run on dirty or
+uncommitted bytes; (4) the checkpoint result is recorded, preserving both prior failed runs
+listed below; (5) only after a checkpoint PASS and result registration may the T8 implementation
++ harness correction chain be published to `origin/master` — publishing first would also publish
+the still-uncheckpointed T8 implementation commit, since it sits beneath the correction in the
+same unpushed chain. No retry-until-green behavior is authorized or recorded: the checkpoint was
+run exactly once per instruction, and this correction was prepared from the preserved failure
+artifacts rather than from repeated attempts.
+
+**Failed runs (both preserved unchanged under `.local-artifacts/release-checkpoint-results/`):**
+
+- `cf5a7dca-ef62-4b7a-9e90-46d885615741` — FAILED at
+  `structured-allocation-scenario-postgres-test.js` (ordinal 126), 125/254.
+- `d4e921ce-4f9d-4a14-8974-71c863a8c190` — FAILED at
+  `evaluation-live-artifact-domain-postgres-test.js` (ordinal 130), 129/254. The previously
+  failing owner PASSED in this run, and the deterministic sibling
+  `evaluation-live-artifact-domain-test.js` PASSED earlier in the same run.
+- **Same ZERO-DRIFT seam across different owners:** both failures are the identical
+  `EvaluationRunnerError: the read-only report changed durable state` at the runner's
+  fingerprint/report/fingerprint window (`structured-allocation-evaluation-runner.js` `runTrial`),
+  each through a different calling suite, and both calling suites pass standalone at the candidate
+  commit — the defect is in the measurement context, not in either suite or in the T8 delta.
+
+**Root cause (recorded from the two artifacts and the runner source).** The ZERO-DRIFT window took
+its three durable fingerprints while the trial's product server process was still ALIVE. Quiescence
+observes that no run is executing; it does not stop the writer process. Under sustained checkpoint
+load a legitimate background write from the still-running writer could land inside the read-only
+window, so the check could report drift that the measurement itself permitted — a harness
+soundness defect, intermittent by construction.
+
+**Correction (narrow, harness-only).** `runTrial` now stops the trial server —
+`await server.stop()`, required, failure propagates — after quiescence and path proof and BEFORE
+the first ZERO-DRIFT fingerprint. The measurement begins only after the product writer process has
+fully exited (the harness `stop` waits for actual process exit; the existing finally stop remains,
+idempotent). No sleeps, no drift retry, no fingerprint weakening, no probabilistic quiet-period
+substitute, no product-write suppression, no T8 special case.
+
+**ZERO-DRIFT is unchanged and fail-hard.** The frozen fingerprint → read-only report →
+fingerprint → read-only report → fingerprint sequence and the throw-on-any-mismatch contract are
+preserved. The thrown error's MESSAGE now carries bounded serialized `before`/`between`/`after`
+fingerprints (fixed 1024-character bound per fingerprint) so a failure is diagnosable from output
+alone; the existing structured detail object (`{before, between, after}`) is preserved.
+
+**Test-only adversarial probe (registered seam, default-null).** `runTrial` accepts
+`zeroDriftProbe`, invoked at exactly two named phases —
+`after_server_stop_before_first_fingerprint` (proves the product process exited before
+measurement) and `after_first_report_before_between_fingerprint` (a test may deliberately commit a
+ticket-scoped durable write that ZERO-DRIFT must catch). Production, scored and rehearsal callers
+pass no probe; their behavior changes only by the freeze barrier. No general hook framework.
+
+**Verification ownership.** New required PostgreSQL suite
+`scripts/evaluation-zero-drift-barrier-postgres-test.js` (registered in `scripts/test-manifest.js`
+and the release checkpoint's PostgreSQL list) proves the five reviewed properties: process exited
+before the first fingerprint; stability without adversarial mutation; hard ZERO-DRIFT failure under
+a deliberate between-reports write; bounded before/between/after fingerprint evidence in the
+failure output; one normal fixture-mode trial succeeding with the freeze barrier and the truthful
+artifact warning. The trial artifact now records in `warnings` that the product server was stopped
+(process exited) before the read-only ZERO-DRIFT measurement and that quiescence alone did not
+provide that guarantee. No orphaned suite status changed.
+
+**Non-interference.** T8 frozen semantics are unchanged. The T8 production implementation bytes
+committed in `38ce3f5` are unchanged by this correction: `server.js`, `views/`, `persistence/`,
+`runtime/`, `postgres-test-harness.js`,
+`structured-allocation-evaluation-report.js`, and both previously failing calling suites are not
+modified. The shared architectural register itself IS changed by this record: this file is not
+byte-identical to its `38ce3f5` state, and that is expected — the change is this harness-correction
+record plus the harness/test/registration files it names. The canonical checkpoint has NOT been
+re-run; it runs only at step (3) of the ordering above — after independent review and a local
+commit on top of `38ce3f5`, commit-bound, never on uncommitted bytes — and publication to
+`origin/master` follows only a PASS with the result registered (step (5)), never before it.

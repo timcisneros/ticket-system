@@ -246,6 +246,7 @@ const TESTS = Object.freeze([
   { file: "evaluation-live-candidate-domain-totality-test.js", status: "required" },
   { file: "evaluation-live-artifact-domain-postgres-test.js", status: "required" },
   { file: "evaluation-reader-quiescence-postgres-test.js", status: "required" },
+  { file: "evaluation-zero-drift-barrier-postgres-test.js", status: "required" },
   { file: "evaluation-live-decision-topology-test.js", status: "required" },
   { file: "evaluation-live-manifest-test.js", status: "required" },
   { file: "evaluation-live-budget-test.js", status: "required" },

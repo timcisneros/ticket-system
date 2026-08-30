@@ -199,6 +199,10 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // Tranche 6 post-result release validation: a terminal Ticket may not make
   // the evaluator observe quiescence while its child evidence writer is live.
   'evaluation-reader-quiescence-postgres-test.js',
+  // Zero-drift freeze barrier — the product server is deterministically stopped
+  // and exited before the ZERO-DRIFT measurement, and adversarial mutation in
+  // the window still fails hard with fingerprint evidence.
+  'evaluation-zero-drift-barrier-postgres-test.js',
   'evaluation-live-credential-postgres-test.js',
   // Tranche 6 — the durable provider-transport observation, on both production
   // transports and all three roles. Replaces the final hop; zero external calls.
