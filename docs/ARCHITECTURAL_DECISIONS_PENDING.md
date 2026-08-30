@@ -8779,7 +8779,7 @@ a large subsystem.
 | T5 | waiting / time / fairness / backpressure | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete, independently reviewed, canonical checkpoint passed; no separate operational cutover required — see the T5 operational closure entry below) |
 | T6 | effect boundary | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete via zero runtime delta; independently reviewed; canonical checkpoint passed; no separate operational cutover required — see the T6 operational closure entry below) |
 | T7 | intervention / context | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete via zero production runtime delta; independently reviewed; canonical checkpoint passed; no separate operational cutover required — see the T7 operational closure entry below) |
-| T8 | operator plane | SEMANTIC KERNEL FROZEN (implementation NOT started; operational closure NOT claimed — see the T8 semantic freeze entry below) |
+| T8 | operator plane | SEMANTIC KERNEL FROZEN; implementation COMPLETE at 38ce3f5d741869eab9fbd3dabc5fd16289d3a2bc; checkpoint-harness correction COMPLETE at f92614ca40c17d8bf1be06d7783122496a4f8300; canonical checkpoint PASSED 255/255 at f92614c; publication and operational closure governed by the closure record below |
 | T9 | external actor / event | pending |
 | T10 | foundation closure | final |
 
@@ -12000,3 +12000,79 @@ record plus the harness/test/registration files it names. The canonical checkpoi
 re-run; it runs only at step (3) of the ordering above — after independent review and a local
 commit on top of `38ce3f5`, commit-bound, never on uncommitted bytes — and publication to
 `origin/master` follows only a PASS with the result registered (step (5)), never before it.
+
+## T8 + zero-drift checkpoint — closure record candidate (prepared 2026-08-30)
+
+**Status:** CLOSURE RECORD CANDIDATE — NOT AUTHORITY UNTIL INDEPENDENT REVIEW AND PUBLICATION.
+This record is SELF-FINALIZING: the exact bytes independently reviewed here are the bytes
+committed and pushed, and publication requires NO documentation edit — there is no
+publication-time edit of any kind.
+
+* **Before publication** of this record's commit: the canonical checkpoint is VERIFIED / PASSED
+  (artifact-bound, recorded below); the local chain is verified (below); publication is not yet
+  complete; T8 operational closure is not yet complete. As of this record's preparation and
+  review, `origin/master` is at `6ab511b4748a4cfaa843b6d2a5210fa1f2454c4b` and contains neither
+  local commit — stated here as a preparation-time fact, not as an enduring current-state
+  assertion.
+* **The publication boundary**, stated prospectively in these same reviewed bytes: publication
+  consists of this exact independently reviewed closure-record commit reaching authoritative
+  `origin/master`. Once that exact reviewed commit is present on authoritative `origin/master`,
+  the publication condition is satisfied and T8 operational closure is COMPLETE — no additional
+  documentation mutation is required to make that true, and none is authorized.
+* The T8 roadmap/status row is brought current within this same candidate diff (state recorded
+  truthfully in both pre- and post-publication conditions, deferring publication and operational
+  closure to this record), so that no byte changes at publication time.
+
+**Verified commit chain (local, checkpoint-verified):**
+
+1. T8 implementation commit: `38ce3f5d741869eab9fbd3dabc5fd16289d3a2bc`
+   ("Implement T8 operator plane obligations"), parent `6ab511b`.
+2. Zero-drift harness correction commit: `f92614ca40c17d8bf1be06d7783122496a4f8300`
+   ("Stabilize zero-drift checkpoint measurement"), parent `38ce3f5`.
+   The local chain `6ab511b → 38ce3f5 (T8 implementation) → f92614c (zero-drift checkpoint
+   correction)` is checkpoint-verified and eligible for publication only after this closure record
+   itself passes independent review.
+
+**Failed commit-bound checkpoint history — PRESERVED HISTORICAL EVIDENCE, not erased and not
+superseded.** The first two commit-bound checkpoints FAILED, remain preserved unchanged under
+`.local-artifacts/release-checkpoint-results/`, and keep their historical FAILED status:
+
+- `cf5a7dca-ef62-4b7a-9e90-46d885615741` — repositoryCommit `38ce3f5…` — FAILED — first failure
+  `structured-allocation-scenario-postgres-test.js` — ZERO-DRIFT measurement race.
+- `d4e921ce-4f9d-4a14-8974-71c863a8c190` — repositoryCommit `38ce3f5…` — FAILED — first failure
+  `evaluation-live-artifact-domain-postgres-test.js` — the same ZERO-DRIFT measurement race
+  through a different calling suite.
+
+Their common ZERO-DRIFT harness defect was independently adjudicated and corrected (see the
+2026-08-29 correction candidate above, whose history — both failed runs and their adjudication —
+is preserved verbatim; the correction passed fresh independent review including the narrow
+sequencing re-review, and was committed locally as `f92614c`). The correction requires
+product-server exit before ZERO-DRIFT measurement, which closed the race.
+
+**Corrected canonical checkpoint — PASSED (the canonical verification evidence for the exact
+local `f92614c` tree):**
+
+- run: `3ea3612a-3303-4958-afd9-1837422584fa`
+- repositoryCommit: `f92614ca40c17d8bf1be06d7783122496a4f8300`
+- registryHash: `a31ed65d1d218ccd55e8a49481a0cfd1a8338228b69ba4bf1a7132221ede5696`
+- result: `255 / 255` — 1 syntax, 123 deterministic, 131 PostgreSQL
+- started `2026-08-30T00:38:04.294Z`, completed `2026-08-30T01:39:08.744Z`
+- durable artifact:
+  `.local-artifacts/release-checkpoint-results/20260830T003804294Z-3ea3612a-3303-4958-afd9-1837422584fa`
+
+**T8 non-interference.** T8 frozen semantics remain unchanged. The T8 production implementation
+remains the independently reviewed `38ce3f5` implementation. `f92614c` changes checkpoint and
+evaluation harness behavior only — the runner's freeze barrier, diagnostics, test-only probe, and
+verification registration — and does not alter T8 production semantics or production
+implementation. The harness correction introduces no migration, no schema change, no store
+change, no runtime-contract change, no permission change, and no cutover.
+
+**Publication status.** As of this record's preparation and review, publication has not yet
+occurred: `origin/master` is at `6ab511b4748a4cfaa843b6d2a5210fa1f2454c4b` — a preparation-time
+fact, not an enduring current-state assertion; the publication boundary and its post-publication
+consequences are fixed in the Status block above and require no further edit. Nothing in this
+record claims that `origin/master` contains either local commit at preparation time. This record
+supersedes only the now-resolved "checkpoint not yet run" status lines inside the two 2026-08-29
+candidate entries above; those entries remain preserved as historical candidates, including both
+failed runs and their adjudication, and their description of the T8 roadmap/status row reflects
+their preparation date.
