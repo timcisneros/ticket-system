@@ -8780,7 +8780,7 @@ a large subsystem.
 | T6 | effect boundary | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete via zero runtime delta; independently reviewed; canonical checkpoint passed; no separate operational cutover required — see the T6 operational closure entry below) |
 | T7 | intervention / context | OPERATIONALLY CLOSED (semantic kernel FROZEN; implementation complete via zero production runtime delta; independently reviewed; canonical checkpoint passed; no separate operational cutover required — see the T7 operational closure entry below) |
 | T8 | operator plane | SEMANTIC KERNEL FROZEN; implementation COMPLETE at 38ce3f5d741869eab9fbd3dabc5fd16289d3a2bc; checkpoint-harness correction COMPLETE at f92614ca40c17d8bf1be06d7783122496a4f8300; canonical checkpoint PASSED 255/255 at f92614c; publication and operational closure governed by the closure record below |
-| T9 | external actor / event | pending |
+| T9 | external actor / event | EMPTY / DEFERRED AUTHORITY — no substantive current kernel; no production delta; future external ingress requires its own registered domain-local design; see T9 closure record below |
 | T10 | foundation closure | final |
 
 Tranche names alone confer no semantics: behavior for T5+ must never be inferred forward from a
@@ -12076,3 +12076,186 @@ supersedes only the now-resolved "checkpoint not yet run" status lines inside th
 candidate entries above; those entries remain preserved as historical candidates, including both
 failed runs and their adjudication, and their description of the T8 roadmap/status row reflects
 their preparation date.
+
+---
+
+## T9 external actor / event — empty-authority / deferral closure record candidate (prepared 2026-08-29)
+
+**Status:** EMPTY-AUTHORITY / DEFERRAL RECORD CANDIDATE — NOT AUTHORITY UNTIL INDEPENDENT
+REVIEW AND PUBLICATION. This record is SELF-FINALIZING: the exact bytes independently
+reviewed here are the bytes published, and publication requires NO documentation edit —
+there is no publication-time edit of any kind.
+
+* **Before publication** of this record's commit: the CURRENT published T9 status remains
+  `pending` — no T9 brief, kernel question, or semantics exist yet; publication of this
+  record is not yet complete; T9 closure is not yet complete. As of this record's
+  preparation and review, `origin/master` is at
+  `67b271a412b2a3deffe8058810056c24ce7cebe6` and contains neither this record nor any T9
+  authority — stated here as a preparation-time fact, not as an enduring current-state
+  assertion.
+* **The publication boundary**, stated prospectively in these same reviewed bytes:
+  publication consists of this exact independently reviewed deferral-record commit
+  reaching authoritative `origin/master`. Once that exact reviewed commit is present on
+  authoritative `origin/master`, the publication condition is satisfied and T9 is CLOSED
+  with ZERO runtime delta — no additional documentation mutation is required to make that
+  true, and none is authorized.
+* The T9 roadmap/status row is brought current within this same candidate diff (state
+  recorded truthfully in both pre- and post-publication conditions, deferring closure to
+  this record), so that no byte changes at publication time.
+
+### 1. Current T9 disposition
+
+The roadmap label `T9 | external actor / event` is a sequencing/name pointer only; the
+roadmap itself states that tranche names alone confer no semantics. An independent,
+repository-only review (read-only source inspection; no tests run; no database, provider,
+or runtime contact) found NO substantive current T9 authority to add. There is:
+
+* no webhook ingress — the only repository occurrences of "webhook" are fixture sample
+  text in `scripts/fixture-generator.js` and `docs/OPERATOR_CONTRACT.md`'s statement that
+  OpAgent has no shell, process, webhook, plugin, SFTP, or arbitrary network; no server
+  route or handler exists;
+* no callback or event-ingest endpoint;
+* no unauthenticated external-event path;
+* no connector daemon or background sync;
+* no generic external-event producer;
+* no unowned actor/event mechanism requiring a new kernel.
+
+Therefore T9 introduces no positive semantic kernel and no production mechanism. This
+record registers that emptiness; it does NOT invent a T9 semantic kernel and creates NO
+provisional positive T9 invariants.
+
+### 2. Predecessor ownership (pointers, not restatement)
+
+Existing authority remains authoritative; this record only points:
+
+* T2 — admission/lifecycle/attempt truth;
+* T5 — waiting/eligibility boundaries (waiting / time / fairness / backpressure);
+* T6 — Run-caused governed-effect truth and the explicit governed-membership
+  classification rule (membership by explicit repository classification ONLY — never
+  inferred merely from externality);
+* T7 — information source/trust/delivery truth (T7-I2 trust boundary; T7-I4 delivery
+  requirements);
+* T8 — operator acts/control surfaces (T8-I1 subject boundary; T8-I2 control-surface
+  non-authority);
+* connector, watcher, message, and access catalogs remain domain-owned (owned by their
+  catalog authorities; see the T8 non-absorption list);
+* canonical event storage remains owned by the existing storage map
+  (`docs/RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH.md`; PostgreSQL persistence).
+
+T9 duplicates or reinterprets none of these authorities.
+
+### 3. Negative / deferred boundary
+
+The minimum finding, recorded as a pointer-level deferral rule — NOT a new generic T9
+occurrence contract:
+
+**Externality alone — of an actor, source, transport, event, or occurrence — confers:**
+
+* no authority;
+* no trust;
+* no admission;
+* no lifecycle transition;
+* no T6 membership;
+* no T7 delivery occurrence;
+* no T5 eligibility;
+* no generic actor identity;
+* no generic event/receipt semantics.
+
+This adds no new invariant: each denial is already owned by the predecessor authorities
+in §2 (notably T6's frozen membership rule and T7-I2's trust boundary); this record
+collects them under the T9 label only so the label cannot be read as implying the
+opposite.
+
+Any future external-ingress mechanism must obtain its own registered, domain-local
+design/classification under the authority that owns the resulting behavior. This record
+does NOT freeze a generic `source identity + time + content binding` record shape and
+creates NO universal arrival/event identity.
+
+### 4. `external.effect`
+
+* no production emitter exists;
+* T6 already dispositioned it as reserved, non-authoritative vocabulary with no semantic
+  role frozen and no authorized emitter (T6 semantic freeze, "`external.effect`
+  disposition");
+* T9 does not acquire it;
+* any future retirement is a separate registered hygiene decision.
+
+No emitter is created here; it is not retired in this pass; it is not reinterpreted as a
+T9 event class.
+
+### 5. `notification.sent`
+
+* no production emitter exists;
+* T6 explicitly did not decide it (T6 semantic freeze: "the sibling reserved type
+  `notification.sent` is notification vocabulary and is not decided by T6");
+* it is semantically adjacent to the still-unassigned model→operator messaging decision
+  under T7-I7;
+* T9 does not acquire it;
+* any retirement is separate hygiene;
+* any future semantic ownership requires its own registered decision.
+
+`notification.sent` and `external.effect` are NOT coupled into a shared T9 event family
+by this record or by any T9 authority.
+
+### 6. T9 non-ownership
+
+T9 explicitly is NOT, and does not acquire:
+
+* a generic external actor ontology;
+* a universal external-event model;
+* a webhook platform;
+* an event bus;
+* a generic arrival record;
+* a generic receipt ontology;
+* cross-domain source identity;
+* a trust lattice;
+* scheduler/eligibility authority;
+* automatic work creation from arrival;
+* automatic effect/lifecycle claims;
+* absorption of T7-I7 model→operator messaging.
+
+### 7. Production / persistence delta
+
+* production delta: NONE;
+* persistence delta: NONE;
+* migration: NONE;
+* schema change: NONE;
+* checkpoint requirement from T9 itself: NONE;
+* operational cutover: NONE.
+
+No runtime change is required because there is no current T9 mechanism to realize. No
+checkpoint is run for this candidate and none is required by T9; this record changes
+documentation bytes only.
+
+### 8. Roadmap status
+
+The T9 row in "Broad Ticket-Kernel Roadmap (T0–T10)" above is brought current within this
+same candidate diff to:
+
+> T9 | external actor / event | EMPTY / DEFERRED AUTHORITY — no substantive current
+> kernel; no production delta; future external ingress requires its own registered
+> domain-local design; see T9 closure record below
+
+The row is NOT labeled "OPERATIONALLY CLOSED" in the pre-publication state; closure
+follows the self-finalizing publication boundary in the Status block above.
+
+### 9. Hermeticity / fresh-model recoverability
+
+After publication, a fresh capable model can recover from this register alone, and can
+stop searching for a hidden T9 subsystem:
+
+* T9 was examined;
+* no current mechanism was found;
+* no positive kernel was justified;
+* predecessor authorities remain authoritative;
+* future ingress is explicitly deferred;
+* orphan vocabulary does not imply a hidden T9 event model.
+
+### 10. Optional hygiene residual
+
+Carried forward ONLY because this register requires discovered residuals to be recorded,
+and explicitly NOT implemented or authorized by T9: `server.js`
+`collectExplicitExternalEffects` (filtering `external.effect`) and
+`collectExplicitNotifications` (filtering `notification.sent`) are presentation/read
+branches over event types with no production emitter. Their removal (or retention) is an
+optional, separate hygiene decision that must not be read as a T9 semantic act.
