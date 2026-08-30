@@ -1,0 +1,24 @@
+{
+  "recordKind": "t10-repair-authorization",
+  "recordVersion": 1,
+  "repairId": "t10-run-counter-reconciliation-v1",
+  "authorizationState": "AUTHORIZED",
+  "authorizedScriptSha256": "53bdcc905a0558f83e457f79750ed562e1e9f7b26a4cfaa308d7dd1b14b009db",
+  "authorizedBaselineHead": "1e8dc3e225100f69aa54cd956ef129ec2dda4114",
+  "expectedRealityDigest": "d172e2e134408ab68d00d4c847bf19689cffef40b2061f26493014c114184709",
+  "expectedCounterDigest": "65fc7d9d24dfcaa1ddbfdf7527f5436a65311d3052f02972152ff4d3d71fa4ca",
+  "expectedTarget": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "database": "ticket_system",
+    "schema": "ticket_system"
+  },
+  "reconstructionRuleId": "t10-run-counter-reconciliation-v1: DELETE FROM runtime_status_counts WHERE entity_type = 'run', then INSERT SELECT 'run', status, mod(id, 256)::smallint, COUNT(*)::bigint FROM runs GROUP BY status, mod(id, 256) — the 009 seed rule, reused by the 041 Q5 reseed precedent",
+  "lockRelations": [
+    "runs",
+    "diagnostic_logs",
+    "runtime_status_counts"
+  ],
+  "authorizedBy": "T10 independent authorizing review",
+  "authorizedAtUtc": "2026-08-30T21:50:02Z"
+}

@@ -1,3 +1,239 @@
+## T10 run-counter derived-state drift — narrow reconciliation candidate, authorization record prepared, execution not yet permitted (2026-08-30)
+
+**Status: AUTHORIZATION RECORD PREPARED — EXECUTION NOT YET PERMITTED.**
+
+T10 discovered derived-state drift in the trigger-maintained `runtime_status_counts`
+operational projection (persistence/postgres/migrations/009_operational_status.sql): the
+run-scoped counter projection disagrees with authoritative current `runs` reality by
+**exactly 8 excess run-count units — not 8 phantom Run entities**. Current Run reality is
+8 (completed 2, failed 5, interrupted 1); the run-counter projection reads 16 (completed 3,
+failed 12, interrupted 1). The excess is concentrated in eight exact (status, shard) rows with counter = reality + 1
+(seven failed, one completed): failed shard 1 counter 2/reality 1; failed shard 2 counter
+1/reality 0; failed shard 3 counter 2/reality 1; failed shard 4 counter 1/reality 0; failed
+shard 5 counter 2/reality 1; failed shard 6 counter 2/reality 1; completed shard 7 counter
+1/reality 0; failed shard 8 counter 1/reality 0. Ticket counters are coherent; the one
+unmatched ticket counter row is legitimate zero-count residue, which is legal state and must
+not be cleaned for tidiness.
+
+The projection is non-authoritative for scheduling, admission, and authority paths; its only
+consumer is operational-summary presentation (`getRuntimeOperationalSummary`,
+persistence/postgres/store.js, live read, no restart needed). Kernel semantics remain valid:
+no current canonical Run writer can produce positive counter drift, the live trigger and
+function match repository source and are enabled, and no repository test/dev/debug path was
+found capable of contaminating the operational schema. The exact historical cause of the
+drift is unresolved and must remain unresolved; no migration, rollback, runtime restart, or
+kernel-semantic repair is indicated. Two historical governance facts from the T2/T3 cutover
+lineage remain recorded and unchanged by this entry, stated here from the earlier register
+records so no opaque label is needed: (a) migration 041's first authorized operational
+execution refused safely inside its migration transaction and rolled back to migration-040
+semantics (recorded in "T2 Migration-041 Classifier Fact-Assembly Parity — RESOLVED,
+2026-08-24"), and its later successful operational execution lacks durable repository proof
+that the recorded re-attempt gate — a fresh release checkpoint plus a fresh amended-classifier
+barrier — was satisfied beforehand; (b) migration 042 operationally executed while the
+then-authoritative T3-A record ("T3-A Objective-Revision Kernel", 2026-08-24) still explicitly
+stated the activation migration was NOT authorized for operational execution. The current
+041/042 schema state is byte/identity-exact and is re-verified on every runtime start by the
+store's migration-identity checks; these are historical governance violations, not evidence
+that the current schema state is invalid, and the run-counter reconciliation neither repairs
+nor alters them. No retroactive authorization is claimed or granted by stating them.
+
+The adjudicated minimum repair is a deterministic run-scope reconstruction of
+the counter projection from authoritative Run reality (the 009 seed rule grouped by
+(status, mod(id, 256)), the same rule the 041 ticket-counter reseed reused), executed as one
+transaction that fails closed: `LOCK TABLE runs, diagnostic_logs, runtime_status_counts IN
+SHARE ROW EXCLUSIVE MODE NOWAIT` — the canonical 041-H1 relative order, and the only
+acquisition in the transaction that can block. It covers every relation the transaction
+writes (counter projection plus the atomic occurrence-evidence row) plus the run-reality
+read set, so no write-capable access is acquired after `runtime_status_counts`. `tickets` is
+deliberately NOT locked and NOT read in the mutation transaction: ticket counter nonchange is
+proven inside the transaction by digest equality of the ticket counter rows alone (the
+counter table is locked), while ticket-reality coherence is observed by the preflight and
+re-proven by the separate post-commit verification transaction; this removes the former
+post-lock ACCESS SHARE read of tickets. After the initial statement the mutation transaction
+performs only compatibility-safe ACCESS SHARE reads (pg_catalog, schema_migrations), which
+conflict with nothing under the proven boundary that no migration/DDL runs concurrently with
+an authorized repair. `ticket_attempts`, `allocation_plans`, `events`, and
+`run_consequences` are neither read nor written and not locked. The exact pre-state fence
+binds the reviewed state exactly before any mutation: the eight pinned
+discrepancy rows with their exact shards and the four implied reality rows (sha256-pinned in
+the script source beside the readable rows), exact reality and counter aggregate totals,
+matched-elsewhere semantics, the exact sixteen-row zero-residue pin (legal pending/running
+shards 1-8 lifecycle residue; see the re-adjudication record below), and an enabled
+counter trigger. The full canonical Run reality and run-counter projection digests
+(convention documented in the script) are NOT observed at execution for self-authority: they
+must come from the repository-owned authorization record and are enforced before mutation,
+so a state with identical totals or an identical excess multiset on different shards
+refuses, as does any changed Run membership or status placement. Reconstruction is
+run-scope-only, postconditions are verified before commit, and any discrepancy rolls back
+the whole transaction. Zero-count run residue may disappear as a natural consequence of the
+canonical reconstruction, which repository semantics (009 seed, 041 Q5/Q8) confirm is
+optional residue rather than required state; ticket counter rows must remain byte-untouched.
+The operational target is pinned to the repository-approved bundled boundary — host
+127.0.0.1, port 5432, database `ticket_system`, schema `ticket_system` — parsed from
+`DATABASE_URL` at the `scripts/dev-environment.js` boundary with credentials dropped and
+never surfaced, plus an on-contact `current_database()` equality check, so pointing
+`DATABASE_URL` at a foreign cluster carrying the same database name refuses.
+
+AUTHORIZATION CONTRACT (distinct from ACTUAL EXECUTION AUTHORIZATION): execution consumes
+and verifies a committed, machine-readable, repair-specific authorization record at
+`config/repair-authorization.t10-run-counter-reconciliation-v1.json`, whose binding contents
+are established independently BEFORE execution. The record binds: repair id
+(`t10-run-counter-reconciliation-v1`), explicit authorization state, authorized script
+sha256, authorized baseline HEAD, expected full Run-reality digest, expected full
+run-counter digest, exact operational target, reconstruction-rule identity, and the lock
+relations. The script validates the record itself in two phases (shape/state before any
+database contact; binding equality before mutation) and accepts NO authorization values from
+the command line — there are no CLI flags for script sha, digests, target, rule, baseline,
+or authorization state, so an executor cannot run the preflight, observe values, and feed
+them back as authority. Substituting different bindings requires committing a modified
+record, which the record-bound clean-tree and HEAD==fresh-remote-master checks refuse locally,
+or pushing to origin/master — the same out-of-band repository-write authority that guards every
+committed authority here, and the act the authorizing review performs. Execution additionally
+requires a clean working tree; HEAD equal to the CURRENT origin `refs/heads/master` tip
+established by a fresh non-mutating remote query (`git ls-remote --exit-code origin
+refs/heads/master`, run before any database contact on `--execute`; exactly one well-formed
+40-hex result; any network or remote failure, missing master, malformed line, wrong ref, or
+ambiguous result refuses, with git stderr/stdout sanitized so credential-helper material can
+never surface); and the record's authorized baseline being an ancestor of that freshly queried
+tip. The locally cached `origin/master` tracking ref is diagnostic evidence only and is never
+the freshness authority — a stale cached ref can neither enable execution nor substitute for
+the live equality check, and it is not consulted for baseline ancestry. Occurrence evidence
+distinguishes, without ambiguity, HEAD, the cached tracking ref, and the freshly queried
+remote tip. Execution occurs only from a clean repository state byte-identical to the current
+canonical published master containing the authorization. The record originally shipped with
+this candidate was a NON-AUTHORIZING contract example (`authorizationState` `NOT_AUTHORIZED`,
+digest and authorizer fields `null`) proving shape and location without granting authority;
+it has since been prepared as AUTHORIZED with exactly the independently issued values (see
+the final-preflight/authorization record below) and remains unpublished worktree bytes.
+
+PREFLIGHT CORRECTION RECORD (2026-08-30): the first separately bounded non-mutating
+operational preflight of the superseded script bytes (sha256
+`044b99fc25cb8fa4943d19efa8fa36f2c2b19d7bf6021a96b3322e70b7511b85`) reached the operational
+database; the pinned target/identity checks and the read-only schema-currency verification
+passed, and the reviewed NOWAIT lock acquisition succeeded without contention — then trigger
+inspection failed READ-ONLY with PostgreSQL SQLSTATE 42P01 ("missing FROM-clause entry") because
+the candidate had encoded the schema-qualified `runs` relation as a raw expression cast to
+regclass, which PostgreSQL parses in expression context as a qualified column reference. This
+was a candidate defect, not operational drift: no fence or state reads occurred, no full-state
+digests were obtained, no repair/data mutation or occurrence evidence occurred, the
+authorization record remained NOT_AUTHORIZED, and the transaction rolled back releasing the
+locks. The correction is narrow: the trigger lookup now uses the store's established
+parameterized `to_regclass($1)` pattern with a canonically quoted fully qualified relation name
+as the parameter (same mechanism as the store's own catalog checks), with a self-test guard
+against regressing to the invalid expression form. That preflight was bounded and explicitly
+permitted but was performed within the same long-running session that prepared and corrected
+the candidate, so it was NOT an independent review and confers no review authority. The real
+proof of the corrected lookup is a fresh non-mutating operational preflight, which may occur
+only after the corrected candidate passes a brand-new consolidated independent review by a
+session that has not authored or materially shaped the candidate.
+
+RE-ADJUDICATION RECORD (2026-08-30): a second separately bounded non-mutating operational
+preflight of the superseded script bytes (sha256
+`e1a31c2ce2fbe873ff5f6b37c07ed200569f2fafbe5edf5bd03986c190e3fa01`) reached the operational
+database; the target/identity and read-only schema-currency checks passed, the reviewed NOWAIT
+lock acquisition succeeded without contention, and the corrected parameterized `to_regclass($1)`
+trigger inspection PASSED — SQLSTATE 42P01 did NOT recur. The structural fence then refused
+fail-closed, before any mutation, on sixteen zero-count Run counter rows the prior candidate
+premise had not pinned; no full-state digests were emitted, no repair/data mutation or
+occurrence evidence occurred, and the authorization record remained NOT_AUTHORIZED. A
+subsequent independent read-only adjudication (one REPEATABLE READ READ ONLY transaction)
+then established: the sixteen zero rows (pending|1..8 and running|1..8, each 0) are canonical
+lifecycle residue created by decrement-to-zero under the 009 trigger; repository lifecycle
+evidence places their canonical creation before the prior adjudication, and no canonical
+run-scope counter deletion/recreation path explains a later appearance, so the prior "no
+zero-count Run rows" premise was incorrect/unsupported; the exact mechanism by which that
+earlier observation omitted the rows is not repository-recoverable, because the literal
+observation query was not preserved. The zero residue is NOT evidence of contamination. The
+positive eight-unit defect is exact and unchanged (reality completed 2 / failed 5 /
+interrupted 1, total 8, pending/running 0; positive counters completed 3 / failed 12 /
+interrupted 1, total 16; the eight pinned discrepancy rows and four implied reality rows
+unchanged), and its cause remains separately unresolved. Canonical reseed semantics (009
+seed; 041 Q5/Q8) sanction removing run-scope residue rows, so the fence now pins the sixteen
+zero rows exactly instead of refusing every zero row, and post-repair convergence expects
+grouped positive rows only. The same adjudication discovered a second latent fail-closed
+defect: both drift-convergence queries placed `entity_type = 'run'` solely in the FULL OUTER
+JOIN ON clause, which does not remove non-run rows from the t-side input — the seven live
+Ticket counter rows (including one legal zero residue, in_progress|6 = 0) would be counted as
+Run drift and would refuse a correct repair. Both drift checks now filter the counter input to
+run scope BEFORE the join (the 041-Q8 input-filtering pattern), share one query definition,
+and carry a static regression guard. Neither refused preflight executed a repair; no
+authorization existed at that point; T10 remains open.
+
+FINAL REVIEWED PREFLIGHT — PASSED, AND AUTHORIZATION ISSUED (2026-08-30): after the re-pinned
+candidate (script sha256
+`53bdcc905a0558f83e457f79750ed562e1e9f7b26a4cfaa308d7dd1b14b009db`) passed the genuinely
+independent consolidated review, the final independently reviewed non-mutating operational
+preflight exited 0: target/schema identity passed; migration/schema currency through 042
+passed; the reviewed NOWAIT locking passed; the `runs_runtime_status_count` lookup passed with
+SQLSTATE 42P01 not recurring; the exact 8-row Run reality fence passed; the complete 28-row
+Run-counter fence passed, including the exact sixteen canonical zero-residue rows; the exact
+positive eight-unit defect fence passed; ticketDriftRows = 0; no mutation occurred. The
+preflight observed reality digest
+`d172e2e134408ab68d00d4c847bf19689cffef40b2061f26493014c114184709` and complete Run-counter
+digest `65fc7d9d24dfcaa1ddbfdf7527f5436a65311d3052f02972152ff4d3d71fa4ca`, which byte-matched
+the preceding independent read-only adjudication. The genuinely independent authorizing review
+then ISSUED the exact repository-owned authorization values — authorizedScriptSha256
+`53bdcc905a0558f83e457f79750ed562e1e9f7b26a4cfaa308d7dd1b14b009db`; authorizedBaselineHead
+`1e8dc3e225100f69aa54cd956ef129ec2dda4114`; expectedRealityDigest
+`d172e2e134408ab68d00d4c847bf19689cffef40b2061f26493014c114184709`; expectedCounterDigest
+`65fc7d9d24dfcaa1ddbfdf7527f5436a65311d3052f02972152ff4d3d71fa4ca`; authorizedBy "T10
+independent authorizing review"; authorizedAtUtc `2026-08-30T21:50:02Z` — and the
+implementation session has MECHANICALLY PREPARED them into
+`config/repair-authorization.t10-run-counter-reconciliation-v1.json` exactly as issued. That
+preparation is NOT execution: the repair has NOT executed, no repair occurrence evidence
+exists yet, T10 remains open, and the current operational Run counters are NOT repaired.
+These authorization bytes are NOT yet published authority: the prepared record and register
+update must next receive independent exact-byte review, and after that review publication to
+canonical master is still required; execution remains forbidden until publication AND all
+execute-time gates pass (committed AUTHORIZED record, clean tree, fresh-remote master
+equality, authorized baseline ancestry, script-sha and full-state digest binding, enabled
+trigger, current schema, exact operational target, and the fail-closed fence).
+
+Independently reviewed candidate artifact:
+`scripts/operational-repair-t10-run-counters.js`
+(sha256 `53bdcc905a0558f83e457f79750ed562e1e9f7b26a4cfaa308d7dd1b14b009db`; `--self-test`
+covers the pure exact-state fence (positive pins, the exact sixteen-row zero-residue pin, and
+refusals for missing/extra/relocated/wrong-status/nonzero/negative residue), canonicalization,
+lock/access model, target identity,
+fresh-remote-master parser and refusals (single valid line, empty, malformed, wrong-ref,
+ambiguous, HEAD-inequality, cached-ref irrelevance), the parameterized trigger-lookup
+regression guard, the run-scope drift input-filtering guard (counter rows filtered to
+`entity_type = 'run'` before the FULL OUTER JOIN at both convergence sites), argument refusal,
+and the full
+authorization boundary — missing/malformed/foreign/non-AUTHORIZED records, script-sha, digest,
+target, and repository-identity mismatches, and CLI substitution refusal — without database
+contact or any live remote query; `--preflight` is a NON-MUTATING LOCKING PREFLIGHT — it
+acquires the same NOWAIT share-row-exclusive locks, can briefly contend with writers, fails
+closed on contention, mutates nothing, and prints observed digests as evidence only;
+`--execute` takes no authorization CLI values at all and establishes fresh remote master
+authority before any database contact). The authorization-contract record is
+`config/repair-authorization.t10-run-counter-reconciliation-v1.json`
+— now PREPARED as `AUTHORIZED` with exactly the issued values, sha256
+`7f2944dd7f9eea6e2e390c6e2c8d1e081e58fb30e312aa1443506eee8796f351` (the originally shipped
+NON-AUTHORIZING contract example, sha256
+`8826efff69febf0b872c1c1848c5d090b3f091d987f9b9c5193c5b768a333b75`, is superseded history);
+it binds the repair id, the reviewed script sha256,
+the authorized baseline, the two reviewed full-state digests, the exact operational target,
+the reconstruction-rule identity, and the lock relations.
+The repair semantics and the script's exact bytes were independently reviewed; this updated
+entry and the prepared AUTHORIZATION BYTES still require independent exact-byte review, after
+which publication to canonical master remains required before any execution. The script
+binds its own sha256 against the authorization record at execution time, so any byte change
+invalidates the candidate until the authorizing review re-pins it.
+Occurrence evidence will be two append-only deployment-scope `diagnostic_logs` rows created
+only by an authorized execution (the first commits atomically with the repair and records
+the authorization record identity; the second records post-commit verification); none exist
+yet. The PREPARED AUTHORIZED record is NOT YET PUBLISHED AUTHORITY: it is uncommitted,
+unreviewed as exact bytes, and execution remains forbidden until publication AND all
+execute-time gates pass.
+
+Execution is **not yet permitted** merely because a PREPARED AUTHORIZED record exists in this
+uncommitted worktree. The defect is **not repaired** and T10 is **not closed** by this entry;
+a later entry must record the authorized execution, its occurrence evidence, and the
+verification result before any repaired/closed status may be claimed.
+
+---
+
 ## Execution-semantics provenance fixture shared Ticket-attempt authority (2026-08-17)
 
 **Status: RESOLVED IN SOURCE — independent pre-semantics provenance cases now
