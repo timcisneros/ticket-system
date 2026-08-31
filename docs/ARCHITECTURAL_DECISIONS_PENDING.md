@@ -1,15 +1,16 @@
-## T10 historical 041/042 governance adjudication — compensating verification PASSED; closure adjudication pending (2026-08-31)
+## T10 historical 041/042 governance adjudication — compensating verification PASSED; historical items CLOSED (2026-08-31)
 
-**Status: COMPENSATING VERIFICATION PASSED — HISTORICAL 041/042 CLOSURE ADJUDICATION PENDING — AUTHORIZATION REMAINS NOT_AUTHORIZED — T10 REMAINS OPEN.**
+**Status: HISTORICAL 041/042 GOVERNANCE ADJUDICATION CLOSED — COMPENSATING VERIFICATION PASSED — EXECUTIONS REMAIN HISTORICALLY UNAUTHORIZED — AUTHORIZATION REMAINS NOT_AUTHORIZED — T10 REMAINS OPEN.**
 
 This entry records the PASSED compensating verification for the historical migration-041/042
 governance adjudication (violations recorded in "T2 Migration-041 Classifier Fact-Assembly
 Parity — RESOLVED" and "T3-A Objective-Revision Kernel", summarized in the T10 run-counter
 reconciliation entry; prevention separately published and CLOSED at
-`05efb8957582941ab08f0a407cde77d8493c64f9`). It records EVIDENCE ONLY. This evidence record
-is not historical closure: historical 041/042 remain OPEN until a separate closure
-adjudication establishes that the recorded historical violation, bounded compensating
-verification, and published recurrence prevention together satisfy the T10 closure standard.
+`05efb8957582941ab08f0a407cde77d8493c64f9`). It records EVIDENCE ONLY. A separate
+independent closure adjudication subsequently applied the T10 closure standard — recorded
+historical violation truth, bounded compensating verification, and published recurrence
+prevention — and found both historical items CLOSABLE with the executions remaining
+historically unauthorized; the per-item closure records below record that outcome.
 
 VERIFIER IDENTITY: the operational evidence was produced by exactly one live execution of
 `scripts/operational-verify-t10-historical-migrations.js --verify` at published commit
@@ -88,11 +89,43 @@ migration 043, any future migration, fresh operational bootstrap, migration exec
 cutover/restart. Canonical migration authorization remains `NOT_AUTHORIZED`. The executions
 remain historically unauthorized under the repository authority that existed at the time.
 
-STATUS: historical 041 — OPEN (historical violation confirmed; compensating verification
-PASSED and recorded in this entry; historical closure adjudication pending). Historical 042 —
-OPEN (same). T10 remains OPEN. This evidence record is not historical closure, before or
-after publication of these bytes: neither historical item may be marked CLOSED by this entry,
-and closure requires a separate adjudication under the T10 closure standard above.
+CLOSURE ADJUDICATION — CLOSED (independent adjudication, 2026-08-31): for each historical
+item the six closure facts are as follows. MIGRATION 041 — HISTORICAL FACT: the later
+successful operational execution proceeded while the recorded re-attempt gate (a fresh
+release checkpoint plus a fresh amended-classifier barrier) was not durably established
+beforehand. COMPENSATING FACT: current operational convergence passed the bounded
+published-verifier verification recorded in this entry (verifier commit `9509028…`, sha
+`aa4cb308…4707`; classifier/T2 and migration/identity results as recorded above). PREVENTION
+FACT: the supported execution path now mechanically requires exact repository-owned
+authorization (published at `0da0f34…`, prevention sub-item CLOSED at `05efb89…`); the
+canonical record remains NOT_AUTHORIZED. REMEDY FACT: no rollback, additional operational
+repair, or further verification is indicated by current evidence. CLOSURE FACT: the
+historical governance adjudication for migration 041 is CLOSED. NON-CLAIM: closure does NOT
+retroactively authorize the original execution; later verification does not establish that
+the original pre-execution barriers were satisfied; the execution remains historically
+unauthorized. MIGRATION 042 — HISTORICAL FACT: the activation migration operationally
+executed while the then-authoritative T3-A record explicitly stated it was NOT authorized
+for operational execution pending the separate T3 cutover boundary, for which no
+repository authorization was established before execution. COMPENSATING FACT: current
+T3/042 revision coherence passed the bounded
+published-verifier verification recorded in this entry (same snapshot, same verifier).
+PREVENTION FACT: same published mechanism (counterfactual contract directly covers this
+class). REMEDY FACT: no rollback, additional operational repair, or further verification is
+indicated. CLOSURE FACT: the historical governance adjudication for migration 042 is CLOSED.
+NON-CLAIM: closure does NOT retroactively authorize the original execution; later
+verification does not establish that the cutover boundary was authorized or its steps
+performed; the execution remains historically unauthorized. Execution mechanism, actor, and
+exact dates remain UNKNOWN and are not attributed; the closure does not depend on them.
+
+STATUS: historical 041 — CLOSED (historical violation durably established; compensating
+verification PASSED and recorded above; recurrence prevention published; no further
+operational remediation indicated; the execution REMAINS historically unauthorized).
+Historical 042 — CLOSED (same). T10 remains OPEN: the remaining T10 obligations
+(hermeticity/cognitive-efficiency repairs, A20 orphan/backlog adjudication, final
+completeness audit) are separate later work. This closure is an adjudication outcome, not an
+authorization event, and remains true before and after publication of these bytes: closing
+the historical adjudications does NOT retroactively authorize either execution and does NOT
+close T10.
 
 ---
 
