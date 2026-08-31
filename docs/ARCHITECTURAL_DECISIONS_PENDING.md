@@ -1,3 +1,101 @@
+## T10 historical 041/042 governance adjudication — compensating verification PASSED; closure adjudication pending (2026-08-31)
+
+**Status: COMPENSATING VERIFICATION PASSED — HISTORICAL 041/042 CLOSURE ADJUDICATION PENDING — AUTHORIZATION REMAINS NOT_AUTHORIZED — T10 REMAINS OPEN.**
+
+This entry records the PASSED compensating verification for the historical migration-041/042
+governance adjudication (violations recorded in "T2 Migration-041 Classifier Fact-Assembly
+Parity — RESOLVED" and "T3-A Objective-Revision Kernel", summarized in the T10 run-counter
+reconciliation entry; prevention separately published and CLOSED at
+`05efb8957582941ab08f0a407cde77d8493c64f9`). It records EVIDENCE ONLY. This evidence record
+is not historical closure: historical 041/042 remain OPEN until a separate closure
+adjudication establishes that the recorded historical violation, bounded compensating
+verification, and published recurrence prevention together satisfy the T10 closure standard.
+
+VERIFIER IDENTITY: the operational evidence was produced by exactly one live execution of
+`scripts/operational-verify-t10-historical-migrations.js --verify` at published commit
+`9509028b98807373fa496e17d8202b65c3385c88`, verifier sha256
+`aa4cb308b178dc406a4b87bc705ffbed4fe8669dcb0c6f431ad73d7d176f4707` — the exact bytes that
+passed a fresh independent implementation review (verdict A, HIGH 0, MEDIUM 0) before
+publication; the live run used the published bytes. The verifier binds source/publication
+(branch master; clean tracked tree; fresh `git ls-remote` master equality; prevention closure
+commit an ancestor) before any database contact and resolves only the repository-owned
+operational target.
+
+EXECUTION BOUNDARY: exactly ONE authorized `--verify` execution occurred; process exit 0; no
+retry. All operational evidence came from exactly ONE `REPEATABLE READ` / `READ ONLY`
+transaction; no database mutation of any kind and no evidence write occurred.
+`repositoryCommit` and freshly queried `freshRemoteMaster` both equaled `9509028…`.
+Non-secret operational target: host `127.0.0.1`, port `5432`, database `ticket_system`,
+schema `ticket_system`. This was a read-only compensating verification — NOT a migration
+authorization, NOT a cutover, and NOT a retroactive satisfaction of either original
+pre-execution gate.
+
+RESULT CUSTODY: canonical `resultSha256`
+`75d0a70ed5f38c6819c0a7a35655ced23c561b7d3c96f3cfb7708dfbe9837293`; an independent offline
+recomputation with the repository's `canonicalJson` semantics MATCHED exactly; captured stdout
+custody sha256 `fb16e002458789279e35f4cc065e212b01b704133f1fb31efe416587037e15bd`; stderr
+empty (sha256 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`, the empty
+digest). The ignored local artifact directory
+`.local-artifacts/t10-historical-migration-verification/20260831T165821797Z/` is incidental
+execution provenance only; tracked truth carries the bounded evidence below and does not
+depend on that path existing.
+
+MIGRATION/IDENTITY RESULT: `migrationHead 042_objective_revision_baseline.sql`;
+`migrationIdentityVerdict exact`; 42 repository migration files / 42 identity rows;
+`migrationLedgerDigest 41306d4e430bb80659be46a3dd34f558e1df8e6f08087882958428987b1b2c7d`;
+`migrationIdentityDigest 6851a8bcbfa642f19d2de8c802cfe379ad8a25cc0ae452650b1df2376eb1babe`.
+This proves that the CURRENT operational migration ledger and `schema_migration_identities`
+state byte-exactly matched the published repository migration set through 042 under the
+verifier's exact version+SHA contract (ledger order exact, no stray/future/missing rows,
+every stored identity SHA equal to the repository file bytes). It does NOT prove the
+historical executions were authorized.
+
+041/T2 COMPENSATING RESULT: the corrected migration-041 fact-assembly classifier ran TWICE
+from independent re-reads inside the single snapshot with digest-identical canonical results
+(`classifierRunADigest = classifierRunBDigest =
+ad4cff91d7c18624f09f4eec13d9996a1013ea2b06b22055cd6bb5e24aef49c2`;
+`classifierDeterministic true`); 6 Tickets considered, 6 `migratable`, 0 ambiguous,
+0 integrity contradictions, 0 non-migratable, 0 materialization mismatches, 0
+proposed-lifecycle mismatches. Current T2 state: 6 Tickets, 0 statuses outside the frozen
+five-state vocabulary, 0 Ticket rows carrying Run-only `failed`, 0 malformed cancellation
+authorities, 0 canceled/authority disagreements, cancellation shape constraint installed and
+validated. This is CURRENT compensating verification of operational convergence; the original
+041 execution did NOT satisfy its then-required fresh pre-execution amended-classifier
+barrier, and this PASS does not change that historical fact.
+
+042/T3 COMPENSATING RESULT: 6 Tickets, 6 with revision-event chains; ALL ten bounded
+revision-coherence failure counts were 0 (missing/invalid pointer, missing chain, invalid
+payload, non-contiguity, broken previous hash/number linkage, pointer/head divergence,
+current content-hash binding, unexpected establishment provenance, orphan revision events)
+and `tickets_revision_guard` was origin-enabled. This verifies CURRENT operational revision
+coherence only — pointer presence, chain contiguity, provenance validity, canonical
+content-hash binding, and guard enforcement as of the snapshot. It does NOT retroactively
+satisfy the original T3 cutover authorization boundary (quiesce/prove/apply/verify/start/
+verify/reopen) that was not established before the historical execution.
+
+WRITER-CENSUS RESULT: the published-source census (bound to the verified HEAD) counted
+9 sanctioned production Ticket writers with 0 bypasses
+(`writerCensusDigest e3fa3b8d76880003e1741529dc56e2a5ea193cdf738b163c29069311741e7850`).
+Bounded claim: zero CURRENT production Ticket-writer bypasses under the verifier's reviewed
+census contract; not universal proof against arbitrary future source forms or out-of-band
+direct SQL.
+
+NO-RETROACTIVE-AUTHORIZATION BOUNDARY: the compensating PASS establishes CURRENT operational
+convergence only. It does NOT retroactively authorize migration 041 or migration 042; does
+NOT establish that either original execution satisfied its then-required pre-execution
+barriers; does NOT erase the historical governance violations; and does NOT authorize
+migration 043, any future migration, fresh operational bootstrap, migration execution, or
+cutover/restart. Canonical migration authorization remains `NOT_AUTHORIZED`. The executions
+remain historically unauthorized under the repository authority that existed at the time.
+
+STATUS: historical 041 — OPEN (historical violation confirmed; compensating verification
+PASSED and recorded in this entry; historical closure adjudication pending). Historical 042 —
+OPEN (same). T10 remains OPEN. This evidence record is not historical closure, before or
+after publication of these bytes: neither historical item may be marked CLOSED by this entry,
+and closure requires a separate adjudication under the T10 closure standard above.
+
+---
+
 ## T10 migration execution-authority prevention — PUBLISHED at 0da0f34…, prevention sub-item CLOSED (2026-08-31)
 
 **Status: MIGRATION EXECUTION-AUTHORITY PREVENTION PUBLISHED AT 0da0f34… — PREVENTION SUB-ITEM CLOSED — AUTHORIZATION REMAINS NOT_AUTHORIZED — T10 REMAINS OPEN.**
