@@ -1968,12 +1968,12 @@ class PostgresRuntimeStore {
   async migrate() {
     // Universal migration execution-authority guard (T10 prevention).
     // Disposable stores (explicit repository-code declaration) keep the
-    // legacy engine path. Every non-disposable invocation is observed
-    // READ-ONLY first; a fully current, stray-free ledger is a mutation-free
-    // no-op that requires no transition authorization; any non-empty pending
-    // transition must pass the full repository-owned authority gate BEFORE
-    // the advisory lock, CREATE SCHEMA/TABLE, migration SQL, mutating hooks,
-    // or ledger/identity writes can run.
+    // pre-existing migration engine path. Every non-disposable invocation is
+    // observed READ-ONLY first; a fully current, stray-free ledger is a
+    // mutation-free no-op that requires no transition authorization; any
+    // non-empty pending transition must pass the full repository-owned
+    // authority gate BEFORE the advisory lock, CREATE SCHEMA/TABLE, migration
+    // SQL, mutating hooks, or ledger/identity writes can run.
     if (this.disposableMigrations === true) {
       return this._runMigrations();
     }
