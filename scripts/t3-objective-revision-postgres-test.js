@@ -1109,7 +1109,7 @@ async function main() {
     const ledgerBefore = (await pool.query(
       `SELECT version FROM "${schemaE}".schema_migrations ORDER BY version`)).rows;
 
-    const storeE = new PostgresRuntimeStore({ connectionString: databaseUrl, schema: schemaE });
+    const storeE = new PostgresRuntimeStore({ connectionString: databaseUrl, schema: schemaE, disposableMigrations: true });
     try {
       let refusalCode = null;
       let refusalMessage = '';
