@@ -49,7 +49,7 @@ function oquery(argv) {
 }
 
 async function main() {
-  const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA });
+  const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA, disposableMigrations: true });
   await store.migrate();
 
   const server = spawn(process.execPath, ['server.js'], {

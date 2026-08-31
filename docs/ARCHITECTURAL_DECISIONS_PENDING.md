@@ -1,3 +1,86 @@
+## T10 migration execution-authority prevention — implementation candidate prepared, independent implementation review required (2026-08-30)
+
+**Status: MIGRATION EXECUTION-AUTHORITY PREVENTION CANDIDATE PREPARED — INDEPENDENT IMPLEMENTATION REVIEW REQUIRED.**
+
+T10 established the historical governance defect that migrations 041 and 042 reached the
+operational database without satisfying their repository-required execution-authorization and
+release barriers, and that the relevant barriers were substantially prose/process authority:
+the migration execution chokepoint mechanically validates migration identity and drift but
+required no execution authorization. Later schema correctness does not retroactively authorize
+those executions, and their historical adjudication remains separate future T10 work. This
+entry records the implementation candidate for the smallest repository-owned mechanism that
+makes operational migration impossible to execute through supported paths without published
+authorization. It is PREPARED, uncommitted, and NOT yet accepted: no prevention is claimed to
+be accepted/published/operationally closed, no future migration transition (043 or any other,
+including any fresh operational bootstrap) is authorized by it, and the canonical record ships
+fail-closed.
+
+Proven topology (from source at HEAD `cdd41e7b743030a2fcdaf560408aa56be95f5860`): the single
+supported migration SQL executor is `PostgresRuntimeStore.migrate()`; every supported entry
+path (`db:migrate`, `release:db-migrate`, `dev:setup`, the disposable PostgreSQL test harness
+and direct disposable test callers) funnels into it; `server.js` never migrates (it runs the
+read-only `prepareRuntimePersistence()` currency check and refuses partially migrated
+schemas); `release:db-preflight` is read-only; there is no second runner. The target
+discriminator challenge found no first-class operational-environment marker (developer-local
+and operational targets share the same pinned identity `127.0.0.1:5432/ticket_system`), so
+prevention binds exact target identity rather than inventing an environment taxonomy, and
+disposable-ness is an explicit repository-code declaration — never inferred from
+DATABASE_URL/TEST_DATABASE_URL, schema prefixes alone, bundled identity, environment kind, or
+missing state.
+
+Implementation candidate (uncommitted): a new narrow module
+`persistence/postgres/migration-authority.js` owns canonical record loading, strict shape
+validation, non-secret target parsing/equality, repository Phase-A publication authority
+(clean worktree; HEAD; fresh canonical master via
+`git ls-remote --exit-code origin refs/heads/master` requiring exactly one well-formed
+40-hex ref; HEAD == fresh master; `authorizedBaselineHead` an ancestor of HEAD; record
+tracked; git failures sanitized), canonical applied-order/pending derivation using the
+existing migration enumeration and `migrationChecksum` mechanism, exact transition evaluation,
+and deterministic refusal reasons (`MigrationExecutionAuthorityError`). `migrate()` now: (1)
+returns the legacy engine path unchanged only for stores explicitly declared
+`disposableMigrations: true` (the canonical test harness and each direct disposable test
+constructor now declare it; default construction is GUARDED); (2) otherwise performs READ-ONLY
+observation first (current database, schema existence, ledger existence, applied versions —
+never creating schema or ledger state); (3) returns a mutation-free no-op when the ledger is
+fully current and stray-free (empty pending set requires no transition authorization, and this
+path cannot create schema/ledger state; a ledger with strays is not "already current" and
+falls through to refusal); (4) refuses any non-empty pending transition before the advisory
+lock, CREATE SCHEMA/TABLE, migration SQL, mutating hooks, or ledger/identity writes unless a
+strictly valid AUTHORIZED record binds the exact target, the exact applied pre-state
+(`requiredAppliedVersions`, canonical order), and the exact ordered pending set with source
+sha256 (`authorizedPendingMigrations`; no subset/superset/order/byte drift). A fully current,
+stray-free ledger additionally performs predecessor-equivalent READ-ONLY
+`schema_migration_identities` validation before the mutation-free no-op (missing or changed
+already-applied migration identities refuse; the no-op acquires no advisory lock, performs no
+DDL, and writes nothing), and AUTHORIZED records validate `authorizedAtUtc` as an RFC3339
+timestamp. Already-applied
+migration bytes remain under the existing `schema_migration_identities` custody; the existing
+unknown-future and history-integrity checks are retained unchanged as defense in depth; no
+authorization values are accepted from CLI flags or environment variables; no secrets appear
+in records or errors; cached origin/master is diagnostic only.
+
+The canonical record `config/migration-execution-authorization.json` ships in the exact
+deterministic NOT_AUTHORIZED shape (`migrationTransitionId`, target fields, baseline,
+authorizer and timestamp null; applied/pending sets empty) — this candidate authorizes
+nothing: not 041, not 042, not 043, not fresh operational bootstrap, not any future
+transition. Authorization issuance remains the same out-of-band repository-write trust
+boundary accepted for the T10 repair record (an independently authorizing review publishes
+the record); checkpoint results are `.local-artifacts` (non-canonical), so the published
+record is the durable canonical gate artifact, with `release:db-preflight` remaining the
+runbook read-only pre-step — mechanical checkpoint binding would require canonical checkpoint
+publication, a separate future decision. Counterfactual contract tests prove the historical
+class: pre-state through 040 with pending [041, 042] admits only an exact byte/target/
+pre-state/publication-matching AUTHORIZED record, and refuses records authorizing only 041,
+only 042, reordered, retampered, subset, superset, stale-reuse, cross-target, dirty-tree,
+non-fresh-master, or untracked authority. Deterministic verification lives in
+`scripts/migration-execution-authority-test.js` (pure; no database contact) plus static
+source-order assertions proving refusal occurs before the mutation engine; disposable suites
+continue to exercise the unchanged engine semantics under explicit declaration. Historical
+041/042 records are NOT altered and NOT closed by this entry; the run-counter reconciliation
+closure above is untouched.
+
+---
+
 ## T10 run-counter derived-state drift — narrow reconciliation candidate, run-counter repair executed and independently verified, closure record prepared (2026-08-30)
 
 **Status: RUN-COUNTER RECONCILIATION REPAIRED AND INDEPENDENTLY VERIFIED — CLOSURE RECORD PREPARED; T10 REMAINS OPEN.**

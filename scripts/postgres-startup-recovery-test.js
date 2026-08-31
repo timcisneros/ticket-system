@@ -105,7 +105,7 @@ async function main() {
   // OS-allocated ephemeral port: see scripts/test-port.js. Fixed or pid-derived
   // ports collided across suites and surfaced as a misleading start failure.
   PORT = String(await allocateTestPort());
-  const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA });
+  const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA, disposableMigrations: true });
   await store.migrate();
 
   try {

@@ -68,7 +68,7 @@ async function initializeThrough038(store) {
 }
 
 async function withPre039(suffix, body) {
-  const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: schemaName(suffix) });
+  const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: schemaName(suffix), disposableMigrations: true });
   try {
     await initializeThrough038(store);
     return await body(store);

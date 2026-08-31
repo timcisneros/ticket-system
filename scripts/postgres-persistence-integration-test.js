@@ -43,8 +43,8 @@ function timeout(ms, message) {
 async function main() {
   const schema = `ticket_system_test_${process.pid}_${crypto.randomBytes(4).toString('hex')}`;
   const nonemptyFoundationSchema = `${schema}_nonempty`;
-  const store = new PostgresRuntimeStore({ connectionString, schema, lockTimeoutMs: 3_000 });
-  const peer = new PostgresRuntimeStore({ connectionString, schema, lockTimeoutMs: 3_000 });
+  const store = new PostgresRuntimeStore({ connectionString, schema, lockTimeoutMs: 3_000, disposableMigrations: true });
+  const peer = new PostgresRuntimeStore({ connectionString, schema, lockTimeoutMs: 3_000, disposableMigrations: true });
   const smallRecordStore = new PostgresRuntimeStore({
     connectionString,
     schema,
@@ -60,7 +60,8 @@ async function main() {
   const nonemptyFoundationStore = new PostgresRuntimeStore({
     connectionString,
     schema: nonemptyFoundationSchema,
-    lockTimeoutMs: 3_000
+    lockTimeoutMs: 3_000,
+    disposableMigrations: true
   });
 
   try {

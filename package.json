@@ -33,6 +33,7 @@
     "test:persistence:contract": "node scripts/postgres-persistence-contract-test.js",
     "test:persistence:postgres": "node scripts/postgres-persistence-integration-test.js",
     "test:cutover:postgres": "node scripts/postgres-runtime-cutover-test.js",
+    "test:migration-authority": "node scripts/migration-execution-authority-test.js",
     "test:page-render:postgres": "node scripts/page-render-regression-test.js",
     "db:migrate": "node --env-file-if-exists=.env.local scripts/postgres-migrate.js",
     "release:db-preflight": "node --env-file-if-exists=.env.local scripts/release-db-preflight.js",

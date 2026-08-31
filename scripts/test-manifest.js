@@ -174,6 +174,8 @@ const TESTS = Object.freeze([
   { file: "provider-input-privacy-test.js", status: "required" },
   { file: "auto-retry-bounds-test.js", status: "required" },
   { file: "run-mutation-evidence-test.js", status: "required" },
+  // T10 — migration execution authority prevention (deterministic).
+  { file: "migration-execution-authority-test.js", status: "required" },
   { file: "event-chain-restart-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "event-integrity-negative-test.js", status: "required" },
   { file: "evidence-truthfulness-contract-test.js", status: "required" },

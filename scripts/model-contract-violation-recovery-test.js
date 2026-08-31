@@ -121,7 +121,7 @@ async function main() {
   // simultaneously and cannot alias. The old scheme used PORT_1 + 1, which
   // assumed the neighbouring port was free.
   [PORT_1, PORT_2] = await allocateTestPorts(2);
-  const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA });
+  const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA, disposableMigrations: true });
   await store.migrate();
   const provider = await startMockProvider();
   let handle = null;

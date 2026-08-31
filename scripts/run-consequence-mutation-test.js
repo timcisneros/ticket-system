@@ -134,7 +134,7 @@ async function waitFor(fn, timeoutMs, label) {
 }
 
 async function main() {
-  const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA });
+  const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA, disposableMigrations: true });
   await store.migrate();
   const preloadPath = createPreload();
   let server = null;

@@ -178,7 +178,12 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   'child-process-settlement-test.js',
   // Tranche 6 — the controlled-evaluation harness proofs. Deterministic: it
   // touches only the filesystem and pure contracts, and needs no database.
-  'structured-allocation-evaluation-test.js'
+  'structured-allocation-evaluation-test.js',
+  // T10 — migration execution authority: deterministic, provider-free guard
+  // contract (record shape/state, exact target binding, exact applied
+  // pre-state, exact ordered pending set with source sha256, publication
+  // authority, fully-current identity-drift detection).
+  'migration-execution-authority-test.js'
 ]);
 
 const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([

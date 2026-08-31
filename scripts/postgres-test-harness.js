@@ -363,7 +363,7 @@ async function withHarness(suiteName, body, options = {}) {
   const databaseUrl = requireTestDatabaseUrl(suiteName);
   const schema = createTestSchemaName(options.schemaSlug || suiteName);
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), `${SCHEMA_PREFIX}-ws-`));
-  const store = new PostgresRuntimeStore({ connectionString: databaseUrl, schema });
+  const store = new PostgresRuntimeStore({ connectionString: databaseUrl, schema, disposableMigrations: true });
 
   let servers = [];
   try {

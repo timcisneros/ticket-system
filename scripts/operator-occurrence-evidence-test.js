@@ -124,7 +124,7 @@ function assertOccurrenceShape(row, expected) {
 async function main() {
   PORT = String(await allocateTestPort());
   BASE_URL = `http://127.0.0.1:${PORT}`;
-  const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA });
+  const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA, disposableMigrations: true });
   let server = null;
   try {
     await store.migrate();

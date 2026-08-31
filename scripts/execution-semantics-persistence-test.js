@@ -198,7 +198,7 @@ async function main() {
   // ports collided across suites and surfaced as a misleading start failure.
   PORT = String(await allocateTestPort());
   BASE = `http://127.0.0.1:${PORT}`;
-  const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA });
+  const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA, disposableMigrations: true });
   await store.migrate();
   const provider = await startMockProvider();
   let handle = null;

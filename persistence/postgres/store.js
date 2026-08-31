@@ -183,6 +183,8 @@ const {
 } = require('./application-state-methods');
 
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
+const migrationAuthority = require('./migration-authority');
+const REPOSITORY_ROOT = path.join(__dirname, '..', '..');
 const MIGRATION_FILE_PATTERN = /^[0-9]{3}_[a-z0-9_]+\.sql$/;
 const IDENTIFIER_PATTERN = /^[a-z_][a-z0-9_]*$/;
 // T2 Tranche 5 canonical five-state vocabulary. `failed` and `closed` are
@@ -1194,10 +1196,19 @@ class PostgresRuntimeStore {
     maxEligibleRunIds = 1_000,
     maxJsonRecordBytes = 2 * 1024 * 1024,
     defaultMaxActiveRuns = 32,
-    defaultLocalModelConcurrency = 1
+    defaultLocalModelConcurrency = 1,
+    disposableMigrations = false
   } = {}) {
     this.schema = String(schema || 'ticket_system');
     this.schemaSql = quoteIdentifier(this.schema);
+    // Migration execution authority (T10 prevention): the default is GUARDED.
+    // Only explicit repository-code declaration marks a store disposable —
+    // never DATABASE_URL, TEST_DATABASE_URL, a schema prefix, the bundled
+    // database identity, environment kind, or a missing schema.
+    this.disposableMigrations = disposableMigrations === true;
+    // Retained only to derive the non-secret authorization target identity
+    // (host/port/database) for guarded migration execution; never surfaced.
+    this.connectionString = typeof connectionString === 'string' ? connectionString : null;
     this.lockTimeoutMs = positiveSafeInteger(lockTimeoutMs, 'lockTimeoutMs');
     // Count of transaction retries absorbed by _retryTransientTransaction.
     this.transientConflictRetries = 0;
@@ -1955,6 +1966,58 @@ class PostgresRuntimeStore {
   }
 
   async migrate() {
+    // Universal migration execution-authority guard (T10 prevention).
+    // Disposable stores (explicit repository-code declaration) keep the
+    // legacy engine path. Every non-disposable invocation is observed
+    // READ-ONLY first; a fully current, stray-free ledger is a mutation-free
+    // no-op that requires no transition authorization; any non-empty pending
+    // transition must pass the full repository-owned authority gate BEFORE
+    // the advisory lock, CREATE SCHEMA/TABLE, migration SQL, mutating hooks,
+    // or ledger/identity writes can run.
+    if (this.disposableMigrations === true) {
+      return this._runMigrations();
+    }
+    const migrations = migrationFiles();
+    const client = await this.pool.connect();
+    try {
+      const preState = await migrationAuthority.observeAppliedMigrationState(client, {
+        schema: this.schema,
+        schemaSql: this.schemaSql
+      });
+      const appliedVersions = migrationAuthority.canonicalizeAppliedVersions(preState.appliedVersions, migrations);
+      if (migrationAuthority.isFullyCurrentCanonicalLedger(appliedVersions, migrations)) {
+        // Fully current: predecessor-equivalent READ-ONLY identity validation
+        // (changed already-applied migration bytes refuse here), then the
+        // mutation-free no-op. No advisory lock, no DDL, no ledger writes.
+        const identityCheck = await migrationAuthority.assertAppliedMigrationIdentitiesCurrent(client, {
+          schema: this.schema,
+          schemaSql: this.schemaSql,
+          migrations,
+          migrationChecksum
+        });
+        if (!identityCheck.ok) {
+          throw new migrationAuthority.MigrationExecutionAuthorityError(identityCheck.reasons);
+        }
+        return [];
+      }
+      const pendingMigrations = migrationAuthority.computePendingMigrations(appliedVersions, migrations, migrationChecksum);
+      await migrationAuthority.enforceMigrationExecutionAuthority({
+        repoRoot: REPOSITORY_ROOT,
+        connectionString: this.connectionString,
+        schema: this.schema,
+        currentDatabaseName: preState.databaseName,
+        migrations,
+        migrationChecksum,
+        appliedVersions,
+        pendingMigrations
+      });
+    } finally {
+      client.release();
+    }
+    return this._runMigrations();
+  }
+
+  async _runMigrations() {
     const client = await this.pool.connect();
     const lockName = `ticket-system:migrations:${this.schema}`;
     try {

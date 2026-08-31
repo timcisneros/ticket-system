@@ -20,7 +20,7 @@ function sessionCall(store, method, ...args) {
 
 async function main() {
   const schema = `ticket_system_cutover_${process.pid}_${crypto.randomBytes(4).toString('hex')}`;
-  const store = new PostgresRuntimeStore({ connectionString, schema, lockTimeoutMs: 3_000 });
+  const store = new PostgresRuntimeStore({ connectionString, schema, lockTimeoutMs: 3_000, disposableMigrations: true });
   const peer = new PostgresRuntimeStore({ connectionString, schema, lockTimeoutMs: 3_000 });
 
   try {

@@ -275,7 +275,7 @@ async function main() {
     const baselineRunCounters = await pool.query(
       `SELECT status, shard, count FROM "${schemaA}".runtime_status_counts WHERE entity_type='run' ORDER BY 1,2`);
 
-    const store = new PostgresRuntimeStore({ connectionString: databaseUrl, schema: schemaA });
+    const store = new PostgresRuntimeStore({ connectionString: databaseUrl, schema: schemaA, disposableMigrations: true });
     const applied = await store.migrate();
     ok(applied.includes('041_ticket_five_state_cutover.sql'), '041 applied in the convergent schema');
 
@@ -366,7 +366,7 @@ async function main() {
     const ledgerBefore = await pool.query(
       `SELECT version FROM "${schemaB}".schema_migrations ORDER BY version`);
 
-    const storeB = new PostgresRuntimeStore({ connectionString: databaseUrl, schema: schemaB });
+    const storeB = new PostgresRuntimeStore({ connectionString: databaseUrl, schema: schemaB, disposableMigrations: true });
     let refused = false;
     let refusalCode = null;
     try { await storeB.migrate(); } catch (error) {
@@ -406,7 +406,7 @@ async function main() {
       `SELECT version FROM "${schemaC}".schema_migrations ORDER BY version`);
 
     const blocker = await pool.connect();
-    const storeC = new PostgresRuntimeStore({ connectionString: databaseUrl, schema: schemaC });
+    const storeC = new PostgresRuntimeStore({ connectionString: databaseUrl, schema: schemaC, disposableMigrations: true });
     let lockRefused = false;
     let lockErrorCode = null;
     try {

@@ -235,7 +235,7 @@ async function main() {
   const legacyAttemptId = await seedLegacyRun(pool, schemaA, l1.id); // pre-T3 run
 
   console.log('activation baseline migration');
-  const storeA = new PostgresRuntimeStore({ connectionString: databaseUrl, schema: schemaA });
+  const storeA = new PostgresRuntimeStore({ connectionString: databaseUrl, schema: schemaA, disposableMigrations: true });
   const applied = await storeA.migrate();
   ok(applied.includes('042_objective_revision_baseline.sql'), 'canonical runner applied 042 once');
 
@@ -1040,7 +1040,7 @@ async function main() {
         previous: null, actor: 'ghost', reasonCode: 'creation',
         reason: null, capturedAt: new Date().toISOString()
       })]);
-    const storeB = new PostgresRuntimeStore({ connectionString: databaseUrl, schema: schemaB });
+    const storeB = new PostgresRuntimeStore({ connectionString: databaseUrl, schema: schemaB, disposableMigrations: true });
     try {
       await storeB.migrate().then(() => ok(false, 'stray history must refuse baseline'))
         .catch(error => {
@@ -1060,7 +1060,7 @@ async function main() {
     const schemaC = `t3a_${stamp}_c`;
     await createSchemaThrough(pool, schemaC, 40);
     await seedLegacyTicket(pool, schemaC, { objective: '   padded   ' });
-    const storeC = new PostgresRuntimeStore({ connectionString: databaseUrl, schema: schemaC });
+    const storeC = new PostgresRuntimeStore({ connectionString: databaseUrl, schema: schemaC, disposableMigrations: true });
     try {
       await storeC.migrate().then(() => ok(false, 'noncanonical legacy must refuse'))
         .catch(error => {
@@ -1077,7 +1077,7 @@ async function main() {
     await createSchemaThrough(pool, schemaD, 40);
     await applyMigration041Manually(pool, schemaD);
     const rawTicket = await seedLegacyTicket(pool, schemaD, { objective: 'Raw pre-T3 ticket' });
-    const storeD = new PostgresRuntimeStore({ connectionString: databaseUrl, schema: schemaD });
+    const storeD = new PostgresRuntimeStore({ connectionString: databaseUrl, schema: schemaD, disposableMigrations: true });
     try {
       const earlyRefusal = await storeD.createRunsAndStartTicket({
         ticketId: rawTicket.id,

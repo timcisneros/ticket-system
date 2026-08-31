@@ -1,0 +1,17 @@
+{
+  "recordKind": "migration-execution-authorization",
+  "recordVersion": 1,
+  "migrationTransitionId": null,
+  "authorizationState": "NOT_AUTHORIZED",
+  "expectedTarget": {
+    "host": null,
+    "port": null,
+    "database": null,
+    "schema": null
+  },
+  "requiredAppliedVersions": [],
+  "authorizedPendingMigrations": [],
+  "authorizedBaselineHead": null,
+  "authorizedBy": null,
+  "authorizedAtUtc": null
+}

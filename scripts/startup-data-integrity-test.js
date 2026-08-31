@@ -172,7 +172,7 @@ async function main() {
     // nothing (it omitted SESSION_SECRET, so both scenarios died on a missing
     // secret rather than on a storage fault).
     {
-      const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: controlSchema });
+      const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: controlSchema, disposableMigrations: true });
       await store.migrate();
       await store.close();
 
@@ -209,7 +209,7 @@ async function main() {
     // The direct analogue of the original corrupt-users-file scenario: the store
     // is present but cannot answer the question bootstrap depends on.
     {
-      const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: brokenSchema });
+      const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: brokenSchema, disposableMigrations: true });
       await store.migrate();
       await store.close();
 

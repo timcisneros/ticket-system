@@ -35,7 +35,7 @@ const WORKSPACE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'operator-visibilit
 function assert(c, m) { if (!c) throw new Error(m); }
 
 async function main() {
-  const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA });
+  const store = new PostgresRuntimeStore({ connectionString: DATABASE_URL, schema: SCHEMA, disposableMigrations: true });
   await store.migrate();
   fs.mkdirSync(path.join(WORKSPACE_ROOT, 'reports', 'q3'), { recursive: true });
 
