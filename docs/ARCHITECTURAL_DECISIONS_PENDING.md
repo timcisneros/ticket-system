@@ -1,6 +1,6 @@
-## T10 run-counter derived-state drift — narrow reconciliation candidate, authorization published, repair not executed (2026-08-30)
+## T10 run-counter derived-state drift — narrow reconciliation candidate, run-counter repair executed and independently verified, closure record prepared (2026-08-30)
 
-**Status: AUTHORIZATION PUBLISHED — REPAIR NOT EXECUTED.**
+**Status: RUN-COUNTER RECONCILIATION REPAIRED AND INDEPENDENTLY VERIFIED — CLOSURE RECORD PREPARED; T10 REMAINS OPEN.**
 
 T10 discovered derived-state drift in the trigger-maintained `runtime_status_counts`
 operational projection (persistence/postgres/migrations/009_operational_status.sql): the
@@ -218,6 +218,95 @@ of the publication HEAD; the post-publication worktree was clean. The independen
 AUTHORIZED record and the independently reviewed script are therefore published byte-exactly
 on canonical master.
 
+AUTHORIZED EXECUTION AND REPAIR CLOSURE (2026-08-30): following publication, exactly ONE
+authorized operational execution occurred via `node
+scripts/operational-repair-t10-run-counters.js --execute` — a single attempt, no retry, exit
+status 0 — at repository HEAD `0e5a1c6ec457023050321f4536633237742abad0` (cached and freshly
+queried origin refs/heads/master equal; repository clean true; authorized script sha256
+`53bdcc905a0558f83e457f79750ed562e1e9f7b26a4cfaa308d7dd1b14b009db`; authorization record
+sha256 `7f2944dd7f9eea6e2e390c6e2c8d1e081e58fb30e312aa1443506eee8796f351`; authorized
+baseline `1e8dc3e225100f69aa54cd956ef129ec2dda4114` verified ancestor). The executor
+established its Phase-A repository authority itself, before any database contact.
+
+AUTHORIZED PRE-STATE (independently re-observed by the executor under its reviewed
+locks/fence; both digests matched the published authorization exactly): reality digest
+`d172e2e134408ab68d00d4c847bf19689cffef40b2061f26493014c114184709`; pre-repair Run-counter
+digest `65fc7d9d24dfcaa1ddbfdf7527f5436a65311d3052f02972152ff4d3d71fa4ca`; Run reality
+completed 2 / failed 5 / interrupted 1 / pending 0 / running 0 / total 8; Run-counter
+projection 28 rows (12 positive, 16 zero residue, 0 negative) carrying exactly the authorized
+eight excess positive count units; Ticket pre-state digest
+`e190dc24216246351b5bc1470aa43068be332ac409af7c53c0e2bb4bebdd9e8f`, ticketDriftRows = 0.
+Exact target/schema matched (`ticket_system`, schema `ticket_system`, server 17.10);
+migration/schema currency through 042 passed; `runs_runtime_status_count` existed exactly
+once and was enabled; the reviewed NOWAIT locks (runs → diagnostic_logs →
+runtime_status_counts, SHARE ROW EXCLUSIVE) succeeded without contention.
+
+RECONSTRUCTION (the already-authorized repository rule): exactly 28 Run-scoped counter rows
+deleted and 8 grouped-positive rows inserted under the migration-009 / 041-Q5 precedent. The
+sixteen removed zero rows were previously adjudicated optional canonical lifecycle residue —
+not lost authority. No Ticket counter mutation occurred.
+
+TRANSACTIONAL POSTCONDITIONS (all passed before commit): Run reality remained stable inside
+the transaction; the corrected Run-only convergence comparison returned zero drift; the
+post-state Run-counter digest equaled the Run reality digest; the Ticket counter digest
+remained unchanged; the migration head remained 042; affected rows were exactly 28 deleted /
+8 inserted.
+
+PRIMARY OCCURRENCE EVIDENCE: `diagnostic_logs` id 139, type
+`operational:run_counter_reconciliation`, occurred_at `2026-08-30T23:38:40.317Z`
+(executedAtUtc `2026-08-30T23:38:40.263Z` recorded in its body). It binds the relevant
+non-secret execution identity: repairId; reconstructionRuleId; the authorization record's
+path, sha256 and state; authorizedBy; authorizedAtUtc; authorizedBaselineHead; repository
+HEAD; fresh remote master; clean repository state; script SHA; non-secret database
+target/schema/server identity; pre-state reality, Run-counter and Ticket digests; post-state
+reality, Run-counter and Ticket digests; affected rows 28 deleted / 8 inserted; the reviewed
+lock statement; and the occurrence time.
+
+POST-COMMIT VERIFICATION EVIDENCE: `diagnostic_logs` id 140, type
+`operational:run_counter_reconciliation_verified`, verifiedOccurrenceDiagnosticLogId = 139,
+passed = true, runCounterDriftRows = 0, ticketDriftRows = 0, reality totals completed 2 /
+failed 5 / interrupted 1, verifiedAtUtc `2026-08-30T23:38:40.342Z`; observed digests: reality
+`d172e2e134408ab68d00d4c847bf19689cffef40b2061f26493014c114184709`, Run counter
+`d172e2e134408ab68d00d4c847bf19689cffef40b2061f26493014c114184709` (already equal to
+reality), Ticket `e190dc24216246351b5bc1470aa43068be332ac409af7c53c0e2bb4bebdd9e8f`.
+
+INDEPENDENT POST-EXECUTION VERIFICATION: a genuinely independent post-execution review
+subsequently opened ONE coherent REPEATABLE READ READ ONLY snapshot at
+`2026-08-30T23:42:58.001Z` against database `ticket_system` (server 17.10) and independently
+established — RUN REALITY: exactly 8 grouped rows, completed|2 = 1, completed|8 = 1,
+failed|1 = 1, failed|3 = 1, failed|5 = 1, failed|6 = 1, failed|7 = 1, interrupted|4 = 1,
+reality digest `d172e2e134408ab68d00d4c847bf19689cffef40b2061f26493014c114184709`; RUN
+COUNTERS: exactly the same 8 rows, 8 positive, 0 zero, 0 negative, sum 8, Run counter digest
+`d172e2e134408ab68d00d4c847bf19689cffef40b2061f26493014c114184709` (equal to the reality
+digest), runCounterDriftRows = 0; TICKET: ticketCounterDigest
+`e190dc24216246351b5bc1470aa43068be332ac409af7c53c0e2bb4bebdd9e8f` unchanged,
+ticketDriftRows = 0; MIGRATION/TRIGGER: 042 head current, migration identities valid,
+`runs_runtime_status_count` enabled.
+
+EXACTLY-ONCE EVIDENCE (bounded): durable repository evidence contains exactly one mutating
+occurrence for this repair (id 139) and exactly one matching successful verification record
+(id 140, referencing 139). This statement is bounded to the governed durable evidence and the
+verified current state; it does not claim metaphysical proof that no unrecorded external
+actor could ever have changed data.
+
+ATOMICITY WORDING: current database observation establishes that occurrence row 139 exists,
+the converged repaired state exists, and verification row 140 exists. The structural claims —
+primary occurrence evidence inserted inside the same transaction as the reconstruction, commit
+requiring all reviewed transactional postconditions, and post-commit verification occurring
+separately to produce the verification evidence — are established by the unchanged reviewed
+script bytes (`53bdcc905a0558f83e457f79750ed562e1e9f7b26a4cfaa308d7dd1b14b009db`), not by
+current observation alone.
+
+STATUS: the T10 RUN-COUNTER RECONCILIATION item is operationally REPAIRED and INDEPENDENTLY
+VERIFIED, and this docs-only closure record is PREPARED (uncommitted). T10 itself REMAINS
+OPEN. The historical cause of the eight excess positive count units remains UNKNOWN: known —
+the derived projection had eight excess count units; known — the projection has been
+reconstructed and now converges exactly with authoritative reality; unknown — the exact
+historical mechanism that created the positive stale drift. Successful repair is not
+retrospective causal certainty. Historical migration-041 governance, historical migration-042
+governance, migration execution-authorization prevention, remaining hermeticity repairs, and
+A20 adjudication are separate later T10 work and are NOT closed by this record.
+
 Independently reviewed candidate artifact:
 `scripts/operational-repair-t10-run-counters.js`
 (sha256 `53bdcc905a0558f83e457f79750ed562e1e9f7b26a4cfaa308d7dd1b14b009db`; `--self-test`
@@ -250,24 +339,24 @@ respective milestones (see the exact-byte review and publication record above); 
 canonical master is COMPLETE. The script
 binds its own sha256 against the authorization record at execution time, so any byte change
 invalidates the authorization until the authorizing review re-pins it.
-Occurrence evidence will be two append-only deployment-scope `diagnostic_logs` rows created
-only by an authorized execution (the first commits atomically with the repair and records
-the authorization record identity; the second records post-commit verification); none exist
-yet.
+Occurrence evidence consists of the two append-only deployment-scope `diagnostic_logs` rows
+created by the one authorized execution (the first committed atomically with the repair and
+records the authorization record identity; the second records post-commit verification): ids
+139 and 140, recorded in the authorized-execution closure record above.
 
-The published AUTHORIZED record makes the repair ELIGIBLE for its separate
-execution-authorization step; publication itself implies no execution. Execution requires
-that separate step and must independently satisfy the repository-owned execute-time gates:
-clean repository; HEAD equal to freshly queried origin/master; `authorizedBaselineHead` an
-ancestor of fresh master; the published AUTHORIZED record; the exact authorized script SHA;
-the exact operational target; schema currency; enabled trigger; lock acquisition; live
-full-state digests equal to the authorized digests; and the exact fail-closed structural
-fence.
+The published AUTHORIZED record made the repair eligible for its separate
+execution-authorization step; that step occurred exactly once and all repository-owned
+execute-time gates were independently satisfied by the executor at execution time: clean
+repository; HEAD equal to freshly queried origin/master; `authorizedBaselineHead` an ancestor
+of fresh master; the published AUTHORIZED record; the exact authorized script SHA; the exact
+operational target; schema currency; enabled trigger; lock acquisition; live full-state
+digests equal to the authorized digests; and the exact fail-closed structural fence.
 
-The defect is **not repaired** and T10 is **not closed** by this entry: no reconstruction has
-occurred, no occurrence evidence exists, and no post-commit repair verification exists; a
-later entry must record the authorized execution, its occurrence evidence, and the
-verification result before any repaired/closed status may be claimed.
+The T10 RUN-COUNTER RECONCILIATION item is REPAIRED and INDEPENDENTLY VERIFIED (durable
+occurrence evidence 139/140 and independent read-only confirmation recorded above). T10
+itself is **not closed** by this entry; historical migration-041/042 governance, migration
+execution-authorization prevention, remaining hermeticity repairs, and A20 adjudication
+remain separate later T10 work.
 
 ---
 
