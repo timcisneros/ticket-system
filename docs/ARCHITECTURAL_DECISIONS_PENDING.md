@@ -1,6 +1,6 @@
-## T10 migration execution-authority prevention — implemented, release checkpoint PASSED 256/256 locally, publication pending (2026-08-30/31)
+## T10 migration execution-authority prevention — PUBLISHED at 0da0f34…, prevention sub-item CLOSED (2026-08-31)
 
-**Status: MIGRATION EXECUTION-AUTHORITY PREVENTION IMPLEMENTED — RELEASE CHECKPOINT PASSED 256/256 LOCALLY — PUBLICATION PENDING.**
+**Status: MIGRATION EXECUTION-AUTHORITY PREVENTION PUBLISHED AT 0da0f34… — PREVENTION SUB-ITEM CLOSED — AUTHORIZATION REMAINS NOT_AUTHORIZED — T10 REMAINS OPEN.**
 
 T10 established the historical governance defect that migrations 041 and 042 reached the
 operational database without satisfying their repository-required execution-authorization and
@@ -10,12 +10,13 @@ required no execution authorization. Later schema correctness does not retroacti
 those executions, and their historical adjudication remains separate future T10 work. This
 entry records the implementation candidate for the smallest repository-owned mechanism that
 makes operational migration impossible to execute through supported paths without published
-authorization. It is IMPLEMENTED and committed locally (implementation `20e37fd902e0bd3d9d86cd789d9292954c35af17`,
-checkpoint-PASSED 256/256 on `4f66a3fe490508bf1bf1276a34bfbd8b1d571dce` — see the release-checkpoint history
-below) and NOT yet published: no prevention is claimed to be
-accepted/published/operationally closed, no future migration transition (043 or any other,
-including any fresh operational bootstrap) is authorized by it, and the canonical record ships
-fail-closed.
+authorization. It is IMPLEMENTED, independently reviewed, release-checkpoint PASSED
+(256/256 on `4f66a3fe490508bf1bf1276a34bfbd8b1d571dce` — see the release-checkpoint history
+below), and PUBLISHED non-force to `origin/master` at `0da0f3461e6769bc80752368a3a02c8ae2f4c6da`
+— the T10 migration execution-authority PREVENTION sub-item is therefore CLOSED. Publication
+authorized no future migration transition (043 or any other, including any fresh operational
+bootstrap), executed no operational migration, and performed no cutover; the canonical record
+ships fail-closed.
 
 Proven topology (from source at HEAD `cdd41e7b743030a2fcdaf560408aa56be95f5860`): the single
 supported migration SQL executor is `PostgresRuntimeStore.migrate()`; every supported entry
@@ -108,13 +109,16 @@ exactly three times, each attempt preserved unchanged under
   `9be9e443385df0fa92493bcbcb32f4610697015fbcf07873ef33736d49a22183` — exactly the
   independently reviewed suite bytes.
 
-CURRENT STATE: the prevention mechanism is IMPLEMENTED and CHECKPOINT-PASSED locally on
-`4f66a3f…`; publication to `origin/master` (still at `cdd41e7…`) is PENDING and follows only
-independent review of this registration. The canonical record remains NOT_AUTHORIZED — this
-checkpoint sequence authorized no migration transition, executed no operational migration,
-and involved no operational PostgreSQL contact (checkpoint PostgreSQL activity used the
-proven disposable `ticket_system_test` target only). T10 remains open: historical 041/042
-adjudication and the remaining T10 obligations are separate later work.
+CURRENT STATE: the prevention mechanism is IMPLEMENTED, independently reviewed,
+CHECKPOINT-PASSED on `4f66a3f…`, and PUBLISHED — the exact reviewed registration chain was
+pushed non-force to `origin/master` at `0da0f3461e6769bc80752368a3a02c8ae2f4c6da` (after
+publication, local HEAD, cached origin/master, and freshly queried remote master all equaled
+`0da0f34…`). The T10 migration execution-authority PREVENTION sub-item is CLOSED. The final
+successful implementation checkpoint remains bound to `4f66a3f…` (the docs-only publication
+commit `0da0f34…` itself was not checkpointed and required none). The canonical record
+remains NOT_AUTHORIZED — publication authorized no migration transition, executed no
+operational migration, and performed no cutover/restart. Historical 041/042 adjudication and
+the remaining T10 obligations are separate later work; T10 remains open.
 
 ---
 
