@@ -1,6 +1,6 @@
-## T10 migration execution-authority prevention — implementation candidate prepared, independent implementation review required (2026-08-30)
+## T10 migration execution-authority prevention — implemented, release checkpoint PASSED 256/256 locally, publication pending (2026-08-30/31)
 
-**Status: MIGRATION EXECUTION-AUTHORITY PREVENTION CANDIDATE PREPARED — INDEPENDENT IMPLEMENTATION REVIEW REQUIRED.**
+**Status: MIGRATION EXECUTION-AUTHORITY PREVENTION IMPLEMENTED — RELEASE CHECKPOINT PASSED 256/256 LOCALLY — PUBLICATION PENDING.**
 
 T10 established the historical governance defect that migrations 041 and 042 reached the
 operational database without satisfying their repository-required execution-authorization and
@@ -10,8 +10,10 @@ required no execution authorization. Later schema correctness does not retroacti
 those executions, and their historical adjudication remains separate future T10 work. This
 entry records the implementation candidate for the smallest repository-owned mechanism that
 makes operational migration impossible to execute through supported paths without published
-authorization. It is PREPARED, uncommitted, and NOT yet accepted: no prevention is claimed to
-be accepted/published/operationally closed, no future migration transition (043 or any other,
+authorization. It is IMPLEMENTED and committed locally (implementation `20e37fd902e0bd3d9d86cd789d9292954c35af17`,
+checkpoint-PASSED 256/256 on `4f66a3fe490508bf1bf1276a34bfbd8b1d571dce` — see the release-checkpoint history
+below) and NOT yet published: no prevention is claimed to be
+accepted/published/operationally closed, no future migration transition (043 or any other,
 including any fresh operational bootstrap) is authorized by it, and the canonical record ships
 fail-closed.
 
@@ -28,7 +30,7 @@ disposable-ness is an explicit repository-code declaration — never inferred fr
 DATABASE_URL/TEST_DATABASE_URL, schema prefixes alone, bundled identity, environment kind, or
 missing state.
 
-Implementation candidate (uncommitted): a new narrow module
+Implementation (committed): a new narrow module
 `persistence/postgres/migration-authority.js` owns canonical record loading, strict shape
 validation, non-secret target parsing/equality, repository Phase-A publication authority
 (clean worktree; HEAD; fresh canonical master via
@@ -78,6 +80,41 @@ source-order assertions proving refusal occurs before the mutation engine; dispo
 continue to exercise the unchanged engine semantics under explicit declaration. Historical
 041/042 records are NOT altered and NOT closed by this entry; the run-counter reconciliation
 closure above is untouched.
+
+RELEASE-CHECKPOINT HISTORY AND PASS REGISTRATION (recorded 2026-08-31): the implementation
+and its two independently reviewed corrections form the local chain `20e37fd902e0bd3d9d86cd789d9292954c35af17`
+(original implementation) → `d439b091f4e719674d202b7aa6dd183ffafaa566` (test-only
+disposable-declaration correction) → `4f66a3fe490508bf1bf1276a34bfbd8b1d571dce` (comment-only
+store.js correction); all are unpublished. The canonical commit-bound release checkpoint ran
+exactly three times, each attempt preserved unchanged under
+`.local-artifacts/release-checkpoint-results/`:
+
+- ATTEMPT #1 — run identity `41aef7fb-79bb-4869-98ce-430491ff70d4`, bound to `20e37fd…`:
+  FAILED 16/256, first failure `t3-objective-revision-postgres-test.js` — a test-only
+  disposable migration declaration was missing (`storeE`); independently adjudicated and
+  corrected in `d439b09…`. Not a production migration-authority semantic failure.
+- ATTEMPT #2 — run identity `69ad01f9-8eb2-4343-8387-69d37943df7e`, bound to `d439b09…`:
+  FAILED 107/256, first failure `postgres-persistence-contract-test.js` — the required
+  source-text tripwire `/upsertTicket|upsertRun|legacy/i` matched a non-executable guard
+  COMMENT token; independently adjudicated and corrected (comment-only) in `4f66a3f…`.
+  Not a migration-authority semantic failure.
+- ATTEMPT #3 — run identity `853da943-adbe-4318-bc89-c2cd7101c545`, bound to `4f66a3f…`:
+  PASSED 256/256 (started `2026-08-31T06:03:50.087Z`, completed
+  `2026-08-31T06:58:45.922Z`, registryHash
+  `1f83d3c47a7a31d211eb7a4b866e28bbcb50601dbc0be0368e084d505652a436`). Owner-level proofs
+  from the canonical owner results: `t3-objective-revision-postgres-test.js` (ordinal 17)
+  PASS, `postgres-persistence-contract-test.js` (ordinal 108) PASS, and
+  `migration-execution-authority-test.js` (ordinal 125) PASS with registry sourceRawSha256
+  `9be9e443385df0fa92493bcbcb32f4610697015fbcf07873ef33736d49a22183` — exactly the
+  independently reviewed suite bytes.
+
+CURRENT STATE: the prevention mechanism is IMPLEMENTED and CHECKPOINT-PASSED locally on
+`4f66a3f…`; publication to `origin/master` (still at `cdd41e7…`) is PENDING and follows only
+independent review of this registration. The canonical record remains NOT_AUTHORIZED — this
+checkpoint sequence authorized no migration transition, executed no operational migration,
+and involved no operational PostgreSQL contact (checkpoint PostgreSQL activity used the
+proven disposable `ticket_system_test` target only). T10 remains open: historical 041/042
+adjudication and the remaining T10 obligations are separate later work.
 
 ---
 
