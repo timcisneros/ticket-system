@@ -2,6 +2,14 @@
 
 ## Overview
 
+> **Storage status:** The ledger file names below — `events.jsonl`, `runs.json`,
+> `tickets.json`, `operation-history.json` — name the **retired JSON adapter** in
+> this document's historical portions. The same deterministic,
+> evidence-derived telemetry definitions apply to the current PostgreSQL
+> relations (`persistence/postgres/store.js`; canonical authority
+> `docs/POSTGRES_CUTOVER.md`, `docs/RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH.md`).
+> The telemetry semantic contract remains current.
+
 The substrate exposes its behavior as measurable operational evidence. All telemetry is derived deterministically from the ledger (events.jsonl, runs.json, tickets.json, operation-history.json). No hidden mutable counters are maintained.
 
 > The semantic definitions these surfaces implement originate in `docs/STATE_SURFACES.md`, which also records surfaces not yet implemented.

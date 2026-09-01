@@ -4,8 +4,8 @@
 
 - `oquery.js` — authenticated PostgreSQL-backed ticket/operator CLI.
 - `op-session.js` — interactive helper using the server API.
-- `codex-bootstrap.js` — print current runtime architecture and commands.
-- `codex-trace.js` — fetch exact run state/events/map/log evidence through the API.
+- `developer-agent-bootstrap.js` — print current runtime architecture and commands.
+- `developer-agent-trace.js` — fetch exact run state/events/map/log evidence through the API.
 - `postgres-migrate.js` — apply ordered migrations using `DATABASE_URL` and `POSTGRES_SCHEMA`.
 - `dev-database.js` — start the local PostgreSQL service through Docker or Podman Compose.
 - `dev-setup.js` — non-destructive config, migrations, initial admin, and initial agent bootstrap.

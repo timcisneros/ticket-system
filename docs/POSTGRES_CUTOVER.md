@@ -9,7 +9,8 @@ not current evidence or a supported runtime mode.
 
 ## Authority boundary
 
-Migrations `001` through `028` and `persistence/postgres/store.js` own:
+The canonical migrations under `persistence/postgres/migrations/` (current head `042`) and
+`persistence/postgres/store.js` own:
 
 - ticket/run identity, lifecycle, leases, recovery, phase projection, evaluation, and consequence;
 - append-only events with database-owned identity/time and per-run sequence/hash-chain tips;

@@ -31,7 +31,7 @@ function requestJson(baseUrl, cookie, route) {
 
 async function main() {
   const runId = runIdFromArgs(process.argv.slice(2));
-  if (!Number.isSafeInteger(runId) || runId <= 0) throw new Error('Usage: npm run codex:trace -- --run <id>');
+  if (!Number.isSafeInteger(runId) || runId <= 0) throw new Error('Usage: npm run developer-agent:trace -- --run <id>');
   const root = path.resolve(__dirname, '..');
   const cookiePath = process.env.OPERC_COOKIE_PATH || path.join(root, '.opercookie');
   let cookie;

@@ -5,6 +5,14 @@ Context, per `docs/BOUNDED_WATCHER_DESIGN_AUDIT.md`. It adds **no execution path
 observes a narrow source and may draft a ticket proposal; only an explicit, authorized approval
 creates a normal ticket through the usual path.
 
+> **Storage status:** The `data/*.json` storage details below (`data/watchers.json`,
+> `data/watcher-observations.json`, `data/watcher-ticket-proposals.json`) describe the
+> **retired JSON adapter** and are kept as contract/history. Current production
+> persistence authority is PostgreSQL (watcher authority migration `023`,
+> `persistence/postgres/store.js`; canonical authority `docs/POSTGRES_CUTOVER.md`).
+> The bounded-watcher semantic contract — manual observer/proposer, no execution
+> path — remains current.
+
 ## What a watcher is
 
 - A record in `data/watchers.json` scoped to one **active** Work Context, with a narrow

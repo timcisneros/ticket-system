@@ -31,7 +31,10 @@ implementation.
 
 ## Data model
 
-`data/message-threads.json` — one record per thread:
+The operator inbox persists in PostgreSQL — `message_threads` (one row per thread)
+and `message_thread_messages` (one row per message), introduced by migration
+`025_application_state_and_sessions.sql` and owned through
+`persistence/postgres/store.js` (canonical authority `docs/POSTGRES_CUTOVER.md`):
 
 - `key` — idempotency key: `ticket:<id>:triage:<createdAt>`, `run:<id>:triage:<createdAt>`, or `ticket:<id>:deliverable:run:<runId>`. A rerun that produces new triage gets a new key, hence a new thread (email semantics).
 - `kind` — `blocker` (needs an operator decision) or `deliverable` (needs acknowledgement).

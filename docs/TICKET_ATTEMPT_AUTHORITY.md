@@ -46,16 +46,23 @@ The established multi-Run outcome order is preserved: completion blocking,
 then failure, then interruption, then unanimous completion. Missing or
 conflicting authority does not synthesize a disposition.
 
-Canonical Ticket projection consumes only the current attempt:
+Canonical Ticket projection consumes only the current attempt. Ticket lifecycle
+states are exactly the frozen five — `open`, `in_progress`, `blocked`,
+`completed`, `canceled` (runtime/ticket-lifecycle-contract.js; the
+`tickets_status_check` CHECK introduced by migration
+`041_ticket_five_state_cutover.sql`). Attempt dispositions (`completed`,
+`failed`, `blocked`, `interrupted`) are Run/attempt authority and are never
+Ticket lifecycle states; the projector must not elevate a failed or interrupted
+attempt disposition directly.
 
-| Attempt authority | Ticket status |
+| Attempt authority | Ticket projected status |
 | --- | --- |
 | no attempt | `open` |
 | unsettled | `in_progress` |
-| `completed` | `completed` |
-| `failed` | `failed` |
-| `blocked` | `blocked` |
-| `interrupted` | `open` |
+| settled `completed` (verified) | `completed` |
+| settled `blocked` | `blocked` |
+| settled `failed` | `open` — `failed` is attempt disposition only; with an established unresolved durable blocking authority the separate blocking authority projects `blocked` instead |
+| settled `interrupted` | `open` — `interrupted` is attempt disposition only |
 
 Triage/operator attention remains a separate projection. Run/evidence history
 continues to expose detailed execution topology without making it Ticket

@@ -8,6 +8,12 @@ integration.
 
 ## Routing policy
 
+> **Storage status:** The sentence below naming `data/model-routing-policies.json`
+> describes the **retired JSON adapter** and is kept as history. Current production
+> persistence authority is the PostgreSQL routing-policy catalog (migration `021`,
+> `persistence/postgres/store.js`; canonical authority `docs/POSTGRES_CUTOVER.md`).
+> The routing semantic contract below remains current.
+
 Routing policies are accessed through one repository contract. The active JSON adapter persists the
 current-format catalog in `data/model-routing-policies.json`; migration 021 supplies the PostgreSQL
 authority. A record is:

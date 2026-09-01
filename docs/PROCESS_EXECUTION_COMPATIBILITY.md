@@ -6,7 +6,7 @@ No pairing not listed here is supported.
 
 | Authority | Supported | Read-only compatible | Upgrade required | Unsupported |
 | --- | --- | --- | --- | --- |
-| PostgreSQL schema | 032 | none | older schema | future or partial schema |
+| PostgreSQL schema | 42 | none | older schema | future or partial schema |
 | Launcher protocol | 1 | 1 for recovery/observation | none | every other version |
 | Materializer protocol | 1 | 1 for recovery/observation | none | every other version |
 | Process target catalog | 2 | historical catalog embedded in admitted runs | catalog 1 for new admission | future versions |
@@ -15,7 +15,7 @@ No pairing not listed here is supported.
 | Completion authority | 1 | explicitly labelled historical runs | missing current authority | future versions |
 | Completion decision | 1 | explicitly labelled historical runs | missing current decision | future versions |
 | Process supervision | 1 | explicitly labelled historical lifecycle | missing current lifecycle | future versions |
-| Process operation record | schema 029 | terminal records retained under schema 032 | schema below 032 | future/unknown migrations |
+| Process operation record | schema 029 | terminal records retained under schema 42 | schema below 42 | future/unknown migrations |
 
 ## Deployment generation policy
 
@@ -38,6 +38,6 @@ and release-contract hash. A mismatched active generation is `blocked`, not a
 rolling-compatibility guess.
 
 Application-only rollback is permitted only when the previous release contract
-supports schema 032. Otherwise rollback means an explicit database and paired
+supports schema 42. Otherwise rollback means an explicit database and paired
 artifact restore; the system never runs reverse SQL or silently downgrades a
 schema.

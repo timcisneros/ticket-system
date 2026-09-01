@@ -54,7 +54,7 @@ If the run failed, the operator inspects the failure reason.
 
 **CLI:**
 ```bash
-pnpm codex:trace -- --run <runId>
+pnpm developer-agent:trace -- --run <runId>
 ```
 
 **API:**
@@ -120,7 +120,7 @@ node scripts/oquery.js workspace --url http://127.0.0.1:3099 cat <artifact-name>
 
 **Evidence:** Trace the run to inspect its persisted events, operations, evaluation, and consequence:
 ```bash
-pnpm codex:trace -- --run <runId>
+pnpm developer-agent:trace -- --run <runId>
 ```
 
 ### 6. Confirm Runtime Evidence
@@ -130,7 +130,7 @@ Confirm the terminal state and its PostgreSQL-backed runtime evidence.
 **CLI:**
 ```bash
 node scripts/oquery.js runs --url http://127.0.0.1:3099 --id <runId> --json --api
-pnpm codex:trace -- --run <runId>
+pnpm developer-agent:trace -- --run <runId>
 ```
 
 **What to verify:**
@@ -162,7 +162,7 @@ $ node scripts/oquery.js runs --id 60 --json --api
 [ { "status": "failed", "error": "Agent run exceeded listDirectory limit of 3" } ]
 
 # 3. Inspect failure
-$ pnpm codex:trace -- --run 60
+$ pnpm developer-agent:trace -- --run 60
 # Shows: agent listed root, then src, then config, then hit limit before moving any files
 
 # 4. Decide: objective was too broad. Revise.
@@ -176,7 +176,7 @@ $ node scripts/oquery.js workspace cat status.md
 <file contents>
 
 # 6. Confirm persisted evidence
-$ pnpm codex:trace -- --run 65
+$ pnpm developer-agent:trace -- --run 65
 # Trace shows the terminal run, operations, evaluation, and consequence
 ```
 

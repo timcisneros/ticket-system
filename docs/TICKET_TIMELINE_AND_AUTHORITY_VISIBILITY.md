@@ -4,6 +4,14 @@
 
 r1.18 adds a read-only ticket timeline assembled from existing state and evidence at request time. It does not create a timeline ledger, rewrite source records, or change ticket execution.
 
+> **Storage status:** The source names below — `tickets.json`, `runs.json`,
+> `operation-history.json`, `events.jsonl`, `logs.json` — name the **retired JSON
+> adapter** in this document's historical portions. The same timeline
+> source/precedence model applies to the current PostgreSQL relations
+> (`persistence/postgres/store.js`; canonical authority
+> `docs/POSTGRES_CUTOVER.md`). The timeline's read-only, evidence-assembling
+> semantic contract remains current.
+
 The timeline is available through:
 
 - `GET /api/tickets/:id/timeline`

@@ -50,8 +50,8 @@ subject to runtime authority, evidence, replay, recovery, evaluation, and conseq
 - Apply migrations only: `pnpm db:migrate`
 - All development commands load `.env.local`; explicit environment variables win
 - Syntax: `npm run build`
-- Orientation: `npm run codex:bootstrap`
-- Trace a run: `npm run codex:trace -- --run <id>`
+- Orientation: `npm run developer-agent:bootstrap`
+- Trace a run: `npm run developer-agent:trace -- --run <id>`
 - Full gate: `TEST_DATABASE_URL=... npm run checkpoint:release`
 - PG integration: `TEST_DATABASE_URL=... npm run test:persistence:postgres`
 - Cutover boundary: `TEST_DATABASE_URL=... npm run test:cutover:postgres`
@@ -62,7 +62,7 @@ subject to runtime authority, evidence, replay, recovery, evaluation, and conseq
 node scripts/oquery.js login --url http://127.0.0.1:3099
 node scripts/oquery.js agents --url http://127.0.0.1:3099
 node scripts/oquery.js create-ticket --url http://127.0.0.1:3099 --agent 'Developer Agent' --wait --json '<objective>'
-npm run codex:trace -- --run <runId>
+npm run developer-agent:trace -- --run <runId>
 ```
 
 ## Verification workflow

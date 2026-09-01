@@ -1,5 +1,17 @@
 # Process Template Activation Durability
 
+> **Storage status:** The two-file JSON activation mechanics below
+> (`process-template-versions.json` / `process-templates.json`), including the
+> cross-file crash window and the startup reconciler, describe the **retired JSON
+> adapter** and are kept as a durability decision record. Current production
+> persistence authority is PostgreSQL (process-template authority migrations
+> `017`/`018`/`028`, `persistence/postgres/store.js`, whose
+> `activateProcessTemplateVersion` commits supersede, activation, and root
+> re-point in one transaction; canonical authority `docs/POSTGRES_CUTOVER.md`).
+> The durability semantic contract — an activation must converge to exactly one
+> active version and never commit partially — remains current; the two-file
+> mechanics and crash window do not.
+
 Activating a new process-template version is committed across **two** separate atomic
 writes:
 

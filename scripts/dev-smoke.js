@@ -191,7 +191,7 @@ async function runSmoke({
     throw new Error(
       'Smoke run did not complete: ticket #' + result.ticket.id + ' ' + result.ticket.status +
       ', run #' + result.run.id + ' ' + result.run.status +
-      '. Inspect with pnpm codex:trace -- --run ' + result.run.id
+      '. Inspect with pnpm developer-agent:trace -- --run ' + result.run.id
     );
   }
 

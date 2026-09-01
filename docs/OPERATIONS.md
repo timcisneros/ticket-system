@@ -679,6 +679,14 @@ without any coordination machinery.
 
 ## 11. Local Event Log × Git (Working-Copy Deletion Gotcha)
 
+> **Storage status:** This section's `data/events.jsonl` subject is the local
+> event log of the **retired JSON adapter**, kept as operational history. Current
+> production event persistence is the append-only PostgreSQL `events` relation
+> (`persistence/postgres/store.js`; canonical authority
+> `docs/POSTGRES_CUTOVER.md`). The Git working-copy deletion gotcha below applies
+> to the historical local ledger (and to any similarly Git-untracked local
+> artifact), not to current runtime persistence.
+
 `data/events.jsonl` is an append-only local **evidence artifact**: untracked via
 `git rm --cached` (commit `7d0449d`, "Adopt event-log lifecycle policy") and
 Git-ignored, but kept on disk.

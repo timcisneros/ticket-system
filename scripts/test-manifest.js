@@ -127,9 +127,14 @@ const TESTS = Object.freeze([
   { file: "artifact-projection-status-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "assignment-audit-test.js", status: "required" },
   { file: "attempt-usage-visibility-test.js", status: "orphaned", reason: "cutover-orphan" },
-  // A26: partially superseded by auto-retry-bounds-test.js. RETAINED because its
-  // "runtime failure with mutation never retries" scenario has no destination
-  // while the mutated-run guard is inert. Retire it when A26 is implemented.
+  // A26: implemented 2026-07-27 (resolveRunMutationEvidence — one authority for
+  // both the retry assessment and the finalized replay), so the old inert
+  // mutated-run-guard rationale is obsolete and the "runtime failure with
+  // mutation never retries" scenario now has destination coverage in
+  // run-mutation-evidence-test.js scenario 2. RETAINED on the still-recorded
+  // uncovered assertion "verification failure never retries" (the A25-related
+  // disposition: no deterministic postcondition-failure fixture exists yet).
+  // Retire it when that assertion lands. See the A26 register entry.
   { file: "auto-retry-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "batch-workload-validation-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "bounded-transition-test.js", status: "required" },

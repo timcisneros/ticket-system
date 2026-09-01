@@ -2,8 +2,8 @@
 
 ## Roles
 
-- **Operator** (Big Pickle or Codex): creates tickets, reads logs, inspects results, runs tests, reports issues.
-- **Developer/Codex**: edits the ticket-system application source as normal privileged product work.
+- **Operator**: creates tickets, reads logs, inspects results, runs appropriate verification, reports issues.
+- **Developer agent**: edits the ticket-system application source as privileged product-development work.
 - **Coding agent** (OpAgent-*): mutates only mounted workspace/user files inside `workspace-root` through the agent pipeline.
 
 ## Mutation Pipeline
@@ -31,15 +31,15 @@ unmodeled.
 ## Allowed Surfaces
 
 - `node scripts/oquery.js create-ticket "..."` — create a ticket
-- Inspection commands: `node scripts/oquery.js list-tickets`, `oquery.js get-run`, etc.
-- Tests: `node --test`, `pnpm test`
+- Inspection commands: `node scripts/oquery.js tickets`, `oquery.js runs`, `oquery.js logs`, etc.
+- Tests: individual suites run directly (`node scripts/<suite>-test.js`); the full release gate is `TEST_DATABASE_URL='postgresql://...' npm run checkpoint:release` (see `docs/RELEASE_CHECKPOINT.md`)
 - Reading files (inspection only)
 
 ## Forbidden
 
 - Agent access to files outside `workspace-root`
-- Direct edits to workspace/user files (linkcheck/, governance-kernel/, etc.) when evaluating the agent pipeline
-- Direct edits to `/tmp/op-data/*.json` or any data store
+- Direct edits to workspace/user files when evaluating the agent pipeline
+- Direct edits to any data store
 - Throwaway HTTP/ticket-creation scripts
 - Silently repairing bad agent output
 - Any mutation that bypasses the ticket → agent → record pipeline

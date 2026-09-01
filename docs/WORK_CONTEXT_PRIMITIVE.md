@@ -5,6 +5,12 @@ tickets and process templates, supplies a few creation-time defaults/allow-lists
 listings. It is the smallest implementation of the design recorded in
 `docs/WORK_CONTEXT_PRIMITIVE_DESIGN_AUDIT.md`.
 
+> **Storage status:** The `data/work-contexts.json` storage detail below describes the
+> **retired JSON adapter** and is kept as history. Current production persistence
+> authority is PostgreSQL (work-context catalog migration `015`,
+> `persistence/postgres/store.js`; canonical authority `docs/POSTGRES_CUTOVER.md`).
+> The Work Context semantic contract below remains current.
+
 ## What Work Context is
 
 - A named grouping with a `status` (`active` | `archived`), defaults, allow-lists, and filter

@@ -4,6 +4,14 @@ The current connector implementation establishes a connector authority boundary 
 **local/mock adapter only**. It proves catalog, receipt, Work Context, permission, and persistence
 behavior without representing the product's future connector catalog as local-only.
 
+> **Storage status:** The `data/*.json` storage details below (`data/connectors.json`,
+> `data/connector-receipts.json`, `data/local-connector-objects.json`) describe the
+> **retired JSON adapter** and are kept as contract/history. Current production
+> persistence authority is PostgreSQL (connector authority migration `022`, local
+> connector objects migration `026`, `persistence/postgres/store.js`; canonical
+> authority `docs/POSTGRES_CUTOVER.md`). The connector authority boundary — local/mock
+> adapter only, no external system call — remains the current semantic contract.
+
 ## Current scope
 
 - The only implemented adapter `kind` is `local_mock`. It reads from the disposable fixture object

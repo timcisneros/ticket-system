@@ -4,6 +4,13 @@ r1.21 adds a **shared visibility surface** over the r1.20 Work Context primitive
 (`docs/WORK_CONTEXT_PRIMITIVE.md`). It lets an operator open one Work Context and see the related
 tickets, triage, process templates, schedules, and recent runs in one place.
 
+> **Storage status:** The `tickets.json` / `process-templates.json` / `runs.json`
+> source details below describe the **retired JSON adapter** and are kept as
+> history. Current production persistence authority is PostgreSQL
+> (`persistence/postgres/store.js`; canonical authority `docs/POSTGRES_CUTOVER.md`).
+> The visibility surface's semantic contract — one read-only per-context view over
+> the existing stores — remains current.
+
 ## What it is
 
 - A **read-only** detail page at `GET /work-contexts/:id` and a JSON summary at

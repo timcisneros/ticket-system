@@ -97,14 +97,14 @@ In a second terminal, exercise one real provider-backed ticket and verify its wo
 pnpm dev:smoke
 ```
 
-A model/provider failure is reported as a failed smoke run with a `codex:trace` command; it is never
+A model/provider failure is reported as a failed smoke run with a `developer-agent:trace` command; it is never
 converted into a passing result. For general operator work:
 
 ```sh
 node scripts/oquery.js login --url http://127.0.0.1:3099
 node scripts/oquery.js agents --url http://127.0.0.1:3099
 node scripts/oquery.js create-ticket --url http://127.0.0.1:3099 --agent 'Developer Agent' --wait --json '<objective>'
-npm run codex:trace -- --run <runId>
+npm run developer-agent:trace -- --run <runId>
 ```
 
 Rotate an existing credential with `pnpm admin:password`; passwords are rejected as command-line

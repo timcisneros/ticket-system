@@ -81,7 +81,7 @@ pnpm dev:smoke
 The smoke command securely prompts for the admin password, creates one bounded
 `Ensure folder onboarding-smoke exists` ticket through the authenticated HTTP surface, waits for
 its run, and verifies the workspace folder. It is an observational provider check: model/provider
-failures remain failures and include the exact `codex:trace` follow-up command.
+failures remain failures and include the exact `developer-agent:trace` follow-up command.
 
 To change an existing credential, use `pnpm admin:password` (or
 `pnpm admin:password -- --username <name>`). Passwords are accepted only through the hidden prompt,

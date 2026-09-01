@@ -419,18 +419,22 @@ Assign each mutation only to a suite that executes its owner.
 | scheduler ineligibility | scheduler claim query | restart suites ✔ done |
 | read-only projection | n/a — count assertions | restart suites ✔ done |
 | Ticket runtime scoping | `findRuntimeRun` | `governed-blocked-restart-postgres-test` ✔ done |
-| Run-state block authority | `serializeRunRuntimeState` | **unowned** — see checklist |
-| CLI applicability | `scripts/oquery.js` | **unowned** |
+| Run-state block authority | `serializeRunRuntimeState` | `governed-blocked-restart-postgres-test`, `governed-sibling-dependency-postgres-test` ✔ done |
+| CLI applicability | `scripts/oquery.js` | `governed-verified-progress-lifecycle-postgres-test` ✔ done (row 1 via `run-state`; rows 2/5 proved NOT APPLICABLE from source) |
 
 ---
 
-## 8. Remaining implementation checklist
+## 8. Implementation checklist — COMPLETE
 
-**Reader cells remaining: 24.** Rows × readers where an assertion is still
-missing, excluding cells classified NOT APPLICABLE (12) and cells already
-asserted (9).
+**Reader cells remaining: 0.** Every applicable row × reader cell is asserted,
+classified RAW HISTORY ONLY, proved a closed refusal, or proved NOT APPLICABLE
+from source — see the §11 five-row proof matrix, COMPLETE.
 
-**Mutation cases remaining: 9.**
+**Mutation cases remaining: 0 within this checklist.** The mutations enumerated
+below were implemented with their suites; the separately recorded §11a unowned
+mutation (the `projectedStatus` `not_applicable` transition branch) and the
+register's `oquery replay` unaimed CLI mutations remain recorded, not
+claimed.
 
 By file, in the recommended order:
 
@@ -583,12 +587,11 @@ For row 5 the refusing reads additionally leave `runRevisions` byte-identical �
 nothing was terminalized, repaired or reclaimed — and create no containment
 record.
 
-### Cells deliberately not asserted
-### Cells deliberately not asserted
+### CLI applicability (asserted)
 
-* **CLI row 1** — classified APPLICABLE in §4 but **not executed**. Rows 2-5
-  are NOT APPLICABLE with the source reason recorded there. This is the one
-  remaining cell in the matrix.
+CLI row 1 is asserted through the real `node scripts/oquery.js run-state` CLI
+path (see §11's CLI row); rows 2 and 5 are NOT APPLICABLE from source as
+recorded in §4. No matrix cell remains unexecuted.
 
 ## 11a. Completion evidence is owed only by a completion claim (corrected 2026-08-05)
 

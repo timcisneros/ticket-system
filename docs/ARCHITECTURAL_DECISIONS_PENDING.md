@@ -615,6 +615,30 @@ remain separate later T10 work.
 
 ---
 
+## T10 A20 verification-completeness adjudication — CLOSED / PASSED (2026-08-31)
+
+**Status: A20 VERIFICATION-COMPLETENESS ADJUDICATION CLOSED / PASSED — CURRENT MANIFEST
+TRUTH: 328 TOTAL / 255 REQUIRED (124 DETERMINISTIC + 131 POSTGRESQL) / 56 ORPHANED (ALL
+`cutover-orphan`, 0 `cutover-orphan-silent`) / 17 EXCLUDED — AUTHORIZATION REMAINS
+NOT_AUTHORIZED — T10 REMAINS OPEN.**
+
+The independent A20 verification-completeness adjudication established that the 56 orphaned
+and 17 excluded artifacts do NOT represent a missing verification owner for any currently
+claimed frozen T0–T9 kernel invariant: no current frozen-kernel invariant lacks adequate
+required repository-owned verification because of the orphan/excluded population. The A20
+verification-completeness adjudication is therefore CLOSED with result PASSED. NON-CLAIM:
+this does NOT mean every orphan/product/legacy suite is repaired or required; the residual
+56-suite repair/retirement backlog is legacy/product/hermeticity/required-set-quality work,
+not a current frozen-kernel completeness blocker. T10 remains OPEN for the bounded
+hermeticity/cognitive-efficiency repair set and the final T10 audit.
+
+Counts are static-manifest truth, recomputable at any time with
+`node scripts/test-manifest.js`: total 328 `scripts/*-test.js` suites; required 255
+(deterministic 124, PostgreSQL 131); orphaned 56 (`cutover-orphan` 56,
+`cutover-orphan-silent` 0); excluded 17.
+
+---
+
 ## Execution-semantics provenance fixture shared Ticket-attempt authority (2026-08-17)
 
 **Status: RESOLVED IN SOURCE — independent pre-semantics provenance cases now
@@ -2501,7 +2525,7 @@ the defect can cause, not how hard it is to fix.
 | A15 | Postcondition telemetry names a source the event never reaches | Low | **Open — decision required** | Documentation / telemetry |
 | A16 | Run consequence records no committed mutations | **High** | **Implemented** — see entry | Correctness |
 | A17 | Delegated handoff logging crashes the server process | **Critical** | **Open — implementation required** | Correctness / availability |
-| A20 | Repository-wide PostgreSQL-cutover test-orphan population | **High** | **Open** — inventory complete, anti-rot implemented; 81 orphans remain | Verification gap |
+| A20 | Repository-wide PostgreSQL-cutover test-orphan population | **High** | **Open** — inventory complete, anti-rot implemented; verification-completeness adjudication CLOSED/PASSED (2026-08-31); 56 orphans remain (all `cutover-orphan`) | Verification gap |
 | A21 | Ticket reassignment silently discarded; audit trail asserts otherwise | **High** | **Implemented 2026-07-26** — see entry | Correctness / truthfulness |
 | A22 | Resume after a committed workspace operation fails on an idempotency conflict | **High** | **Implemented 2026-07-26** — see entry | Correctness / recovery |
 | A23 | Deterministic crash-seam coverage was incomplete | Medium | **Closed 2026-07-26** — all nine seams driven | Verification gap |
@@ -3924,11 +3948,11 @@ status or only the log's existence would have stayed green.
 
 | Field | Value |
 |-------|-------|
-| **Status** | **Open — inventory complete and authoritative; repair backlog of 83 remains.** Anti-rot mechanism implemented; two confirmed orphans repaired |
-| **Severity** | **High** — 83 suites guard live contracts and none of them can run |
+| **Status** | **Open — inventory complete and authoritative; verification-completeness adjudication CLOSED/PASSED (2026-08-31, see the current T10 A20 record above); repair backlog of 56 remains, all `cutover-orphan`.** Anti-rot mechanism implemented; two confirmed orphans repaired |
+| **Severity** | **High** — 56 orphaned suites remain unregistered and cannot run; adjudicated residual repair work, not a frozen-kernel completeness blocker |
 | **Scope** | Successor to A10, which inventoried 14 of them |
-| **Evidence** | Every unregistered suite executed at `e1d05a7`; results in the classification below |
-| **Decision required** | Repair, replace, or retire each of the 83, in priority order |
+| **Evidence** | Every unregistered suite executed at `e1d05a7`; results in the classification below; current manifest recomputable via `node scripts/test-manifest.js` |
+| **Decision required** | Repair, replace, or retire each of the 56 remaining orphans, in priority order; residual required-set-quality work, not a kernel-completeness blocker |
 
 **Description:**
 
@@ -6322,14 +6346,15 @@ branch while appearing to cover the eligible one.
 Not repaired here, and deliberately not batch-migrated. A10 established that mechanical
 migration is wrong: `bounded-transition-test.js` needed two scenarios re-expressed because the
 phase gate superseded them, and `replay-snapshot-storage-test.js` needed a third of itself
-retired. Each of the 83 needs the same per-suite judgement about whether its contract is still
-live.
+retired. Each of the remaining 56 needs the same per-suite judgement about whether its
+contract is still live.
 
 Recommended order:
 
-1. **The remaining 5 `cutover-orphan-silent` suites**, regardless of what they guard. Their
-   failure mode is invisible, so they are the ones most likely to be mistaken for coverage.
-   Use `scripts/child-process-settlement.js`; the unguarded pattern is now fixed in one place.
+1. **The `cutover-orphan-silent` class is now zero** — all seven silent orphans were
+   dispositioned (see "Silent orphans: closed (2026-07-26)" above), and the unguarded
+   settlement pattern is fixed in one place in `scripts/child-process-settlement.js`; no
+   silent orphans remain to schedule.
 2. **Suites guarding authority, mutation and evidence contracts** — the ones whose regression
    would be a correctness or security defect rather than a display defect.
 3. **Everything else**, retiring rather than porting wherever the mechanism is dead, with the

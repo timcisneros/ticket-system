@@ -56,7 +56,8 @@ derive from durable runtime evidence, **not** agent self-report.
 ## 7. Verification and triage
 
 When a ticket declares postconditions, **verification** judges "done". **Triage** is the human stop
-point for blocked/failed/ambiguous work — review it at `/triage`. Resolving triage **annotates**
+point for blocked/failed/ambiguous work — review it at `/inbox` (the canonical operator inbox
+surface; the legacy `/triage` path only redirects there). Resolving triage **annotates**
 (who/when/why); it never reruns, completes, or changes status.
 
 ## 8. Timeline
@@ -117,7 +118,14 @@ surfaces writes nothing and creates no summary ledger. See `docs/OPERATIONAL_TRA
 
 ## 16. Release checkpoint
 
-`pnpm run checkpoint:release` is the release gate and reports its executed and passing check count.
+The release gate is the PostgreSQL release checkpoint, which requires an explicit
+`TEST_DATABASE_URL` boundary:
+
+```
+TEST_DATABASE_URL='postgresql://...' npm run checkpoint:release
+```
+
+It reports its executed and passing check count.
 See `docs/RELEASE_CHECKPOINT.md` for the full hygiene flow (clean tree → expected branch/files →
 build → checkpoint → ff-merge → annotated tag).
 

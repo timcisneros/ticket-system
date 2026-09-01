@@ -33,7 +33,7 @@ const sections = [
   ['Operator flow', [
     'node scripts/oquery.js login --url http://127.0.0.1:3099',
     'node scripts/oquery.js create-ticket --url http://127.0.0.1:3099 --agent <id|name> --wait --json "<objective>"',
-    'npm run codex:trace -- --run <id>'
+    'npm run developer-agent:trace -- --run <id>'
   ]],
   ['Evidence inspection', [
     'GET /api/runs/:id/state',

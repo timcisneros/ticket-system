@@ -292,7 +292,7 @@ evidence, and verification chain — a "skill" is a validated plan over catalog 
 2. `views/run-detail.ejs`: browser evidence group in the existing two-tier layout — navigation
    trace, screenshot gallery (operator tier), receipts/raw ops (collapsed developer tier).
 3. `views/ticket-detail.ejs` / `views/tickets.ejs`: show target + interaction authorization.
-4. `scripts/page-render-regression-test.js` additions; `scripts/oquery.js` + `codex:trace`
+4. `scripts/page-render-regression-test.js` additions; `scripts/oquery.js` + `developer-agent:trace`
    browser-run rendering; docs (`BROWSER_TARGET_CONTRACT.md`, AGENTS.md evidence locations).
 
 ---
