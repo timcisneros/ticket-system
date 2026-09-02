@@ -6,15 +6,20 @@
 // no operational contact. Repository/git behavior is covered by fixture-based
 // predicate tests plus static source-order assertions; the real proof of
 // live behavior is a later independently reviewed operational preflight.
+// The canonical tracked record verifies state-adaptively from its own
+// authorizationState alone (see the canonical-record section below).
 
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const {
-  PostgresRuntimeStore
+  PostgresRuntimeStore,
+  migrationChecksum,
+  migrationFiles
 } = require('../persistence/postgres/store');
 const {
+  AUTHORIZED,
   MigrationExecutionAuthorityError,
   NOT_AUTHORIZED,
   isRfc3339Timestamp,
@@ -98,20 +103,115 @@ function ok(condition, message) {
   assert.ok(condition, message);
 }
 
-// ── Canonical shipped record ────────────────────────────────────────────────
+// ── Canonical tracked record (state-adaptive) ───────────────────────────────
+// The tracked canonical record selects its own verification branch from
+// authorizationState alone — no CLI flag, environment variable, or hidden
+// override exists. NOT_AUTHORIZED is the exact fail-closed resting state
+// authorizing nothing. AUTHORIZED is the bounded operational-transition
+// state: the branch proves, from tracked repository bytes only (no database,
+// no network, no git subprocess), that the record binds exactly one real,
+// byte-coherent canonical transition before publication. Execution-time
+// predicates (clean tree, tracked record, HEAD == freshly queried origin
+// master, baseline ancestry, observed target/pre-state/pending equality)
+// remain owned by enforceMigrationExecutionAuthority and are unchanged.
 {
   const raw = fs.readFileSync(path.join(ROOT, 'config', 'migration-execution-authorization.json'), 'utf8');
   const record = validateRecordShape(raw);
-  ok(record.authorizationState === NOT_AUTHORIZED, 'shipped record must be NOT_AUTHORIZED');
-  ok(record.migrationTransitionId === null, 'NOT_AUTHORIZED transitionId null');
-  ok(JSON.stringify(record.expectedTarget) === JSON.stringify({ host: null, port: null, database: null, schema: null }),
-    'NOT_AUTHORIZED target fully null');
-  ok(JSON.stringify(record.requiredAppliedVersions) === '[]', 'NOT_AUTHORIZED requiredAppliedVersions empty');
-  ok(JSON.stringify(record.authorizedPendingMigrations) === '[]', 'NOT_AUTHORIZED authorizedPendingMigrations empty');
-  ok(record.authorizedBaselineHead === null && record.authorizedBy === null && record.authorizedAtUtc === null,
-    'NOT_AUTHORIZATION carries no authority fields');
-  const evaluation = evaluate(record);
-  ok(evaluation.ok === false, 'NOT_AUTHORIZED record refuses any transition');
+  if (record.authorizationState === NOT_AUTHORIZED) {
+    ok(record.migrationTransitionId === null, 'NOT_AUTHORIZED transitionId null');
+    ok(JSON.stringify(record.expectedTarget) === JSON.stringify({ host: null, port: null, database: null, schema: null }),
+      'NOT_AUTHORIZED target fully null');
+    ok(JSON.stringify(record.requiredAppliedVersions) === '[]', 'NOT_AUTHORIZED requiredAppliedVersions empty');
+    ok(JSON.stringify(record.authorizedPendingMigrations) === '[]', 'NOT_AUTHORIZED authorizedPendingMigrations empty');
+    ok(record.authorizedBaselineHead === null && record.authorizedBy === null && record.authorizedAtUtc === null,
+      'NOT_AUTHORIZATION carries no authority fields');
+    const evaluation = evaluate(record);
+    ok(evaluation.ok === false, 'NOT_AUTHORIZED record refuses any transition');
+  } else if (record.authorizationState === AUTHORIZED) {
+    // Canonical migration source: migrationFiles() enforces the repository's
+    // canonical filename/order/prefix rules; migrationChecksum() hashes the
+    // exact tracked migration bytes.
+    const canonicalMigrations = migrationFiles();
+    const pendingEntries = record.authorizedPendingMigrations;
+    for (const entry of pendingEntries) {
+      ok(canonicalMigrations.includes(entry.version),
+        `authorized pending migration ${entry.version} exists in canonical migration source`);
+      ok(entry.sha256 === migrationChecksum(entry.version),
+        `authorized sha256 for ${entry.version} exactly matches canonical migration file bytes`);
+    }
+    for (const version of record.requiredAppliedVersions) {
+      ok(canonicalMigrations.includes(version),
+        `required applied migration ${version} exists in canonical migration source`);
+    }
+    ok(JSON.stringify([...record.requiredAppliedVersions, ...pendingEntries.map(entry => entry.version)]) ===
+      JSON.stringify(canonicalMigrations),
+      'requiredAppliedVersions + authorizedPendingMigrations compose the canonical migration order exactly');
+    ok(JSON.stringify(computePendingMigrations(record.requiredAppliedVersions, canonicalMigrations, migrationChecksum)) ===
+      JSON.stringify(pendingEntries),
+      'canonical pending set derived from requiredAppliedVersions exactly equals authorizedPendingMigrations');
+    // The record admits the exact bound transition through the
+    // repository-owned pure evaluator under an exact matching fixture.
+    const liveInputs = () => ({
+      observedTarget: { ...record.expectedTarget },
+      appliedVersions: [...record.requiredAppliedVersions],
+      pendingMigrations: pendingEntries.map(entry => ({ ...entry }))
+    });
+    const evaluateBound = (recordVariant, overrides = {}) =>
+      evaluate(recordVariant, { ...liveInputs(), ...overrides });
+    const admission = evaluateBound(record);
+    ok(admission.ok, `AUTHORIZED record admits the exact bound transition: ${JSON.stringify(admission.reasons)}`);
+    // Exact-binding perturbations refuse (mechanism-owned dimensions).
+    for (const field of ['host', 'port', 'database', 'schema']) {
+      const observed = { ...record.expectedTarget };
+      observed[field] = field === 'port' ? record.expectedTarget.port + 1 : `${record.expectedTarget[field]}-perturbed`;
+      const result = evaluateBound(record, { observedTarget: observed });
+      ok(result.ok === false && result.reasons.some(reason => reason.includes(`target ${field}`)),
+        `cross-target replay refuses on ${field}`);
+    }
+    ok(evaluateBound(record, {
+      appliedVersions: [...record.requiredAppliedVersions, '999_stray_history.sql']
+    }).ok === false, 'superset applied pre-state refuses');
+    if (record.requiredAppliedVersions.length > 0) {
+      ok(evaluateBound(record, { appliedVersions: record.requiredAppliedVersions.slice(1) }).ok === false,
+        'missing applied pre-state head refuses');
+    }
+    if (record.requiredAppliedVersions.length >= 2) {
+      ok(evaluateBound(record, { appliedVersions: [...record.requiredAppliedVersions].reverse() }).ok === false,
+        'reordered applied pre-state refuses');
+    }
+    ok(evaluateBound(record, { pendingMigrations: pendingEntries.slice(0, -1) }).ok === false,
+      'pending subset refuses');
+    ok(evaluateBound(record, { pendingMigrations: [...pendingEntries,
+      { version: '999_stray_future.sql', sha256: checksum('999_stray_future.sql') }] }).ok === false,
+      'pending superset refuses');
+    if (pendingEntries.length >= 2) {
+      ok(evaluateBound(record, { pendingMigrations: [...pendingEntries].reverse() }).ok === false,
+        'pending order mismatch refuses');
+    }
+    ok(evaluateBound({ ...record, authorizedPendingMigrations: pendingEntries.map((entry, index) => index === 0
+      ? { ...entry, sha256: checksum('tampered-bytes') } : { ...entry }) }).ok === false,
+      'changed authorized pending source bytes refuse');
+    ok(evaluateBound({ ...record, authorizedPendingMigrations: pendingEntries.map((entry, index) => index === 0
+      ? { version: '999_stray_future.sql', sha256: checksum('999_stray_future.sql') } : { ...entry }) }).ok === false,
+      'non-canonical authorized pending version refuses');
+    ok(evaluateBound({ ...record, requiredAppliedVersions: [...canonicalMigrations] }).ok === false,
+      'stale authorization reuse after transition refuses');
+    ok(evaluateBound({ ...record, authorizationState: NOT_AUTHORIZED }).ok === false,
+      'demoted authorization state refuses');
+    // Publication-authority predicates remain required for the live record.
+    const authorityRefusal = (overrides, fragment, label) => {
+      const result = evaluateBound(record, { repositoryAuthority: { ...PHASE_A_OK, ...overrides } });
+      ok(result.ok === false && result.reasons.some(reason => reason.includes(fragment)),
+        `${label} refuses`);
+    };
+    authorityRefusal({ clean: false }, 'not clean', 'dirty repository');
+    authorityRefusal({ recordTracked: false }, 'not tracked', 'untracked authorization record');
+    authorityRefusal({ freshRemoteMaster: 'c'.repeat(40) }, 'freshly queried origin refs/heads/master',
+      'HEAD != fresh canonical master');
+    authorityRefusal({ baselineIsAncestor: false }, 'not an ancestor', 'baseline ancestry failure');
+  } else {
+    assert.fail(`tracked record carries non-canonical authorizationState ${JSON.stringify(record.authorizationState)}`);
+  }
 }
 
 // ── Record shape ────────────────────────────────────────────────────────────

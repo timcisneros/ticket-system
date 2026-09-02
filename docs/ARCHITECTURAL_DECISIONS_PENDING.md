@@ -831,6 +831,102 @@ and ordinary maintenance — not T10 foundation closure.
 
 ---
 
+## T10 migration-authority verification-contract correction — defect adjudicated, narrow repair implemented (2026-09-02)
+
+**Status: T10 NARROWLY REOPENED FOR ONE VERIFICATION-CONTRACT DEFECT — DEFECT ADJUDICATED AND CORRECTION IMPLEMENTED — RUNTIME MIGRATION-AUTHORITY SEMANTICS UNCHANGED — AUTHORIZATION REMAINS NOT_AUTHORIZED.**
+
+A genuinely fresh independent design review preparing the first post-T10 migration discovered a
+narrow defect in the migration-execution-authority VERIFICATION CONTRACT — not in the runtime
+authority. The runtime mechanism (`persistence/postgres/migration-authority.js`) legitimately
+defines exactly two canonical record states and requires, for any real operational migration
+transition, a tracked, committed, clean-tree, published (HEAD == freshly queried origin/master)
+AUTHORIZED record binding the exact target, the exact applied pre-state, and the exact ordered
+pending set with source sha256. The required owner test
+`scripts/migration-execution-authority-test.js` (status `required` in `scripts/test-manifest.js`,
+registered in `CHECKPOINT_TEST_SCRIPTS`) simultaneously asserted — unconditionally, with no mode,
+CLI flag, environment switch, or companion verifier — that the tracked canonical record must be
+NOT_AUTHORIZED ("shipped record must be NOT_AUTHORIZED"). Because CI runs the full release
+checkpoint on every push, the publication commit that the mechanism's own publication authority
+mandates would necessarily fail a required suite on canonical master: no lawful supported path
+existed to exercise a real authorized migration. The standing authority has never transitioned
+(`config/migration-execution-authorization.json` has exactly one commit, its NOT_AUTHORIZED
+creation in `20e37fd…`), which is why every prior T10 verification, checkpoint, and audit — all
+exercised at rest — never encountered the contradiction. The unconditional assertion's
+source-supported meaning was the canonical RESTING-state invariant; its enforcement was
+unconditional, and that mismatch is the defect. The defect is classified NARROW: runtime
+refusal/authorization semantics were sound; only the possibility half of the supported-path claim
+was unverifiable as shipped. The one-off `t10-repair-authorization` record is a different
+mechanism (script-SHA repair preflight with no registered owner test) and is not precedent.
+
+Correction (implemented): the canonical-record section of the owner test is now STATE-ADAPTIVE,
+selected solely from the tracked record's own `authorizationState` — no CLI flag, no environment
+variable, no hidden override, still pure (no database, no network, no git subprocess).
+NOT_AUTHORIZED branch: the exact fail-closed resting assertions are preserved in semantics
+(all-null/empty authority fields; the record refuses any transition). AUTHORIZED branch:
+deterministically proves from tracked repository bytes only that the bound transition is real and
+byte-coherent before publication — strict AUTHORIZED shape (`validateRecordShape`); every
+authorized pending migration exists in the canonical migration source; canonical migration
+filename/order/prefix rules validate; each recorded source sha256 exactly equals the
+corresponding migration file bytes; `requiredAppliedVersions + authorizedPendingMigrations`
+compose the canonical migration order exactly; the canonical pending set derived from
+`requiredAppliedVersions` exactly equals `authorizedPendingMigrations`; the record admits the
+exact bound transition through the repository-owned pure evaluator (`evaluateTransition`) under
+an exact matching publication fixture; and perturbations refuse across the mechanism-owned
+exact-binding dimensions (target host/port/database/schema, applied pre-state
+superset/missing-head/reorder, pending subset/superset/order/version/source-bytes, stale
+full-applied reuse, demoted authorization state, dirty tree, untracked record, stale fresh-remote
+master, broken baseline ancestry). To avoid duplicating canonical rules, the store's existing
+pure helpers `migrationFiles`/`migrationChecksum` are additively exported from
+`persistence/postgres/store.js` (no behavior change). No runtime migration-authority predicate
+changed: exact target binding, exact applied pre-state, exact pending set/order/bytes,
+tracked-record, clean-tree, HEAD == fresh canonical master, baseline ancestry,
+stale-reuse/cross-target/modified-byte/untracked/dirty-tree refusals, the fully-current
+mutation-free no-op, and the disposable exemption are all unchanged; the two-state record model is
+unchanged (no CONSUMED state; the canonical record remains NOT_AUTHORIZED in this correction).
+
+Corrected authorized-transition lifecycle (repository law for any future real migration): (1)
+canonical resting state NOT_AUTHORIZED; (2) independently reviewed prepared AUTHORIZED state
+binding the exact transition (a modification of the already tracked record); (3) commit and
+publication to canonical master; (4) full canonical release checkpoint green at that publication
+commit (the record is checkpoint-owned test input, so the publication commit is not
+checkpoint-neutral); (5) exact authorized migration execution under the runtime's full
+publication/target/pre-state/pending predicates; (6) post-transition verification; (7)
+independently reviewed retirement of the record to the exact NOT_AUTHORIZED resting shape; (8)
+publication; (9) full canonical release checkpoint green at the retirement commit. Historical
+execution truth is recorded in this register; prospective migration authority is represented only
+by the two-state canonical record, and a consumed AUTHORIZED record must never rest in the tree.
+T10 remains reopened narrowly for this correction only; all other T10 closure facts stand
+unchanged.
+
+Verification evidence (2026-09-02, this correction's preparation session, candidate uncommitted
+at record time): focused owner test `node scripts/migration-execution-authority-test.js` PASSED
+with 68 assertions on the canonical NOT_AUTHORIZED resting record; the AUTHORIZED branch was
+independently proven non-vacuous against synthetic records built from the real canonical
+migration bytes OUTSIDE the repository (coherent synthetic AUTHORIZED record over the 042 head:
+PASS with 125 assertions; tampered pending sha: fails on the exact sha assertion; non-canonical
+pending version: fails on canonical-source membership; half-filled NOT_AUTHORIZED record: refuses
+at shape validation) — the tracked canonical record itself was never modified. `npm run build`
+PASSED (598 source files).
+
+PRE-COMMIT CHECKPOINT PREPARATION EVIDENCE: full checkpoint run
+`f08580ce-295b-4719-aba2-d72f57ad5f31` (started 2026-09-02T17:40:13Z, completed 18:40:42Z,
+disposable target `ticket_system_test` on `127.0.0.1:5432`) PASSED 256/256 while the correction
+candidate was still uncommitted; its durable `repositoryCommit` remains
+`84704565b8f707d12f1b2e3043d24e199322d478`. This run is preparation evidence that the candidate
+was healthy before commit — nothing more. Its owner artifact proves the candidate
+`migration-execution-authority-test.js` bytes executed successfully (ordinal 125, deterministic,
+exit 0, 68 assertions recorded durably), and the run registry hash-binds exactly those candidate
+bytes (sourceRawSha256
+`05335f9bd86c8a5a7e58fa32ce4d794e1444c8d755b4ae638291fbe7bb5312e0`); no equivalent byte binding
+exists for `persistence/postgres/store.js` or for this register. Run `f08580ce…` is NOT the
+canonical release checkpoint for the future correction commit, and no future commit may claim it
+as such: after the exact independently accepted candidate is committed, a NEW full canonical
+release checkpoint MUST be run at that exact commit, and only that new green result serves the
+correction commit. Commit and publication proceed only through the repository's ordinary
+workflow.
+
+---
+
 ## Execution-semantics provenance fixture shared Ticket-attempt authority (2026-08-17)
 
 **Status: RESOLVED IN SOURCE — independent pre-semantics provenance cases now

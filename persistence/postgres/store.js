@@ -14222,6 +14222,8 @@ module.exports = {
   buildEventEnvelope,
   buildWorkspaceLockRequests,
   canonicalJson,
+  migrationChecksum,
+  migrationFiles,
   normalizeWorkspacePath,
   quoteIdentifier,
   sha256Json
