@@ -927,6 +927,90 @@ workflow.
 
 ---
 
+## T10 migration-authority verification-contract correction — PUBLISHED at d62a97b…, COMMIT-BOUND CHECKPOINT PASSED, narrow closure (2026-09-02)
+
+**Status: NARROW T10 VERIFICATION-CONTRACT CORRECTION PUBLISHED AT d62a97b… AND VERIFIED BY THE CANONICAL COMMIT-BOUND RELEASE CHECKPOINT bb3cd2f3… (256/256) — CORRECTION SUBSTANTIVELY COMPLETE — RUNTIME MIGRATION-AUTHORITY SEMANTICS UNCHANGED — AUTHORIZATION REMAINS NOT_AUTHORIZED — MIGRATION HEAD REMAINS 042 — NO MIGRATION 043 — P1 NOT STARTED.**
+
+DEFECT. T10 carried one narrow verification-contract/lifecycle contradiction, discovered while
+preparing the first post-T10 migration: the runtime migration authority legitimately supports
+tracked, committed, published AUTHORIZED records as the required precondition for real
+operational migration execution, while the required owner test
+(`scripts/migration-execution-authority-test.js`, required in the release checkpoint and run by
+CI on every push) unconditionally asserted that the canonical tracked record must remain
+NOT_AUTHORIZED. The first lawful AUTHORIZED publication therefore could not coexist with a green
+required checkpoint. This was a verification-contract defect only — not a weakening of runtime
+migration authority and not a broad T0–T9 or T10 semantic failure.
+
+CORRECTION. Published correction commit `d62a97bb1ba96a904e9d2b451497d6299b821081` (subject
+"Correct migration authority verification contract"; parent
+`84704565b8f707d12f1b2e3043d24e199322d478`; exactly three paths changed:
+`docs/ARCHITECTURAL_DECISIONS_PENDING.md`, `persistence/postgres/store.js`,
+`scripts/migration-execution-authority-test.js`). The correction made the canonical owner test
+state-adaptive across the already-existing two-state vocabulary (NOT_AUTHORIZED / AUTHORIZED; no
+third authority state such as CONSUMED was introduced), preserved the fail-closed resting-state
+assertions exactly, and now verifies from tracked bytes only that an AUTHORIZED record coherently
+binds one exact real canonical transition (canonical-source membership, canonical
+filename/order/prefix rules, byte-exact source sha256, `requiredAppliedVersions +
+authorizedPendingMigrations` composing the canonical migration order, pure-evaluator admission of
+the exact bound transition under an exact matching fixture, and mechanism-owned perturbation
+refusals). The store's existing pure `migrationFiles`/`migrationChecksum` helpers were additively
+exported so the owner test verifies against the repository's own canonical
+enumeration/checksum semantics rather than a duplicated copy. No runtime migration-authority
+semantics changed; the canonical authorization record was not changed; no migration was executed.
+
+INDEPENDENT REVIEW. The complete implementation candidate received a fresh independent
+implementation review with final accepted result HIGH = 0, MEDIUM = 0, LOW = 0, VERDICT = A. The
+reviewer explicitly accepted the state-adaptive owner test, the two helper exports, runtime
+non-weakening, the current durable AUTHORIZED-branch coverage as sufficient, the corrected
+checkpoint-evidence wording, and found no material context contamination in candidate bytes. The
+reviewer authored no candidate bytes.
+
+PRE-COMMIT PREPARATION RUN (historical truth preserved). Full checkpoint run
+`f08580ce-295b-4719-aba2-d72f57ad5f31` PASSED 256/256 while the correction candidate was still
+uncommitted; its durable `repositoryCommit` remains `84704565b8f707d12f1b2e3043d24e199322d478`.
+It is PRE-COMMIT CHECKPOINT PREPARATION EVIDENCE ONLY — evidence that the candidate was healthy
+before commit — and is NOT the canonical checkpoint for the published correction commit; nothing
+was retroactively bound to it and no future commit claims it.
+
+CANONICAL COMMIT-BOUND CHECKPOINT. The authoritative checkpoint for the correction is run
+`bb3cd2f3-c9d9-4e1c-bf90-b523269a101e`, bound to the exact published correction commit:
+repositoryCommit `d62a97bb1ba96a904e9d2b451497d6299b821081`; registryHash
+`580dd24be94f2d9e61dad5c9d4e5d083c8fa21bba94abf01f14e71870b520d66`; PASSED 256/256; owner
+`migration-execution-authority-test.js` ordinal 125 with sourceRawSha256
+`05335f9bd86c8a5a7e58fa32ce4d794e1444c8d755b4ae638291fbe7bb5312e0` — the exact committed test
+bytes — and exitCode 0; disposable PostgreSQL target `ticket_system_test` on `127.0.0.1:5432`.
+The operational `ticket_system` database was not contacted for this correction; no operational
+migration was executed; migration 043 did not exist and was not authorized.
+
+PUBLICATION. The exact checkpointed commit was published non-force (exact-SHA refspec,
+fast-forward, no amend, no new commit), advancing canonical master `84704565…` → `d62a97bb…`. At
+this closure record's preparation, local HEAD, cached origin/master, and freshly queried
+origin/master all equal `d62a97bb1ba96a904e9d2b451497d6299b821081`. The correction entry above
+describes its own preparation milestone ("candidate uncommitted at record time"); this closure
+record records the completed commit/checkpoint/publication state and supersedes that temporal
+wording.
+
+FINAL AUTHORITY STATUS. Canonical migration authorization rests NOT_AUTHORIZED with
+`authorizedPendingMigrations = []` — it authorizes nothing, and this correction authorized no
+transition. Migration head remains `042_objective_revision_baseline.sql`; migration 043 is NOT
+authorized and has not been implemented. T0–T9 remain closed and unchanged; the broader T10
+architectural/runtime direction remains unchanged; only the newly discovered verification-contract
+defect was reopened and repaired. The narrow T10 correction is substantively complete. P1 has NOT
+started as part of this correction.
+
+DURABLE CLOSURE CRITERION (compositional satisfiability). Recorded for future verification
+design, in repository-native general terms: an authority/governance mechanism is not adequately
+closed merely because invalid operations fail closed. For a claimed supported authority-bearing
+lifecycle, repository verification must also establish that at least one legitimate authorized
+path is compositionally satisfiable end-to-end under all applicable authority, evidence,
+checkpoint, and release rules. A contradiction in which a legitimate supported operation requires
+violating another repository-owned invariant is a defect to repair — not justification for
+bypassing, disabling, weakening, or informally overriding the conflicting control. This criterion
+is a verification/closure standard only: it does not reopen T0–T9, does not redesign existing
+semantics, and does not claim that every conceivable future lifecycle has already been proven.
+
+---
+
 ## Execution-semantics provenance fixture shared Ticket-attempt authority (2026-08-17)
 
 **Status: RESOLVED IN SOURCE — independent pre-semantics provenance cases now
