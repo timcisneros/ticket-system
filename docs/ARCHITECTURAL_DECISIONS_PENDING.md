@@ -639,6 +639,94 @@ Counts are static-manifest truth, recomputable at any time with
 
 ---
 
+## T10 hermeticity / cognitive-efficiency / agent-neutrality repair — PUBLISHED / CHECKPOINT PASSED / SUB-ITEM CLOSED (2026-09-01)
+
+**Status: HERMETICITY / COGNITIVE-EFFICIENCY / AGENT-NEUTRALITY REPAIR SUB-ITEM CLOSED —
+IMPLEMENTED, INDEPENDENTLY ACCEPTED (HIGH 0 / MEDIUM 0 / LOW 0), BUILD PASSED, RELEASE
+CHECKPOINT PASSED 256/256, PUBLISHED AT `3a343682…` — AUTHORIZATION REMAINS NOT_AUTHORIZED
+— T10 REMAINS OPEN.**
+
+A fresh repo-wide T10 hermeticity / cognitive-efficiency adjudication found a bounded repair
+set of two material repository-truth blockers and eight bounded repairs; that initial
+hermeticity / cognitive-efficiency repair set was documentation/comment-only, including the
+comment-only `scripts/test-manifest.js` edit, with no executable semantic change. A
+subsequent agent-neutrality / anti-lock-in correction then renamed the generic developer
+tooling and its package commands and current references
+(`scripts/codex-bootstrap.js`/`codex-trace.js`/`codex-verify.js` →
+`scripts/developer-agent-bootstrap.js`/`developer-agent-trace.js`/`developer-agent-verify.js`);
+independent review established those executable renames were semantics-preserving — the
+verify script byte-identical, and trace/bootstrap differing from their predecessors only in
+command/help-name strings — with no runtime/provider/authority behavior change. The
+implemented and published repair removed the identified defects with no runtime semantics
+change. Repair
+classes, summarized for authority recovery: the current A20 verification-completeness truth
+(counts 328/255/56/17; adjudication CLOSED/PASSED; 56-suite residual backlog separate) was
+made durable in the current T10 A20 record; the living Ticket attempt/lifecycle projection
+prose in `docs/TICKET_ATTEMPT_AUTHORITY.md` was aligned to the frozen five-state authority
+(`open`, `in_progress`, `blocked`, `completed`, `canceled`; run-only `failed` is not a
+Ticket lifecycle state), derived from `runtime/ticket-lifecycle-contract.js`, migration
+`041_ticket_five_state_cutover.sql`, and the required owner test; stale current-looking
+migration/schema/persistence/operator guidance was corrected (PostgreSQL cutover
+migration-range wording, process-execution schema pin 032→42, terminal-projection reader
+contradiction removed so the document is coherent with its completed §11 five-row proof
+matrix, operator inbox PostgreSQL persistence, operator guide `/inbox` and the explicit
+`TEST_DATABASE_URL` release-gate boundary, operator-contract stale command/path residue
+removed); retired JSON/local-file persistence prose was clearly scoped as historical with
+storage-status banners where only the persistence implementation — not the semantic
+contract — is retired; and durable governance roles plus generic development tooling were
+made implementation-neutral (Operator / Developer agent roles defined by responsibility,
+and the generic `codex:bootstrap`/`codex:trace`/`codex:verify` tooling renamed to durable
+`developer-agent:bootstrap`/`developer-agent:trace`/`developer-agent:verify` with the
+script files renamed accordingly). The anti-lock-in fact is narrower than "all tooling must
+use this name": generic durable developer-agent tooling and role authority no longer depend
+on the particular agent/model/vendor currently occupying the role, while provider-specific
+names remain legitimate where implementation is technically material. The final combined
+candidate then received a fresh independent read-only review with HIGH = 0, MEDIUM = 0,
+LOW = 0 (the reviewer implemented nothing and made zero edits). `npm run build` PASSED on
+that reviewed candidate before commit (JavaScript syntax: 598 source files), with the whole
+candidate byte-fingerprint proven unchanged across the build.
+
+The exact reviewed candidate was first committed locally: commit
+`3a34368200f116e1cec16c94d2059bbde4c81a73` (parent `0c487561b5619c502f4d3c6b7da12b3f772c072b`,
+subject "Close T10 hermeticity and agent-neutrality repairs"). The canonical release
+checkpoint then ran against that clean local commit and PASSED:
+checkpointRunIdentity `1eb15788-413c-4fd5-8a58-6e2a59852585`; registryHash
+`1f83d3c47a7a31d211eb7a4b866e28bbcb50601dbc0be0368e084d505652a436`; 256/256 passed, 0
+failed; started 2026-09-01T00:39:56.516Z, completed 2026-09-01T01:39:20.244Z. Local
+checkpoint evidence was emitted under `.local-artifacts/release-checkpoint-results/…`;
+that gitignored artifact is working-environment-local evidence, not itself a repository
+authority surface — this tracked register record is the durable repository authority for
+the established checkpoint/publication facts. Only after the checkpoint passed was the
+commit published by exact non-force push to `origin/master`; after publication local
+HEAD = cached origin/master = fresh origin/master = `3a34368200f116e1cec16c94d2059bbde4c81a73`.
+The checkpoint ran against the distinct disposable
+`ticket_system_test` database boundary; the operational `ticket_system` database was never
+used as `TEST_DATABASE_URL` and was not mutated. No credentials are recorded here.
+
+At checkpointed/published source the manifest truth is unchanged: 328 total
+`scripts/*-test.js` suites; 255 required (124 deterministic, 131 PostgreSQL); 56 orphaned;
+17 excluded. A20 verification-completeness remains CLOSED/PASSED while the 56-suite
+residual orphan repair/retirement backlog remains separate, open work. NON-CLAIM: this
+sub-item's closure does not mean all repository cleanup or all A20 orphan work is complete.
+
+AUTHORITY / NON-CLAIM FACT: this repair changed no frozen T0–T9 semantics; no
+runtime/server/store/migration/schema authority changed; no test-registration or manifest
+classification changed (the manifest edit was comment-only); historical 041 remains CLOSED
+and its execution remains historically unauthorized; historical 042 remains CLOSED and its
+execution remains historically unauthorized; migration execution-authority prevention
+remains CLOSED; the run-counter reconciliation remains repaired and independently
+verified; canonical migration authorization remains NOT_AUTHORIZED; the checkpoint
+authorized no migration.
+
+CLOSURE FACT: the T10 hermeticity / cognitive-efficiency / agent-neutrality repair sub-item
+is CLOSED because the bounded repair set is implemented, independently accepted,
+checkpointed, and published. T10 REMAINS OPEN: one final genuinely fresh T10
+completeness / hermeticity / cognitive-efficiency / anti-lock-in audit is the remaining
+T10 work, followed by T10 closure/publication only if that final audit accepts the
+repository. The final audit has NOT occurred; this record does not claim it.
+
+---
+
 ## Execution-semantics provenance fixture shared Ticket-attempt authority (2026-08-17)
 
 **Status: RESOLVED IN SOURCE — independent pre-semantics provenance cases now
