@@ -475,14 +475,16 @@ async function main() {
       'pre-042 fixture emits no ticket.objective_revised events');
 
     // T2 Tranche 5 / T3: the fixture stops at 038, so the real runner applies
-    // exactly the pending tail — asserted EXACTLY, in order.
+    // exactly the pending tail — asserted EXACTLY, in order (now ending at the
+    // P1 migration 043, which adds api_tokens and no Ticket/Run/plan field).
     const appliedMigrations = await store.migrate();
     equal(appliedMigrations, [
       '039_ticket_attempt_authority.sql',
       '040_ticket_cancellation_authority.sql',
       '041_ticket_five_state_cutover.sql',
-      '042_objective_revision_baseline.sql'
-    ], 'the real runner applies exactly the pending 039..042 sequence in order');
+      '042_objective_revision_baseline.sql',
+      '043_api_token_authority.sql'
+    ], 'the real runner applies exactly the pending 039..043 sequence in order');
     const immutableAfter = await store.pool.query(
       `SELECT id, ticket_id, agent_id, status, execution_mode, body, created_at, completed_at
        FROM ${store.table('runs')} ORDER BY id`

@@ -274,6 +274,19 @@ const {
   assertAccessCatalogRepository
 } = require('./persistence/access-catalog');
 const {
+  classifyApiRoutePath
+} = require('./runtime/api-auth-planes');
+const {
+  mintApiToken,
+  sha256ApiTokenHex,
+  isPlausibleApiToken,
+  apiTokenIssuanceResponseBody,
+  API_TOKEN_ISSUANCE_STATUS_CONTRACT,
+  API_TOKEN_MANAGE_PERMISSION,
+  API_TOKEN_LABEL_MAX_LENGTH,
+  API_TOKEN_SECRET_REDACTION_KEYS
+} = require('./runtime/api-token-contract');
+const {
   WorkflowCatalogConflictError,
   WorkflowCatalogIdConflictError,
   assertWorkflowCatalogRepository
@@ -1106,7 +1119,17 @@ function buildPriorArtifactOwnerConflictError(operation, args, candidatePath, ow
 // request. Captured at run-initiation time (creation/rerun/reopen) and stored on
 // the run, so cross-ticket permission is evaluated against the user who actually
 // initiated the run — never a later, unrelated ticket editor.
+// Identity comes from request.principal (session or bearer plane); the session
+// branch preserves the exact pre-P1 behavior for requests without a principal.
 function delegatedFromRequest(request, source) {
+  const principal = request && request.principal;
+  if (principal && principal.userId != null) {
+    return {
+      userId: principal.userId,
+      username: request.user ? request.user.username : null,
+      source
+    };
+  }
   if (!request || !request.session || request.session.userId == null) return null;
   return {
     userId: request.session.userId,
@@ -1117,7 +1140,16 @@ function delegatedFromRequest(request, source) {
 
 // Resolve the acting principal for shared ticket creation. Mirrors the current
 // POST /tickets createdBy resolution (username when known, else the session user id).
+// Identity comes from request.principal (session or bearer plane); the session
+// branch preserves the exact pre-P1 behavior for requests without a principal.
 function actorFromRequest(request) {
+  const principal = request && request.principal;
+  if (principal && principal.userId != null) {
+    return {
+      userId: principal.userId,
+      username: request.user ? request.user.username : null
+    };
+  }
   if (!request || !request.session) return { userId: null, username: null };
   return {
     userId: request.session.userId != null ? request.session.userId : null,
@@ -2190,6 +2222,17 @@ fastify.register(require('@fastify/session'), {
   }
 });
 fastify.register(require('@fastify/formbody'));
+
+// Test-only route inventory (P1 verification ownership). The hook is declared
+// before any route so it observes EVERY registered route exactly once; the
+// inventory is dumped only when TTS_TEST_ROUTE_INVENTORY_FILE is set at
+// startup, which never happens in ordinary operation. The registered
+// PostgreSQL-backed authority suite uses it to prove route-table parity
+// against what the server actually serves, never against a curated copy.
+const routeInventory = [];
+fastify.addHook('onRoute', route => {
+  if (route && route.url) routeInventory.push({ method: route.method, url: route.url });
+});
 
 fastify.addHook('onRequest', async (request, reply) => {
   request.routeStartedAtNs = process.hrtime.bigint();
@@ -5402,6 +5445,10 @@ function isSensitiveSnapshotKey(key) {
     lowerKey === 'apikey' ||
     lowerKey === 'api-key' ||
     lowerKey === 'secret' ||
+    // API-token digests are secret-equivalent (P1): defensively redacted
+    // wherever secret redaction applies, from the frozen key list owned by
+    // runtime/api-token-contract.js.
+    API_TOKEN_SECRET_REDACTION_KEYS.includes(lowerKey) ||
     lowerKey.endsWith('_secret') ||
     lowerKey.endsWith('-secret') ||
     lowerKey === 'token' ||
@@ -11527,8 +11574,17 @@ async function renderAdminGroupForm(reply, request, options = {}) {
 // ==================== PERMISSION SYSTEM ====================
 
 function getUserPermissions(userId) {
-  if (userId === null || userId === undefined) return [];
   const context = requestAuthorizationContext.getStore();
+  // The plane-aware preHandler loads exactly ONE effective request identity
+  // into the context (the bearer principal when the Authorization header owns
+  // authentication, else the session principal). When a principal is loaded it
+  // IS the request identity: session-coupled callers pass the session user id,
+  // which is the same identity on session requests (semantics preserved), and
+  // a leftover session id on bearer-owned requests is ignored because bearer
+  // owns authentication with no fallback. The context itself is only ever
+  // populated by the preHandler — it is never a second authority.
+  if (context && context.principal) return [...context.permissions];
+  if (userId === null || userId === undefined) return [];
   const normalizedUserId = parseInt(userId, 10);
   if (!context || context.userId !== normalizedUserId) {
     throw new Error('User permission evaluation requires a loaded request authorization context');
@@ -25198,11 +25254,28 @@ function serializeForInlineScript(value) {
 
 // ==================== AUTH DECORATORS ====================
 
+// Plane-aware authentication enforcement (P1). The plane-aware preHandler has
+// already resolved exactly one identity: a bearer principal on bearer-eligible
+// API routes, or the session principal. A resolved principal therefore
+// satisfies this guard. Bearer credentials can never widen onto HTML/operator
+// surfaces: the preHandler treats bearer as an authentication input ONLY on
+// the bearer-eligible API plane, so on NON_API routes no principal exists and
+// only the session authenticates — unchanged behavior.
 fastify.decorate('requireAuth', async function(request, reply) {
+  if (request.principal) return;
   if (!request.session.userId) {
     return reply.redirect('/login');
   }
 });
+
+// Authentication-plane enforcement for BEARER_ELIGIBLE_API routes (P1).
+// Bearer resolution happened in the plane-aware preHandler below: a present
+// Authorization header that fails (malformed, wrong scheme, unknown, revoked,
+// or deleted-user) was already answered with 401 there and never reaches this
+// decorator. When it reaches this decorator either a valid principal exists
+// (bearer or session) or no Authorization header was presented — in which case
+// the existing session path remains available, exactly like requireAuth.
+const requireApiAuth = fastify.requireAuth;
 
 // ==================== HOOKS ====================
 
@@ -25210,26 +25283,95 @@ fastify.addHook('onRequest', (request, reply, done) => {
   requestAuthorizationContext.run({ userId: null, permissions: [] }, done);
 });
 
+// Bearer authentication is consulted ONLY on the bearer-eligible API plane and
+// ONLY when an Authorization header is present; it then OWNS authentication
+// with no session fallback. On the session-only token namespace, the public
+// API list, and every NON_API surface, bearer is not an authentication input
+// at all, so a malformed header cannot change behavior there. Any header value
+// that exists — including a blank one — counts as present: bearer ownership
+// then fails closed instead of silently degrading to the session plane.
+function resolveBearerAuthorizationHeader(request) {
+  const header = request.headers.authorization;
+  if (header === undefined || header === null) return null;
+  return String(header);
+}
+
+async function resolveBearerPrincipal(request) {
+  const header = resolveBearerAuthorizationHeader(request);
+  if (header === null) return { present: false, principal: null };
+  const match = /^Bearer\s+(.+)$/i.exec(header);
+  if (!match) return { present: true, principal: null };
+  const presentedToken = match[1].trim();
+  if (!isPlausibleApiToken(presentedToken)) return { present: true, principal: null };
+  const record = await getAccessCatalogRepository()
+    .findActiveApiTokenByDigest(sha256ApiTokenHex(presentedToken));
+  if (!record) return { present: true, principal: null };
+  // Authorization is resolved per request from the canonical access catalog,
+  // so group/permission changes affect the next request, and a user deleted
+  // after issuance (whose tokens cascaded away) can never authenticate.
+  const authorization = await getAccessCatalogRepository().getUserAuthorization(record.userId);
+  if (!authorization) return { present: true, principal: null };
+  return {
+    present: true,
+    principal: {
+      userId: record.userId,
+      via: 'bearer',
+      tokenId: record.tokenId,
+      authorization
+    }
+  };
+}
+
+function requestRoutePattern(request) {
+  const url = request.routeOptions && request.routeOptions.url ? request.routeOptions.url : null;
+  if (url) return url;
+  return String(request.url || '').split('?')[0];
+}
+
 fastify.addHook('preHandler', async (request, reply) => {
   request.user = null;
   request.userPermissions = [];
+  request.principal = null;
+  const context = requestAuthorizationContext.getStore();
+  if (!context) throw new Error('Request authorization context was not initialized');
+  const plane = classifyApiRoutePath(requestRoutePattern(request));
+
+  if (plane === 'BEARER_ELIGIBLE_API') {
+    const bearer = await resolveBearerPrincipal(request);
+    if (bearer.present) {
+      if (!bearer.principal) {
+        reply.code(401);
+        return reply.send({ error: 'Valid bearer authentication is required' });
+      }
+      context.userId = bearer.principal.userId;
+      context.permissions = [...bearer.principal.authorization.permissions];
+      context.principal = { userId: bearer.principal.userId, via: 'bearer', tokenId: bearer.principal.tokenId };
+      request.user = bearer.principal.authorization.user;
+      request.userPermissions = [...bearer.principal.authorization.permissions];
+      request.principal = context.principal;
+      return;
+    }
+  }
+
   if (request.session.userId) {
-    const context = requestAuthorizationContext.getStore();
-    if (!context) throw new Error('Request authorization context was not initialized');
     const userId = parseInt(request.session.userId, 10);
     if (!Number.isSafeInteger(userId) || userId <= 0) {
       request.session.userId = null;
       return;
     }
-    context.userId = userId;
     const authorization = await getAccessCatalogRepository().getUserAuthorization(userId);
     if (!authorization) {
       request.session.userId = null;
       return;
     }
+    context.userId = userId;
+    context.permissions = [...authorization.permissions];
+    context.principal = { userId, via: 'session' };
     request.user = authorization.user;
     request.userPermissions = authorization.permissions;
-    context.permissions = [...authorization.permissions];
+    // Request identity only: no permissions, no scopes, no independent
+    // authorization travels on the principal.
+    request.principal = context.principal;
   }
 });
 
@@ -25331,6 +25473,181 @@ fastify.post('/logout', async (request, reply) => {
     sameSite: 'lax'
   });
   return reply.redirect('/login');
+});
+
+// ==================== API TOKEN ROUTES (P1) ====================
+//
+// SESSION_ONLY_API: bearer is not an authentication input on this plane, so a
+// bearer token can never issue, list, or revoke credentials — bearer compromise
+// cannot amplify into replacement credentials. Structurally self-only: no
+// owner-selection field is accepted in body or query, so a caller can only ever
+// touch tokens belonging to its own authenticated identity. Unsafe methods
+// inherit the repository's global origin gate unchanged.
+//
+// apiToken:manage means EXACTLY: issue, list, and revoke API tokens belonging
+// to the CURRENT authenticated user. It confers no ticket, run, or product
+// authority.
+
+// Any owner-selecting field — however spelled — is refused before anything
+// else: token management is self-only by construction. Keys are compared
+// lowercased, so the set entries are lowercase too.
+const API_TOKEN_OWNER_SELECTION_FIELDS = new Set([
+  'userid', 'user_fk', 'userfk', 'username', 'owner', 'ownerid', 'owner_id', 'user'
+]);
+
+function apiTokenSessionGate(request, reply) {
+  if (!request.principal || request.principal.via !== 'session' || !request.session.userId) {
+    reply.code(API_TOKEN_ISSUANCE_STATUS_CONTRACT.issueNoSession);
+    return { error: 'Session authentication is required for API token management' };
+  }
+  if (!hasPermission(request.principal.userId, API_TOKEN_MANAGE_PERMISSION)) {
+    reply.code(API_TOKEN_ISSUANCE_STATUS_CONTRACT.issueMissingPermission);
+    return { error: `${API_TOKEN_MANAGE_PERMISSION} permission is required` };
+  }
+  return null;
+}
+
+fastify.post('/api/tokens', async (request, reply) => {
+  const gate = apiTokenSessionGate(request, reply);
+  if (gate) return gate;
+
+  const body = request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+    ? request.body
+    : {};
+  const ownerField = Object.keys(body).find(field => API_TOKEN_OWNER_SELECTION_FIELDS.has(String(field).toLowerCase()));
+  if (ownerField) {
+    reply.code(API_TOKEN_ISSUANCE_STATUS_CONTRACT.issueOwnerSelectionField);
+    return { error: `API token management is self-only; "${ownerField}" is not accepted` };
+  }
+  const label = typeof body.label === 'string' ? body.label.trim() : '';
+  if (!label || label.length > API_TOKEN_LABEL_MAX_LENGTH) {
+    reply.code(API_TOKEN_ISSUANCE_STATUS_CONTRACT.issueInvalidOrMissingLabel);
+    return { error: `label is required and must be ${API_TOKEN_LABEL_MAX_LENGTH} characters or fewer after trimming` };
+  }
+
+  // The raw token exists only inside this function and this response. It is
+  // never persisted, logged, or re-derivable; persistence stores the SHA-256
+  // hex digest of the complete presented token, and the digest is never
+  // rendered anywhere.
+  const rawApiToken = mintApiToken();
+  const tokenHash = sha256ApiTokenHex(rawApiToken);
+  const { apiToken } = await getAccessCatalogRepository().createApiToken({
+    userId: request.principal.userId,
+    tokenHash,
+    label
+  });
+  reply.code(API_TOKEN_ISSUANCE_STATUS_CONTRACT.issueSuccess);
+  return apiTokenIssuanceResponseBody(rawApiToken, apiToken);
+});
+
+fastify.get('/api/tokens', async (request, reply) => {
+  const gate = apiTokenSessionGate(request, reply);
+  if (gate) return gate;
+  const tokens = await getAccessCatalogRepository().listApiTokens({ userId: request.principal.userId });
+  reply.code(API_TOKEN_ISSUANCE_STATUS_CONTRACT.listSuccess);
+  return { tokens };
+});
+
+fastify.delete('/api/tokens/:id', async (request, reply) => {
+  const gate = apiTokenSessionGate(request, reply);
+  if (gate) return gate;
+  const tokenId = parseInt(request.params.id, 10);
+  // Nonexistent, foreign-owned, already-revoked, and malformed ids are all the
+  // same answer: no ACTIVE self-owned token matched. No existence oracle.
+  if (!Number.isSafeInteger(tokenId) || tokenId <= 0) {
+    reply.code(API_TOKEN_ISSUANCE_STATUS_CONTRACT.revokeNoActiveSelfOwnedMatch);
+    return { error: 'No active API token matched' };
+  }
+  const revoked = await getAccessCatalogRepository().revokeApiToken({
+    userId: request.principal.userId,
+    apiTokenId: tokenId
+  });
+  if (!revoked) {
+    reply.code(API_TOKEN_ISSUANCE_STATUS_CONTRACT.revokeNoActiveSelfOwnedMatch);
+    return { error: 'No active API token matched' };
+  }
+  reply.code(API_TOKEN_ISSUANCE_STATUS_CONTRACT.revokeSuccess);
+  return { ok: true };
+});
+
+// ==================== JSON TICKET CREATION (P1) ====================
+//
+// BEARER_ELIGIBLE_API wrapper around the ONE canonical Ticket-creation seam.
+// No Ticket-creation semantics are duplicated here; actor identity comes from
+// the request principal through actorFromRequest/delegatedFromRequest, and no
+// body-supplied actor authority exists. `runs: []` is a legitimate outcome
+// where the canonical seam defers run creation and MUST NOT be read as failure.
+
+function projectJsonTicketCreationResult(result) {
+  return {
+    ticket: {
+      id: result.ticket.id,
+      status: result.ticket.status,
+      objective: result.ticket.objective,
+      assignmentTargetType: result.ticket.assignmentTargetType,
+      assignmentTargetId: result.ticket.assignmentTargetId,
+      assignmentMode: result.ticket.assignmentMode,
+      executionMode: result.ticket.executionMode,
+      capabilityType: result.ticket.capabilityType,
+      createdBy: result.ticket.createdBy,
+      createdAt: result.ticket.createdAt
+    },
+    runs: (result.runs || []).map(run => ({
+      id: run.id,
+      ticketId: run.ticketId,
+      status: run.status,
+      agentId: run.agentId != null ? run.agentId : null,
+      agentName: run.agentName || null
+    }))
+  };
+}
+
+fastify.post('/api/tickets', {
+  preHandler: requireApiAuth,
+  config: { mutationAdmission: true }
+}, async (request, reply) => {
+  if (!hasPermission(request.principal.userId, 'ticket:create')) {
+    reply.code(403);
+    return { error: 'ticket:create permission is required' };
+  }
+
+  const body = request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+    ? request.body
+    : {};
+  // No body-selected actor authority: the acting identity is always the
+  // authenticated request principal.
+  const forbiddenActorFields = new Set([...API_TOKEN_OWNER_SELECTION_FIELDS, 'createdby']);
+  const actorField = Object.keys(body).find(field => forbiddenActorFields.has(String(field).toLowerCase()));
+  if (actorField) {
+    reply.code(400);
+    return { error: `Actor identity is resolved from the authenticated request principal; "${actorField}" is not accepted` };
+  }
+
+  const result = await createTicketFromInput({
+    objective: body.objective,
+    acceptanceCriteria: body.acceptanceCriteria,
+    declaredWork: body.declaredWork,
+    assignmentTargetType: body.assignmentTargetType,
+    assignmentTargetId: body.assignmentTargetId,
+    assignmentMode: body.assignmentMode,
+    capabilityType: body.capabilityType,
+    executionMode: body.executionMode,
+    workflowId: body.workflowId,
+    workflowInput: body.workflowInput,
+    ownedOutputPaths: body.ownedOutputPaths,
+    executionPolicy: body.executionPolicy,
+    targetRef: body.targetRef,
+    workTypeId: body.workTypeId,
+    workContextId: body.workContextId !== undefined && body.workContextId !== '' ? body.workContextId : null,
+    workContextTargetId: body.workContextTargetId !== undefined && body.workContextTargetId !== '' ? body.workContextTargetId : null
+  }, actorFromRequest(request), { delegated: delegatedFromRequest(request, 'created_from_ticket') });
+
+  if (!result.ok) {
+    reply.code(400);
+    return { error: result.error };
+  }
+  reply.code(201);
+  return projectJsonTicketCreationResult(result);
 });
 
 // ==================== TICKET ROUTES ====================
@@ -31931,6 +32248,19 @@ async function start() {
     serverReady = true;
     await fastify.listen({ port: PORT, host: '0.0.0.0' });
     console.log(`Server running on http://localhost:${PORT}`);
+    // Test-only route-table inventory (P1 verification ownership): when the
+    // explicit inventory-file environment variable is set, dump the REAL
+    // registered route table (method + url pattern) so the registered
+    // PostgreSQL-backed authority suite can prove route-table parity against
+    // what the server actually serves, instead of a rot-prone curated copy.
+    // Never set in ordinary operation.
+    if (process.env.TTS_TEST_ROUTE_INVENTORY_FILE) {
+      fs.writeFileSync(
+        process.env.TTS_TEST_ROUTE_INVENTORY_FILE,
+        JSON.stringify(routeInventory, null, 2),
+        'utf8'
+      );
+    }
   } catch (err) {
     serverReady = false;
     if (sessionMaintenanceTimer) {

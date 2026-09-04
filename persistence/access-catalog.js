@@ -29,7 +29,13 @@ const BUILTIN_PERMISSIONS = Object.freeze([
   'connector:read',
   'connector:write',
   'ops:read',
-  'runtimeLimits:manage'
+  'runtimeLimits:manage',
+  // P1 governed programmatic access. Means EXACTLY: issue, list, and revoke
+  // API tokens belonging to the CURRENT authenticated user. It confers no
+  // ticket, run, or product authority. The canonical durable row is inserted
+  // by migration 043; this builtin floor is the repository-owned
+  // bootstrap-parity expectation only, never a second permission authority.
+  'apiToken:manage'
 ]);
 
 const REQUIRED_ACCESS_CATALOG_REPOSITORY_METHODS = Object.freeze([

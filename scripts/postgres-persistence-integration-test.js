@@ -104,12 +104,14 @@ async function main() {
     assert.equal(await store.health(), true);
     assert.equal((await store.acquireRuntimeAuthority()).mode, 'shared_transactional');
     const emptyRuntimeIntegrity = await store.prepareRuntimePersistence();
-    // 46 relations and 218 integrity artifacts after kernel-owned Ticket-attempt
-    // authority added one relation plus its membership/revision/FK guards. These
+    // 47 relations and 226 integrity artifacts after kernel-owned Ticket-attempt
+    // authority added one relation plus its membership/revision/FK guards, and
+    // P1 API-token authority added the api_tokens relation, its revoke-once
+    // trigger, and its FK/uniqueness/shape constraints. These
     // counts are deliberately exact: a relation appearing or vanishing
     // unnoticed is precisely what they exist to catch.
-    assert.equal(emptyRuntimeIntegrity.checkedRelationCount, 46);
-    assert.equal(emptyRuntimeIntegrity.checkedIntegrityArtifactCount, 218);
+    assert.equal(emptyRuntimeIntegrity.checkedRelationCount, 47);
+    assert.equal(emptyRuntimeIntegrity.checkedIntegrityArtifactCount, 226);
     assert.equal(emptyRuntimeIntegrity.integrityMode, 'transactional_constraints');
 
     const initialRuntimeLimits = await store.getRuntimeLimitsConfig();
@@ -544,6 +546,97 @@ async function main() {
       store._appendSystemLog = appendAccessAudit;
     }
     assert.equal((await store.listGroups({ limit: 20 })).groups.some(group => group.name === 'Must Roll Back Access Group'), false);
+
+    // ── P1 API-token authority: migration 043 persistence contract ──────────
+    // The canonical permission row exists (lockstep with the builtin floor,
+    // asserted through the bootstrap parity above), the catalog stays
+    // migration-owned, and api_tokens enforces FK cascade, digest uniqueness,
+    // label constraints, and revoke-once integrity at the database level.
+    assert.equal(migrationResults.flat().filter(name => name === '043_api_token_authority.sql').length, 1);
+    const apiTokenPermission = await store.pool.query(
+      `SELECT name FROM ${store.table('access_permissions')} WHERE name = 'apiToken:manage'`
+    );
+    assert.equal(apiTokenPermission.rowCount, 1);
+    await assert.rejects(
+      store.pool.query(`INSERT INTO ${store.table('access_permissions')} (name) VALUES ('permission:bypass')`),
+      /migration-owned/,
+      'the permission catalog remains migration-owned outside migrations'
+    );
+    const p1TokenOwner = updatedAccessUser.user.id;
+    const p1RawToken = 'tts_'
+      + crypto.randomBytes(32).toString('base64url');
+    const p1TokenHash = crypto.createHash('sha256').update(p1RawToken, 'utf8').digest('hex');
+    const p1Issued = await store.createApiToken({ userId: p1TokenOwner, tokenHash: p1TokenHash, label: '  integration p1 token  ' });
+    assert.equal(p1Issued.apiToken.label, 'integration p1 token', 'labels persist trimmed');
+    assert.equal(p1Issued.apiToken.revokedAt, null);
+    assert.ok(!JSON.stringify(p1Issued).includes(p1TokenHash) && !JSON.stringify(p1Issued).includes('token_hash'),
+      'projections never expose the digest');
+    assert.equal(p1Issued.auditLog.type, 'api_token:issued');
+    assert.deepEqual(
+      await store.findActiveApiTokenByDigest(p1TokenHash),
+      { tokenId: p1Issued.apiToken.id, userId: p1TokenOwner }
+    );
+    assert.equal(await store.findActiveApiTokenByDigest('0'.repeat(64)), null);
+    await assert.rejects(
+      store.pool.query(
+        `INSERT INTO ${store.table('api_tokens')} (user_fk, token_hash, label)
+         SELECT user_fk, token_hash, 'digest uniqueness refused' FROM ${store.table('api_tokens')} WHERE id = $1`,
+        [p1Issued.apiToken.id]
+      ),
+      error => error.code === '23505',
+      'the digest is unique across all rows'
+    );
+    for (const invalid of [null, '', '   ', 'x'.repeat(129)]) {
+      await assert.rejects(
+        store.pool.query(
+          `INSERT INTO ${store.table('api_tokens')} (user_fk, token_hash, label) VALUES ($1, $2, $3)`,
+          [p1TokenOwner, crypto.createHash('sha256').update(crypto.randomBytes(32)).digest('hex'), invalid]
+        ),
+        error => error.code === '23514' || error.code === '23502',
+        `the label constraint refuses ${JSON.stringify(invalid)}`
+      );
+    }
+    await assert.rejects(
+      store.pool.query(
+        `INSERT INTO ${store.table('api_tokens')} (user_fk, token_hash, label) VALUES (99999999, $1, 'orphan refused')`,
+        [crypto.createHash('sha256').update(crypto.randomBytes(32)).digest('hex')]
+      ),
+      error => error.code === '23503',
+      'the user foreign key refuses orphan tokens'
+    );
+    const p1Revoked = await store.revokeApiToken({ userId: p1TokenOwner, apiTokenId: p1Issued.apiToken.id });
+    assert.equal(p1Revoked.apiToken.revokedAt !== null, true);
+    assert.equal(p1Revoked.auditLog.type, 'api_token:revoked');
+    assert.equal(await store.revokeApiToken({ userId: p1TokenOwner, apiTokenId: p1Issued.apiToken.id }), null,
+      'an already-revoked token matches no ACTIVE token');
+    await assert.rejects(
+      store.pool.query(`UPDATE ${store.table('api_tokens')} SET revoked_at = NULL WHERE id = $1`, [p1Issued.apiToken.id]),
+      /permanent/,
+      'revocation is permanent: resurrection is refused'
+    );
+    await assert.rejects(
+      store.pool.query(`UPDATE ${store.table('api_tokens')} SET label = 'relabel refused' WHERE id = $1`, [p1Issued.apiToken.id]),
+      /permanent/,
+      'revoked token identity is immutable'
+    );
+    {
+      const activeToken = await store.createApiToken({
+        userId: p1TokenOwner,
+        tokenHash: crypto.createHash('sha256').update(crypto.randomBytes(32)).digest('hex'),
+        label: 'cascade target'
+      });
+      await store.deleteUser({
+        userId: p1TokenOwner,
+        expectedRevision: (await store.getUserById(p1TokenOwner)).revision,
+        changedBy: 'integration-operator'
+      });
+      const cascadeCount = await store.pool.query(
+        `SELECT COUNT(*)::int AS count FROM ${store.table('api_tokens')} WHERE user_fk = $1`,
+        [p1TokenOwner]
+      );
+      assert.equal(cascadeCount.rows[0].count, 0, 'deleting a user cascades its tokens away');
+      void activeToken;
+    }
 
     const assignmentRaceGroup = await store.createGroup({
       value: { name: 'Assignment Race', permissions: [], canReceiveTickets: true },
@@ -3311,8 +3404,8 @@ async function main() {
     await parentWaiter;
 
     const populatedRuntimeIntegrity = await store.prepareRuntimePersistence();
-    assert.equal(populatedRuntimeIntegrity.checkedRelationCount, 46);
-    assert.equal(populatedRuntimeIntegrity.checkedIntegrityArtifactCount, 218);
+    assert.equal(populatedRuntimeIntegrity.checkedRelationCount, 47);
+    assert.equal(populatedRuntimeIntegrity.checkedIntegrityArtifactCount, 226);
     assert.equal(populatedRuntimeIntegrity.integrityMode, 'transactional_constraints');
     assert.equal(await store.releaseRuntimeAuthority(), true);
 

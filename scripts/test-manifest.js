@@ -160,6 +160,8 @@ const TESTS = Object.freeze([
   { file: "timeline-receipt-projection-test.js", status: "required" },
   { file: "ticket-attempt-authority-postgres-test.js", status: "required" },
   { file: "ticket-attempt-backfill-postgres-test.js", status: "required" },
+  { file: "api-token-authority-postgres-test.js", status: "required" },
+  { file: "api-token-contract-test.js", status: "required" },
   { file: "action-batch-preflight-test.js", status: "required" },
   { file: "event-append-lock-order-test.js", status: "required" },
   { file: "complete-flag-truncation-guard-test.js", status: "orphaned", reason: "cutover-orphan" },

@@ -171,6 +171,7 @@ const {
   triggerSpawnIdempotencyKey
 } = require('../process-template-authority');
 const { installAccessCatalogMethods } = require('./access-catalog-methods');
+const { installApiTokenMethods } = require('./api-token-methods');
 const { installWorkflowCatalogMethods } = require('./workflow-catalog-methods');
 const { installModelRoutingPolicyMethods } = require('./model-routing-policy-methods');
 const { installConnectorAuthorityMethods } = require('./connector-authority-methods');
@@ -1339,6 +1340,7 @@ class PostgresRuntimeStore {
         'access_group_permissions',
         'access_users',
         'user_group_memberships',
+        'api_tokens',
         'process_templates',
         'process_template_status_counts',
         'process_template_versions',
@@ -1406,6 +1408,7 @@ class PostgresRuntimeStore {
         ['access_permissions', 'access_permissions_migration_owned'],
         ['access_groups', 'access_groups_revision_guard'],
         ['access_users', 'access_users_revision_guard'],
+        ['api_tokens', 'api_tokens_revoke_once'],
         ['process_templates', 'process_templates_revision_guard'],
         ['process_templates', 'process_templates_status_count'],
         ['process_template_versions', 'process_template_versions_immutability_guard'],
@@ -1517,6 +1520,12 @@ class PostgresRuntimeStore {
         ['user_group_memberships', 'user_group_memberships_pkey'],
         ['user_group_memberships', 'user_group_memberships_user_fk'],
         ['user_group_memberships', 'user_group_memberships_group_fk'],
+        ['api_tokens', 'api_tokens_pkey'],
+        ['api_tokens', 'api_tokens_user_fk'],
+        ['api_tokens', 'api_tokens_token_hash_unique'],
+        ['api_tokens', 'api_tokens_token_hash_shape'],
+        ['api_tokens', 'api_tokens_label_shape'],
+        ['api_tokens', 'api_tokens_revocation_shape'],
         ['process_templates', 'process_templates_body_object'],
         ['process_templates', 'process_templates_revision_positive'],
         ['process_templates', 'process_templates_schedule_cursor'],
@@ -14194,6 +14203,7 @@ class PostgresRuntimeStore {
 }
 
 installAccessCatalogMethods(PostgresRuntimeStore, { OptimisticConcurrencyError });
+installApiTokenMethods(PostgresRuntimeStore);
 installWorkflowCatalogMethods(PostgresRuntimeStore, { OptimisticConcurrencyError });
 installModelRoutingPolicyMethods(PostgresRuntimeStore, { OptimisticConcurrencyError });
 installConnectorAuthorityMethods(PostgresRuntimeStore, { OptimisticConcurrencyError });

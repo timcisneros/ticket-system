@@ -37,12 +37,13 @@ const COOKIE_PATH = path.join(COOKIE_DIR, '.opercookie');
 
 function assert(c, m) { if (!c) throw new Error(m); }
 
-function oquery(argv) {
+function oquery(argv, extraEnv = {}) {
   return execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'oquery.js'), ...argv], {
     env: {
       ...process.env,
       OPERC_URL: BASE, OPERC_COOKIE_PATH: COOKIE_PATH,
-      OPERC_USERNAME: 'admin', OPERC_PASSWORD: 'admin123'
+      OPERC_USERNAME: 'admin', OPERC_PASSWORD: 'admin123',
+      ...extraEnv
     },
     encoding: 'utf8'
   });
@@ -136,9 +137,104 @@ async function main() {
     assert(graphJson.currentPhase === 'terminalization', 'run-graph --json must carry the current phase');
 
     const helpOut = oquery(['--help']);
-    for (const c of ['inbox', 'inbox-thread', 'inbox-resolve', 'journal', 'work-types', 'authority-paths', 'browser-status', 'run-graph']) {
+    for (const c of ['inbox', 'inbox-thread', 'inbox-resolve', 'journal', 'work-types', 'authority-paths', 'browser-status', 'run-graph', 'token issue', 'token list', 'token revoke', '--token-file', 'TTS_TOKEN']) {
       assert(helpOut.includes(c), `help must document ${c}`);
     }
+
+    // ── P1 governed programmatic access: session-backed token bootstrap ────
+    // Issue the FIRST token through the cached session (oquery login), with
+    // raw-once display, an explicit cannot-be-retrieved warning, and no digest.
+    const hexDigestPattern = /\b[0-9a-f]{64}\b/i;
+    const issueOut = oquery(['token', 'issue', '--label', 'parity bootstrap token']);
+    assert(issueOut.includes('tts_'), 'issue must display the raw tts_ token');
+    assert(issueOut.includes('ONCE') && issueOut.includes('cannot be retrieved again'),
+      'issue must warn the raw token cannot be retrieved again');
+    const rawToken = (issueOut.match(/tts_[A-Za-z0-9_-]{43}/) || [])[0];
+    assert(rawToken, 'issue must display exactly one well-formed raw token');
+    assert(!hexDigestPattern.test(issueOut), 'issue output must never contain a digest');
+    assert(issueOut.includes('--token-file') && issueOut.includes('TTS_TOKEN'),
+      'issue must recommend --token-file/TTS_TOKEN over history-exposed literals');
+
+    const issuedList = JSON.parse(oquery(['token', 'list', '--json']));
+    assert(Array.isArray(issuedList.tokens) && issuedList.tokens.length >= 1, 'token list must return own tokens');
+    const listed = issuedList.tokens.find(token => token.label === 'parity bootstrap token');
+    assert(listed && listed.revokedAt === null, 'the issued token is listed active');
+    assert(JSON.stringify(Object.keys(listed).sort()) === JSON.stringify(['createdAt', 'id', 'label', 'revokedAt'].sort()),
+      'list projections carry exactly id/label/createdAt/revokedAt');
+    assert(!hexDigestPattern.test(oquery(['token', 'list'])), 'list output must never contain a digest');
+    assert(!/tts_[A-Za-z0-9_-]{43}/.test(oquery(['token', 'list'])), 'list output must never re-display a raw token');
+
+    // Bearer consumption, no session at all: --token-file owns authentication.
+    // A stale objective identical to a SEEDED ticket proves the returned
+    // identity is the canonical created ticket, not an objective match.
+    const duplicatedObjective = 'Generate Q3 compliance summary (completed + verified)';
+    const tokenFile = path.join(COOKIE_DIR, 'parity-token');
+    fs.writeFileSync(tokenFile, rawToken, 'utf8');
+    const noCookiePath = path.join(COOKIE_DIR, 'no-such-cookie-file');
+    const created = JSON.parse(oquery(
+      ['create-ticket', '--token-file', tokenFile, '--json', duplicatedObjective],
+      { OPERC_COOKIE_PATH: noCookiePath }
+    ));
+    assert(created.ticketId > 0, 'create-ticket with --token-file must return the canonical created ticket id');
+    assert(!hexDigestPattern.test(JSON.stringify(created)), 'create-ticket output must never contain a digest');
+    // The canonical id resolves the EXACT new ticket (never the seeded
+    // lookalike that shares the objective), and the objective string is never
+    // used to look the ticket up.
+    const runtimeOfCreated = await (async () => {
+      const res = await fetch(`${BASE}/api/tickets/${created.ticketId}/runtime`, {
+        headers: { Authorization: `Bearer ${rawToken}` }
+      });
+      assert(res.status === 200, 'the returned canonical ticket id must resolve the created ticket for the bearer');
+      return res.json();
+    })();
+    assert(runtimeOfCreated.ticket.objective === duplicatedObjective, 'the created ticket carries the requested objective');
+    assert(runtimeOfCreated.ticket.id === created.ticketId, 'runtime lookup by returned id is the created ticket');
+    const seededWithSameObjective = (await store.pool.query(
+      `SELECT MIN(id)::int AS id FROM ${store.table('tickets')} WHERE body->>'objective' = $1`,
+      [duplicatedObjective]
+    )).rows[0].id;
+    assert(seededWithSameObjective < created.ticketId,
+      'the canonical id is the freshly created ticket, not the pre-existing objective match');
+
+    // A bearer token cannot issue another bearer token: the token plane is
+    // session-only, so a bearer-only CLI invocation must fail authentication.
+    const bearerIssueOut = oquery(['token', 'issue', '--label', 'must fail', '--json'], {
+      OPERC_COOKIE_PATH: noCookiePath,
+      TTS_TOKEN: rawToken
+    });
+    assert(bearerIssueOut.includes('not_authenticated'),
+      'bearer-only token issue must fail authentication (never mint credentials)');
+    assert(!/tts_[A-Za-z0-9_-]{43}/.test(bearerIssueOut), 'the failed issue must not mint or display any token');
+
+    // TTS_TOKEN consumption on create-ticket (no session file either).
+    const envCreated = JSON.parse(oquery(
+      ['create-ticket', '--json', 'Parity TTS_TOKEN objective'],
+      { OPERC_COOKIE_PATH: noCookiePath, TTS_TOKEN: rawToken }
+    ));
+    assert(envCreated.ticketId > 0, 'create-ticket must consume TTS_TOKEN');
+
+    // Revoke through the session-backed CLI; the bearer stops authenticating.
+    const revokeOut = oquery(['token', 'revoke', String(listed.id)]);
+    assert(revokeOut.includes('revoked'), 'revoke must report success');
+    const revokeAgain = oquery(['token', 'revoke', String(listed.id), '--json']);
+    assert(revokeAgain.includes('not_found'), 'revoking an already-revoked token answers 404, no oracle');
+    assert(!hexDigestPattern.test(revokeOut + revokeAgain), 'revoke output must never contain a digest');
+    // The revoked bearer must not create anything: the CLI reports failure
+    // (agent resolution and POST both 401) and the server persists no ticket.
+    const revokedCreateOut = oquery(['create-ticket', '--token-file', tokenFile, '--json', 'must not run after revoke'], {
+      OPERC_COOKIE_PATH: noCookiePath
+    });
+    assert(!revokedCreateOut.includes('ticketId'),
+      'a revoked bearer must not produce a creation summary');
+    assert(!hexDigestPattern.test(revokedCreateOut), 'refused create-ticket output must never contain a digest');
+    const refusedTicketCount = (await store.pool.query(
+      `SELECT COUNT(*)::int AS count FROM ${store.table('tickets')} WHERE body->>'objective' = 'must not run after revoke'`
+    )).rows[0].count;
+    assert(refusedTicketCount === 0, 'a revoked bearer creates no ticket');
+
+    const listAfterRevoke = JSON.parse(oquery(['token', 'list', '--json']));
+    const revokedListed = listAfterRevoke.tokens.find(token => token.id === listed.id);
+    assert(revokedListed && revokedListed.revokedAt, 'the revoked token remains listed as revoked (permanent)');
 
     console.log('PASS: oquery parity — inbox read/reply/resolve, journal filters, catalog/authority listings, and browser status reachable headlessly');
   } finally {

@@ -183,7 +183,12 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   // contract (record shape/state, exact target binding, exact applied
   // pre-state, exact ordered pending set with source sha256, publication
   // authority, fully-current identity-drift detection).
-  'migration-execution-authority-test.js'
+  'migration-execution-authority-test.js',
+  // P1 — governed programmatic access. Deterministic: token format/digest,
+  // the ONE route-plane classifier, PUBLIC_API_ROUTES exactness, token
+  // namespace boundaries, the frozen status table, issuance response shape,
+  // and the redaction-key contract. No PostgreSQL contact.
+  'api-token-contract-test.js'
 ]);
 
 const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
@@ -417,7 +422,14 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   'auto-retry-bounds-test.js',
   // A26 — committed-mutation evidence: one authority for the retry decision and the
   // finalized replay, counted from receipts, once per operation, failing closed.
-  'run-mutation-evidence-test.js'
+  'run-mutation-evidence-test.js',
+  // P1 — governed programmatic access: live session/bearer authentication-plane
+  // authority, token-management self-only/session-only refusals, revoked and
+  // deleted-user bearer refusals, next-request permission resolution,
+  // origin-gate inheritance, public /api/health preservation, HTML bearer
+  // inaccessibility, and route-table parity against the server's real route
+  // inventory. Disposable TEST_DATABASE_URL only via the repository harness.
+  'api-token-authority-postgres-test.js'
 ]);
 
 function buildCheckpointChecks() {

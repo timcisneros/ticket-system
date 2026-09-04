@@ -11,11 +11,10 @@ const {
   normalizeGovernedProgressBlock
 } = require('../runtime/governed-progress-block-contract');
 
-async function resolveServerAgent(url, cookie, value) {
+async function resolveServerAgent(url, cookie, value, authHeadersOverride) {
   const requested = value === undefined || value === null || value === '' ? '1' : String(value).trim();
-  const response = await httpReq('GET', `${url}/api/configured-agents/resolve?value=${encodeURIComponent(requested)}`, {
-    headers: { 'Cookie': `sessionId=${cookie}` }
-  });
+  const headers = authHeadersOverride || { 'Cookie': `sessionId=${cookie}` };
+  const response = await httpReq('GET', `${url}/api/configured-agents/resolve?value=${encodeURIComponent(requested)}`, { headers });
   if (response.status === 404) return null;
   if (response.status !== 200) {
     let detail = null;
@@ -1393,31 +1392,10 @@ function createTicketSummary(ticket, run, agent) {
   };
 }
 
-async function fetchTicketAndRun(url, cookie, fallbackObjective = null) {
-  const listRes = await httpReq('GET', `${url}/api/tickets`, {
-    headers: { 'Cookie': `sessionId=${cookie}` }
-  });
-  if (listRes.status !== 200) return { ticket: null, run: null };
-
-  const ticketData = JSON.parse(listRes.body);
-  const tickets = ticketData.tickets || ticketData;
-  const matchingTickets = fallbackObjective
-    ? tickets.filter(ticket => ticket.objective === fallbackObjective)
-    : tickets;
-  const ticket = matchingTickets.length > 0
-    ? matchingTickets.reduce((a, b) => (a.id > b.id ? a : b))
-    : tickets.reduce((a, b) => (a.id > b.id ? a : b), null);
-  if (!ticket) return { ticket: null, run: null };
-
-  const runtimeRes = await httpReq('GET', `${url}/api/tickets/${ticket.id}/runtime`, {
-    headers: { 'Cookie': `sessionId=${cookie}` }
-  });
-  if (runtimeRes.status !== 200) return { ticket, run: null };
-  const runtime = JSON.parse(runtimeRes.body);
-  return { ticket: runtime.ticket || ticket, run: runtime.latestRun || runtime.currentRun || null };
-}
-
-async function waitForCreatedTicketRun(url, cookie, ticketId) {
+// Bounded wait for a created ticket to reach a terminal state. The canonical
+// ticket id comes from the creation response; the objective string is never
+// used to look tickets up (P1 removed objective-based Ticket-ID guessing).
+async function waitForCreatedTicketRun(url, cookie, ticketId, authHeadersOverride) {
   const terminal = new Set(['completed', 'failed', 'interrupted', 'resumable_pending']);
   const started = Date.now();
   const timeoutMs = 300000;
@@ -1425,7 +1403,7 @@ async function waitForCreatedTicketRun(url, cookie, ticketId) {
 
   while (Date.now() - started < timeoutMs) {
     const runtimeRes = await httpReq('GET', `${url}/api/tickets/${ticketId}/runtime`, {
-      headers: { 'Cookie': `sessionId=${cookie}` }
+      headers: authHeadersOverride || { 'Cookie': `sessionId=${cookie}` }
     });
     if (runtimeRes.status === 200) {
       const data = JSON.parse(runtimeRes.body);
@@ -1443,11 +1421,13 @@ async function waitForCreatedTicketRun(url, cookie, ticketId) {
 }
 
 async function cmdCreateTicket(args) {
+  const url = args.url || opercUrl();
   const cookie = readCookie();
-  if (!cookie) {
-    const message = 'Not logged in. Run oquery login first.';
+  const authHeaders = apiAuthHeaders(args, cookie);
+  if (!Object.keys(authHeaders).length) {
+    const message = 'Not authenticated. Run oquery login first, or present a token via --token-file/TTS_TOKEN.';
     if (args.json) return console.log(JSON.stringify({ error: 'not_authenticated', message }, null, 2));
-    return console.log(red('  ✗ Not logged in. Run') + ` ${bold('oquery login')} ${red('first.')}`);
+    return console.log(red('  ✗ Not authenticated. Run') + ` ${bold('oquery login')} ${red('first, or present a token via --token-file/TTS_TOKEN.')}`);
   }
 
   const objective = args._.join(' ');
@@ -1457,48 +1437,170 @@ async function cmdCreateTicket(args) {
     return console.log(red(message));
   }
 
-  const url = args.url || opercUrl();
-  const agent = await resolveServerAgent(url, cookie, args.agent || '1');
+  const agent = await resolveServerAgent(url, cookie, args.agent || '1', apiAuthHeaders(args, cookie));
   if (!agent) {
     const message = `Agent not found: ${args.agent}`;
     if (args.json) return console.log(JSON.stringify({ error: 'agent_not_found', message }, null, 2));
     return console.log(red(`  ✗ ${message}`));
   }
 
-  // POST to create ticket
-  const body = `objective=${encodeURIComponent(objective)}&assignmentTargetType=agent&assignmentTargetId=${encodeURIComponent(String(agent.id))}&assignmentMode=individual`;
-  const res = await httpReq('POST', `${url}/tickets`, {
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Cookie': `sessionId=${cookie}`,
-    },
-    body
+  // JSON creation through the canonical /api/tickets seam. The response carries
+  // the canonical created Ticket identity plus the Runs actually created;
+  // `runs: []` is a legitimate deferred-creation outcome, never a failure.
+  const res = await httpReq('POST', `${url}/api/tickets`, {
+    headers: { ...apiAuthHeaders(args, cookie), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      objective,
+      assignmentTargetType: 'agent',
+      assignmentTargetId: agent.id,
+      assignmentMode: 'individual'
+    })
   });
 
-  if (res.status === 302) {
-    let { ticket, run } = await fetchTicketAndRun(url, cookie, objective);
-    if (args.wait && ticket) {
-      ({ ticket, run } = await waitForCreatedTicketRun(url, cookie, ticket.id));
+  let data = null;
+  try { data = res.body ? JSON.parse(res.body) : null; } catch (e) { data = null; }
+
+  if (res.status === 201 && data && data.ticket && data.ticket.id) {
+    let ticket = data.ticket;
+    let runs = Array.isArray(data.runs) ? data.runs : [];
+    if (args.wait) {
+      const waited = await waitForCreatedTicketRun(url, cookie, ticket.id, apiAuthHeaders(args, cookie));
+      if (waited.ticket) ticket = waited.ticket;
+      if (waited.run) runs = [waited.run];
     }
+    const run = runs.length > 0 ? runs[0] : null;
     const summary = createTicketSummary(ticket, run, agent);
     if (args.json) {
       console.log(JSON.stringify(summary, null, 2));
       return;
     }
-    if (ticket) {
-      console.log(`  ${green('✓')} Ticket T${ticket.id} created on ${url} (${statusTag(ticket.status)}) assigned to ${agent.name || `Agent ${agent.id}`}${run ? `, run R${run.id} ${statusTag(run.status)}` : ''}`);
-      return;
-    }
-    console.log(`  ${green('✓')} Ticket created (HTTP ${res.status})`);
+    console.log(`  ${green('✓')} Ticket T${ticket.id} created on ${url} (${statusTag(ticket.status)}) assigned to ${agent.name || `Agent ${agent.id}`}${run ? `, run R${run.id} ${statusTag(run.status)}` : ', no run created yet'}`);
+    return;
+  }
+  if (res.status === 400) {
+    const message = data && data.error ? data.error : 'Ticket creation rejected';
+    if (args.json) return console.log(JSON.stringify({ error: 'create_rejected', status: res.status, message }, null, 2));
+    console.log(red(`  ✗ ${message}`));
   } else if (res.status === 401 || res.status === 403) {
-    const message = 'Session expired or permission denied. Run oquery login again.';
+    const message = 'Session/token expired or permission denied. Run oquery login again or issue a fresh token.';
     if (args.json) return console.log(JSON.stringify({ error: 'permission_denied', message }, null, 2));
-    console.log(red('  ✗ Session expired or permission denied. Run') + ` ${bold('oquery login')} ${red('again.')}`);
+    console.log(red('  ✗ Session/token expired or permission denied. Run') + ` ${bold('oquery login')} ${red('again or issue a fresh token.')}`);
   } else {
     if (args.json) return console.log(JSON.stringify({ error: 'create_failed', status: res.status, body: res.body ? res.body.slice(0, 300) : null }, null, 2));
     console.log(red(`  ✗ Failed (HTTP ${res.status})`));
     if (res.body) console.log(`    ${dim(res.body.replace(/<[^>]+>/g, '').slice(0, 300))}`);
   }
+}
+
+// ── API-token bootstrap commands (P1) ──
+//
+// First-token bootstrap is SESSION-backed: `oquery login` → session cookie →
+// the session-only /api/tokens endpoints. These commands never send bearer
+// credentials, because a bearer token must never be able to mint another one.
+// The raw token is displayed exactly once at issue; no digest is ever output.
+
+async function cmdTokenIssue(args) {
+  const cookie = requireSession(args); if (!cookie) return;
+  const url = args.url || opercUrl();
+  const label = args.label !== undefined && args.label !== true && String(args.label).trim()
+    ? String(args.label).trim()
+    : 'oquery cli token';
+  const res = await httpReq('POST', `${url}/api/tokens`, {
+    headers: { 'Content-Type': 'application/json', 'Cookie': `sessionId=${cookie}` },
+    body: JSON.stringify({ label })
+  });
+  let data = null;
+  try { data = res.body ? JSON.parse(res.body) : null; } catch (e) { data = null; }
+  if (res.status === 201 && data && data.token) {
+    if (args.json) {
+      return console.log(JSON.stringify({
+        token: data.token,
+        apiToken: data.apiToken,
+        warning: 'The raw token is displayed only once and cannot be retrieved again. Store it now.'
+      }, null, 2));
+    }
+    console.log(`  ${green('✓')} API token issued (id ${data.apiToken.id}, label "${data.apiToken.label}")`);
+    console.log('');
+    console.log(`  ${bold(data.token)}`);
+    console.log('');
+    console.log(yellow('  ⚠ This raw token is displayed ONCE and cannot be retrieved again. Store it now.'));
+    console.log(dim('  Recommended use: save it to a file and pass --token-file <path>, or set TTS_TOKEN.'));
+    console.log(dim('  A literal --token also works but lands in shell history.'));
+    return;
+  }
+  if (res.status === 400) {
+    const message = data && data.error ? data.error : 'Token issue rejected';
+    if (args.json) return console.log(JSON.stringify({ error: 'issue_rejected', status: res.status, message }, null, 2));
+    return console.log(red(`  ✗ ${message}`));
+  }
+  if (res.status === 401 || res.status === 403) {
+    const message = 'Session expired or apiToken:manage permission missing. Run oquery login again.';
+    if (args.json) return console.log(JSON.stringify({ error: 'permission_denied', message }, null, 2));
+    return console.log(red('  ✗ Session expired or apiToken:manage permission missing. Run') + ` ${bold('oquery login')} ${red('again.')}`);
+  }
+  if (args.json) return console.log(JSON.stringify({ error: 'issue_failed', status: res.status }, null, 2));
+  console.log(red(`  ✗ Token issue failed (HTTP ${res.status})`));
+}
+
+async function cmdTokenList(args) {
+  const cookie = requireSession(args); if (!cookie) return;
+  const url = args.url || opercUrl();
+  const res = await httpReq('GET', `${url}/api/tokens`, {
+    headers: { 'Cookie': `sessionId=${cookie}` }
+  });
+  let data = null;
+  try { data = res.body ? JSON.parse(res.body) : null; } catch (e) { data = null; }
+  if (res.status === 200 && data && Array.isArray(data.tokens)) {
+    if (args.json) return console.log(JSON.stringify({ tokens: data.tokens }, null, 2));
+    if (!data.tokens.length) {
+      console.log(dim('  No API tokens. Issue one with: oquery token issue --label "my token"'));
+      return;
+    }
+    console.log(`  ${bold('API tokens (own)')}`);
+    for (const token of data.tokens) {
+      const state = token.revokedAt ? red('revoked') : green('active');
+      console.log(`    ${cyan('T' + token.id)}  ${bold(token.label)}  ${dim(datetime(token.createdAt))}  ${state}`);
+    }
+    return;
+  }
+  if (res.status === 401 || res.status === 403) {
+    const message = 'Session expired or apiToken:manage permission missing. Run oquery login again.';
+    if (args.json) return console.log(JSON.stringify({ error: 'permission_denied', message }, null, 2));
+    return console.log(red('  ✗ Session expired or apiToken:manage permission missing. Run') + ` ${bold('oquery login')} ${red('again.')}`);
+  }
+  if (args.json) return console.log(JSON.stringify({ error: 'list_failed', status: res.status }, null, 2));
+  console.log(red(`  ✗ Token list failed (HTTP ${res.status})`));
+}
+
+async function cmdTokenRevoke(args) {
+  const cookie = requireSession(args); if (!cookie) return;
+  const tokenId = parseInt(args._[0] || args.id, 10);
+  if (!Number.isSafeInteger(tokenId) || tokenId <= 0) {
+    return console.log(red('Usage: oquery token revoke <tokenId>'));
+  }
+  const url = args.url || opercUrl();
+  const res = await httpReq('DELETE', `${url}/api/tokens/${tokenId}`, {
+    headers: { 'Cookie': `sessionId=${cookie}` }
+  });
+  let data = null;
+  try { data = res.body ? JSON.parse(res.body) : null; } catch (e) { data = null; }
+  if (res.status === 200 && data && data.ok === true) {
+    if (args.json) return console.log(JSON.stringify({ ok: true, tokenId }, null, 2));
+    console.log(`  ${green('✓')} API token #${tokenId} revoked. Revocation is permanent.`);
+    return;
+  }
+  if (res.status === 404) {
+    const message = 'No active API token matched (nonexistent, foreign-owned, or already revoked).';
+    if (args.json) return console.log(JSON.stringify({ error: 'not_found', message }, null, 2));
+    return console.log(red(`  ✗ ${message}`));
+  }
+  if (res.status === 401 || res.status === 403) {
+    const message = 'Session expired or apiToken:manage permission missing. Run oquery login again.';
+    if (args.json) return console.log(JSON.stringify({ error: 'permission_denied', message }, null, 2));
+    return console.log(red('  ✗ Session expired or apiToken:manage permission missing. Run') + ` ${bold('oquery login')} ${red('again.')}`);
+  }
+  if (args.json) return console.log(JSON.stringify({ error: 'revoke_failed', status: res.status }, null, 2));
+  console.log(red(`  ✗ Token revoke failed (HTTP ${res.status})`));
 }
 
 async function cmdStats(args) {
@@ -1651,6 +1753,33 @@ function requireSession(args) {
     return null;
   }
   return cookie;
+}
+
+// ── Bearer consumption (P1 governed programmatic access) ──
+//
+// Precedence: --token, then --token-file, then TTS_TOKEN. --token-file and
+// TTS_TOKEN are preferred in documentation over a literal --token, which lands
+// in shell history.
+function readBearerToken(args) {
+  if (args.token !== undefined && args.token !== true && String(args.token).trim()) {
+    return String(args.token).trim();
+  }
+  if (args['token-file'] !== undefined && args['token-file'] !== true && String(args['token-file']).trim()) {
+    return fs.readFileSync(String(args['token-file']), 'utf8').trim();
+  }
+  if (process.env.TTS_TOKEN && process.env.TTS_TOKEN.trim()) {
+    return process.env.TTS_TOKEN.trim();
+  }
+  return null;
+}
+
+// API authentication headers for one CLI invocation: a bearer token owns
+// authentication on bearer-eligible API routes; otherwise the cached session
+// cookie keeps working exactly as before.
+function apiAuthHeaders(args, cookie) {
+  const token = readBearerToken(args);
+  if (token) return { 'Authorization': `Bearer ${token}` };
+  return cookie ? { 'Cookie': `sessionId=${cookie}` } : {};
 }
 
 // Truthfully report a non-2xx operator-action response. Never invents success.
@@ -3572,14 +3701,37 @@ function help() {
       --json          Raw JSON output
 
     create-ticket <objective>
-                    Create a new ticket via API
-                      Uses cached session (run 'login' first)
+                    Create a new ticket via the JSON API (POST /api/tickets)
+                      Uses a bearer token when presented (--token, --token-file,
+                      or TTS_TOKEN), else the cached session (run 'login' first)
                       Defaults to agent-1, individual mode
-                      Prints created ticket id and status
+                      Prints the canonical created ticket id from the API
+                      response — the objective is never used to guess the id
+                      (an empty 'runs' list means run creation was deferred,
+                      never failure)
       --agent <id|name>
                       Assign to agent id or local agent name
       --wait          Poll until the created ticket/run reaches terminal state
       --json          Print {"ticketId", "runId", "status", "agent"}
+      --url <url>     Server base URL
+
+    token issue     Issue an API token (session-backed first-token bootstrap:
+                    run 'login' first; bearer tokens cannot issue tokens)
+      --label <text>  Required label, 1..128 characters after trimming
+                      (default: "oquery cli token")
+      --json          Raw JSON output
+      --url <url>     Server base URL
+                    The raw token is displayed ONCE and cannot be retrieved
+                    again; save it to a file and prefer --token-file or
+                    TTS_TOKEN over a shell-history-exposed --token literal.
+
+    token list      List your own API tokens (id, label, created, state)
+      --json          Raw JSON output
+      --url <url>     Server base URL
+
+    token revoke <tokenId>
+                    Permanently revoke one of your own ACTIVE API tokens
+      --json          Raw JSON output
       --url <url>     Server base URL
 
     assign-ticket <ticketId>
@@ -4049,6 +4201,15 @@ async function main() {
     await cmdLogin(args).catch(e => console.error(red('Error: ' + e.message)));
   } else if (cmd === 'create-ticket') {
     await cmdCreateTicket(args).catch(e => console.error(red('Error: ' + e.message)));
+  } else if (cmd === 'token') {
+    const sub = args._.shift();
+    if (sub === 'issue') await cmdTokenIssue(args).catch(e => console.error(red('Error: ' + e.message)));
+    else if (sub === 'list') await cmdTokenList(args).catch(e => console.error(red('Error: ' + e.message)));
+    else if (sub === 'revoke') await cmdTokenRevoke(args).catch(e => console.error(red('Error: ' + e.message)));
+    else {
+      console.log('Usage: oquery token issue [--label <text>] | oquery token list | oquery token revoke <tokenId>');
+      console.log('Token commands are session-backed (oquery login first). Bearer tokens cannot issue tokens.');
+    }
   } else if (cmd === 'stop') {
     await cmdStop(args).catch(e => console.error(red('Error: ' + e.message)));
   } else if (cmd === 'retry') {
