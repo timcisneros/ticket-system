@@ -44,9 +44,14 @@ const PROCESS_EXECUTION_RELEASE_CONTRACT_VERSION = 1;
 // T2 Tranche 5: migration 041 (five-state Ticket cutover) advances the
 // runtime schema head. Same reasoning as 035-039: the preflight requires an
 // exact migration head, so the release contract tracks it.
-const PROCESS_EXECUTION_DATABASE_SCHEMA_VERSION = 42;
-const PROCESS_EXECUTION_MINIMUM_DATABASE_SCHEMA_VERSION = 42;
-const PROCESS_EXECUTION_MAXIMUM_DATABASE_SCHEMA_VERSION = 42;
+// P1 governed programmatic access: migration 043 (API-token authority) adds
+// api_tokens and the apiToken:manage permission row. It does not touch
+// process execution authority, but the preflight requires an exact head, so
+// the release contract tracks it (the same lockstep the register documents
+// for every head-advancing migration).
+const PROCESS_EXECUTION_DATABASE_SCHEMA_VERSION = 43;
+const PROCESS_EXECUTION_MINIMUM_DATABASE_SCHEMA_VERSION = 43;
+const PROCESS_EXECUTION_MAXIMUM_DATABASE_SCHEMA_VERSION = 43;
 const PROCESS_OPERATION_SCHEMA_VERSION = 29;
 const PROCESS_EXECUTION_ROOTFS_REGISTRY_SCHEMA_VERSION = 1;
 const PROCESS_EXECUTION_RELEASE_READINESS_VERSION = 1;
