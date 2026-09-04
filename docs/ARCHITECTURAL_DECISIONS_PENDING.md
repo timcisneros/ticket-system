@@ -1011,6 +1011,350 @@ semantics, and does not claim that every conceivable future lifecycle has alread
 
 ---
 
+## P1 GOVERNED PROGRAMMATIC ACCESS — accepted design freeze — implementation-authority registration candidate (2026-09-03)
+
+**Status: P1 DESIGN FROZEN — IMPLEMENTATION NOT STARTED — MIGRATION 043 REQUIRED BY THE DESIGN BUT NOT AUTHORIZED AND NOT CREATED — AUTHORIZATION REMAINS NOT_AUTHORIZED — DOCS-ONLY REGISTRATION CANDIDATE PENDING NARROW INDEPENDENT REGISTRATION REVIEW.**
+
+This candidate is intended, once independently accepted, committed, and published, to durably
+register the ACCEPTED design freeze produced by the completed independent P1 design review.
+Until publication it is a candidate implementation-authority record, NOT durable repository
+authority and NOT a completion record: it is uncommitted and unpublished; no P1 source code
+exists; no migration 043 bytes exist; and canonical migration authorization remains
+`NOT_AUTHORIZED` with `authorizedPendingMigrations = []` in
+`config/migration-execution-authorization.json`. The purpose of this registration candidate is
+hermeticity: a fresh implementation agent must be able to recover the frozen P1 contract from
+this register and repository authority alone, without prior-agent memory or conversation
+context. Candidate baseline: branch `master`; local HEAD = cached origin/master = freshly
+queried origin/master = `d67febbd6ad165b7836fd56185ab3a257739da06`; worktree clean; nothing
+staged; stash empty; `git diff --check` clean; migration head
+`042_objective_revision_baseline.sql`; no migration 043; no P1 or API-token implementation
+anywhere in tracked source. This is one coherent section in this register; the frozen contract
+is not scattered across other documents, and no historical T0–T10 closure record is altered.
+
+### 1. Product boundary
+
+P1 = GOVERNED PROGRAMMATIC ACCESS. Purpose: expose the existing governed ticket system cleanly
+to programmatic clients without creating a second authority plane. P1 adds ONLY:
+
+* API-token credentials for EXISTING `access_users`;
+* the `apiToken:manage` builtin expectation / permission-catalog row;
+* a `request.principal` request-identity seam;
+* bearer authentication on the explicitly eligible authenticated API product plane;
+* session-only API-token credential management;
+* JSON `POST /api/tickets` wrapping the existing canonical Ticket-creation seam;
+* `oquery` token bootstrap/use and canonical Ticket-ID consumption.
+
+P1 does NOT add: new principal classes; service accounts; separate RBAC; cross-user or admin
+token issuance; token scopes or delegation; bounded-agent `invokeWorkflow` authority;
+child/subwork authority; process-execution enablement; P2/P3 completion semantics;
+deployment/operations; external integrations; webhooks; schedulers; or new lifecycle truth.
+
+### 2. Permission authority
+
+PostgreSQL `access_permissions` remains the single canonical durable/runtime permission catalog
+(established by migration `019_access_catalog_authority.sql` and guarded by its
+`access_permissions_migration_owned` trigger). Runtime authorization continues to derive only
+from the existing access-catalog chain:
+
+`access_users` → `user_group_memberships` → `access_groups` → `access_group_permissions` →
+`access_permissions`.
+
+`BUILTIN_PERMISSIONS` (`persistence/access-catalog.js`) is the repository-owned builtin floor /
+bootstrap-parity expectation. It grants no authority independently and is not a second canonical
+permission authority.
+
+The new permission `apiToken:manage` means exactly: issue, list, and revoke API tokens belonging
+to the CURRENT authenticated user. It confers no ticket, run, or product authority.
+
+Because `access_permissions` is migration-owned (the 019 trigger rejects all
+non-migration INSERT/UPDATE/DELETE) and bootstrap refuses an incomplete builtin floor, adding
+`apiToken:manage` requires LOCKSTEP: a repository builtin-expectation change AND migration 043
+insertion of the canonical `access_permissions` row under the repository's established
+migration-time trigger-suppression pattern (the `ALTER TABLE ... DISABLE TRIGGER` /
+`ENABLE TRIGGER` pattern used by `039_ticket_attempt_authority.sql`). Therefore migration 043 is
+required by this design. It is NOT authorized and its bytes are NOT created by this record.
+
+### 3. API token authority
+
+API tokens authenticate EXISTING `access_users` only. No new principal class; no service
+accounts; no cross-user issuance; no delegated credentials; no permission snapshots. Every
+bearer-authenticated request resolves the user's CURRENT authorization from the canonical access
+catalog, so group/permission changes affect the next request. A deleted user's token
+authentication fails. A revoked token's authentication fails.
+
+### 4. Token persistence contract (migration 043 required, not created)
+
+Migration 043 is required. Frozen logical table `api_tokens`, minimum fields:
+
+* `id`
+* `user_fk` → `access_users(id) ON DELETE CASCADE`
+* `token_hash`
+* `label`
+* `created_at`
+* `revoked_at`
+
+Frozen properties:
+
+* SHA-256 hex digest only is persisted;
+* unique digest index;
+* user index;
+* label trimmed, non-empty, maximum 128 characters;
+* revocation is permanent;
+* no expiry;
+* no last-used tracking;
+* no active-token cap;
+* no user-agent/IP/scope metadata;
+* no raw-token persistence.
+
+A revoke-once schema guard may enforce ONLY `revoked_at NULL → timestamp` and prevent token
+resurrection or arbitrary mutation. Migration 043 also inserts `apiToken:manage` into the
+migration-owned canonical permission catalog (section 2). Migration 043 bytes are NOT created by
+this registration step.
+
+### 5. Token format and custody
+
+Raw token = `tts_` + unpadded base64url encoding of 32 cryptographically random bytes (256 bits
+entropy). The persisted value is the SHA-256 hex digest of the COMPLETE presented token,
+including the `tts_` prefix.
+
+The raw token is returned exactly once on issuance; it is never persisted, never logged, never
+included in evidence, and never re-derived. The digest is treated as secret-equivalent and is
+never rendered to user, log, or evidence surfaces.
+
+### 6. Request principal
+
+`request.principal = { userId, via: 'session' | 'bearer', tokenId? }` — REQUEST IDENTITY ONLY.
+It carries no permissions, no scopes, and no independent authorization. Downstream authorization
+continues through the current access-catalog-derived permission context. Session requests carry
+`{ userId, via: 'session' }`; bearer requests additionally carry `tokenId`.
+
+### 7. Authentication planes
+
+Exactly four route classifications exist, selected by ONE repository-owned route-classification
+seam rather than scattered route exceptions:
+
+**A. BEARER_ELIGIBLE_API** — authenticated API product routes. Authorization header PRESENT:
+bearer owns authentication; malformed, wrong-scheme, unknown, revoked, or deleted-user bearer
+yields `401` with no fallback to a valid session cookie. Authorization header ABSENT: existing
+session authentication remains available.
+
+**B. SESSION_ONLY_API** — the token-management namespace exactly: pathname `=== '/api/tokens'`
+OR pathname starts with `'/api/tokens/'`. Bearer is NOT an authentication input; session is
+authoritative. No session: `401` JSON. Valid session with a malformed bearer header: session
+behavior unchanged, because bearer is not an input on this plane.
+
+**C. PUBLIC_API** — frozen current list exactly `['/api/health']`. Bearer is NOT an
+authentication input; malformed or unknown Authorization headers MUST NOT make the public
+endpoint return `401`; existing public behavior remains unchanged.
+
+**D. NON_API** — HTML/operator routes and everything outside the API product plane. Session
+behavior unchanged; bearer is not an authentication input; bearer credentials must never
+silently widen onto HTML/operator mutation or presentation routes.
+
+### 8. Cross-origin / CSRF inheritance
+
+The repository already owns the inherited cross-origin protection, grounded in current source:
+a global unsafe-method origin gate for `POST/PUT/PATCH/DELETE` (`UNSAFE_HTTP_METHODS`,
+`server.js`); exact allowed-origin checking; `Origin: null` accepted only when vouched by
+same-origin `Sec-Fetch-Site`; a `SameSite=Lax`, `HttpOnly` session cookie; a secure cookie
+derived from the HTTPS public base URL; and no credentialed CORS configuration.
+Session-authenticated token issuance/revocation therefore INHERITS this existing
+repository-owned cross-origin protection. P1 does NOT add a second CSRF framework.
+Authentication and origin authority remain distinct: a valid session identifies the user; the
+origin gate determines whether an unsafe browser request may reach mutation handling.
+Non-browser clients presenting no Origin continue through ordinary authentication/permission
+semantics.
+
+### 9. Token-management endpoints (SESSION_ONLY_API)
+
+All of the following require session authentication AND `apiToken:manage`. They are
+structurally self-only: no `userId` or username body/query field may choose the credential
+owner. Bearer credentials cannot issue, list, or revoke tokens — this prevents bearer
+compromise from amplifying into replacement credentials.
+
+**POST /api/tokens** — request body `{ "label": "<required trimmed 1..128 chars>" }`.
+Success `201`: `{ "token": "<raw token, returned once>", "apiToken": { "id": <canonical token
+id>, "label": "<label>", "createdAt": "<canonical timestamp>" } }` — no digest, no preview, no
+`userId`. Exact errors: an owner-selecting body field → `400`; invalid or missing label →
+`400`; no session → `401`; session without `apiToken:manage` → `403`.
+
+**GET /api/tokens** — success `200`: `{ "tokens": [ { "id": ..., "label": ..., "createdAt":
+..., "revokedAt": ... } ] }`. No existence oracle.
+
+**DELETE /api/tokens/:id** — where no ACTIVE self-owned token matches `id` (including
+nonexistent, another user's, or already-revoked) → `404`. Successful revoke → `200`:
+`{ "ok": true }`.
+
+### 10. Audit / redaction
+
+Issuance and revocation are recorded through the existing canonical `appendSystemLog` /
+`diagnostic_logs` surface, transactionally with the persistence operation. Permitted metadata
+ONLY: `tokenId`, `userId`, `action` (`issued` | `revoked`), `label`, `createdAt`. Never: raw
+token, digest, or Authorization header. Redaction coverage is defensively extended to include
+`tokenHash` where secret redaction applies.
+
+### 11. JSON ticket creation
+
+`POST /api/tickets` is a bearer-eligible authenticated API product route requiring
+`ticket:create` and the existing mutation admission. It MUST wrap the existing canonical
+`createTicketFromInput(input, actor, options)` seam (`server.js`) — no duplicate Ticket-creation
+semantics. Actor identity comes from `request.principal` through the (extended)
+`actorFromRequest` / `delegatedFromRequest` seam. No body-supplied `createdBy`/`userId`
+authority exists. Success `201` returns the canonical created Ticket identity directly plus the
+Runs actually created; `runs: []` is valid where the canonical seam permits deferred run
+creation. Consumers MUST NOT infer failure from empty Runs. No HTML redirect inference. No
+objective-string Ticket-ID lookup.
+
+### 12. Read / wait / follow boundary
+
+Existing JSON read surfaces remain canonical and are not duplicated. Bearer eligibility makes
+authenticated existing API reads machine-usable under existing permission semantics. No new wait
+endpoint, no scheduler, no webhook, and no new lifecycle truth. `oquery` bounded polling remains
+acceptable for P1.
+
+### 13. oquery contract
+
+P1 removes objective-based Ticket-ID guessing. `create-ticket` consumes `POST /api/tickets` and
+uses the returned canonical `ticket.id`. Bearer consumption support: `--token`, `--token-file`,
+and `TTS_TOKEN`, with `--token-file` / `TTS_TOKEN` preferred in documentation over
+shell-history-exposed literal tokens. First-token bootstrap is SESSION-backed. New
+repository-owned commands: `oquery token issue [--label <text>]`, `oquery token list`,
+`oquery token revoke <id>`; these use existing `oquery login` → session cookie → the
+SESSION_ONLY_API token-management endpoints. No bearer token may mint another bearer token.
+The issue command necessarily displays the raw token once and warns it cannot be retrieved
+again. No digest output.
+
+### 14. Migration 043 release choreography
+
+Migration 043 is NOT AUTHORIZED by this design freeze. An AUTHORIZED record may be prepared
+and published ONLY AFTER the independently reviewed, committed, exact-commit-checkpointed,
+published `NOT_AUTHORIZED` implementation/migration-byte baseline exists (section 17). The
+lifecycle must compose as:
+
+A. `NOT_AUTHORIZED` resting state.
+B. Complete P1 implementation + migration 043 source bytes prepared against disposable test
+   infrastructure (section 17, steps 1–2).
+C. Fresh independent implementation review (section 17, steps 3–5).
+D. Commit exact accepted implementation bytes while canonical authorization remains
+   `NOT_AUTHORIZED` (section 17, step 6).
+E. Build + full canonical release checkpoint at the exact implementation commit with a
+   disposable `TEST_DATABASE_URL` (section 17, step 8).
+F. Publish the exact implementation commit non-force; do NOT restart operational code
+   (section 17, steps 9–10).
+G. Verify canonical master now contains the exact independently accepted migration-043 bytes.
+H. Prepare the tracked AUTHORIZED record as a subsequent repository transition, bound to: the
+   exact operational target; the exact applied pre-state 001…042; the exact pending migration
+   043; the exact migration-043 source SHA; and the valid published baseline/ancestry required
+   by the runtime authority mechanism.
+I. Fresh independent review of the AUTHORIZED record.
+J. Commit/publish the AUTHORIZED record to canonical master.
+K. Run the required full checkpoint at THAT exact AUTHORIZED publication commit — the first
+   real canonical checkpoint execution of the state-adaptive AUTHORIZED branch. If red: STOP
+   AND REPAIR; never weaken, skip, or disable verification.
+L. Only with green published authority: release preflight → exact governed operational
+   migration → post-migration verification.
+M. Only after the operational schema is verified current may server code whose builtin floor
+   expects `apiToken:manage` be restarted.
+N. Independently review retirement to the exact `NOT_AUTHORIZED` shape.
+O. Commit/publish retirement.
+P. Final checkpoint green at the exact retirement commit.
+
+No retroactive authorization. No operational migration before AUTHORIZED publication. No
+restart before operational schema verification. The runtime mechanism binding this lifecycle —
+exact target, exact applied pre-state, exact ordered pending set with source sha256,
+tracked-record, clean-tree, HEAD == freshly queried canonical master, baseline ancestry, and
+the stale-reuse/cross-target/modified-byte/untracked/dirty-tree refusals — is the published T10
+migration-execution-authority prevention (two-state record model and corrected state-adaptive
+owner test recorded above in this register).
+
+### 15. Compositional closure claim
+
+The design review established BOTH refusal and legitimate-path satisfiability for: session
+token issue/list/revoke; bearer product authentication; revoked-token refusal; dynamic
+permission changes; bearer JSON Ticket creation; session CSRF/origin protection; first-token
+`oquery` bootstrap; public `/api/health` behavior preservation; session-only `/api/tokens`
+behavior; and the governed migration-043 publication/execution/retirement lifecycle. No
+legitimate P1 lifecycle requires disabling, weakening, bypassing, or retroactively overriding
+another repository-owned control.
+
+### 16. Verification ownership
+
+NEW deterministic owner `scripts/api-token-contract-test.js`, registered in
+`CHECKPOINT_TEST_SCRIPTS`. Pure only — no PostgreSQL contact. Covers: token format/digest;
+route-plane classification; `PUBLIC_API_ROUTES` exactly `['/api/health']`; `/api/tokens`
+namespace semantics; boundary names such as `/api/tokensomething`; issuance response shape; the
+exact status table; and the redaction-key contract.
+
+NEW PostgreSQL-backed owner `scripts/api-token-authority-postgres-test.js`, registered in
+`POSTGRES_INTEGRATION_SCRIPTS`. Disposable `TEST_DATABASE_URL` only. Covers live:
+session-only token-management behavior; bearer-only token-management refusal; session plus
+malformed bearer remaining session-authoritative on token routes; bearer header precedence on
+eligible API routes; malformed/revoked/deleted-user bearer; dynamic permission resolution;
+origin-gate inheritance; public `/api/health` unaffected by malformed bearer; HTML bearer
+inaccessibility; and route-table parity — every current `/api` route is either authenticated or
+explicitly in `PUBLIC_API_ROUTES`.
+
+Extend existing `scripts/postgres-persistence-integration-test.js` for schema/FK/revoke/digest/
+permission-row persistence. Extend `scripts/oquery-parity-test.js` for: token issue/list/revoke
+session bootstrap; no digest output; raw-once output; canonical create-ticket ID; and removal
+of objective guessing. Reuse unchanged `scripts/migration-execution-authority-test.js` for the
+migration-authorization lifecycle. No PostgreSQL-backed test may be ambiguously classified as
+deterministic.
+
+### 17. Implementation order
+
+1. Prepare the COMPLETE P1 implementation candidate: migration 043 BYTES ONLY (canonical
+   migration authorization remains `NOT_AUTHORIZED`; the operational database is untouched),
+   API-token persistence methods, the builtin floor expectation change, the route-plane
+   classifier, the `request.principal` seam, plane-aware auth plumbing, the bounded
+   session-identity mechanical sweep, session-only token endpoints, `POST /api/tickets`,
+   `oquery` bearer support and session-backed token commands with canonical creation-ID
+   handling, and the required tests (section 16).
+2. Run development/focused/disposable verification as appropriate plus `npm run build`. These
+   are candidate-preparation checks only: an uncommitted full checkpoint run is NOT canonical
+   release evidence and may never be cited as such.
+3. Obtain a FRESH INDEPENDENT IMPLEMENTATION REVIEW of the complete uncommitted candidate.
+4. Resolve only required findings and obtain narrow re-review as necessary until the exact
+   candidate bytes are accepted.
+5. Freeze the exact independently accepted candidate fingerprint.
+6. Commit EXACTLY those reviewed implementation bytes. The commit includes migration 043
+   source BYTES, but canonical migration authorization remains `NOT_AUTHORIZED`; no
+   operational migration occurs.
+7. Verify committed byte identity and run `npm run build` at the exact implementation commit.
+8. Run a NEW full canonical release checkpoint at that EXACT implementation commit with an
+   explicit disposable `TEST_DATABASE_URL`, requiring the durable checkpoint artifact to bind
+   `repositoryCommit` = the exact implementation commit SHA. Canonical migration authorization
+   remains `NOT_AUTHORIZED`. Migration 043 may execute only inside the repository's explicitly
+   disposable test/migration harness, where such bypass is already authorized by repository
+   semantics. The operational `ticket_system` database remains untouched.
+9. Only after that exact-commit checkpoint passes, publish the exact independently
+   reviewed/checkpointed implementation commit to canonical master using non-force
+   publication. Do NOT restart the operational server yet: its builtin floor would expect
+   `apiToken:manage` while the operational database still ends at migration 042.
+10. Verify local HEAD, cached origin/master, and freshly queried remote master all equal the
+    exact published implementation commit. This published `NOT_AUTHORIZED` implementation
+    commit becomes the stable source baseline containing the reviewed migration-043 bytes.
+11. ONLY THEN begin the separate governed migration-043 AUTHORIZED-record lifecycle
+    (section 14).
+
+Implementation publication and migration execution authority remain separate barriers, and
+implementation review and operational migration authority are NEVER collapsed into one step.
+
+### 18. Non-claims
+
+This candidate authorizes no migration and no operational transition; it creates no migration
+043 bytes; it changes no runtime, store, migration, schema, or checkpoint-owned identity; it
+starts no implementation; and it is not yet durable repository authority until independently
+accepted, committed, and published. P1 source implementation status: NOT STARTED. Canonical
+migration authorization status: `NOT_AUTHORIZED`, `authorizedPendingMigrations = []`; migration
+head `042_objective_revision_baseline.sql`. The next step after this correction is a fresh
+narrow independent registration review of these docs-only candidate bytes; once that review
+accepts the candidate and it is committed and published, it becomes durable repository
+authority. Any material divergence between this freeze and repository source found by that
+review is a stop-and-repair condition, not a license for informal deviation.
+
+---
+
 ## Execution-semantics provenance fixture shared Ticket-attempt authority (2026-08-17)
 
 **Status: RESOLVED IN SOURCE — independent pre-semantics provenance cases now
