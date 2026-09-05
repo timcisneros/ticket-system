@@ -1355,6 +1355,182 @@ review is a stop-and-repair condition, not a license for informal deviation.
 
 ---
 
+## Development-review disposition register — review-boundary closure rule, P1 implementation residuals, P1 checkpoint history, and post-T10 external-only reconciliation (2026-09-04)
+
+**Status: DEVELOPMENT-REVIEW RESIDUAL / OPEN-LOOP RECONCILIATION RECORD — DOCS-ONLY — NO
+EXECUTABLE, MANIFEST, MIGRATION, SCHEMA, CHECKPOINT, OR OPERATIONAL CHANGE — BASE
+IMPLEMENTATION HEAD `c4fd97cf531658117d206fcf7f74f63b2735d118` (canonical checkpoint
+`d3896f89-63c0-4c98-b1b3-462e41a53ab0` PASSED 258/258 at that commit) — MIGRATION
+AUTHORIZATION REMAINS `NOT_AUTHORIZED` WITH `authorizedPendingMigrations = []`.**
+
+### 1. Plane terminology (stated once)
+
+HIGH / MEDIUM / LOW in this section are REPOSITORY DEVELOPMENT-REVIEW severities only.
+They describe the impact of a finding on development/review reasoning — never Ticket
+priority, Ticket lifecycle, Run state, bounded-agent severity, runtime authorization, or
+any product/runtime semantics. A development-review finding and its disposition live on
+the development/review plane; the ticket/run/evidence plane is governed exclusively by the
+existing kernel authority. Nothing here creates bounded-agent or product semantics.
+
+### 2. Permanent review-disposition rule
+
+A repository development / independent-review boundary is not procedurally closed until
+every finding present in that review's FINAL FINDINGS / FINAL ADJUDICATION has a durable
+repository-visible disposition. Allowed dispositions are exactly four:
+FIXED; ACCEPTED RESIDUAL; SUPERSEDED; REJECTED / NOT A DEFECT (with reason).
+Exploratory observations, transient hypotheses, and rejected possibilities raised during
+review reasoning that do NOT survive into the review's final findings/adjudication do not
+independently create durable residual obligations, and no machinery is created for
+capturing reviewer scratch work. The requirement for actual final findings is not
+weakened: a finding in a review's final adjudication always needs a durable disposition.
+A finding's severity and its disposition are separate concepts: a LOW finding does not
+automatically require code correction, and a nonblocking final finding that matters for
+future reasoning MUST still receive durable disposition — "nonblocking" never licenses
+transcript-only survival.
+
+### 3. P1 implementation review — accepted development-review residuals
+
+Disposition taxonomy note (stated once): the ONLY base disposition values are the four in
+section 2 — FIXED, ACCEPTED RESIDUAL, SUPERSEDED, REJECTED / NOT A DEFECT. Any qualifier
+after the base value (for example "historical artifact", "non-material",
+"product/API parity", "documentation discoverability", "composition", "consistency",
+"intentionally manual") is a TYPE/QUALIFIER describing why the residual was accepted —
+never a fifth base disposition. Separately, "ALREADY DURABLY RECORDED" and "NO LONGER
+APPLICABLE" are reconciliation/adjudication RESULTS for externally reported candidate
+items (section 5), not final-finding disposition values.
+
+The original independently reviewed P1 implementation (its Git identity is commit
+`489bde9f4c6fd23d2ffa2ec8b905bc079b36c46f`, parent `1360945e…`) produced four nonblocking
+LOW development-review findings, accepted with the following dispositions. All four were
+verified non-authority-widening at review time. The final published corrected
+implementation state is the independently reviewed child commit
+`c4fd97cf531658117d206fcf7f74f63b2735d118` (tree `4ee1a839f1a7424f2eaf1ddf848fee4b1a922179`).
+
+**P1-R1 — aggregate candidate fingerprint recipe (ACCEPTED RESIDUAL —
+process-hermeticity improvement).** The aggregate candidate fingerprint once reported as
+`280954f7…` belonged to the ORIGINAL UNCOMMITTED 15-file P1 implementation candidate; its
+concatenation recipe was never durably specified and was not independently reproducible.
+All actual candidate byte constituents WERE independently verified at the time (exact
+path set; tracked `git diff --binary` SHA; all 15 individual file SHA-256 values). Once
+committed, that exact reviewed implementation became `489bde9f…` (with its tree SHA
+recorded by Git); the subsequently corrected final published implementation state is
+`c4fd97cf…` (tree `4ee1a839…`). Neither Git identity retroactively makes the old ad-hoc
+`280954f7…` recipe reproducible. Do not retroactively invent a recipe for the old value.
+Revisit before any future review/freeze process relies on an aggregate candidate
+fingerprint as authoritative identity: such a process must define its recipe durably
+BEFORE relying on it as authority.
+
+**P1-R2 — `api_tokens_revocation_shape` CHECK is vacuous (ACCEPTED RESIDUAL — historical
+artifact).**
+Migration 043's `api_tokens_revocation_shape` CHECK admits both `revoked_at IS NULL` and
+`revoked_at IS NOT NULL` and therefore constrains nothing. Harmless. Do not create
+migration churn solely to remove it. Revisit only if a future legitimate schema migration
+naturally rewrites the shape or evidence later shows an actual correctness consequence.
+
+**P1-R3 — authenticated `/login` permission view projection (ACCEPTED RESIDUAL —
+non-material).** `getUserPermissions` now resolves the loaded request principal first, so an
+authenticated `/login` view receives the session user's permissions where it previously
+received `[]`. The current login/template surface does not consume that data and no
+authority widening was found. Revisit if that surface begins consuming the projection or
+the behavior becomes externally material.
+
+**P1-R4 — JSON `workflowInput` parity (ACCEPTED RESIDUAL — product/API parity).** JSON
+`POST /api/tickets` lets a string `workflowInput` normalize to `{}` through the canonical
+seam, whereas the HTML form rejects unparseable JSON. No authority widening found.
+Nonblocking for P1; candidate for ordinary future API-contract cleanup when this surface
+is next deliberately changed. This is an input-parsing parity observation, not a security
+defect — do not silently recharacterize it.
+
+### 4. P1 implementation history — failed canonical checkpoint, correction, green checkpoint
+
+Recorded as FIXED / HISTORICAL GATE EVIDENCE PRESERVED (not a residual; not a LOW):
+
+- The exact independently reviewed implementation commit `489bde9f4c6fd23d2ffa2ec8b905bc079b36c46f`
+  (parent `1360945e…`) FAILED its canonical commit-bound release checkpoint:
+  run `1fdebfc5-12f1-49c9-ba67-0fd26cb3301b`, `registryHash 51c1719a…`, FAILED 146/258,
+  first failure ordinal 147 `scripts/process-execution-release-postgres-test.js`
+  (`43 !== 42`).
+- Root cause: migration 043 advanced the repository migration head, but the
+  repository-required process-execution exact-schema-head lockstep
+  (`PROCESS_EXECUTION_*_DATABASE_SCHEMA_VERSION`, register entry "Advancing the
+  repository migration head requires advancing the process-execution release contract's
+  compatible-schema window") had not been advanced. The failed run remains preserved
+  unchanged under `.local-artifacts/release-checkpoint-results/` as truthful gate history.
+- Correction commit `c4fd97cf531658117d206fcf7f74f63b2735d118` ("Correct P1
+  process-execution schema head lockstep", parent `489bde9f…`): advanced the exact
+  supported head 42→43 in `runtime/process-execution-release-contract.js` and the exact
+  expectations in `scripts/process-execution-release-postgres-test.js` and
+  `scripts/process-execution-release-contract-test.js`. Fresh independent narrow
+  re-review: HIGH 0 / MEDIUM 0 / LOW 0, verdict A.
+- New canonical checkpoint at the child commit: run `d3896f89-63c0-4c98-b1b3-462e41a53ab0`,
+  `repositoryCommit c4fd97cf…`, `registryHash 5d0abac8…`, PASSED 258/258, 0 failed.
+- Publication: master fast-forwarded non-force `1360945e…` → `489bde9f…` → `c4fd97cf…`.
+  Migration 043 remains published SOURCE bytes only, operationally NOT_AUTHORIZED; the
+  operational database remains at 42 / `042_objective_revision_baseline.sql` with
+  `api_tokens` absent.
+
+### 5. Post-T10 external-only candidates — reconciliation against current source
+
+A later fresh post-T10 compositional audit reported thirteen candidate observations. Each was
+re-adjudicated against CURRENT repository source before this record; dispositions follow
+the section-2 vocabulary. Already-recorded items are pointed at, not duplicated; no item
+is promoted in severity; no manual/source-proof boundary is converted into checkpoint
+obligations.
+
+| # | Candidate | Disposition | Source-grounded basis |
+|---|-----------|-------------|----------------------|
+| 1 | Compositional-closure criterion discoverability — the T10 closure fact asserts "all 13 final closure standards PASS" but the 13 standards are not enumerated at or near that statement | ACCEPTED RESIDUAL — documentation discoverability | The criterion is materially adequate and discoverable in principle: it is durably recorded as the "DURABLE CLOSURE CRITERION (compositional satisfiability)" paragraph inside the "T10 migration-authority verification-contract correction — PUBLISHED at d62a97b…" register entry, and the T10 final-audit section's FINAL CLOSURE FACT paragraph applies it; only its discoverability from the closure statement itself is weak. Revisit when the register is next reorganized; do not re-derive the 13 standards here. |
+| 2 | Undocumented `AGENT_ALLOW_*` environment capability override | ACCEPTED RESIDUAL — external-only documentation | `server.js` / `AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED` is gated on `AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT === '1'` (default off); the register mentions the name only incidentally inside the A24-era mutation-coverage entry for `workflow-prompt-composition-test.js`. Its capability semantics as an operator/developer environment override are not documented. Document at the next deliberate change of that surface. |
+| 3 | Stale T8 `provenanceSurface` catalog strings | ACCEPTED RESIDUAL — presentation-only | `ACTIONS_CATALOG` `provenanceSurface` strings in `server.js` may lag current evidence surfaces (operation receipts). The T8-I4 "Frozen distinction inventory" records OTHER presentation residuals but not this one. Presentation-only; revisit with the next catalog-touching change. |
+| 4 | `TEST_INTERRUPTION_POINT` is not `NODE_ENV=test`-gated while adjacent test hooks are | ACCEPTED RESIDUAL — consistency | `server.js` reads the raw `TEST_INTERRUPTION_POINT` env var; the adjacent `TEST_SKIP_STARTUP_RUN_RECOVERY` and `TEST_INTERRUPT_AFTER_*` hook declarations require `NODE_ENV === 'test'`. No authority change taken here. Revisit at the next deliberate change of the test-hook surface. |
+| 5a | T4 released-child full chain (claim→execute→settle) as one behavioral owner | ACCEPTED RESIDUAL — composition | T4's recorded limitation covers the OPERATIONAL live sample (the T4 operational cutover record's positive-path-sample limitation); stage-level owner tests exist; a single full-chain composition owner is not recorded. Revisit when T4 surfaces are next deliberately changed. |
+| 5b | T5 full capacity chain (capacity-wait→claim→acquire→settlement) as one behavioral owner | ACCEPTED RESIDUAL — composition | T5's closure record "Honest evidence basis" covers the absence of a live pressure sample; the budget/boundary owners cover stages individually; one full-chain composition owner is not recorded. Revisit when T5 surfaces are next deliberately changed. |
+| 5c | Expired in-lease waiter→resume→settle as one behavioral owner | ACCEPTED RESIDUAL — composition | Stage owners exist (`lease-renewal-resume-safety-test.js`, `process-lease-expiry-cancellation-postgres-test.js`); the full expiry→resume→settle chain composition is not recorded. Revisit when lease/wait surfaces are next deliberately changed. |
+| 5d | verification-failure-never-retries direct ownership | ALREADY DURABLY RECORDED | The register's A20 auto-retry verification-ownership table records the `verification failure never retries` row with destination NONE, the structural argument, and the truthful-fixture-first requirement. Leave alone. |
+| 5e | Route-level positive stop-running-run ownership | ALREADY DURABLY RECORDED | The register's allocated-cluster entry "Two honest limitations" (#1) and the suite's own honest-limitation comment in `allocation-lifecycle-isolation-test.js` record that stop is exercised only against an already-terminal run and that in-flight-stop isolation needs a long-running run the deterministic stub cannot produce. Leave alone. |
+| 5f | T6 uncertain / operator-recovery / target-mismatch behavioral ownership | ALREADY DURABLY RECORDED (and behaviorally owned) | The T6 per-invariant verification index for T6-I2/T6-I4 maps direct owners for the UNCERTAIN branches and both crash points, alongside the 15-cell PASS matrix; operator-recovery routes are positively driven by required `recovery-regression-test.js`; claim classification by required `governed-request-claim-classification-test.js`. No uncovered T6 behavior matching the audit claim remains. |
+| 5g | interrupted-uncertain permanence across repeated restart | NO LONGER APPLICABLE | Required `governed-post-transport-restart-postgres-test.js` restarts TWICE (servers 2 and 3) and asserts delivery-uncertain authority is a historical fact a restart can neither lose nor repeat ("a further restart buys nothing"). Covered. |
+| 5h | `dev:smoke` real-provider path is manual, not checkpoint-owned | ALREADY DURABLY RECORDED — INTENTIONAL MANUAL BOUNDARY | The manual smoke path is explicit repository-recoverable policy, not a lost development-review obligation: `pnpm dev:smoke` is documented as the first real ticket/provider/workspace verification in `AGENTS.md`, `docs/OPERATOR_GUIDE.md`, and `docs/SETUP_AND_FIRST_RUN.md` (defined in `package.json`); `scripts/dev-smoke.js` is deliberately unregistered in `scripts/test-manifest.js`, and the manifest's `EXCLUSION_REASONS.live-provider` policy states live-provider verification "cannot run deterministically in CI and must not gate a release". No checkpoint obligation is created for live-provider work. |
+| 5i | auto-retry ceiling test manually composes retry | NO LONGER APPLICABLE | Current `auto-retry-bounds-test.js` drives the REAL server path (live scheduler interval; retries created by terminalization, not by direct invocation; `runAutoRetryAfterFailureIfPolicyAllows` is invoked only from its `server.js` terminalization call site). The audit's description matches no current source. |
+
+### 6. Already-recorded open work — confirmed, pointed, not duplicated
+
+- **A20 56-suite orphan repair/retirement backlog**: durably recorded in the "T10 A20
+  verification-completeness adjudication" entry, restated in the T10 final-audit closure
+  entry, with per-file reasons in `scripts/test-manifest.js`. Separate non-kernel/non-T10
+  legacy/product/hermeticity/required-set-quality work.
+- **T7 deferred decisions** (model→operator ownership unassigned T7-I7; `human_confirmed`
+  separate doctrine T7-I8; same-Run delivery extension and later-run T7 mechanisms as
+  future registered work): durably recorded in the T7 registration and closure entries'
+  "Deferred decisions remain deferred" subsections.
+- **T8-I4 recorded residuals** (CLI `--allowed-scopes` write grant, stored `write`
+  annotation, `outcome` term overload, I2/hygiene control-path defects): durably recorded
+  in the T8-I4 "Frozen distinction inventory" / "Recorded residuals" subsection.
+- **T5-I6** (no FIFO/fairness/ordering policy frozen) and **T9** (empty/deferred external
+  authority + optional hygiene residual): durably recorded in their closure entries.
+
+No new residual entries are created for intentionally open work above.
+
+### 7. Historical-transcript discipline
+
+An old development-session TODO, abandoned experiment, WIP note, or historical
+investigation is NOT a current obligation merely because its transcript ended without a
+visible "fixed" statement. Current repository authority wins: closed/superseded/archived
+investigations stay closed unless current source establishes an unresolved obligation.
+Historical ST/TM/BF/benchmark/experimental work is not resurrected from transcript
+chronology. This reconciliation created NO new obligations from old transcripts.
+
+### 8. Non-claims
+
+This record changes no executable, manifest, migration, schema, checkpoint, or
+operational identity; registers no Ticket/Run/bounded-agent semantics; authorizes no
+migration; and does not alter the P1 design freeze, migration 043 bytes, or the
+checkpoint registry. It adds exactly the review-disposition rule, the four P1 residual
+dispositions, the P1 failed→corrected→green checkpoint history, the post-T10
+reconciliation table, and confirmatory pointers to already-recorded open work.
+
+---
+
 ## Execution-semantics provenance fixture shared Ticket-attempt authority (2026-08-17)
 
 **Status: RESOLVED IN SOURCE — independent pre-semantics provenance cases now
