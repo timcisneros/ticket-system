@@ -1529,6 +1529,46 @@ checkpoint registry. It adds exactly the review-disposition rule, the four P1 re
 dispositions, the P1 failed→corrected→green checkpoint history, the post-T10
 reconciliation table, and confirmatory pointers to already-recorded open work.
 
+### 9. Migration-043 AUTHORIZED record — independent review dispositions (2026-09-05)
+
+Development-review findings only (section 1 plane distinction applies). The fresh
+independent review of the exact frozen migration-043 AUTHORIZED authorization-record
+candidate — transition `042-to-043` bound to target `127.0.0.1:5432/ticket_system`
+schema `ticket_system`, applied pre-state exactly 001..042, pending exactly
+`043_api_token_authority.sql` with source sha256 `019a137b…`, candidate file sha256
+`656597ad…`, base HEAD `38c4ee66…` — returned FINAL ADJUDICATION verdict A,
+HIGH none, MEDIUM none, with the following retained findings and dispositions:
+
+**MR-1 — `authorizedAtUtc` moment semantics (ACCEPTED RESIDUAL).** The repository
+contract for the field is format-only (RFC3339 with Gregorian component validation) and
+does not strongly define whether the moment denotes preparation/authority-establishment
+time versus independent-acceptance/publication time. For THIS migration-043
+authorization, the recorded value `2026-09-05T15:47:38Z` is interpreted as the time the
+candidate authorization content was established/prepared — explicitly NOT a claim that
+independent review or publication had already occurred at that moment. The reviewed
+value is valid for this transition; no authorization-record correction is made.
+
+**MR-2 — `evaluateAppliedMigrationIdentities` fully-current precondition
+discoverability (ACCEPTED RESIDUAL — documentation/ergonomics).** The exported
+read-only validator in `persistence/postgres/migration-authority.js` expects a
+fully-current canonical migration ledger (every canonical migration applied and
+identity-matched); that precondition is effectively discoverable only through its
+docstring/call-site semantics, and the validator was easy to misuse against the
+pre-migration 42-applied state during authorization preparation — where it correctly
+reported the (expected) missing identity for the not-yet-applied 043. The misuse was
+harmless and indicates no operational defect. Revisit only at the next deliberate
+change of that surface; no code correction is required now.
+
+**Adjudications recorded with these dispositions:** `authorizedBy` ("fresh independent
+migration-043 authorized-record review") was adjudicated truthful and valid for the
+record; the preparation-time misapplication of the fully-current validator against the
+42-applied pre-state was REJECTED / NOT A DEFECT as an operational finding (the
+pre-state was correct; the probe used the wrong validator contract); and no
+authorization-record correction was required by the review. The accepted AUTHORIZED
+bytes are unchanged by this subsection. The full review transcript is not reproduced;
+this record exists solely so every finding retained in FINAL FINDINGS / FINAL
+ADJUDICATION carries a durable repository-visible disposition (section 2 rule).
+
 ---
 
 ## Execution-semantics provenance fixture shared Ticket-attempt authority (2026-08-17)
