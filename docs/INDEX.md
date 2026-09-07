@@ -7,9 +7,11 @@
 - [`SYSTEM_STATUS.md`](SYSTEM_STATUS.md) — implemented guarantees and remaining productization work.
 - [`ARCHITECTURAL_DECISIONS_PENDING.md`](ARCHITECTURAL_DECISIONS_PENDING.md) — canonical register of
   open integrity defects, deferred work, and pending architectural decisions; also carries the
-  broad ticket-kernel roadmap (T0–T10) and the current-tranche brief.
+  closed broad ticket-kernel roadmap (T0–T10), the post-T10 bounded/product forward-roadmap
+  reconciliation (capability stages and P-numbered implementation sequencing), and the
+  current-tranche brief.
   Read before starting work that touches runtime enforcement, feasibility, recovery, objective
-  interpretation, or ticket-kernel sequencing.
+  interpretation, ticket-kernel sequencing, or any post-T10 forward product work.
 - [`STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md`](STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md)
   — completed structured allocation and governed model economics roadmap through Tranche 6. The
   frozen evaluation ended FINAL STOP; the explicit post-result decision demotes future first-class

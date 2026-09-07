@@ -1657,6 +1657,381 @@ re-review transcript is not reproduced.
 
 ---
 
+## Post-T10 forward-roadmap reconciliation — Broad Ticket-Kernel closure, bounded/product capability and implementation roadmaps, numbering guard — RECONCILIATION CANDIDATE (2026-09-07)
+
+**Status: DOCS-ONLY RECONCILIATION CANDIDATE — NOT AUTHORITY UNTIL INDEPENDENT REVIEW AND
+PUBLICATION — NO IMPLEMENTATION, MIGRATION, SCHEMA, CHECKPOINT, OR OPERATIONAL CHANGE — NO
+IMPLEMENTATION AUTHORITY CREATED BY THIS TEXT — T0–T10 REMAINS CLOSED — P1 GOVERNED
+PROGRAMMATIC ACCESS REMAINS CLOSED — MIGRATION AUTHORIZATION REMAINS `NOT_AUTHORIZED`.**
+
+### 1. Historical provenance and reconciliation statement
+
+Strategic and implementation planning for post-T10 product work existed outside durable
+repository authority. Repository recovery established: the Broad Ticket-Kernel Roadmap
+(T0–T10) had to be bootstrapped into this register on 2026-08-26 because its sequence
+otherwise existed only outside recoverable repository authority; the post-T10 P-numbered
+planning sequence was only partially propagated — P1 became frozen, independently reviewed,
+implemented, checkpointed, published, migrated under its AUTHORIZED record, and retired to
+`NOT_AUTHORIZED` (see the P1 design-freeze entry and the development-review disposition
+register above), while no register entry, document, or commit anywhere in repository history
+defines P2 or any later phase. Planning proposals recovered from historical discussion cannot
+be proven to have been formally accepted, and this record does NOT rewrite any unratified
+proposal into historical authority. It does NOT accuse prior agents and does NOT invent
+intent. What this reconciliation does: after recovering the surviving planning artifacts, the
+user-authored requirements, and current repository authority, it establishes — now — the
+durable forward topology below as the best-supported and least-lossy model. Completed work is
+unchanged by it.
+
+### 2. Roadmap topology (stated once)
+
+- **Broad Ticket-Kernel Roadmap (T0–T10): CLOSED** architectural/kernel sequencing authority;
+  see its bootstrap entry in this register. It governed substrate/product kernel semantics
+  (lifecycle, revisions, relationships, waiting, effects, intervention, operator plane,
+  external actor, foundation closure). It is NOT developer/source sequencing and is not
+  reopened.
+- **Separate technical roadmap axes remain separately scoped and closed:** process execution
+  (eight tranches), work definition / typed evidence (four tranches), structured allocation
+  and model economics (six tranches, FINAL STOP). No merge, no reopening.
+- **Developer/source plane:** privileged agent interaction with ticket-system SOURCE — an
+  authority plane plus cross-cutting engineering discipline (hermeticity, cognitive
+  efficiency, agent/model neutrality, repository organization, verification/review discipline,
+  implementation correctness, source-authority integrity). It is NOT a numbered roadmap and
+  owns no product sequencing. Its durable homes are the plane-separation/anti-lock-in
+  authority in the T10 final-audit entry above, the development-review disposition rule, the
+  published checkpoint-trigger policy (`AGENTS.md`), and `docs/DIRECTION.md` invariants.
+- **Bounded/product plane:** agent interaction THROUGH the ticket system — a distinct
+  authority plane. It carries the two forward planning dimensions below.
+- **Forward planning dimensions (established prospectively by this reconciliation):**
+  - **Bounded/Product Capability Roadmap** — strategic capability maturity: what useful
+    capability and product maturity the bounded/product plane must eventually achieve. It
+    does NOT determine repository implementation order.
+  - **Product Implementation Sequencing Roadmap** — concrete next-work order: what
+    repository/product work is performed next, in what dependency order. The `P<n>` namespace
+    belongs ONLY to this roadmap.
+
+### 3. Capability-frontier criterion (standing, bounded/product plane)
+
+> The bounded/product plane is developed toward the useful-work capability frontier
+> demonstrated by a privileged developer agent operating on source, measured by outcomes
+> achievable through governed product primitives. This is directional and does not imply
+> current feature parity, mechanism parity, shell access, repository mutation, unrestricted
+> host/network authority, privilege parity, or authority-plane collapse. A lower-authority
+> governed primitive that achieves the useful outcome satisfies the criterion.
+
+This composes with frozen plane authority: planes remain authority-distinct and "no current
+feature parity is claimed between the planes" (T10 final-audit anti-lock-in entry above). The
+criterion is a standing challenge against roadmap omissions: every implementation item must
+advance a capability outcome or a necessary operational/access prerequisite, and every active
+capability stage must have an implementation path or a recorded unscheduled/gated reason.
+
+### 4. Bounded/Product Capability Roadmap — active stages
+
+Active stage = current roadmap concern with sufficient recovered/product evidence. Stages are
+capability dimensions, not work phases; they own direction, maturity, and acceptance
+questions — never implementation order.
+
+**CAP-1 — Outcome Integrity.**
+- Outcome: given an expressed acceptance contract of checkable conditions, the system
+  truthfully determines from durable evidence whether those conditions are satisfied and
+  refuses unsupported completion; where no checkable contract exists it reports that honestly
+  rather than accepting vacuously. It does NOT claim to prove quality for judgment-laden
+  outcomes and never converts model judgment into completion authority.
+- Delivered substrate: frozen T2 lifecycle/reasons; completion evidence owed only by a
+  completion claim (register); deterministic postconditions and their coverage census;
+  policy-verifier architecture.
+- Remaining gap: deterministic content-checkable acceptance criteria beyond substrate
+  postconditions.
+- Acceptance question: can the system prove, from durable evidence alone, that the defined
+  outcome was achieved — and refuse completion otherwise?
+- Status: partially satisfied (substrate delivered); validated direction; advanced by P2.
+
+**CAP-2 — Adaptive / Context-Appropriate Work.**
+- Outcome: execution adapts to the nature of the work — type-appropriate limits/guidance and
+  authoritative context acquisition — without widening authority.
+- Delivered substrate: deterministic workload profiles in current source (`report`,
+  `diagnosis`, `refactor`); unmatched objectives fall back to base limits. A historical
+  five-type model additionally described `recommendation` and `bulk-inventory`, but those two
+  profiles are not present in current runtime source and that historical model remains
+  unvalidated;
+  attempt/evidence read authority; Work Contexts; operator-inbox thread records; T7's frozen
+  delivery-truth vocabulary as the standard any future delivery design must meet.
+- Boundary fact: NO same-Run operator→agent delivery channel exists today; frozen T7
+  authorizes none (T7-I3), and none may be created except through an explicit registered T7
+  semantic extension.
+- Remaining gap: authoritative-context continuation and structured clarification;
+  model→operator messaging ownership (T7-I7) is unassigned and must be resolved by any such
+  design's own registered decision.
+- Acceptance question: does the system handle work whose shape it did not predict — using
+  only authoritative recorded context — while every adaptation stays inside recorded
+  authority?
+- Status: partially satisfied; EVIDENCE-CAVEATED (historical work-type models are unvalidated;
+  current profiles may suffice for real usage). Advanced (design-gated) by P3.
+
+**CAP-3 — Governed Surface Breadth.**
+- Outcome: bounded agents accomplish real work on progressively broader governed surfaces,
+  every interaction receipted inside recorded bounds.
+- Delivered substrate: workspace inspection/mutation phases; browser target Phase 1
+  (read-only) plus the operator browser environment; the complete eight-tranche
+  process-execution substrate (default-off); the T6 effect boundary; the connector authority
+  boundary (local adapter only).
+- Remaining gap: browser Phase-2 interaction (designed, explicitly gated); process-execution
+  product enablement; real external connectors (each requiring its own security/operational
+  review); further surface classes.
+- Acceptance question: can a bounded agent accomplish real work on the next class of useful
+  surface, with every interaction provably inside its recorded bounds?
+- Status: partially satisfied; validated direction. Advanced by P4 (internal surfaces) and
+  P7 (external, one at a time).
+
+**CAP-4 — Delegation and Composition.**
+- Outcome: larger work decomposes into smaller governed work — invocable workflows,
+  child/subwork execution, multi-target composition — with every delegated unit independently
+  completed and evidenced.
+- Delivered substrate: T4 relationships; Ticket attempts with immutable Run membership;
+  workflow-scoped child-Ticket creation (`executeTicketPlan`: workflow-executable, no child
+  auto-run).
+- Boundary facts: agent-invoked workflow execution (`invokeWorkflow`) is a designed catalog
+  entry ONLY — no executable path exists at current source; child/subwork execution and
+  multi-target composition do not exist.
+- Remaining gap: executable governed workflow invocation; child/subwork execution paths;
+  multi-target composition (design decision, not pre-authorized).
+- Constraint: structured parent/planner/leaf authority remains demoted (FINAL STOP);
+  composition is expressed only through existing Ticket/Run/Workflow primitives.
+- Acceptance question: can work be delegated into smaller governed work — every piece
+  independently evidenced — with no piece escaping authority?
+- Status: partially satisfied; FINAL-STOP-constrained. Advanced by P5.
+
+**CAP-5 — Long-Horizon Durable Work.**
+- Outcome: work spanning long durations and external events pauses, resumes, and proves
+  continuity from authoritative recorded state.
+- Delivered substrate: T5 waiting/time/fairness/backpressure; leases; process templates and
+  schedules; attempt/continuation semantics.
+- Remaining gap: long-lived product work; event-driven external triggering is gated on future
+  external-actor/event authority (T9 remains EMPTY/DEFERRED by frozen closure).
+- Acceptance question: can long-running work pause and resume — across restarts and
+  interventions — with continuity proven from recorded state and no silent drift?
+- Status: partially satisfied at substrate level; frontier EVIDENCE-CAVEATED; no
+  implementation phase scheduled (T9-gated remainder).
+
+### 5. Recovered candidate capability concern — NOT an active stage
+
+**Domain-Appropriate Quality Policy (recovered candidate concern; deliberately NOT numbered
+CAP-6).**
+- Substance: for each class of work, express what adequate quality means and truthfully
+  report which parts are checkable versus judgment-reserved — without converting judgment
+  into completion authority.
+- Why not an active stage: recovered planning evidence for it is unratified; the historical
+  domain work-type models are unvalidated; and for judgment-laden classes (research
+  synthesis, support judgment, creative work) no deterministic ground truth exists today, so
+  an active stage would imply a maturity claim the architecture cannot honestly make.
+- Authority: NO implementation phase, NO current ordering authority, NO CAP-n identifier (a
+  number would falsely imply equal active-stage authority and order).
+- Promotion condition: an explicit registered decision may promote it to an active numbered
+  stage — and possibly to an implementation phase — only once its design question is
+  answered: which work classes admit honest deterministic checkable proxies, and which must
+  be reported as judgment-reserved?
+- Visibility rule: this concern is recorded here so future roadmap work cannot silently lose
+  it.
+
+### 6. Product Implementation Sequencing Roadmap
+
+Authority levels for this roadmap (stated once): upon independent acceptance, commit, and
+publication of this reconciliation, P2–P7 become the authoritative current **Product
+Implementation Sequencing Roadmap** — their roadmap-level identities, outcomes, CAP mappings,
+boundaries, and current sequence are durable PLANNING authority, and P2 is then the current
+next implementation phase. Roadmap registration NEVER authorizes implementation: each phase's
+exact schema, API, runtime semantics, migrations, operational changes, new authorities,
+provider contact, and design-specific verification remain unauthorized until that phase
+receives its own separately registered design/implementation authority under existing
+repository rules. **Roadmap registration ≠ implementation authorization.**
+
+**P1 — Governed Programmatic Access — CLOSED.**
+Bearer/API-token governed access to the canonical Ticket plane. Its design freeze,
+implementation review, checkpoint history, migration-043 authorization lifecycle, and
+retirement to `NOT_AUTHORIZED` are durably recorded in the P1 design-freeze entry and the
+development-review disposition register above; this reconciliation does not restate or alter
+them. P1's historical identity is fixed and it is never renumbered.
+
+**P2 — Honest Completion.**
+Outcome: strengthen deterministic/checkable acceptance and refusal so unsupported completion
+cannot become product truth.
+- Advances CAP-1 (deterministic criteria also serve part of the domain-quality candidate
+  concern without activating it).
+- Roadmap-level only: exact schema/API/verifier implementation is NOT frozen here and
+  requires its own registered design.
+- Dependency edge: P2 → P5 (section 8).
+
+**P3 — Bounded Authoritative Context & Continuation.**
+Outcome: allow bounded work to use authoritative prior-attempt evidence and audited
+operator-guided continuation without silently creating live operator→agent delivery
+authority.
+- Advances CAP-2; adjacent to CAP-5 (continuation).
+- In scope: bounded read-only projection of prior attempt/Run evidence; an audited
+  agent→operator clarification/request design MAY be in scope subject to the unassigned
+  ownership decision being resolved by the phase's own registered design; operator-guided
+  continuation through the EXISTING T3 objective-revision authority and new-attempt/rerun
+  gates.
+- Explicit boundaries: same-Run operator→agent answer delivery is NOT authorized here; any
+  such future path is T7-EXTENSION-GATED (section 9). Generic prompt/context construction is
+  not T7 delivery authority.
+- Sequencing note: P3 before P4/P5 is current implementation priority (section 8), not a
+  frozen dependency.
+
+**P4 — Governed Surface Expansion.**
+Outcome: make already-governed substrate usable as bounded-agent product capability, one
+reviewed surface slice at a time.
+- Advances CAP-3.
+- Current candidate slices, each with its own design/review boundary, and none pre-authorized
+  by this grouping:
+  - process-execution product enablement (substrate complete; default-off →
+    operator-enabled under the existing GA runbook and release contract);
+  - browser Phase-2 interaction (click/fill/press as receipted mutation-tier operations; the
+    design's own confirm-before-phase-2 gate still applies).
+- If independent review determines that these slices' trust boundaries make common phase
+  closure misleading, the phase may be split without changing CAP-3.
+- Sequencing note: priority, not dependency.
+
+**P5 — Governed Bounded Composition.**
+Outcome: make currently inert/deferred composition paths actually usable by bounded agents
+through existing Ticket/Run/Workflow authority, with every delegated unit independently
+evidenced.
+- Advances CAP-4; each delegated unit also relies on CAP-1 truth (hence the P2 → P5
+  dependency).
+- Explicit boundaries: executable governed workflow invocation is a gap (the catalog entry
+  today is inert); child/subwork execution is a gap; multi-target composition remains a
+  design decision, not pre-authorized; NO revival of structured parent/planner/leaf
+  authority — FINAL STOP remains controlling.
+
+**P6 — Deployment / Operations.**
+Outcome: make the governed product operationally deployable through separately designed
+deployment authorities.
+- Operational prerequisite, not a capability stage; advances no CAP stage directly.
+- The `SYSTEM_STATUS.md` "not yet claimed" list (multi-tenancy, row-level tenant isolation,
+  managed secrets, backup/restore automation, point-in-time recovery, event
+  retention/partitioning, read replicas, zero-downtime migration orchestration, shared
+  artifact/blob service) is a menu of separately scoped future designs — NOT one pre-approved
+  implementation bundle; each item is demand-gated with its own registered design.
+
+**P7 — Integrations.**
+Outcome: introduce external-system capability one governed integration at a time through the
+existing external-authority/receipt boundary.
+- Advances CAP-3; CAP-5 mapping ONLY where separately authorized (event-triggered external
+  work is T9-gated).
+- Explicit boundaries: one connector/authority surface at a time; each external adapter
+  requires its own security and operational review under the existing connector authority
+  contract; no generic unrestricted network authority; no scheduler/webhook authority beyond
+  separately registered designs.
+
+### 7. Canonical crosswalk (single authority for CAP↔P relationships)
+
+| CAP | Implementation currently advancing it | Unscheduled gaps / non-goals | Gates |
+|---|---|---|---|
+| CAP-1 Outcome Integrity | P2 | model-judged semantic completion — non-goal (truthfulness doctrine) | — |
+| CAP-2 Adaptive/Context-Appropriate Work | P3 (design-gated) | beyond-profile work types; unvalidated work-definition catalog — non-goal pending real-usage evidence | T7-I7 ownership decision; NO same-Run delivery without T7 extension |
+| CAP-3 Governed Surface Breadth | P4 (internal surfaces), P7 (external, one at a time) | further surface classes | browser design gate; connector security/operational review; T9 for event triggering |
+| CAP-4 Delegation and Composition | P5 | orchestration richness beyond FINAL STOP — deliberately bounded | FINAL STOP |
+| CAP-5 Long-Horizon Durable Work | partially via P2/P3/P5; no dedicated phase | event-driven external triggering | T9 (EMPTY/DEFERRED authority) |
+| Domain-Appropriate Quality Policy (candidate concern) | none — unscheduled | judgment-laden quality expression | promotion requires explicit registered decision + checkable-proxy design answer |
+
+Reverse justification (one line each; phases are defined only in section 6):
+
+- P2 → CAP-1 truth (root).
+- P3 → CAP-2 context/continuation (CAP-5 adjacency).
+- P4 → CAP-3 internal surfaces.
+- P5 → CAP-4 delegation (CAP-1 per-unit truth).
+- P6 → necessary operational prerequisite (no CAP stage).
+- P7 → CAP-3 external slice (CAP-5 only via separate authorization).
+
+### 8. Dependency versus implementation priority
+
+Dependencies (semantic/operational necessity — the later work would be unsafe or impossible
+otherwise):
+
+- **P2 → P5:** autonomous child/subwork composition whose work is expected to terminate
+  truthfully requires strengthened deterministic completion FIRST.
+
+Existing-authority substrates are NOT phase dependencies: T3 revision enables P3's
+operator-guided continuation; T4/attempt authority enables P5's composition; T5/lease/
+schedule authority enables long-horizon work.
+
+Complete current sequencing policy (planning authority once published; re-orderable by a
+later registered roadmap decision for phases without a dependency edge):
+
+**P2 → P3 → P4 → P5 → P6 → P7.**
+
+- **P2 is the current next phase.**
+- P3 → P4 → P5 ordering is priority policy among mutually independent phases, not a frozen
+  dependency. Rationale: risk-ascending order (read-only/low authority → enablement of proven
+  substrate → canonical-lifecycle change), usefulness breadth per the frontier criterion
+  (context/continuation delivers the developer-analog capability earliest), and reversibility.
+  The only hard edge inside this span is P2 → P5.
+- P6 and P7 are NOT dependency-linked to P2–P5: P6 is a phase of THIS roadmap whose
+  operational designs are separately demand-gated (it is not a third planning axis); P7 is
+  review-gated and one-at-a-time. Their placements are priority/demand policy only.
+
+A fresh model must answer two different questions from this section alone: what MUST precede
+what (the dependency list above) and what is currently done next (the policy sequence, whose
+head is P2).
+
+### 9. Gates register (single list)
+
+- **T7 extension gate:** any same-Run operator→agent delivery requires an explicit
+  registered T7 semantic extension with durable source-identity/provenance, content binding,
+  target scope, delivery authority, and delivery-occurrence evidence (T7-I3/I4/I5). Frozen
+  T7 authorizes none today. The P3 T3-revision continuation path needs NO extension.
+- **T7-I7 ownership gate:** model→operator messaging ownership is unassigned; any
+  clarification design resolves it by its own registered decision.
+- **T9 gate:** event-driven external triggering requires future external-actor/event
+  authority (T9 remains EMPTY/DEFERRED).
+- **FINAL STOP constraint:** no first-class structured parent/planner/leaf revival;
+  composition only through existing Ticket/Run/Workflow primitives.
+- **Connector review gate:** every external adapter requires its own security/operational
+  review; one surface at a time.
+- **Design gates:** browser Phase-2 confirm-before-phase-2; P3's evidence-caveated design
+  gate; P2/P5 registered designs; P6 per-item designs.
+
+### 10. Numbering and terminology guard
+
+This register already contains multiple unrelated tranche-numbering axes guarded by the
+Broad Ticket-Kernel entry. This reconciliation extends that model:
+
+- `T0–T10` — the CLOSED Broad Ticket-Kernel architectural roadmap only (its entry above).
+  Never read as developer/source sequencing.
+- `P<n>` — the Product Implementation Sequencing Roadmap ONLY. `P1` = Governed Programmatic
+  Access, CLOSED, historical identity fixed. `P2–P7` are the current roadmap phases
+  established by this reconciliation once published: their roadmap identity and current
+  sequence are planning authority (section 8), and none carries implementation/design
+  authority merely from roadmap registration — each phase requires its own registered
+  design/authorization before implementation may begin (section 6). Historical
+  support-priority labels `P1/P2/P3` in archived business-fixture evidence corpora are
+  unrelated ticket-priority fixture data, not roadmap phases.
+- `CAP-<n>` — ACTIVE Bounded/Product Capability Roadmap stages only (currently
+  CAP-1..CAP-5). A recovered candidate concern without an active stage carries NO CAP number
+  (section 5).
+- Other roadmap axes (process-execution, typed-evidence, and structured-allocation tranche
+  numbers; T2-internal tranches) remain scoped by their own named roadmaps per the existing
+  guard.
+- Terminology note: the bare word "CAP" elsewhere in the repository means an economic hard
+  cap (structured-evaluation configuration), and "capacity" means admission pressure; neither
+  relates to `CAP-<n>` capability stages.
+
+### 11. Non-claims
+
+This candidate creates no implementation, migration, schema, checkpoint, or operational
+authority; implements nothing; runs nothing; renumbers nothing (P1 unchanged); reopens
+nothing (T0–T10, FINAL STOP, and frozen T7 semantics unchanged — the T7 extension gate is
+recorded here, not exercised); and pre-authorizes no P2–P7 design. Two states must not be
+conflated:
+
+- **Before publication**, this reconciliation candidate is NOT authority: P2–P7 cannot be
+  relied on as published roadmap authority, and nothing may proceed from this text.
+- **After independent acceptance, commit, and publication**, P2–P7 ARE the authoritative
+  roadmap-level forward sequence and P2 is the current next phase — while implementation
+  still may NOT proceed solely because the roadmap names a phase: the next phase's own
+  separately registered design/implementation authority must exist first. A published phase
+  may remain unimplemented; it is never, after publication, an unaccepted roadmap suggestion.
+
+---
+
 ## Execution-semantics provenance fixture shared Ticket-attempt authority (2026-08-17)
 
 **Status: RESOLVED IN SOURCE — independent pre-semantics provenance cases now
