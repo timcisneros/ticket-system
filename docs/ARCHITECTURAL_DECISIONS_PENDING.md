@@ -1631,6 +1631,30 @@ adjudication only. It changes no runtime, test, harness, migration-authority, or
 authorization bytes; does not execute migration 043; does not run release preflight or
 the canonical checkpoint; and creates no Ticket/Run/bounded-agent severity semantics.
 
+### 11. Host-suspend adjudication docs candidate — narrow re-review dispositions (2026-09-07)
+
+Development-review plane only (section 1). The corrected host-suspend adjudication
+candidate (subsection 10; docs file sha256 `12fdd307…`, diff-binary sha256
+`61acffc3…`, base HEAD `ff98c3d8…`) was independently re-reviewed with FINAL
+ADJUDICATION verdict A: HIGH none, MEDIUM none. **L-R1 — verdict-sentence causal
+scoping — CLOSED** (FIXED by causal scoping): the corrected sentence no longer conflicts
+with the retained M1/M2 robustness findings.
+
+**Retained LOW (final adjudication): verification-scope transparency (ACCEPTED
+RESIDUAL — review-evidence provenance).** The immediately prior uncommitted candidate
+was never persisted as a Git object, so the re-review could not prove its correction
+delta by literal prior-candidate byte comparison. It established the delta
+structurally instead: the current frozen candidate identity matched exactly; the
+corrected sentence was independently inspected; all other subsection content was
+independently checked against repository/artifact evidence; L-R1 was closed; and no
+candidate correction was required. This records ONLY the evidentiary limitation of
+that particular narrow re-review so its basis is not overstated. It is NOT a defect in
+the accepted subsection, NOT a defect in Git/repository semantics, NOT a reason to
+reopen L-R1, NOT a reason to modify the accepted host-suspend adjudication, and NOT a
+blocker to publication or the definitive checkpoint. No correction to the accepted
+candidate is required; the accepted bytes are unchanged by this subsection. The full
+re-review transcript is not reproduced.
+
 ---
 
 ## Execution-semantics provenance fixture shared Ticket-attempt authority (2026-08-17)
