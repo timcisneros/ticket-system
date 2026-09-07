@@ -2032,6 +2032,281 @@ conflated:
 
 ---
 
+## P2 HONEST COMPLETION — semantic design-freeze candidate (2026-09-07)
+
+**Status: P2 DESIGN-FREEZE CANDIDATE — NOT AUTHORITY UNTIL INDEPENDENT REVIEW AND PUBLICATION —
+NO IMPLEMENTATION AUTHORITY CREATED — NO MIGRATION AUTHORITY CREATED. The existing published
+roadmap remains controlling: P2 is the current next phase, and roadmap registration never
+authorized implementation.**
+
+### 1. Purpose and baseline
+
+This candidate is intended, once independently accepted, committed, and published, to durably
+register the ACCEPTED P2 (Honest Completion) semantic design freeze produced by the completed
+pre-freeze design/falsification investigation. Until publication it is a candidate design
+record, NOT durable repository authority, NOT implementation authority, and NOT a completion
+record: it is uncommitted and unpublished; no P2 kernel source exists; no migration is required
+or created; and canonical migration authorization remains `NOT_AUTHORIZED`. The purpose is
+hermeticity: a fresh implementation agent must be able to recover the frozen P2 contract from
+this register and repository authority alone, without prior-agent memory or conversation
+context.
+
+Candidate baseline: branch `master`; local HEAD = cached origin/master = freshly queried
+origin/master = `28b5dd5ec1626595c25b8532aea805eb463b5a3c` ("Publish post-T10 forward roadmap
+reconciliation"); worktree clean; nothing staged; stash empty; `git diff --check` clean;
+migration head `043_api_token_authority.sql`; no P2 kernel implementation anywhere in tracked
+source; no earlier P2 design-freeze record exists anywhere in the register. This candidate is
+ONE coherent section in this register; it does not duplicate and does not alter the published
+post-T10 forward-roadmap reconciliation entry (which remains the sole roadmap authority for
+P2's identity, outcome, CAP mapping, and sequencing), and it reopens no closed roadmap, no
+T0–T10 closure, no P1 record, and no FINAL STOP constraint.
+
+### 2. Preserved predecessor completion truth (by reference — NOT new P2 authority)
+
+The following existing, tested semantics are preserved unchanged by P2 and are restated here
+only as references, never as new P2 invariants:
+
+- Model completion prose is non-authoritative: `modelClaim.authority === false` is structurally
+  enforced in `runtime/completion-decision-contract.js` and pinned by
+  `scripts/completion-decision-postgres-test.js` (a bare model complete claim cannot complete
+  the Ticket).
+- Ticket `COMPLETED` remains settlement-only: the write-once attempt disposition is the exact
+  proof, validated by `evaluateAttemptCompletionAuthority` before it is written
+  (`persistence/postgres/store.js` `transitionTicketAfterRun`), and the five-state projection
+  consumes it (frozen T2 precedence).
+- Missing, stale, conflicting, or authority-mismatched completion evidence fails closed
+  (`evaluateRunCompletionEvidence`, `runtime/structured-allocation-leaf-run-contract.js`).
+- Completion decisions remain hash-bound, append-only, and replay-recomputable
+  (`run_consequences`; proven by `scripts/completion-decision-postgres-test.js`).
+- Immutable executed-intent binding remains controlling: declared work, the completion
+  authority snapshot, and the verification contract snapshot are admission-time and mutually
+  bound (`assertDeclaredWorkCompletionAuthorityBinding`, `runtime/declared-work-contract.js`);
+  later Ticket objective revision (T3) never changes an admitted Run's executed intent.
+- Honest insufficiency: where no authoritative checkable contract exists, the decision reports
+  `incomplete` / `explicit_evidence_required` and the Ticket stays open; the system never
+  manufactures certainty (`docs/KNOWN_LIMITATIONS.md` "postconditions do not prove arbitrary
+  task correctness").
+
+### 3. Canonical receipt-policy meaning (established; unchanged by P2)
+
+`workspace_objective_receipt` canonically means: a qualifying successful workspace-mutation
+operation receipt touched a path matching the objective's path tokens — OCCURRENCE, not
+terminal-state satisfaction, and no content-quality claim. This meaning is established by the
+existing decision rule (`hasWorkspaceObjectiveCompletionEvidence`,
+`runtime/completion-decision-contract.js`), the run-detail completion-source presentation
+(`buildRunCompletionSummary`, `server.js`: "agent workspace changes were applied (not
+independently verified against the full ticket objective)"), and the canonical fixture in
+`scripts/t2-tranche5-store-postgres-test.js`. P2 neither strengthens nor weakens this meaning.
+A terminal-state guarantee would be a DIFFERENT policy — the existing declared-postcondition
+path — and is NOT introduced by P2.
+
+### 4. P2-R1 — `workspace_objective_receipt` determination is durable-evidence-derived and execution-shape-independent
+
+**Classification: correction to the determination of an EXISTING authority policy. It creates
+no new completion authority class, no new evidence class, no schema, and no lifecycle change.**
+
+For an admitted `workspace_objective_receipt` completion policy:
+
+- **Positive satisfaction predicate.** Objective satisfaction is derived deterministically
+  from committed qualifying operation receipts plus the objective-path binding derived
+  deterministically from the immutable executed intent (the admitted declared-work objective,
+  whose binding to the completion authority is already asserted before the decision is built).
+  The predicate must NOT depend on emission of the `workspace.objective_satisfied` event
+  (today an incidental prerequisite recorded by the execution loop only when
+  `!governedLeafRun && !isBrowserRun(run) && !resumedFromPersistedState && !modelPlan.complete`
+  held), on model response shape, on execution-turn count, or on resume boundary.
+- **Final completion decision.** The positive satisfaction predicate remains subject to ALL
+  existing fail-closed violation, contradiction, and authority-refusal evidence. Guard parity
+  is REQUIRED with the existing execution guard, which refuses on `run.violation_detected` AND
+  `authority.denied` (`hasViolationEvidence`, `server.js`). The decision currently records
+  `authority.denied` only inside its required-evidence authority and treats only the three
+  violation-detected event classes as blocking; the corrected determination must not produce
+  completion where the existing execution guard would have refused — `authority.denied`
+  refusal parity is part of this invariant.
+- **Event status.** The `workspace.objective_satisfied` event remains durable history and
+  corroboration only; it is not a decision prerequisite.
+
+Demonstrated defect prevented (H1): equivalent committed workspace evidence currently settles
+differently. A Run that writes an objective-named path and claims completion in the same
+response records no loop event, so its decision reports `incomplete` and the Ticket stays open;
+an equivalent Run that writes in one turn and claims completion in a later turn records the
+event, and its Ticket completes; resumed Runs are likewise over-refused. Determination must be
+a function of durable evidence, not of loop shape.
+
+Non-claims: no terminal-state guarantee; no content-quality claim; no change to the policy's
+existing occurrence semantics (including that external post-receipt mutation does not retract
+completion — unchanged before and after P2); no change to T2 settlement/projection semantics
+or T3 revision semantics; the other receipt/terminal/draft policies (`workflow_terminal`,
+`workflow_draft_receipt`, declared postconditions, governed leaf rules) retain their existing
+independently owned rules, which this invariant does not touch.
+
+### 5. P2-R2 — the existing canonical `fileContains` criterion may govern direct-run completion
+
+**Classification: NEW bounded semantic authority. It allows ONE already-defined typed
+deterministic criterion — the existing canonical declared-work `fileContains` type
+(`runtime/declared-work-contract.js`; fields exactly `id`, `type`, `path`, `contains`) — to
+become authoritative for direct-run completion when deterministically admitted and
+runtime-evidenced. It does NOT make arbitrary text authoritative.**
+
+P2 extends the EXISTING seam and must not create a parallel criterion taxonomy. Established
+substrate facts: `fileContains` is representable in declared-work normalization and is
+available to workflow semantics (`evaluateWorkflowPostcondition`, `server.js`), but it is NOT
+producible today as an authoritative direct-run criterion and is NOT decidable by the
+canonical criterion evaluator (`evaluateCriterion`, `runtime/postcondition-criterion-evaluator.js`,
+which currently evaluates only `folder_exists`, `path_absent`, and `file_content_equals`).
+
+Semantic criterion (minimum): exact workspace path; expected substring; deterministic
+admission provenance (`deterministic-objective-contract`), admitted through the immutable
+executed-intent snapshots before execution.
+
+Evidence requirement: the runtime attestation is runtime-generated, criterion-bound, durable
+before the completion decision, and sufficient to replay the completion decision without
+trusting model prose. It must NOT require storing raw full file contents merely to prove
+substring presence. The later implementation design determines the smallest privacy-safe,
+runtime-owned attestation representation consistent with the existing claim/evidence doctrine
+(the recorded postcondition claim + the ONE canonical evaluator pattern). Exact event field
+names, JSON layout, contract version numbers, and storage shape are NOT frozen by this record
+unless an existing contract makes them unavoidable.
+
+When the executed intent deterministically admits such a criterion for a direct Run, objective
+completion requires the canonical criterion evaluator to decide that criterion satisfied from
+that durable, criterion-bound runtime evidence, enforced through the existing chain:
+completion decision → attempt settlement → Ticket projection. The canonical evaluator's
+existing outcome distinction is preserved exactly and the cases remain distinct:
+
+- **Satisfied.** The runtime obtains sufficient authoritative criterion-bound observation and
+  the canonical evaluator decides the expected substring present (`passed: true`,
+  `POSTCONDITION_PASSED`). The criterion contributes positive completion authority through the
+  existing chain.
+- **Deterministically unsatisfied.** The runtime obtains sufficient authoritative criterion-bound
+  observation and the canonical evaluator decides the expected substring absent
+  (`passed: false`, `POSTCONDITION_EVALUATION_FAILED`). Completion is refused on the basis of a
+  known negative result. This is a FAILED/unsatisfied criterion and must NOT be represented as
+  unavailable.
+- **Unavailable / unsupported.** The runtime cannot obtain sufficient authoritative observation
+  to decide the criterion, or the criterion cannot be evaluated by the authoritative path
+  (`passed: null`, `POSTCONDITION_EVIDENCE_UNAVAILABLE` or `POSTCONDITION_UNSUPPORTED`).
+  Completion fails closed as unavailable/incomplete. Absence of evidence is NEVER converted
+  into an unsatisfied result and NEVER converted into satisfaction.
+
+The four-outcome distinction above is the canonical criterion-evaluator contract. P2 does not
+reopen the pre-existing `directPostconditionResult` mapping for existing direct criterion
+classes (`folder_exists`, `path_absent`, `file_content_equals`), which historically may map
+partial claim coverage to `POSTCONDITION_EVALUATION_FAILED` — that mapping is preserved
+predecessor behavior and remains OUTSIDE the new P2-R2 authority except where changing it is
+strictly necessary to implement the new `fileContains` path without violating this frozen
+contract. For the NEW P2-R2 direct-run `fileContains` authority, however, sufficient
+authoritative observation is required before a deterministic-unsatisfied result may be
+asserted: unavailable evidence must not be represented as observed-false merely because
+criterion-bound evidence is absent. The exact implementation mechanism for preserving that
+distinction through the completion-decision boundary is deferred to the separately registered
+P2 implementation authority.
+
+Raw model prose and free-form operator acceptance text never satisfy the criterion in any
+case.
+
+Non-claims: substring presence is NOT semantic quality; no generic natural-language acceptance
+evaluator; free-form operator `acceptanceCriteria` remains recorded, provenance-tracked, and
+non-authoritative; `jsonPathEquals` and further criterion classes are NOT required for P2
+closure; no generic criteria framework is created.
+
+### 6. Satisfiability (each path must remain end-to-end completable)
+
+1. Direct structural receipt task — unchanged product behavior; P2-R1 only removes
+   loop-shape dependence from its determination.
+2. Direct `fileContains` task whose criterion is satisfied — the Run completes through the
+   existing chain with the criterion enforced from durable evidence.
+3. Direct `fileContains` task whose criterion is deterministically unsatisfied — the runtime
+   observes sufficient criterion-bound evidence and the canonical evaluator decides the
+   expected substring absent: completion is refused as a known negative result
+   (failed/unsatisfied), never represented as unavailable.
+4. Direct `fileContains` task whose criterion cannot be observed or evaluated — unavailable or
+   unsupported per the canonical evaluator contract; completion fails closed as
+   unavailable/incomplete; absence of evidence becomes neither an unsatisfied result nor
+   satisfaction.
+5. Judgment-laden task with no deterministic oracle — remains honestly non-authoritative; the
+   Ticket stays open and honest insufficiency is preserved.
+
+### 7. P2 closure criterion
+
+P2 may be declared CLOSED only when ALL of the following are demonstrated from durable
+evidence:
+
+1. `workspace_objective_receipt` completion produces identical objective-completion truth for
+   equivalent authoritative durable evidence regardless of one-turn versus multi-turn response
+   shape, incidental loop event emission, and resume boundary;
+2. existing fail-closed contradiction, violation, and authority-denial behavior is preserved;
+3. the existing canonical `fileContains` criterion can be deterministically admitted for a
+   direct Run, immutably bound to executed intent, observed by trusted runtime code, durably
+   evidenced, evaluated by the canonical criterion evaluator, and enforced through completion
+   decision → attempt settlement → Ticket projection;
+4. for the NEW P2-R2 `fileContains` path, the satisfied, deterministically-unsatisfied, and
+   unavailable/unsupported outcomes are all demonstrated: satisfied remains satisfied;
+   authoritative observed-negative remains failed/unsatisfied; unavailable/unsupported never
+   becomes satisfaction; and unavailable evidence is never falsely presented as an observed
+   deterministic negative. This requirement is scoped to the NEW `fileContains` authority; it
+   does NOT retrofit the preserved legacy mapping of existing direct criterion classes;
+5. raw model prose and free-form operator acceptance text remain non-authoritative;
+6. all frozen predecessor completion semantics (section 2) remain green.
+
+P2 closure does NOT imply: all deterministic criterion classes are supported; arbitrary
+semantic quality can be verified; workflow fixtures all have strong postconditions; or
+Domain-Appropriate Quality is activated. Further criterion classes remain visible CAP-1
+follow-up capability unless separately promoted by their own registered decisions.
+
+### 8. Authority impact (explicit distinction)
+
+- **P2-R1 — existing-authority correction.** Changes determination logic for one
+  already-admitted completion policy (`workspace_objective_receipt` only); introduces no new
+  completion authority class.
+- **P2-R2 — new bounded semantic authority.** Allows one already-defined typed deterministic
+  criterion (`fileContains`) to become authoritative for direct-run completion when
+  deterministically admitted and runtime-evidenced; arbitrary text is NOT made authoritative.
+
+### 9. Data / migration
+
+Current evidence: **NO MIGRATION EXPECTED.** No table, column, or backfill is justified; no
+migration authority is created. Versioned contract/snapshot/decision changes inside existing
+JSONB structures MAY be introduced by the later implementation if proven necessary; this
+freeze does not pre-authorize any particular version bump.
+
+### 10. Verification boundary (expected implementation owners; not frozen)
+
+Implementation will require the targeted owners for canonical completion semantics, including:
+`scripts/completion-decision-contract-test.js`, `scripts/completion-decision-postgres-test.js`,
+`scripts/completion-admission-test.js`, `scripts/postcondition-criterion-evaluator-test.js`,
+`scripts/postcondition-completion-test.js`, `scripts/declared-work-contract-test.js`,
+`scripts/declared-work-postgres-test.js`,
+`scripts/declared-completion-authority-binding-test.js`,
+`scripts/objective-contract-compiler-test.js`, `scripts/objective-contract-parity-test.js`,
+`scripts/resume-obvious-postcondition-test.js`,
+`scripts/t2-attempt-completion-contract-test.js`,
+`scripts/t2-v2-completion-authority-contract-test.js`,
+`scripts/malformed-completion-binding-postgres-test.js`, and
+`scripts/malformed-completion-projection-postgres-test.js`. Because P2 touches canonical
+completion semantics, P2 IMPLEMENTATION CLOSURE is expected to hit the published full
+canonical checkpoint trigger (`AGENTS.md` verification workflow, category "canonical
+lifecycle semantics"). This design-freeze candidate is docs-only and does NOT trigger that
+checkpoint; the checkpoint is NOT run for this candidate.
+
+### 11. Explicit exclusions
+
+P2 does NOT own: P3 context/continuation/clarification; P4 browser/process surface expansion;
+P5 workflow invocation/child execution/composition; workflow-fixture content enrichment;
+proof-class presentation polish; generic acceptance-language parsing; free-form operator
+acceptance authority; Domain-Appropriate Quality (it remains an unnumbered recovered candidate
+concern, not activated); T7 or T9 expansion; T2/T3 redesign; any FINAL STOP revival.
+
+### 12. Candidate status
+
+P2 HONEST COMPLETION — DESIGN-FREEZE CANDIDATE — NOT AUTHORITY UNTIL INDEPENDENT REVIEW AND
+PUBLICATION — NO IMPLEMENTATION AUTHORITY CREATED. The existing published roadmap remains
+authoritative that P2 is the current next phase; this candidate does not itself authorize
+implementation. The step after independent acceptance and publication of THIS record is a
+separately registered implementation/verification authority under existing repository rules.
+
+---
+
 ## Execution-semantics provenance fixture shared Ticket-attempt authority (2026-08-17)
 
 **Status: RESOLVED IN SOURCE — independent pre-semantics provenance cases now
