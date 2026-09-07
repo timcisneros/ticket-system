@@ -1569,6 +1569,68 @@ bytes are unchanged by this subsection. The full review transcript is not reprod
 this record exists solely so every finding retained in FINAL FINDINGS / FINAL
 ADJUDICATION carries a durable repository-visible disposition (section 2 rule).
 
+### 10. Failed checkpoint `a741f48f…` — host-suspend adjudication and retained dispositions (2026-09-07)
+
+Development-review plane only (section 1). **Preserved failed history (unchanged, not
+superseded, not smoothed over):** canonical checkpoint run
+`a741f48f-8dcf-4f0d-a60a-2483fe53e710` at repository commit
+`ff98c3d8f69c01f09b1d2ba578bdf3f2ac18dcfd`, registry hash
+`5d0abac8fc60e4f7e5df4e67d7301a9c4f2bd4df3e504a08c8df0fb3ec453723`, result FAILED
+205/258; first failure ordinal 206, owner `postcondition-completion-test.js`; symptom:
+the owner's spawned test server reported not ready within the nominal 45000ms readiness
+window. The durable artifacts remain preserved unchanged under
+`.local-artifacts/release-checkpoint-results/`.
+
+**Independent root-cause adjudication (concise):** owner 206 started at approximately
+10:08:54 PDT and its scenarios 1–2 completed successfully immediately beforehand; the
+host began suspending at approximately 10:09:02–10:09:04 PDT and remained suspended
+(s2idle, no journal activity) until approximately 14:16:25 PDT; owner 206 failed
+approximately ten seconds after resume; the spawned child had not crashed — it froze
+mid-startup; the harness readiness probe also froze across the suspend because its
+request path has no per-request timeout and the nominal 45-second deadline is checked
+only between probe iterations; checkpoint execution is sequential, so checkpoint-owner
+contention was not a cause. Independently rejected as causes: server crash; wrong
+port; port occupation; PostgreSQL unavailability/starvation; checkpoint concurrency
+contention; child-process leak; cross-owner state inheritance; effects of the published
+authorization/docs commits (which change no runtime/test/harness bytes); artifact
+tampering. No residual entries are created for these rejected hypotheses.
+
+**Adjudication verdict: NON-SEMANTIC CHECKPOINT INCIDENT.** The red result did not
+evidence a source, harness, migration-authority, or authorization defect as the cause
+of the checkpoint failure, and the
+unchanged exact published HEAD `ff98c3d8…` is ELIGIBLE for ONE completely new full
+canonical checkpoint run. **Repository doctrine recorded:** a later green pass does not
+itself explain a prior failure; it is THIS recorded explanation that makes the
+definitive rerun meaningful rather than a blind retry.
+
+**Retained findings and dispositions (final adjudication):**
+
+- **M1 — readiness request deadline robustness (ACCEPTED RESIDUAL — harness
+  robustness).** `scripts/postgres-test-harness.js` readiness `request()` has no
+  request-level timeout while the 45-second deadline is checked only between loop
+  iterations, so one await can outlive the nominal readiness deadline arbitrarily. This
+  did not cause the host suspend and requires no correction before the authorized
+  rerun; it may be hardened later through the normal mutation/review process. The
+  harness is not changed now.
+- **M2 — no checkpoint-owner wall-clock deadline (ACCEPTED RESIDUAL — checkpoint
+  robustness).** `scripts/release-checkpoint.js` has no per-owner wall-clock deadline,
+  so a frozen owner can stall the entire checkpoint — this incident lasted
+  approximately 4h07m. No correction is required before the rerun; future hardening
+  remains separate work. The checkpoint runner is not changed now.
+- **L1 — readiness diagnostic specificity (ACCEPTED RESIDUAL — diagnostics).** The
+  readiness failure message cannot distinguish host suspension/freeze from an
+  ordinarily slow startup. No current correction required.
+- **L2 — host suspend boundary (ACCEPTED RESIDUAL — external operational
+  environment).** Host suspend behavior, including the initial early-wake/re-entry
+  sequence, is outside repository control. The relevant mitigation for the next
+  checkpoint is OPERATIONAL — run it while the host will remain awake — and is NOT
+  converted into product/runtime semantics or a code requirement.
+
+**Non-claims:** this subsection documents a completed independent development-review
+adjudication only. It changes no runtime, test, harness, migration-authority, or
+authorization bytes; does not execute migration 043; does not run release preflight or
+the canonical checkpoint; and creates no Ticket/Run/bounded-agent severity semantics.
+
 ---
 
 ## Execution-semantics provenance fixture shared Ticket-attempt authority (2026-08-17)
