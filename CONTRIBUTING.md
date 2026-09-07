@@ -8,7 +8,8 @@ Before submitting a change:
 1. Do not include credentials, private ticket/run data, local environment files, or generated
    runtime state.
 2. Run `npm run build` and the focused tests for the changed surface.
-3. For runtime, persistence, release, or cross-cutting changes, run
+3. For changes crossing a system-wide trust boundary as defined in `AGENTS.md`
+   (Verification workflow), run
    `TEST_DATABASE_URL='postgresql://...' npm run checkpoint:release`.
 4. Explain the behavior changed, the evidence inspected, and the validation actually run.
 

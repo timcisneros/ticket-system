@@ -68,10 +68,34 @@ npm run developer-agent:trace -- --run <runId>
 ## Verification workflow
 
 1. Run `npm run build`.
-2. Run `TEST_DATABASE_URL=... npm run checkpoint:release` for runtime or persistence changes.
-3. Run a focused regression script when a changed surface is not in the checkpoint.
-4. For a failed run, inspect exact state, event chain, decision graph, replay, operation receipts,
-   evaluation, and consequence before changing code.
+2. Targeted verification is the default: run the smallest registered verification set
+   that covers the changed authority surface (focused deterministic suites for
+   contract/docs-adjacent changes; the owning PostgreSQL integration suite for
+   persistence/store surfaces).
+3. A full canonical checkpoint (`TEST_DATABASE_URL=... npm run checkpoint:release`) is
+   exceptional and required ONLY when a change crosses an explicit system-wide trust
+   boundary:
+   - canonical lifecycle semantics;
+   - migration or release authority (including the tracked migration-execution
+     authorization record);
+   - cross-cutting canonical invariants, contracts, or registries (e.g.
+     `scripts/test-manifest.js`, `scripts/release-checkpoint.js` owner lists);
+   - the canonical checkpoint machinery itself;
+   - an explicitly declared tranche/phase/release closure boundary.
+4. A change outside those categories escalates to a full checkpoint only when
+   deterministic evidence shows it can affect unrelated canonical owners or otherwise
+   invalidates targeted verification.
+5. Agents must not use vague judgments such as "important change", "large change", or
+   "better safe than sorry" as independent reasons to require the full checkpoint.
+   Documentation-only or narrow implementation changes do not automatically require it
+   merely because they are committed or published.
+6. The rule remains fail-closed wherever repository authority explicitly requires a full
+   checkpoint (e.g. the governed migration-execution lifecycle and declared
+   release/closure boundaries).
+7. The full canonical checkpoint is a release/trust barrier, not the normal inner
+   development loop.
+8. For a failed run, inspect exact state, event chain, decision graph, replay, operation
+   receipts, evaluation, and consequence before changing code.
 
 ## Operational boundaries
 
