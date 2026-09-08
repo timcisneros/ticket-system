@@ -14887,3 +14887,298 @@ and explicitly NOT implemented or authorized by T9: `server.js`
 `collectExplicitNotifications` (filtering `notification.sent`) are presentation/read
 branches over event types with no production emitter. Their removal (or retention) is an
 optional, separate hygiene decision that must not be read as a T9 semantic act.
+
+---
+
+## Historical migration semantic encapsulation — 041/042 frozen execution bundles (prepared 2026-09-07)
+
+**Status:** DOCS-ONLY AUTHORITY CANDIDATE — NOT AUTHORITY UNTIL ONE FRESH INDEPENDENT
+AUTHORITY REVIEW ACCEPTS IT AND THE EXACT REVIEWED BYTES ARE PUBLISHED — NO IMPLEMENTATION
+IS AUTHORIZED BY THIS RECORD — NO MIGRATION SQL BYTES ARE CREATED OR CHANGED — NO
+`schema_migrations` / `schema_migration_identities` WRITE, MUTATION, OR MIGRATION EXECUTION
+IS AUTHORIZED — NO CHANGE TO `config/migration-execution-authorization.json` OR OPERATIONAL
+MIGRATION AUTHORIZATION — NO CHANGE TO THE UNCOMMITTED P2-R1 CANDIDATE BYTES — NO P2-R2
+WORK. This record registers ONLY the bounded historical-migration semantic-encapsulation
+tranche described below, as an outcome-bounded implementation authority candidate.
+
+### 1. Purpose and baseline
+
+This candidate is intended, once independently accepted, committed, and published, to
+durably register the runner-selected frozen historical execution-bundle mechanism that
+corrects the migration-041/042 historical-semantic encapsulation defect discovered during
+the P2-R1 targeted-verification barrier. Candidate baseline: branch `master`; local HEAD =
+cached origin/master = `52a0ddb117d134d9acbcd84902fb983997b796cf` ("Register P2
+implementation authority"); the primary working tree carries the EXACT uncommitted P2-R1
+candidate — modified paths `runtime/completion-decision-contract.js`, `server.js`,
+`scripts/completion-decision-contract-test.js`,
+`scripts/t2-tranche5-store-postgres-test.js`; complete diff SHA-256
+`b059f543b65057e9563467ff943f2d1f55c551c580d1b45d8576ec5643c07535`; per-file SHA-256
+`4e6284e3…` / `19222f00…` / `8f4f2d11…` / `7411633c…` — which this candidate does NOT
+touch. Migration head `043_api_token_authority.sql`. Published migration SQL identities
+(read-only verified): `041_ticket_five_state_cutover.sql` =
+`8239e64271619bf77ded876af484d626b798d4cc380f4c66635f6a85d91dfafe`;
+`042_objective_revision_baseline.sql` =
+`0874874ac876c30cf98d15dcb733ae00039c83a55736a5687874fe51e88e55a6`; the operational ledger
+(`schema_migration_identities`) holds byte-current identities for the applied set through
+043, observed read-only. This is ONE coherent register section; it alters no other entry
+and reopens no closed record, no T0–T10 closure, no P2 record, and no P2 semantic outcome.
+
+### 2. Established finding (investigation provenance)
+
+Migration 041's intended invariant is legitimate: whenever historical migration 041
+executes, it must execute the exact reviewed historical semantics. Its existing
+implementation is defective: the hook
+`persistence/postgres/t041-five-state-backfill.js` imports its semantics from mutable live
+runtime modules and guards them with file-level Q1 sha256 literals, converting migration
+reproducibility into an accidental permanent byte-freeze on active runtime source. Any
+legitimate change to any of the 14 pinned files (the hook plus 13 runtime modules, all
+live) refuses every fresh-schema initialization (`041 source identity drift`), fails
+`scripts/t041-semantic-closure-test.js`, and leaves clean bootstrap broken. The P2
+implementation authority explicitly authorized editing one pinned module
+(`runtime/completion-decision-contract.js`, P2-R1), exposing the trap. A read-only
+falsification pass proved the mirror mechanism below feasible: the hook's `ROOT`, self-hash
+path, and all requires derive exclusively from `__dirname` (hook lines 46, 75, 31–44); the
+13 runtime modules use only `./` sibling relative requires and Node built-ins (zero npm
+packages, zero parent-relative specs, zero `process.cwd`/env/config reads on the 041
+execution path — the closure's single fs-reading function
+`readProtectedWorkspacePaths` is off the classification path, its sole caller being the
+live workspace seam); `migrationChecksum` hashes only `migrations/*.sql` files, and the
+hooks live outside `migrations/`, so hook file selection can never affect ledger identity;
+the 041 invocation is one version-gated call site in `_runMigrations`. Migration 042 has
+the same structural shape (`t042-objective-revision-baseline.js`: `__dirname`-anchored
+`ROOT`, 3-file `sourceDigests()`, one live runtime dependency chain
+`ticket-objective-revision-contract` → `declared-work-contract`, Q1-style pinning) with its
+3 Q1 literals still live-valid. Migration 039 executes live UNPINNED historical semantics —
+a different, residual defect explicitly OUT of scope here.
+
+### 3. Frozen semantic outcome
+
+For historical migrations 041 and 042: whenever either executes (fresh schema, disposable
+test schema, or authorized future non-disposable bootstrap), it executes the exact
+migration-owned reviewed semantics, while its migration SQL bytes, migration checksum, and
+operational ledger identities remain EXACTLY as published. Current live runtime modules are
+no longer part of 041/042 execution semantics and may evolve freely. Q1 source-identity
+tables in both SQL files remain byte-identical and remain the CANONICAL digest authority;
+no second digest registry is created. Existing drift-refusal behavior is preserved exactly:
+tampering any frozen bundle file (hook or runtime module) still fails closed through the
+unchanged Q1 comparison. No T2/T3 semantic outcome changes; no P2 semantic outcome changes;
+no migration identity acceptance semantics change.
+
+### 4. Frozen mechanism (registered design)
+
+4.1 **Bundle topology.** Repository-owned frozen mirrored trees:
+`persistence/postgres/migration-semantics/041/persistence/postgres/t041-five-state-backfill.js`
+plus `persistence/postgres/migration-semantics/041/runtime/` containing the 13 historically
+pinned runtime modules (`ticket-history-classifier-facts.js`, `allocation-plan-contract.js`,
+`authority-paths.js`, `completion-decision-contract.js`, `declared-work-contract.js`,
+`postcondition-criterion-evaluator.js`, `structured-allocation-leaf-run-contract.js`,
+`ticket-attempt-completion-contract.js`, `ticket-attempt-contract.js`,
+`ticket-blocking-authority-composer.js`, `ticket-cancellation-authority-contract.js`,
+`ticket-history-classifier-contract.js`, `ticket-lifecycle-contract.js`); and
+`persistence/postgres/migration-semantics/042/persistence/postgres/t042-objective-revision-baseline.js`
+plus `persistence/postgres/migration-semantics/042/runtime/` containing
+`ticket-objective-revision-contract.js` and `declared-work-contract.js`. The mirrored
+topology preserves the hooks' unchanged relative imports and
+`ROOT = path.join(__dirname, '..', '..')` anchoring, so the HISTORICAL hook bytes execute
+unchanged from the bundle.
+
+4.2 **Creation-source rule (critical).** Bundle files MUST NOT be copied from a dirty
+working tree. Every historical file is sourced from the exact published repository state at
+`52a0ddb117d134d9acbcd84902fb983997b796cf` (the base whose bytes satisfy the existing Q1
+literals), and each copied file's digest is independently proven equal to its Q1 literal
+parsed from the UNCHANGED migration SQL itself. After publication, the bundle — not git
+history — is the repository-owned historical semantic artifact; bundle creation and all
+later verification must work from tracked repository bytes alone.
+
+4.3 **Runner selection and pending-only lazy loading.** The smallest current-infrastructure
+hook resolver: a single simple version→historical-hook resolution in the migration runner
+(in `persistence/postgres/store.js` or one small resolver module) so that PENDING execution
+of version `041_ticket_five_state_cutover.sql` and `042_objective_revision_baseline.sql`
+invokes the frozen bundle hooks, and every other migration keeps existing behavior (039
+keeps its root hook). The SQL file selection and checksum machinery remain unchanged.
+NORMATIVE LOADING RULE: frozen 041/042 bundle hook modules MUST be resolved and loaded only
+when the corresponding migration version is pending and immediately about to execute. A
+fully-current operational runtime MUST NOT load historical migration executable modules
+merely by importing or initializing the normal PostgreSQL store. Missing, corrupt, or
+syntactically invalid frozen bundle code fails closed when that historical migration is
+pending, while pre-release closure verification detects such defects independently. This
+rule governs executable-module LOADING, not merely function invocation: static import of
+bundle hook modules by the store or resolver is NOT compliant. The implementation MAY use a
+lazy require in the pending branch, or one tiny resolver that itself does not eagerly
+import bundle modules; this record does NOT freeze which of those mechanics wins. For
+already-current operational databases: no historical hook executes OR loads; current
+migration identities remain valid; no DB mutation occurs. For fresh/disposable schemas:
+041/042 execute their frozen bundles through the unchanged pending-version path. Fresh 041
+execution becomes: frozen hook → frozen historical semantics → frozen `sourceDigests()` →
+unchanged Q1 → unchanged SQL.
+
+4.4 **Root hook status.** The existing root hooks
+`persistence/postgres/t041-five-state-backfill.js` and
+`persistence/postgres/t042-objective-revision-baseline.js` keep their exact bytes untouched
+in this tranche; they are no longer execution authority for 041/042 and are reclassified as
+legacy/historical compatibility mirrors where still referenced. The bundle is the
+historical EXECUTION authority. The presence of a basename/digest for a hook in Q1 does NOT
+permanently bind the old root filesystem path once the runner executes the bundle copy.
+Verification must assert root-mirror byte-equality to the bundle copies so the mirrors
+cannot silently diverge, and must assert the resolver's selection, so no two competing
+semantic authorities exist. Active verification owners are re-pointed to the bundle hooks.
+
+### 5. Authorized implementation surface (outcome-bounded)
+
+Likely changed paths: `persistence/postgres/migration-semantics/041/**`;
+`persistence/postgres/migration-semantics/042/**`; `persistence/postgres/store.js`
+and/or one small hook-resolver module; the existing semantic-closure / migration /
+fact-parity / T3-objective-revision bootstrap test owners; and this authority record.
+ADDITIONAL repository-local source/test files MAY be changed when mechanically necessary to
+realize the exact frozen outcome in section 3, provided the change does not cross any
+protected boundary in section 6. Every unexpected changed path must be justified in the
+final diff report. This latitude is intentional: implementation authority is
+outcome-bounded, not an exhaustive prediction of harmless mechanical dependencies. It is
+NOT a license for nearby cleanup, renaming, or presentation work.
+
+### 6. Protected STOP boundaries
+
+Implementation MUST STOP before changing: any SQL migration 041 bytes; any SQL migration
+042 bytes; `schema_migrations`; `schema_migration_identities`; migration identity
+acceptance semantics (preflight / migrate / `_runMigrations` identity checks);
+`config/migration-execution-authorization.json`; operational migration authorization; DB
+schema or data; the P2-R1 candidate bytes; any P2-R2 surface; T2/T3 semantic outcomes;
+historical Q1 meaning; or drift-refusal behavior. FOR THIS TRANCHE the repository's
+verification-registration surfaces are also protected: implementation MUST STOP before
+changing `scripts/test-manifest.js` or `scripts/release-checkpoint.js`, and before
+removing or demoting a required test owner, deleting an owner from canonical checkpoint
+registration, or weakening checkpoint inclusion/selection semantics. No change to those
+files is presently necessary; if a mechanically necessary change to verification
+registration is unexpectedly discovered, that is a new authority question, not latitude.
+FOR THIS TRANCHE the root mirror bytes are likewise protected: implementation MUST STOP
+before changing `persistence/postgres/t041-five-state-backfill.js` or
+`persistence/postgres/t042-objective-revision-baseline.js`. Their current root bytes remain
+untouched during encapsulation; they are compatibility/custody mirrors, NOT execution
+authority (the bundle is the execution authority), and root==bundle byte equality remains a
+verification invariant for this tranche. This protection is SCOPED to this encapsulation
+implementation — it does not state or imply that the root paths become permanently immutable
+for all future repository history; changing them here is unnecessary and would confuse
+custody during the transition. Any need for a protected-boundary change is a material
+authority conflict: STOP and report against this record; do not widen authority locally.
+
+### 7. Required invariants and verification owners
+
+Prefer existing owners; the extended semantic-closure owner absorbs the bundle-integrity
+invariants. Mapping:
+
+1. 041 SQL SHA remains `8239e642…` — extended `scripts/t041-semantic-closure-test.js` (it
+   already reads both SQL files).
+2. 042 SQL SHA remains `0874874a…` — same owner.
+3. Operational migration ledger identities remain byte-current — existing migration
+   identity/preflight coverage (`scripts/migration-execution-authority-test.js`; store
+   preflight/migrate no-op paths), plus a read-only ledger observation recorded in the
+   tranche closure evidence.
+4. Frozen 041 bundle exact path set matches the historical Q1 semantic closure (14 files,
+   exact labels) — extended closure owner walking the BUNDLE hook's require closure.
+5. Every 041 bundled digest matches the existing Q1 literals parsed from the UNCHANGED SQL
+   — extended closure owner (Q1 stays canonical; no second digest list).
+6. Frozen 042 bundle exact path set matches its historical Q1 closure (3 files) — same
+   owner, 042 section.
+7. Every 042 bundled digest matches existing 042 Q1 — same owner.
+8. The runner executes bundle hooks for pending 041/042 —
+   `scripts/t2-tranche5-migration-postgres-test.js` (legacy-fixture 041 execution through
+   the bundle hook, drift probe included), the T3/objective-revision migration/bootstrap
+   owner (`scripts/t3-objective-revision-postgres-test.js`) for 042 context, and a direct
+   resolver-selection assertion.
+9. Already-current DB neither executes NOR loads the historical hooks — existing
+   migrate/preflight no-op coverage (`scripts/migration-execution-authority-test.js`),
+   extended by a deterministic module-loading assertion proving the fully-current path does
+   not execute AND does not load/resolve the 041/042 bundle hook modules (a require-cache /
+   resolver assertion suffices; heavyweight module-loader instrumentation is NOT required).
+10. Current live runtime drift cannot change historical 041/042 execution — closure owner
+    proves the bundle hooks' file lists are entirely bundle-internal and their digests equal
+    Q1 independent of live bytes.
+11. Tampered frozen hook/module still fails closed through existing Q1 — the existing
+    registered drift-refusal probe in `scripts/t2-tranche5-migration-postgres-test.js`,
+    executed through the bundle hook.
+12. Clean 001→043 bootstrap succeeds — the existing PostgreSQL fresh-schema harness (every
+    harness owner initializes through the full chain; e.g.
+    `scripts/t2-tranche5-store-postgres-test.js`), plus the documented dev-setup path.
+13. Registered historical migration/fact-parity tests stay semantically equivalent —
+    `scripts/t2-tranche5-migration-postgres-test.js` and
+    `scripts/t2-five-state-fact-parity-postgres-test.js` pass with their projection/digest
+    assertions unchanged in meaning (hooks re-pointed, assertions untouched).
+14. Verification-substrate unblocking for the R1 harness owners is proven in TWO DISTINCT
+    STAGES that must NOT be collapsed. ENCAPSULATION CLOSURE (base-byte probe, in the clean
+    encapsulation implementation worktree): the four previously blocked R1 harness owners
+    (`scripts/t2-tranche5-store-postgres-test.js`,
+    `scripts/completion-decision-postgres-test.js`,
+    `scripts/postcondition-completion-test.js`,
+    `scripts/resume-obvious-postcondition-test.js`), running at their BASE-BYTE (pre-R1)
+    form from the encapsulation base, initialize through fresh PostgreSQL 001→043
+    bootstrap, proving the historical 041/042 source-identity trap no longer blocks the
+    verification substrate. This stage makes NO claim about R1-modified bytes. R1 RESUMPTION
+    (only after the encapsulation tranche is published and the preserved R1 worktree is
+    updated per section 9): re-prove the exact R1 candidate bytes/diff, run the registered
+    R1 harness owners WITH the R1 implementation, and obtain the actual R1
+    targeted-barrier evidence under the P2 implementation authority.
+15. Root mirror paths are not silently treated as competing execution authority — closure
+    owner asserts resolver selection (bundle hooks for 041/042) and root-mirror byte
+    equality; the register labels the root copies legacy mirrors.
+
+Avoid adding new top-level test owners if the existing registered owners absorb the
+invariants cleanly.
+
+### 8. Checkpoint adjudication
+
+This docs-only candidate/publication: C0 targeted verification only (build/syntax, diff
+check, R1 hash re-proof) — no checkpoint. Infrastructure implementation: targeted
+verification while developing (section 7 owners). At the historical-semantic encapsulation
+tranche closure: FULL canonical checkpoint (`TEST_DATABASE_URL=… npm run
+checkpoint:release`) IS REQUIRED, because migration execution/identity-adjacent canonical
+infrastructure is changed. The full checkpoint is NOT run for this candidate.
+
+### 9. Worktree isolation, publication ordering, and R1 resumption protocol
+
+The primary tree already carries BOTH the dirty R1 source/test bytes AND this dirty docs
+candidate, so publication ordering is explicit:
+
+1. After narrow finding closure accepts the corrected exact candidate, publish the reviewed
+   authority bytes from the PRIMARY R1 worktree by staging and committing ONLY
+   `docs/ARCHITECTURAL_DECISIONS_PENDING.md`.
+2. Verify the four R1 candidate files remain byte-identical and unstaged/uncommitted.
+3. Push/fetch the docs-only publication commit.
+4. Create the separate clean encapsulation implementation worktree rooted at THAT NEW
+   AUTHORITY-PUBLICATION COMMIT — not at `52a0ddb…`.
+5. The bundle creation-source rule (§4.2) remains unchanged: historical bundled source
+   bytes are still taken from published commit
+   `52a0ddb117d134d9acbcd84902fb983997b796cf` and proven against Q1. The implementation
+   worktree's newer base must NOT become the historical source of bundle bytes merely
+   because it contains the authority publication commit.
+6. Implement/review/checkpoint/publish the encapsulation tranche in the separate worktree
+   (invariant 14's ENCAPSULATION CLOSURE stage runs there).
+7. Only then fast-forward/update the primary R1 worktree to the encapsulation publication
+   commit. Because the encapsulation implementation is forbidden from touching the four R1
+   candidate files, the update must not overlap those dirty files. Do NOT use stash/restore
+   as part of this protocol.
+8. Re-prove the exact R1-only diff/hash values (`b059f543…`, `4e6284e3…` / `19222f00…` /
+   `8f4f2d11…` / `7411633c…`) after the update.
+9. Resume the R1 targeted barrier (invariant 14's R1 RESUMPTION stage) under the P2
+   implementation authority.
+
+R1 semantics are NOT reopened and require no re-review beyond their existing registration.
+If Git refuses the primary worktree update despite the no-overlap guarantee, STOP and
+report rather than manipulate R1 bytes.
+
+### 10. Known residuals
+
+- Migration 039's historical hook (`persistence/postgres/ticket-attempt-backfill.js`)
+  executes LIVE UNPINNED historical semantics; this tranche does NOT correct that, and it
+  remains a separate known hermeticity limitation.
+- This tranche closes the known Q1-pinned live-source traps for migrations 041 and 042
+  only.
+- No claim of globally complete migration hermeticity is made; future migration hooks
+  should encapsulate their semantic dependencies in migration-owned bundles from birth
+  under the pattern registered here (pattern guidance, not new enforcement machinery).
+
+### 11. Authorization gate
+
+Implementation of this record is UNAUTHORIZED until: (1) one fresh independent authority
+review accepts it; and (2) the exact reviewed docs bytes are published. Until then this
+section is a candidate, the register's published authorities remain controlling, and the
+uncommitted P2-R1 candidate remains preserved byte-exactly in the primary working tree.
