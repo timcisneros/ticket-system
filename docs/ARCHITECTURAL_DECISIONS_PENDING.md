@@ -2307,6 +2307,324 @@ separately registered implementation/verification authority under existing repos
 
 ---
 
+## P2 HONEST COMPLETION — implementation/verification-authority registration candidate (2026-09-07)
+
+**Status: P2 DESIGN FROZEN AND PUBLISHED — IMPLEMENTATION NOT STARTED — THIS IS AN UNCOMMITTED,
+UNPUBLISHED DOCS-ONLY CANDIDATE — NO IMPLEMENTATION IS AUTHORIZED UNTIL THIS RECORD IS
+INDEPENDENTLY REVIEWED, ACCEPTED, COMMITTED, AND PUBLISHED — NO MIGRATION IS REQUIRED, CREATED,
+OR AUTHORIZED — DOCS-ONLY REGISTRATION CANDIDATE PENDING ONE NARROW INDEPENDENT IMPLEMENTATION-
+AUTHORITY REVIEW.**
+
+### 1. Purpose, controlling authority, and baseline
+
+This candidate is intended, once independently accepted, committed, and published, to durably
+register the P2 implementation/verification authority for the PUBLISHED design freeze
+`## P2 HONEST COMPLETION — semantic design-freeze candidate (2026-09-07)` at commit
+`5c01aaa59ee9dec8ef31845060a20c7789b14149` ("Register P2 honest completion design freeze";
+parent `28b5dd5ec1626595c25b8532aea805eb463b5a3c`). The published freeze is the controlling
+semantic authority; this record authorizes ONLY the mechanics that realize exactly TWO kernel
+items — P2-R1 (`workspace_objective_receipt` determination independence) and P2-R2 (bounded
+direct-run authority for the existing canonical `fileContains` criterion). It reopens no frozen
+semantics, widens no criterion class, and does not redesign T2/T3, T7/T9, or Domain-Appropriate
+Quality.
+
+Candidate baseline: branch `master`; local HEAD = cached origin/master =
+`5c01aaa59ee9dec8ef31845060a20c7789b14149`; worktree clean; nothing staged; stash empty;
+`git diff --check` clean; migration head `043_api_token_authority.sql` unchanged; no P2
+kernel source exists anywhere in tracked source. This is ONE coherent section in this register;
+it does not duplicate the published freeze (which remains the sole P2 semantic authority) and
+alters no other register entry.
+
+### 2. Frozen outcomes vs authorized mechanics
+
+The published freeze owns the OUTCOMES (restated by reference, not re-derived): P2-R1 makes
+`workspace_objective_receipt` determination a function of committed qualifying operation
+receipts plus the deterministic objective-path binding of the immutable executed intent, with
+execution-shape independence, preserved occurrence semantics, preserved fail-closed
+violation/contradiction/refusal control, and REQUIRED `authority.denied` refusal parity.
+P2-R2 lets the existing canonical `fileContains` type (`id` optional; `type`, `path`,
+`contains` exact) govern direct-run completion when deterministically admitted and
+runtime-evidenced, with the canonical evaluator's satisfied / deterministically-unsatisfied /
+unavailable / unsupported outcomes preserved exactly and enforced through completion decision →
+attempt settlement → Ticket projection. The published P2 semantic design freeze remains
+controlling. Authorized mechanics may narrow implementation choices but may NEVER override,
+weaken, strengthen, or reinterpret a frozen semantic outcome. If an authorized mechanic cannot
+realize the frozen outcome, implementation STOPS and the register must be amended through the
+existing review/publication boundary before work resumes. The semantic freeze is never relaxed
+silently.
+
+### 3. P2-R1 authorized mechanics
+
+3.1 **Positive predicate rewrite.** In `runtime/completion-decision-contract.js`,
+`hasWorkspaceObjectiveCompletionEvidence` stops reading the `workspace.objective_satisfied`
+event as a prerequisite. Its positive predicate becomes exactly the current intersection rule —
+objective-path tokens (unchanged deterministic extraction) intersected with durable consequence
+paths from `consequence.created/updated/modified/renamed` via the existing
+`path/nextPath/from/to` flatMap — with the token source moved from the replay event to the
+immutable executed intent. Receipt classes, occurrence semantics, and the receipt-policy
+meaning are unchanged: no mutation class is added or removed, the `mutations` catch-all
+category and no-op creates remain invisible exactly as today, and external post-receipt
+mutation does not retract completion.
+
+3.2 **Objective-path token source.** Tokens are derived at decision time by the existing pure
+deterministic extraction (`normalizeObjectivePathToken` / `extractObjectivePathTokens`,
+server.js:20086–20121) applied to `run.declaredWorkSnapshot.objective.text` — the admitted
+declared-work objective whose binding to the completion authority is already asserted before
+the decision is built (`buildRunConsequence`, server.js:8147–8154). Current Ticket text is
+NEVER read; T3 revision safety follows from the per-run immutable snapshot. The two extraction
+helpers move verbatim into `runtime/completion-decision-contract.js` (exported, single source)
+and server.js keeps behavior-preserving delegation wrappers so the emission site
+(server.js:24636), the execution guard (`hasSuccessfulObjectiveMutationEvidence`), and the
+admission shapers use the identical rule. A run whose immutable executed intent is unavailable
+derives no tokens and fails closed (`incomplete`); it is not thrown into a new error class.
+
+3.3 **`authority.denied` refusal parity.** The decision-side violations filter in
+`deriveDecisionFacts` (runtime/completion-decision-contract.js:822–837) is extended by the
+single entry `'authority.denied'`, joining the existing three violation-detected classes. This
+reuses the existing violation predicate and evidence-issue path — no parallel authority system.
+Both the execution guard (`hasViolationEvidence`, server.js:20255–20257) and the decision read
+the same durable run event chain, so parity is exact.
+
+3.4 **Event status.** The `workspace.objective_satisfied` emission site, its guard conditions,
+and its inclusion in the decision's `replayCompletionEvidence` corroboration list are
+unchanged. The event remains durable history; it is no longer a decision prerequisite.
+
+3.5 **Versioning and history.** No contract version constants change. Historical persisted
+decisions remain immutable valid artifacts; only new decisions use the corrected rule; no
+recomputation or backfill is authorized.
+
+### 4. P2-R2 authorized mechanics
+
+4.1 **Deterministic admission grammar (ONE form).** The deterministic objective grammar gains
+exactly one boring form, added to `buildObviousPostconditionChecks` (server.js) mirroring the
+existing `containing exactly` sibling convention: the whole objective must be the single
+anchored form `create file <path> containing <substring>` (optional leading "please"), where
+`<path>` matches `[A-Za-z0-9._/-]+` and is cleaned by the existing path rules, `<substring>` is
+bounded (1–512 after existing content cleaning), the form explicitly excludes
+`containing exactly` (negative lookahead) so existing `file_content_equals` precedence is
+preserved, and any additional clause, second target, connector, or plurality fails closed to no
+admission. An admitted form yields exactly one criterion `{ type: 'fileContains', path,
+contains }` (no `id`), admitted into `buildRunCompletionAuthoritySnapshot`'s existing
+direct-postcondition collection with provenance `deterministic-objective-contract` through the
+existing declared-work binding (`SUPPORTED_POSTCONDITION_FIELDS.fileContains` already accepts
+it; `assertDeclaredWorkCompletionAuthorityBinding` needs no change). Ambiguous or unrecognized
+objectives are NOT admitted and fall through to the existing honest non-authority policies.
+
+4.2 **Runtime evidence.** One focused runtime seam observes ADMITTED direct `fileContains`
+criteria from the run's immutable completion authority snapshot (never re-parsed model text)
+and records a new replay-snapshot claim event `run:direct_postcondition_observed` via
+`recordRunEvent` at the two existing declared-direct check sites (pre-model and post-batch),
+whenever at least one admitted criterion has a decidable outcome. Each observation record
+freezes ONLY the minimum authoritative information necessary for criterion binding and verdict:
+the exact admitted `path`, `containsSha256 = sha256(admittedCriterion.contains)`, and
+`present: boolean` — the trusted runtime's deterministic substring check over
+`workspaceProvider.readFile`. The event type itself (`run:direct_postcondition_observed`)
+establishes that this is the NEW direct-postcondition observation seam; the three frozen fields
+are enough to bind `path X + expected substring S` to the observed boolean result. The
+implementation MAY additionally include diagnostic/provenance fields — `criterionHash`,
+`contentSha256` (identifying the observed file version), `observedKind` — but completion
+authority MUST NOT depend on them, they are not required in the authority record, and no
+redundant double-binding is frozen. If implementation discovers an optional field is genuinely
+necessary for deterministic binding/replay, that is allowed only if the implementation can
+prove why within this frozen minimum authority; otherwise it stays diagnostic. Nothing stores
+raw file content or the substring itself. Observations are TEMPORAL STATE OBSERVATIONS, not
+mutually exclusive claims about one instant, and they are recorded in durable append order;
+earlier observations remain durable history but do not override the latest authoritative
+observation (4.4). Observed path-absence is a decisive negative (consistent with the
+existing `path_absent`/`file_content_equals` doctrine that `absent` is a positive statement);
+an unobservable path (directory at path, read failure) records NO observation and stays
+unavailable. The satisfied all-satisfied claim flow (`run:postcondition_completed` via
+`checkObviousTicketPostcondition`, including the pre-model idempotent path and resume gating)
+is extended only by adding the contains check shape so satisfied runs complete exactly like
+folder runs today; its claims, meaning, and consumers are otherwise unchanged.
+
+4.3 **Decision-side reading.** In `runtime/completion-decision-contract.js`,
+`DIRECT_POSTCONDITION_TYPES` gains `'fileContains'` and `normalizeDirectPostcondition` accepts
+exactly `type`/`path`/`contains` (bounded, non-empty `contains`). `directPostconditionResult`
+branches by type: legacy types keep the existing claims-based path and mapping byte-for-byte;
+`fileContains` reads `run:direct_postcondition_observed` records (malformed entries dropped,
+failing closed to unavailable) and passes them to the canonical evaluator as observations in
+the canonical durable replay/event ordering — the replay snapshot's append-ordered events
+array (as `replayEvents` consumes it), each event's records in recorded array order, which is
+exactly the order the runtime durably wrote them. Relevance is exact `path` + exact
+`containsSha256` digest — nothing more is frozen. The decision preserves the canonical
+evaluator's reason codes exactly — never collapsing unavailable evidence into an observed
+negative. The new event type is added to `buildCompletionDecision`'s
+`replayCompletionEvidence` list so the consumed evidence is hash-bound into
+`requiredEvidenceAuthority`.
+
+4.4 **Canonical evaluator — LATEST RELEVANT AUTHORITATIVE OBSERVATION WINS.**
+`runtime/postcondition-criterion-evaluator.js`: `EVALUABLE_CRITERION_TYPES` gains
+`'fileContains'`; `evaluateCriterion` gains the fileContains branch deciding the verdict from
+the LATEST observation relevant to the exact admitted criterion. Relevant observations are
+those durably bound to the same admitted criterion (exact `path` AND exact `containsSha256`
+digest); malformed or unbound observations are irrelevant and cannot affect the verdict.
+Relevant observations are ordered by the repository's canonical durable replay/event ordering
+(4.3) and the LAST relevant observation decides. Exact temporal rule for the NEW direct-run
+`fileContains`:
+
+* no relevant observation → `POSTCONDITION_EVIDENCE_UNAVAILABLE`;
+* latest relevant observation has `present:true` → `POSTCONDITION_PASSED`;
+* latest relevant observation has `present:false` → `POSTCONDITION_EVALUATION_FAILED`.
+
+Required behaviors pinned by this rule: negative → later positive = PASS; positive → later
+negative = FAIL (including positive observation → crash/lease-loss → recovery → later negative
+= FAIL); no observation = UNAVAILABLE. Mixed history containing both outcomes is NOT declared
+contradictory — the observations are temporal state observations, not mutually exclusive claims
+about the same instant. `.some(present === true)` is explicitly FORBIDDEN for `fileContains`:
+satisfying on any historical positive would reduce P2-R2 to "substring existed at least once",
+which the published freeze never authorized. The legacy `.some()` semantics for
+`folder_exists`/`path_absent`/`file_content_equals` are unchanged. UNSUPPORTED remains the
+residual for undecidable shapes. `CRITERION_EVALUATOR_VERSION` stays 1: existing verdict bytes
+are unchanged, and the governed evidence contract's `SUPPORTED_EVALUATORS` continues to accept
+version 1.
+
+4.5 **Governed-facts decoupling (required consequence, not scope growth).**
+`runtime/governed-eligible-facts.js` currently filters governed creditable facts by
+`EVALUABLE_CRITERION_TYPES`; extending that registry would silently make a governed leaf's
+admitted `fileContains` criterion evidence-eligible and then fail hard in the governed
+evidence contract's frozen `SUPPORTED_CRITERION_TYPES`. Import safety was verified (dependency
+audit plus direct execution): `runtime/governed-postcondition-evidence-contract.js` already
+EXPORTS its governed-owned, frozen, side-effect-free `SUPPORTED_CRITERION_TYPES`
+(`folder_exists`, `path_absent`, `file_content_equals`), requires only
+`./declared-work-contract`, and is not imported by the eligible-facts reader, so
+`governed-eligible-facts` consuming it creates no circular dependency, no layering inversion,
+no side effect, no modification of the governed evidence contract, and no fifth production
+owner. The eligible-facts module therefore consumes the existing governed-owned
+`SUPPORTED_CRITERION_TYPES` as its authoritative eligibility set, keeping governed admission,
+credit, and refusal semantics unchanged; the list is NOT duplicated. P2-R2 authority remains
+DIRECT-run only; the governed evidence contract is NOT extended.
+
+4.6 **Legacy-vs-new mapping boundary.** The preserved predecessor collapse in
+`directPostconditionResult` (partial claim coverage → `passed:false` /
+`POSTCONDITION_EVALUATION_FAILED`) for `folder_exists`/`path_absent`/`file_content_equals` is
+NOT redesigned. The new `fileContains` branch (4.3) plus the dedicated observation channel
+(4.2) keep the new authority out of the legacy partial-coverage branch entirely, so unavailable
+evidence for the NEW type can never be presented as an observed deterministic negative. If
+implementation discovers this is mechanically impossible without touching the legacy branch,
+work STOPS and the conflict is reported against the published freeze.
+
+### 5. Exact authorized production surface
+
+| File | Symbols | Item | Responsibility | Semantic vs mechanical |
+| --- | --- | --- | --- | --- |
+| runtime/completion-decision-contract.js | `DIRECT_POSTCONDITION_TYPES`, `normalizeDirectPostcondition` | R2 | admit canonical fileContains direct criteria | mechanical support (new type value, closed field set) |
+| runtime/completion-decision-contract.js | `hasWorkspaceObjectiveCompletionEvidence`, objective-token helpers (moved verbatim), `deriveDecisionFacts` | R1 | durable-receipt + executed-intent predicate; `authority.denied` parity entry | semantic correction (frozen R1 outcome) |
+| runtime/completion-decision-contract.js | `directPostconditionResult` (fileContains branch), `buildCompletionDecision` replay-evidence list | R2 | latest-relevant-observation fileContains reading in canonical durable order; four-outcome preservation; evidence hash-binding | semantic (frozen four-outcome contract) |
+| runtime/postcondition-criterion-evaluator.js | `EVALUABLE_CRITERION_TYPES`, `evaluateCriterion` fileContains branch, observation constructor (minimal bound fields) | R2 | ONE canonical evaluator decides fileContains from the latest relevant durable observation | semantic rule addition within frozen evaluator contract |
+| runtime/governed-eligible-facts.js | consumes the existing governed-owned `SUPPORTED_CRITERION_TYPES` | R2 guard | keep governed credit semantics unchanged | mechanical decoupling (no behavior change) |
+| server.js | delegation wrappers for the two moved token helpers | R1 | single extraction source | mechanical (behavior-preserving) |
+| server.js | `buildObviousPostconditionChecks` contains form; `buildRunCompletionAuthoritySnapshot` admits `{fileContains, path, contains}` | R2 | deterministic admission | semantic admission (frozen R2 admission shape) |
+| server.js | `run:direct_postcondition_observed` recording helper + its two declared-direct call sites | R2 | runtime-generated criterion-bound durable evidence | new bounded evidence seam (freeze-deferred representation) |
+
+No other production owner is authorized. In particular NOT authorized:
+`persistence/postgres/store.js`, `persistence/postgres/migrations/` (no migration bytes),
+`runtime/declared-work-contract.js`, `runtime/governed-postcondition-evidence-contract.js`,
+`runtime/structured-allocation-leaf-run-contract.js`, `runtime/ticket-attempt-completion-contract.js`,
+`runtime/ticket-attempt-contract.js`, T2/T3 contracts, Ticket projection, workflow
+verification/evaluation seams (`evaluateWorkflowPostcondition` unchanged), `objective-contract.js`,
+`runtime/completion-decision-contract.js` version constants, and any presentation/evaluation
+fixture seam beyond updating tests whose fixtures must name the corrected inputs.
+
+### 6. Verification matrix (planned owners)
+
+Unit/contract owners: `scripts/completion-decision-contract-test.js` (R1-T1..T8 decision-level:
+same-turn, multi-turn, resume equivalence as decision-input equivalence; no-receipt, foreign
+path, `authority.denied`, violation, replay determinism; R2 four outcomes, criterion mismatch,
+model-claim and operator-text non-substitution, legacy mapping regression; R2 temporal
+decision-level cases: negative→later positive = PASS, positive→later negative = FAIL, no
+relevant observation = UNAVAILABLE, and a newer unrelated/mismatched observation cannot
+displace the latest bound observation);
+`scripts/postcondition-criterion-evaluator-test.js` (evaluator fileContains branch: latest
+relevant bound observation wins over ordered observations, relevance = exact path + exact
+`containsSha256`, the four-outcome temporal truth table, version-stable existing verdicts);
+`scripts/declared-work-contract-test.js` +
+`scripts/declared-completion-authority-binding-test.js` (fileContains deterministic-objective-
+contract admission/binding); `scripts/governed-eligible-facts-test.js` (consumption of the
+governed-owned `SUPPORTED_CRITERION_TYPES` registry and unchanged governed eligibility);
+`scripts/direct-folder-postcondition-completeness-test.js` and
+`scripts/resume-obvious-postcondition-test.js` (execution-loop trigger and resume behavior;
+the resume owner additionally proves F-1 reachability: positive observation recorded →
+crash/lease-loss → recovery → later negative observation → terminal decision FAIL — the one
+real recovery/integration case, not multiplied ceremonially).
+Real-server end-to-end R1 closure (`scripts/postcondition-completion-test.js`, which already
+owns the real-server `workspace_objective_receipt` scenario family): R1-E2E-A — direct
+`workspace_objective_receipt` objective, qualifying mutation, SAME model response says
+`complete:true`, `workspace.objective_satisfied` NOT emitted, committed qualifying receipt
+reaches the completion consequence, Run completion decision = completed under the existing
+occurrence policy, attempt settles, Ticket projects COMPLETED; R1-E2E-B — semantically
+equivalent objective/mutation under `complete:false`, the existing
+`workspace.objective_satisfied` event IS emitted, later completion, SAME objective completion
+truth as A (product-truth equivalence of dispositions, settlement, and Ticket projection, not
+merely decision-object construction).
+PostgreSQL/integration owners: `scripts/completion-decision-postgres-test.js` (persisted
+decision roundtrip, replay/hash), `scripts/postcondition-completion-test.js` (real-server
+end-to-end: admission success/refusal, substring present/absent/missing, settlement → Ticket
+COMPLETED/refused), `scripts/t2-tranche5-store-postgres-test.js` (canonical
+`workspace_objective_receipt` fixture updated to carry the run's immutable declared work, as
+real admission already does), `scripts/declared-work-postgres-test.js`,
+`scripts/t2-attempt-completion-contract-test.js`, `scripts/t2-v2-completion-authority-contract-test.js`,
+`scripts/malformed-completion-binding-postgres-test.js`,
+`scripts/malformed-completion-projection-postgres-test.js` (fail-closed integrity unchanged).
+Every frozen semantic requirement in published freeze section 7 maps to at least one listed
+owner; the existing `directFailed` partial-coverage case must remain green unchanged.
+
+### 7. Data / migration status
+
+**NO MIGRATION EXPECTED.** Every durable change lives inside existing JSONB structures: the
+completion authority snapshot gains a new criterion TYPE value in the existing
+`directPostconditions` array; declared work already supports `fileContains`; the new evidence
+is a replay-snapshot event in the existing events array; decisions keep their exact shape. No
+table, column, backfill, or migration-execution authorization is created or implied. No
+contract version constant changes: old snapshots/decisions/evidence remain readable; historical
+decisions remain valid; replay of historical runs consumes stored decisions (never recomputed).
+Mixed-version behavior, stated exactly: an OLD runtime cannot NORMALLY decline a new
+`fileContains` direct criterion into an ordinary unsupported/unavailable result — its
+normalizer cannot accept the new direct criterion type, so terminalization can throw/fail, and
+execution catches it so the RUN FAILS. That is fail-closed, but it is a Run failure during
+rollback/mixed-version exposure, not ordinary criterion unavailability, and it must be
+described as such. Exposure is limited to a mixed-version rollback window in which a NEW binary
+admitted a `fileContains` Run and an OLD binary later processes it. No version bump is
+required under repository convention, as independently adjudicated. If implementation
+discovers that this rollback boundary is operationally unacceptable under existing release
+guarantees, implementation STOPS rather than silently introducing version or migration work;
+no version bump may be created by this authority.
+
+### 8. Checkpoint expectations
+
+During implementation: targeted verification only (the smallest registered owner set covering
+each changed surface, per `AGENTS.md`). At P2 IMPLEMENTATION CLOSURE/publication: the full
+canonical checkpoint (`TEST_DATABASE_URL=... npm run checkpoint:release`) IS REQUIRED —
+canonical completion semantics changed and P2 closure is a phase-closure boundary, exactly as
+the published freeze's verification boundary states. This docs-only candidate triggers NO
+checkpoint and runs none.
+
+### 9. Tranche order, stop condition, and anti-opportunism
+
+Implementation proceeds R1 first, then R2, as two sub-tranches under this one authority: R1
+corrects an existing authority on the most common direct-run path and must land with its
+falsification matrix green before additive R2 machinery stacks onto the same decision
+functions; R2 has no reverse dependency on R1. Between sub-tranches, targeted verification is
+the barrier. STOP CONDITION: any of — a frozen P2 semantic cannot be realized by the authorized
+mechanics; a change outside section 5's table appears necessary; a legacy direct criterion's
+existing mapping must change; a migration or version bump appears necessary; a provider, shell,
+or DB-schema change appears necessary. In any of these, work stops and the register is amended
+through a new candidate before implementation resumes. Opportunistic cleanup of nearby
+completion behavior, presentation polish, fixture enrichment, criterion-class growth, and
+governed/workflow changes are explicitly NOT authorized by this record, and the P2 closure
+criterion does not activate Domain-Appropriate Quality.
+
+### 10. Candidate status
+
+P2 HONEST COMPLETION — IMPLEMENTATION/VERIFICATION-AUTHORITY CANDIDATE — NOT AUTHORITY UNTIL
+ONE NARROW INDEPENDENT REVIEW (fidelity to the published freeze, implementation minimality,
+authority scope, version compatibility, migration boundary, verification adequacy) FINDS NO
+MATERIAL DEFECT AND THIS RECORD IS COMMITTED AND PUBLISHED. That one review barrier is
+sufficient unless it finds a material defect. Until then: no implementation, no staging, no
+commit, no migration, no checkpoint.
+
+---
+
 ## Execution-semantics provenance fixture shared Ticket-attempt authority (2026-08-17)
 
 **Status: RESOLVED IN SOURCE — independent pre-semantics provenance cases now
