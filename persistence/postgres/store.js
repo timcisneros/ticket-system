@@ -128,12 +128,12 @@ const {
 const {
   inspectTicketAttemptBackfill
 } = require('./ticket-attempt-backfill');
-const {
-  inspectTicketFiveStateBackfill
-} = require('./t041-five-state-backfill');
-const {
-  inspectObjectiveRevisionBaseline
-} = require('./t042-objective-revision-baseline');
+// Historical semantic encapsulation (published authority: "Historical migration
+// semantic encapsulation — 041/042 frozen execution bundles"): the 041/042
+// hooks execute from migration-owned frozen bundles and are loaded ONLY when
+// the corresponding version is pending and immediately about to execute —
+// never by importing or initializing this store, and never on the
+// fully-current no-op path. See loadHistoricalMigrationHook below.
 const {
   EVENT_TYPE: OBJECTIVE_REVISION_EVENT_TYPE,
   ADMISSION_INTEGRITY_ERROR_CODE,
@@ -259,6 +259,33 @@ function migrationChecksum(version) {
   return crypto.createHash('sha256')
     .update(fs.readFileSync(path.join(MIGRATIONS_DIR, version)))
     .digest('hex');
+}
+
+// Historical semantic encapsulation — the ONE version→frozen-bundle-hook
+// selection authority. Only 041/042 have migration-owned frozen execution
+// bundles; every other version (including 039) keeps its existing hook
+// behavior. This resolver performs NO eager import: it is called only from
+// the pending-version branch in _runMigrations, so a fully-current runtime
+// never resolves or loads historical bundle modules. A missing, corrupt, or
+// syntactically invalid bundle fails closed here — the require throws inside
+// the migration transaction and the whole migration rolls back.
+const HISTORICAL_MIGRATION_HOOKS = Object.freeze({
+  '041_ticket_five_state_cutover.sql':
+    './migration-semantics/041/persistence/postgres/t041-five-state-backfill',
+  '042_objective_revision_baseline.sql':
+    './migration-semantics/042/persistence/postgres/t042-objective-revision-baseline'
+});
+
+function loadHistoricalMigrationHook(version) {
+  const hookPath = HISTORICAL_MIGRATION_HOOKS[version];
+  if (!hookPath) {
+    throw new PostgresRuntimeIntegrityError(
+      'schema_migrations',
+      `no frozen historical hook bundle is registered for ${version}`
+    );
+  }
+  // eslint-disable-next-line global-require
+  return require(hookPath);
 }
 
 function migrationHeadVersion(files = migrationFiles()) {
@@ -2089,7 +2116,12 @@ class PostgresRuntimeStore {
               // T2 Tranche 5: fail-fast eight-table NOWAIT lock, locked
               // classification of EVERY Ticket, complete desired projection,
               // and source-identity binding — all inside this transaction
-              // before the SQL cutover executes.
+              // before the SQL cutover executes. Executed from the
+              // migration-owned frozen 041 bundle, loaded lazily exactly here
+              // (pending-only); the root hook is a custody mirror, not
+              // execution authority.
+              const { inspectTicketFiveStateBackfill } =
+                loadHistoricalMigrationHook('041_ticket_five_state_cutover.sql');
               await inspectTicketFiveStateBackfill(this, { client });
             }
             if (version === '042_objective_revision_baseline.sql') {
@@ -2097,7 +2129,11 @@ class PostgresRuntimeStore {
               // atomic establishment of objective-revision revision-1
               // authority (event + projection pointer) for every pre-T3
               // Ticket, preserving generic tickets.revision via a narrowly
-              // scoped tickets_revision_guard suspension.
+              // scoped tickets_revision_guard suspension. Executed from the
+              // migration-owned frozen 042 bundle, loaded lazily exactly here
+              // (pending-only).
+              const { inspectObjectiveRevisionBaseline } =
+                loadHistoricalMigrationHook('042_objective_revision_baseline.sql');
               await inspectObjectiveRevisionBaseline(this, { client });
             }
             await client.query(fs.readFileSync(path.join(MIGRATIONS_DIR, version), 'utf8'));

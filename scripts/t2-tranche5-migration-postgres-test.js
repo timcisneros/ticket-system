@@ -33,7 +33,10 @@ const { Pool } = require('pg');
 const { PostgresRuntimeStore } = require('../persistence/postgres/store');
 const {
   inspectTicketFiveStateBackfill
-} = require('../persistence/postgres/t041-five-state-backfill');
+// Historical semantic encapsulation: the frozen 041 bundle hook is the
+// execution authority; this owner must exercise the bundle copy, never the
+// root custody mirror.
+} = require('../persistence/postgres/migration-semantics/041/persistence/postgres/t041-five-state-backfill');
 
 const MIGRATIONS_DIR = path.join(__dirname, '..', 'persistence', 'postgres', 'migrations');
 const ACTOR = 'op';
@@ -512,6 +515,108 @@ async function main() {
       'confirmed: no 041 in the drifted-run ledger');
     ok(afterD.rows.every(row => row.status !== 'canceled' || row.cancellation_authority),
       'no half-converted vocabulary survived the drift refusal');
+
+    // ── E. frozen-bundle hook loading semantics (historical semantic
+    // encapsulation). Two child processes keep the require cache pristine per
+    // phase:
+    //   E1: PENDING execution loads the frozen 041 BUNDLE hook and never the
+    //       root custody mirror;
+    //   E2: on an ALREADY-CURRENT schema, import + construct + fully-current
+    //       migrate() + preflight neither execute NOR load any frozen
+    //       041/042 bundle module, and the ledger identities stay
+    //       byte-current with zero mutation.
+    console.log('frozen-bundle hook loading semantics');
+    const spawnChild = async script => {
+      const { spawnSync } = require('node:child_process');
+      const result = spawnSync(process.execPath, ['-e', script], {
+        cwd: path.join(__dirname, '..'),
+        encoding: 'utf8',
+        env: { ...process.env }
+      });
+      assert.equal(result.status, 0,
+        `child probe exited cleanly (${String(result.stderr).slice(0, 400)})`);
+      return JSON.parse(result.stdout.trim());
+    };
+
+    {
+      // E1 — pending 041 execution selects the frozen bundle hook.
+      const schemaE1 = `t041_migrate_e1_${Date.now().toString(36)}`;
+      try {
+        await createLegacySchema(pool, schemaE1);
+        const outcome = await spawnChild(`
+          const { PostgresRuntimeStore } = require('./persistence/postgres/store');
+          const store = new PostgresRuntimeStore({
+            connectionString: process.env.TEST_DATABASE_URL,
+            schema: ${JSON.stringify(schemaE1)},
+            disposableMigrations: true
+          });
+          store.migrate().then(() => {
+            const loaded = Object.keys(require.cache);
+            process.stdout.write(JSON.stringify({
+              bundle041: loaded.some(p => p.includes('migration-semantics/041/persistence/postgres/t041-five-state-backfill')),
+              bundle042: loaded.some(p => p.includes('migration-semantics/042/persistence/postgres/t042-objective-revision-baseline')),
+              root041: loaded.some(p => p.endsWith('persistence/postgres/t041-five-state-backfill.js') && !p.includes('migration-semantics')),
+              root042: loaded.some(p => p.endsWith('persistence/postgres/t042-objective-revision-baseline.js') && !p.includes('migration-semantics'))
+            }));
+            process.exit(0);
+          }).catch(error => { console.error(error); process.exit(1); });
+        `);
+        ok(outcome.bundle041, 'pending 041 execution loads the FROZEN 041 bundle hook');
+        ok(outcome.bundle042, 'pending 042 execution loads the FROZEN 042 bundle hook');
+        ok(!outcome.root041, 'pending execution never loads the root 041 custody mirror as execution authority');
+        ok(!outcome.root042, 'pending execution never loads the root 042 custody mirror as execution authority');
+      } finally {
+        await pool.query(`DROP SCHEMA IF EXISTS "${schemaE1}" CASCADE`).catch(() => {});
+      }
+    }
+
+    {
+      // E2 — fully-current schema: no hook execution, no bundle module load,
+      // byte-current identities, zero mutation.
+      const schemaE2 = `t041_migrate_e2_${Date.now().toString(36)}`;
+      try {
+        await createLegacySchema(pool, schemaE2);
+        const parentStore = new PostgresRuntimeStore({
+          connectionString: databaseUrl, schema: schemaE2, disposableMigrations: true
+        });
+        await parentStore.migrate(); // parent makes the schema CURRENT
+        const identityBefore = (await pool.query(
+          `SELECT version, sha256 FROM "${schemaE2}".schema_migration_identities ORDER BY version`)).rows;
+        const ledgerBefore = (await pool.query(
+          `SELECT version, applied_at FROM "${schemaE2}".schema_migrations ORDER BY version`)).rows;
+        const outcome = await spawnChild(`
+          const { PostgresRuntimeStore } = require('./persistence/postgres/store');
+          const store = new PostgresRuntimeStore({
+            connectionString: process.env.TEST_DATABASE_URL,
+            schema: ${JSON.stringify(schemaE2)},
+            disposableMigrations: true
+          });
+          (async () => {
+            const applied = await store.migrate();
+            try { await store.prepareRuntimePersistence(); } catch (error) {}
+            const loaded = Object.keys(require.cache);
+            process.stdout.write(JSON.stringify({
+              applied,
+              bundleLoaded: loaded.some(p => p.includes('migration-semantics'))
+            }));
+            process.exit(0);
+          })().catch(error => { console.error(error); process.exit(1); });
+        `);
+        equal(outcome.applied, [], 'fully-current migrate() applies nothing');
+        ok(!outcome.bundleLoaded,
+          'fully-current import/construct/migrate/preflight loads NO frozen 041/042 bundle module');
+        const identityAfter = (await pool.query(
+          `SELECT version, sha256 FROM "${schemaE2}".schema_migration_identities ORDER BY version`)).rows;
+        const ledgerAfter = (await pool.query(
+          `SELECT version, applied_at FROM "${schemaE2}".schema_migrations ORDER BY version`)).rows;
+        equal(JSON.stringify(identityAfter), JSON.stringify(identityBefore),
+          'fully-current no-op left migration identities byte-current');
+        equal(JSON.stringify(ledgerAfter), JSON.stringify(ledgerBefore),
+          'fully-current no-op mutated no ledger row');
+      } finally {
+        await pool.query(`DROP SCHEMA IF EXISTS "${schemaE2}" CASCADE`).catch(() => {});
+      }
+    }
 
     console.log(`\n${assertions} assertions passed`);
   } finally {

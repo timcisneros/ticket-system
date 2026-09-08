@@ -41,7 +41,10 @@ const { Pool } = require('pg');
 const ROOT = path.resolve(__dirname, '..');
 const MIGRATIONS_DIR = path.join(ROOT, 'persistence', 'postgres', 'migrations');
 const CLASSIFIER = path.join(ROOT, 'scripts', 't2-five-state-classifier.js');
-const HOOK_SOURCE = path.join(ROOT, 'persistence', 'postgres', 't041-five-state-backfill.js');
+// Historical semantic encapsulation: assertions run against the FROZEN 041
+// bundle hook (the execution authority); the root path is a custody mirror.
+const HOOK_SOURCE = path.join(ROOT, 'persistence', 'postgres', 'migration-semantics',
+  '041', 'persistence', 'postgres', 't041-five-state-backfill.js');
 const TOOL_SOURCE = path.join(ROOT, 'scripts', 't2-five-state-classifier.js');
 const SHARED_FACTS_MODULE = 'ticket-history-classifier-facts';
 const BASE_T = Date.parse('2026-08-18T19:00:00Z');

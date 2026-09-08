@@ -81,7 +81,9 @@ async function applyMigration041Manually(pool, schema) {
   const {
     inspectTicketFiveStateBackfill,
     sourceDigests
-  } = require('../persistence/postgres/t041-five-state-backfill');
+  // Historical semantic encapsulation: 041 executes from its frozen bundle
+  // (execution authority); the root path is a custody mirror.
+  } = require('../persistence/postgres/migration-semantics/041/persistence/postgres/t041-five-state-backfill');
   const { PostgresRuntimeStore } = require('../persistence/postgres/store');
   const store = new PostgresRuntimeStore({ connectionString: process.env.TEST_DATABASE_URL, schema });
   const client = await pool.connect();
