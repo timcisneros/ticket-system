@@ -2647,6 +2647,225 @@ commit, no migration, no checkpoint.
 
 ---
 
+## P3 — BOUNDED AUTHORITATIVE CONTEXT & CONTINUATION — semantic design-freeze candidate
+
+**STATUS:** candidate — NOT AUTHORITY until independent review, acceptance, commit, and publication. Roadmap authority remains register §6 (P2→P3→…; P3 advances CAP-2, adjacent to CAP-5). This freeze pre-authorizes no implementation, schema, migration, or provider contact. Register §9a (S-A residual) is the recorded predecessor authority routing declared-postcondition continuation treatment to this phase.
+
+### 1. IDENTITY AND OUTCOME
+
+P3 = Bounded Authoritative Context & Continuation.
+
+Two tranches:
+
+* **P3-R1 — Bounded declared-postcondition continuation (premature-stop correction).**
+* **P3-R2 — Bounded authoritative prior-attempt context (reassess projection).**
+
+Both are REQUIRED for P3 closure. The prior-attempt-context outcome is a named roadmap outcome.
+
+Operator-guided continuation remains the EXISTING T3 objective-revision authority plus new-attempt/rerun gates. No T7 extension. No same-Run operator→agent delivery. Generic prompt/context construction is not T7 delivery authority.
+
+T7-I7 (model→operator messaging ownership) is NOT a prerequisite for P3-R1/R2 or P3 closure. Any clarification design requires its own separately registered decision and is outside P3-R1/R2 scope.
+
+### 2. P3-R1 — BOUNDED DECLARED-POSTCONDITION CONTINUATION
+
+Scope: Runs whose admitted completion policy is `declared_postconditions`. Receipt and other policies are untouched except where stated.
+
+#### 2.1 Successful-mutation shortcut restriction
+
+The pre-existing successful-mutation shortcut (`isDirectWorkspaceObjectiveSatisfied` / `workspace.objective_satisfied`) applies ONLY when the Run's admitted completion policy is `workspace_objective_receipt`.
+
+For `declared_postconditions`, the shortcut never terminates the execution loop.
+
+If the Run's completion-authority snapshot is missing or unreadable, the shortcut is WITHHELD fail-closed, never defaulted on.
+
+Observable semantic equivalence is required for `workspace_objective_receipt`: receipt occurrence semantics, `workspace.objective_satisfied` history/corroboration, no retraction after later external workspace change, receipt completion decision, and rerun/resume semantics remain unchanged.
+
+#### 2.2 Advisory model completion
+
+For `declared_postconditions`, model `complete:true` is advisory with respect to objective completion.
+
+The loop terminalizes as successfully complete only when existing deterministic declared-postcondition machinery establishes the admitted criteria satisfied, or when a legitimate non-objective stop/failure/recovery boundary terminates or interrupts execution under its existing semantics.
+
+Budgets, duration, limits, violation/refusal, authority denial, infrastructure failure, unavailable fail-closed behavior, and recovery semantics retain precedence.
+
+#### 2.3 Deferred declared completion
+
+When the post-batch deterministic declared machinery establishes admitted criteria NOT satisfied and the model response signals `complete:true`—and neither action-truncation nor an already-owned compiled-contract branch controls—the Run:
+
+1. records durable deferred-completion history using the existing contract-completion-deferral seam/pattern;
+2. records/names only deterministic unsatisfied criterion information already produced by the existing declared-postcondition check;
+3. supplies corrective feedback through the existing action-result/transition-guidance context;
+4. continues to another turn only while existing runtime authority and budgets permit.
+
+This creates no new completion authority and no second criterion evaluator.
+
+#### 2.4 Unavailable is not unsatisfied
+
+For `fileContains`, absence of a valid relevant observation remains unavailable, not false.
+
+Unavailable follows existing fail-closed blocked semantics and is never used as a reason to continue as though an observed-negative criterion existed.
+
+For `folder_exists`, `path_absent`, and `file_content_equals`, the existing deterministic loop-level check that owns their declared-direct positive claim also supplies the not-satisfied continuation hinge. Structural unobservability may consume bounded budget before canonical terminal truth is known; that is an accepted launch residual, not authority widening.
+
+#### 2.5 No-op deferral bound
+
+A deferred `complete:true` response with zero actions counts toward the EXISTING stalled-response threshold.
+
+Repeated no-op completion therefore remains bounded and terminalizes honestly.
+
+No new repeated-unchanged-criterion machinery is introduced at launch. Existing step, model-request, workspace-operation, mutating-action, duration, inspection-no-progress, violation, and stalled-response bounds remain controlling.
+
+#### 2.6 Authority separation
+
+The model acquires no continuation authority by signaling either complete or continue.
+
+Continuation is derived only from deterministic declared-postcondition state plus existing execution authority/budgets.
+
+The canonical completion decision remains the sole Ticket-completion authority.
+
+Continuation gating must consume the same already-owned deterministic declared-postcondition facts/checks that produce canonical evidence; it MUST NOT introduce a competing evaluator or divergent criterion semantics.
+
+Ticket lifecycle/projection semantics remain unchanged.
+
+No new lifecycle state, schema, or migration.
+
+#### 2.7 Evidence
+
+Declared Runs that previously stopped at the successful-mutation shortcut now reach the existing post-batch evidence/claim seams before any continuation decision.
+
+P2's canonical evaluation, criterion-bound observation channel (`run:direct_postcondition_observed`), receipt semantics, violation/refusal semantics, and Ticket projection remain unchanged.
+
+### 3. P3-R2 — BOUNDED AUTHORITATIVE PRIOR-ATTEMPT CONTEXT
+
+Scope: `reassess`-mode rerun, a NEW attempt, first step only, prompt-transient.
+
+This extends the existing prior-context delivery seam. Resume remains same-Run and uses existing recovery/provider-response reconstruction; no prior-attempt projection is added to resume.
+
+#### 3.1 Content and canonical sources
+
+Each projected fact has ONE canonical source:
+
+**Committed mutation paths:** prior Run consequence committed categories (`created`, `updated`, `deleted`, `renamed`). Never raw `workspaceOperations`; never attempted/failed entries. If consequence is unavailable, omit this section rather than reconstructing it. Use a fixed deterministic bound and explicit truncation marker.
+
+**Prior criterion state:** prior Run persisted `completionDecision.evaluatedPostconditions`, including per-criterion passed/reasonCode as available. No re-evaluation. No replay-derived second evaluator. If absent, omit.
+
+**Prior Run status/reason:** prior Run status + completionDecision reasonCode + sanitized error.
+
+**Provenance:** `priorRunId`, `priorRunStatus`, `priorDecisionAt` (`completionDecision.evaluatedAt` where available). No additional fields without demonstrated need.
+
+#### 3.2 Semantics and selection
+
+The projection is MODEL CONTEXT ONLY.
+
+It is:
+
+* not completion authority;
+* not action authority;
+* unable to satisfy a criterion;
+* unable to substitute for canonical evaluation;
+* excluded from authority/decision hashes.
+
+Selection remains deterministic:
+
+* same Ticket;
+* most recent prior terminal Run;
+* current Run excluded.
+
+The projected context key becomes:
+
+`priorAttemptContext`
+
+rather than `priorFailureContext`, because completed-but-objective-incomplete prior Runs are valid inputs and are not accurately described as failures.
+
+#### 3.3 Prior-vs-current truth
+
+Prior criterion state is explicitly labeled:
+
+**PRIOR-ATTEMPT TERMINAL/LAST-OBSERVED CRITERION STATE**
+
+It is never current workspace truth.
+
+Current truth belongs exclusively to the new Run's own current workspace/postcondition observation and canonical evaluation machinery.
+
+Workspace change between attempts cannot transform prior context into current authority.
+
+#### 3.4 Hermeticity and boundedness
+
+Context is reconstructed solely from repository-defined durable state.
+
+No conversational memory.
+
+No hidden prior-agent state.
+
+No full run-history dump.
+
+No semantic-retrieval dependency.
+
+Projection is deterministically bounded. Truncation is explicit. Omitted/unavailable facts are not fabricated.
+
+### 4. BOUNDARIES
+
+Same-Run operator→agent delivery remains T7-extension-gated and is NOT authorized.
+
+T7-I7 remains outside P3-R1/R2.
+
+P4 owns governed-surface expansion.
+
+P5 owns workflow/child/subwork composition; FINAL STOP against structured parent/planner/leaf revival remains intact.
+
+P6 owns deployment.
+
+P7 owns integrations.
+
+No deferred criterion types are admitted.
+
+No generic memory/RAG framework.
+
+No ontology/plugin/orchestration layer.
+
+No shell-capability expansion.
+
+### 5. MIGRATION / SCHEMA
+
+NO MIGRATION EXPECTED.
+
+P3-R1 uses existing loop-control/evidence/event structures.
+
+P3-R2 projects existing durable Run/consequence/completionDecision data into prompt-transient context.
+
+If implementation discovers a genuinely required new durable fact or schema change, work STOPS and requires separately registered authority before DDL.
+
+PostgreSQL remains runtime authority.
+
+### 6. VERIFICATION
+
+Minimum matrix:
+
+* M1: wrong first write + `complete:true` + false criterion + budget available → continue; correcting second turn → complete exactly once.
+* M2: no mutation + `complete:true` + false criterion → deferred continuation; repeated no-op → existing stalled threshold honest stop.
+* M3: wrong write + `complete:false` → no declared-policy receipt shortcut; post-batch negative evidence exists; continuation occurs while bounded.
+* M4: unavailable `fileContains` + `complete:true` → fail-closed blocked; no unavailable→false collapse.
+* M5: receipt-policy objective preserves predecessor shortcut behavior; missing/unreadable policy snapshot withholds shortcut fail-closed.
+* M6: declared criterion satisfied on later bounded turn → stop/completion exactly once.
+* M7: persistent unsatisfied work remains bounded by existing runtime limits.
+* C1: identical durable prior state produces deterministic `priorAttemptContext`.
+* C2: external workspace change between attempts does not make prior criterion state current authority.
+* C3: foreign/stale prior Run cannot be selected.
+* C4: committed paths use exactly the consequence committed categories; omission rather than alternate reconstruction.
+* C5: truncation/omission cannot manufacture completion/action authority.
+
+All P2 owners remain green after implementation.
+
+Barrier sequence:
+
+**P3-R1 → targeted owning verification → P3-R2 → full canonical checkpoint at P3 phase closure.**
+
+No full checkpoint per sub-tranche absent an independent repository-owned trigger.
+
+**Publication provenance (added at publication; not part of the accepted semantic body): this exact semantic freeze was independently accepted before publication — independent review verdict A, HIGH 0, MEDIUM 0, accepted non-blocking findings L1/L2, informational I1–I3 — and was published unchanged 2026-09-10 as a docs-only register insertion; no implementation, migration, or checkpoint authority is created.**
+
+---
+
 ## Execution-semantics provenance fixture shared Ticket-attempt authority (2026-08-17)
 
 **Status: RESOLVED IN SOURCE — independent pre-semantics provenance cases now
