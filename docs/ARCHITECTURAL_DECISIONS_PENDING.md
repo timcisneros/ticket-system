@@ -2866,6 +2866,420 @@ No full checkpoint per sub-tranche absent an independent repository-owned trigge
 
 ---
 
+## P3 — BOUNDED AUTHORITATIVE CONTEXT & CONTINUATION — implementation/verification-authority registration candidate (2026-09-10)
+
+**Status: P3 SEMANTIC DESIGN FREEZE PUBLISHED — IMPLEMENTATION NOT STARTED — THIS IS AN UNCOMMITTED,
+UNPUBLISHED DOCS-ONLY CANDIDATE — NO IMPLEMENTATION IS AUTHORIZED UNTIL THIS RECORD IS INDEPENDENTLY
+REVIEWED, ACCEPTED, COMMITTED, AND PUBLISHED — NO MIGRATION IS REQUIRED, CREATED, OR AUTHORIZED —
+DOCS-ONLY REGISTRATION CANDIDATE PENDING ONE NARROW INDEPENDENT IMPLEMENTATION-AUTHORITY REVIEW.**
+
+### 1. Purpose, controlling authority, and baseline
+
+This candidate is intended, once independently accepted, committed, and published, to durably
+register the P3 implementation/verification authority for the PUBLISHED semantic design freeze
+`## P3 — BOUNDED AUTHORITATIVE CONTEXT & CONTINUATION — semantic design-freeze candidate` at commit
+`e3484a0fcca38aa5910cb8389e2a4f38e7955c2e` ("Register P3 context and continuation design freeze";
+parent `597c61cf7617b573f6e61bf053ec825a5c54ca60`). The published freeze is the controlling semantic
+authority; this record authorizes ONLY the mechanics that realize exactly its TWO REQUIRED tranches
+— P3-R1 (bounded declared-postcondition continuation) and P3-R2 (bounded authoritative
+prior-attempt context) — plus the verification that proves them. It reopens no frozen semantics,
+creates no migration authority, and changes no T7 disposition.
+
+Candidate baseline: branch `master`; local HEAD = origin/master =
+`e3484a0fcca38aa5910cb8389e2a4f38e7955c2e`; worktree clean; nothing staged; stash empty;
+`git diff --check` clean; migration head `043_api_token_authority.sql` unchanged; no P3 kernel
+implementation exists anywhere in tracked source. This is ONE coherent section in this register; it
+does not duplicate the published freeze (which remains the sole P3 semantic authority) and alters no
+other register entry. Standing rule preserved: **bound authority without unnecessarily bounding
+capability** — this record freezes semantic outcomes and protected trust boundaries, not an
+exhaustive file whitelist (section 13 defines the latitude and its STOP boundary).
+
+### 2. Tranche order and working-tree discipline
+
+Implementation proceeds R1 first, then R2, exactly as the published freeze's barrier sequence
+requires: **P3-R1 → targeted owning verification → P3-R2 → full canonical checkpoint at P3 phase
+closure.** Preferred sequence: implement R1; run the R1 targeted barrier (section 6); independent
+R1 barrier adjudication only if material semantic uncertainty remains; implement R2 on the accepted
+R1 substrate; run the R2 targeted barrier (section 12); independent combined P3 closure review; full
+canonical phase checkpoint; closure/publication review; ONE combined publication commit unless a
+concrete repository reason requires a split. R1 remains UNCOMMITTED in the working tree through its
+targeted barrier. No extra commits or barriers are created mechanically.
+
+### 3. P3-R1 authorized mechanics — bounded declared-postcondition continuation
+
+Scope: Runs whose admitted completion policy is `declared_postconditions`, read from the Run's
+authoritative `completionAuthoritySnapshot` (canonical `normalizeCompletionAuthoritySnapshot`
+semantics). Receipt and other policies are untouched except where stated. The authorized mechanics:
+
+1. **Shortcut policy gate.** The pre-existing successful-mutation shortcut
+   (`isDirectWorkspaceObjectiveSatisfied` → `workspace.objective_satisfied` → loop `completed`) is
+   permitted to terminate the loop ONLY when the Run's admitted completion policy read from the
+   authoritative snapshot is `workspace_objective_receipt`. For `declared_postconditions` it never
+   terminates the loop. When the snapshot is absent, or reading/normalizing it fails, the shortcut
+   is WITHHELD — never defaulted on. Withholding on an unreadable snapshot does not swallow the
+   integrity failure: the loop continues without the shortcut and the canonical completion-authority
+   path keeps owning snapshot integrity enforcement at terminalization (existing fail-closed
+   behavior). The governed-leaf and resumed-run exclusions already guarding this site are
+   unchanged.
+2. **Advisory complete:true.** For `declared_postconditions`, model `complete:true` is advisory.
+   The loop terminalizes as successfully complete only when the existing post-batch deterministic
+   declared machinery establishes the admitted criteria satisfied, or when a legitimate
+   non-objective stop/failure/recovery boundary terminalizes or interrupts under its existing
+   semantics. The existing post-batch precedence chain (governed claim → compiled-contract check →
+   declared-direct check → legacy redundant-operation heuristic → truncation/compiled deferral
+   branches → plain completion branch) keeps its order; budgets, duration, limits, violation/refusal,
+   authority denial, infrastructure failure, unavailable fail-closed behavior, and recovery
+   semantics retain precedence.
+3. **Deferred declared completion.** When the post-batch declared machinery establishes admitted
+   criteria NOT satisfied — for `fileContains` this means a durable observed-negative from the
+   existing criterion-bound observation channel (`run:direct_postcondition_observed`), never an
+   unavailable criterion — and the model response signals `complete:true`, and neither the
+   action-truncation branch nor the already-owned compiled-contract branch controls, the Run:
+   (a) records durable deferred-completion history through the EXISTING
+   `run:contract_completion_deferred` / `run.contract_completion_deferred` seam with payload
+   `{ step, pendingPostconditions }` where `pendingPostconditions` carries only the deterministic
+   unsatisfied criterion facts (`{ type, path }`) already produced by the existing
+   declared-postcondition check; (b) supplies corrective feedback through the existing
+   action-result/transition-guidance channel with truthful wording naming the declared criteria;
+   (c) continues to another turn only while existing runtime authority and budgets permit. This
+   creates no new completion authority and no second criterion evaluator.
+4. **Unavailable stays fail-closed.** Unavailable criterion evidence (no valid relevant observation)
+   is never treated as an observed negative, never used as a continuation reason, and never
+   collapsed to false. The existing branch-3 stop on `complete:true` with unavailable criteria and
+   its canonical `blocked` / `VERIFICATION_UNAVAILABLE` decision remain the controlling behavior.
+5. **Redundant-operation heuristic exclusion for declared Runs.** For a Run whose admitted
+   completion policy is `declared_postconditions`, the legacy redundant-operation heuristic
+   (`checkPostconditionCompletion`, source `redundant_operation`) MUST NEVER supply a successful
+   loop stop. The heuristic reads no admitted criteria and is therefore not declared-postcondition
+   machinery (the freeze's "only when" terminalization rule; the same redundancy-is-not-completion
+   principle already applied to governed leaves at this seam). If admitted declared criteria are
+   actually satisfied, the existing declared-direct deterministic check fires earlier in the
+   post-batch precedence chain, so disabling this fallback for ALL `declared_postconditions` Runs
+   removes only premature/unauthorized loop stops — including states where criteria are
+   unavailable rather than observed-negative, which "observably unsatisfied" wording alone would
+   not cover. It remains unchanged for every other policy. No heuristic redesign, no other-policy
+   change, and no new evaluator are authorized by this item.
+6. **No-op deferral bound.** A deferred `complete:true` response with zero actions counts toward
+   the EXISTING `stalledResponses` counter and `STALLED_RESPONSE_THRESHOLD` (2). The shared
+   counter/threshold serves both the existing `complete:false`-no-op stall and the new deferred
+   `complete:true`-no-op case; the stall event/limit wording must state both truthfully. No new
+   loop counter is authorized unless repository evidence proves the existing one cannot safely
+   serve; existing step, model-request, workspace-operation, mutating-action, duration,
+   inspection-no-progress, violation, and stalled-response bounds remain controlling.
+7. **Receipt preservation.** Observable semantic equivalence for `workspace_objective_receipt` is
+   REQUIRED: receipt occurrence semantics, `workspace.objective_satisfied` history/corroboration,
+   no retraction after later external workspace change, receipt completion decision, and
+   rerun/resume semantics remain unchanged.
+8. **No canonical-completion change.** `buildCompletionDecision` remains the sole canonical
+   completion authority. Continuation gating consumes the same already-owned deterministic
+   declared-postcondition facts/checks that produce canonical evidence — the same snapshot policy
+   read, the same observation-channel rule, the same declared-direct checks — and MUST NOT
+   introduce a competing evaluator or divergent criterion semantics. If correct P3-R1
+   implementation requires changing canonical criterion semantics or `buildCompletionDecision`
+   authority rather than reusing them, STOP for authority adjudication.
+
+**Authorized superseded-behavior test updates (P3-R1):** a P2-era test assertion that intentionally
+pinned the predecessor premature-stop behavior for declared Runs may be updated where the published
+freeze explicitly supersedes that behavior — concretely, the `postcondition-completion-test.js`
+R2-E2E observed-negative scenario's loop/settlement expectations, replaced by the bounded
+continuation semantics above. Such updates do NOT reopen P2 truth semantics: the canonical
+evaluator's satisfied/unsatisfied/unavailable outcomes, observation-channel binding, refusal
+projection, and `VERIFICATION_FAILED`/`VERIFICATION_UNAVAILABLE` reason codes remain pinned
+unchanged.
+
+### 4. P3-R1 expected surface
+
+Expected central owner: `server.js` (execution-loop shortcut gate, post-batch deferral branch,
+stalled counter sharing, redundant-operation exclusion). Expected principal test owner:
+`scripts/postcondition-completion-test.js` (new M-matrix scenarios). Expected regression owners:
+`scripts/completion-decision-contract-test.js`, `scripts/completion-decision-postgres-test.js`,
+`scripts/resume-obvious-postcondition-test.js`, plus any existing direct-postcondition owner
+actually touched. No change to `runtime/completion-decision-contract.js` is expected; if a purely
+mechanical export/reuse of an existing pure evaluator is needed, the change must add no semantic
+authority and must be reported explicitly. Any other path may be touched only under section 13's
+latitude.
+
+### 5. P3-R1 required falsification matrix
+
+Implementation verification must prove at least:
+
+* **M1** wrong first write + `complete:true` + false criterion + budget remaining → same Run
+  continues; corrective second turn can satisfy; completion occurs exactly once.
+* **M2** no mutation + `complete:true` + false criterion → completion deferred; another bounded
+  turn allowed; repeated no-op deferred completion hits the EXISTING stalled-response bound
+  honestly.
+* **M3** wrong write + `complete:false` → no declared-policy receipt shortcut; post-batch negative
+  evidence is durable; bounded continuation occurs.
+* **M4** unavailable `fileContains` + `complete:true` → fail-closed blocked; no unavailable→false
+  collapse; no continuation based on fabricated negative truth.
+* **M5** `workspace_objective_receipt` predecessor shortcut behavior preserved; receipt decision
+  remains completion-authoritative; missing/unreadable policy snapshot withholds the shortcut
+  fail-closed.
+* **M6** declared criterion becomes satisfied on a later bounded turn → continuation stops; Run
+  settles correctly; Ticket completes exactly once.
+* **M7** persistent unsatisfied work remains bounded by existing runtime limits; no infinite
+  keep-trying behavior.
+
+Refusal, authority-denial, violation, and infrastructure-error precedence must remain unchanged
+through the existing owners unless a new specific test is required.
+
+### 6. P3-R1 targeted verification barrier
+
+After R1, before R2 starts, the smallest repository-owned owner set:
+
+* `scripts/postcondition-completion-test.js` (M1–M7; receipt preservation; P2 E2E)
+* `scripts/completion-decision-contract-test.js` (canonical evaluator unchanged)
+* `scripts/completion-decision-postgres-test.js` (persisted decision roundtrip/replay unchanged)
+* `scripts/resume-obvious-postcondition-test.js` (resume/recovery unchanged)
+* any additional direct-postcondition owner actually touched by the implementation
+* `git diff --check`
+* `npm run build`
+
+PostgreSQL owners run under `TEST_DATABASE_URL`. NO full canonical checkpoint at the R1 internal
+barrier unless an independent repository-owned trigger beyond the already-declared phase-closure
+trigger is discovered.
+
+### 7. P3-R2 authorized mechanics — bounded authoritative prior-attempt context
+
+The existing reassess prior-context delivery seam (`buildPriorFailureContext` and its
+`rerunMode === 'reassess'` + `actionResults.length === 0` first-step injection gate) is REPLACED in
+place by the frozen `priorAttemptContext` projection. Scope: `reassess`-mode rerun, a NEW attempt,
+first step only, prompt-transient. Resume remains same-Run with existing recovery/provider-response
+reconstruction; no prior-attempt projection is added to resume. Authorized mechanics:
+
+1. **Selection.** Same Ticket; current Run excluded; most recent prior TERMINAL Run (statuses
+   `completed`, `failed`, `interrupted`), including `completed` terminal Runs — the predecessor
+   early return that excluded completed prior Runs is superseded by the published freeze; prior
+   Run ordering stays the existing deterministic most-recent ordering over the same durable
+   fields. No multiple-Run selection, no retrieval/ranking semantics, no foreign-Ticket Runs.
+2. **Canonical sources.** Committed mutation paths sourced ONLY from the prior Run's persisted
+    consequence committed categories (`created`, `updated`, `deleted`, `renamed`). The canonical
+    retrieval path is exactly: obtain the prior Run's persisted consequence via
+    `getRunConsequence(priorRun.id)` and consume it through the existing A16 canonical hydration
+    `hydrateRunConsequenceForPresentation(...)`; that hydration's existing read-time rebuild from
+    succeeded PostgreSQL operation receipts is PART OF the canonical consequence path when required
+    by existing A16 semantics — it is the existing canonical consequence representation path, not a
+    new alternate P3 source, so one-source-per-fact is preserved. Raw `workspaceOperations` /
+    `workspace.operation` replay/event streams remain prohibited as alternate P3-R2 reconstruction
+    sources; attempted/failed entries are never projected. Note explicitly: `readAllRunsForTicket`
+    / `listRunsForTicket` alone does NOT provide the hydrated consequence or `completionDecision`
+    (they read only the `runs` row); the implementation MUST NOT assume the selected Run object
+    already carries that data. If implementation later proves this named path cannot satisfy the
+    frozen projection, that is an implementation STOP, not a workaround site. Prior criterion state
+    sourced ONLY from the prior Run's persisted `completionDecision.evaluatedPostconditions`.
+    Status/reason from the prior Run's status, the completion decision `reasonCode`, and the
+    persisted prior Run error, which the `priorAttemptContext` projection boundary MUST re-apply
+    through the existing canonical `sanitizeLogMessage` before projection: the projected field is
+    the boundary-sanitized value, persistence-time sanitization does NOT substitute for
+    projection-boundary sanitization, and a null/unavailable source error is omitted per the
+    existing omission rules. (Current terminalization already applies `sanitizeLogMessage` to the
+    persisted error; however repository convention re-sanitizes at presentation boundaries, so
+    projection MUST re-apply it regardless of persistence history.) Provenance: `priorRunId`,
+    `priorRunStatus`, `priorDecisionAt` (`completionDecision.evaluatedAt` where available).
+3. **Model-context-only guarantees.** The projection is model context only: not completion
+   authority, not action authority, unable to satisfy a criterion, unable to substitute for
+   canonical evaluation, and excluded from authority/decision hashes. Prior criterion state is
+   explicitly labeled `PRIOR-ATTEMPT TERMINAL/LAST-OBSERVED CRITERION STATE` and is never current
+   workspace truth; current truth belongs exclusively to the new Run's own current
+   workspace/postcondition observation and canonical evaluation machinery.
+4. **Hermeticity.** Reconstructed solely from repository-defined durable state; no conversational
+   memory, no hidden prior-agent state, no full run-history dump, no semantic-retrieval
+   dependency; deterministically bounded; explicit truncation; omitted/unavailable facts are not
+   fabricated.
+5. **One canonical key.** The projected context key is `priorAttemptContext`. The old
+   `priorFailureContext` key disappears from generated prompts in the same tranche (section 8
+   compatibility decision).
+
+### 8. P3-R2 exact representation decisions (resolved deferred choices)
+
+These resolve the representation choices the published freeze deliberately left open. They are
+implementation authority, not new semantics.
+
+**Mutation-path bound (exact).** The committed-mutation-paths entry bound is the PRIOR Run's own
+durably required `runtimeLimitsSnapshot.maxWorkspaceOperationsPerRun` (read via the existing
+required per-Run limits snapshot accessor; default deployment value 32). Rationale: a Run cannot
+commit more workspace operations than its own durably snapshotted cap, so the bound is directly
+justified by an existing repository invariant, is derived solely from durable prior-Run state (same
+durable prior state → byte-identical projection), and never silently truncates a deployment whose
+configured limits exceed defaults — the exact hinge the repository evidence resolves (configured
+runtime limits have a floor but no ceiling). The bound counts projected ENTRIES, not path strings:
+one committed operation projects exactly one entry (a rename entry carries both of its paths).
+
+**Entry shape.** `created`/`updated`/`deleted` entries: `{ category, path }`. `renamed` entry:
+`{ category: 'renamed', path, nextPath }` — both values taken from the SAME committed consequence
+item; a rename is never split into two entries and never derived from a second source. Entries
+carry no additional fields (no historyId/step/timestamp/result), because reassess needs the
+committed path facts, not the receipt ledger.
+
+**Ordering.** Fixed category sequence `created → updated → deleted → renamed`, preserving each
+category array's persisted order (canonical succeeded-receipt append order). No new sorting;
+object/map enumeration order never defines semantics.
+
+**Deduplication.** Exact-duplicate entries — same category, operation, path, and nextPath — are
+collapsed to the FIRST occurrence before the bound is applied. `operation` is read from the
+persisted consequence item and is used only as a SOURCE-SIDE deduplication key before projection;
+it is NOT included in `priorAttemptContext`. Distinct entries are never merged or dropped;
+repeated writes of the same path remain one committed fact, not several.
+
+**Truncation marker (exact).** The committed-paths section is
+`{ entries: [...], total: <exact deduplicated committed-entry count>, truncated: <total > entries.length> }`.
+When truncated, `entries` carries exactly the first `bound` entries of the deterministic sequence
+and `truncated: true` names the explicit marker. No silent overflow; no omission without the
+marker; truncation cannot manufacture completion or action authority.
+
+**Omission rules.** Prior consequence unavailable → the committed-paths section is omitted, never
+reconstructed. Committed categories all empty → section present with `entries: []`, `total: 0`,
+`truncated: false`. `completionDecision` absent, or `evaluatedPostconditions` missing/empty → the
+criterion section is omitted, never re-evaluated. `priorDecisionAt`/`priorReasonCode`/`priorError`
+are omitted when their source fact is unavailable.
+
+**Criterion entries.** Per criterion, projected from the persisted evaluated-postcondition entry as
+available: `{ type, path?, passed, reasonCode }` — `path` only when the persisted entry carries
+one; `passed` boolean-or-null exactly as persisted; `reasonCode` as persisted. No other persisted
+decision fields are projected. The criteria count needs no separate bound: the completion authority
+already bounds admitted direct criteria (≤ 128).
+
+**Key-compatibility decision (exact).** ONE canonical key `priorAttemptContext`; NO
+`priorFailureContext` compatibility alias; no dual-name period. Basis verified from repository
+evidence: the key's only consumers are the internal prompt builder, repository tests, and
+repository docs — no supported external contract consumes the prompt field name, and the reassess
+operator API (`mode: reassess`) is unchanged. The superseded legacy fields (`lastAction`,
+`inspectedFiles`, `mutationsCompleted`, `recoveryClassification`) disappear with the old shape;
+they are not carried into `priorAttemptContext`.
+
+### 9. P3-R2 expected surface and authorized owner updates
+
+Expected central owner: `server.js` (prior-context builder replacement and its single injection
+site — the gate condition stays exactly `rerunMode === 'reassess'` with zero action results).
+Expected principal owners: `scripts/rerun-mode-evidence-test.js` (behavioral prompt-content proof),
+`scripts/rerun-admission-gate-test.js` (reassess admission). Authorized superseded-shape test
+updates: `scripts/rerun-mode-evidence-test.js` field-name assertions and the source-coupled
+`scripts/report-generation-test.js` / `scripts/operator-workflow-test.js` assertions that pin the
+old field set, updated to the frozen `priorAttemptContext` shape. Authorized presentation-consistency
+docs updates in the same tranche: `docs/EXECUTION_SEMANTICS.md` and `docs/OPERATOR_WORKFLOW.md`
+(rename and projected-content description; no authority change). No checkpoint registration change;
+a new owner is created only if no existing suite can deterministically own a required invariant.
+
+### 10. P3-R2 required falsification matrix
+
+* **C1** identical durable prior state produces a byte/deep-equal deterministic
+  `priorAttemptContext`.
+* **C2** external workspace change between attempts does not make prior criterion state current
+  authority; the new Run's own current deterministic machinery controls actual completion.
+* **C3** prior Run selection: same Ticket only; most recent prior terminal Run; current Run
+  excluded; foreign/stale prior Run impossible.
+* **C4** committed paths: committed consequence categories only; attempted/failed mutation absent;
+  raw replay never used as alternate reconstruction; consequence missing → omitted.
+* **C5** bound/truncation: exact bound enforced; stable deterministic order; explicit truncation
+  marker; no silent loss; truncation cannot manufacture completion/action authority.
+* **C6** a completed-but-objective-incomplete prior Run appears in `priorAttemptContext`.
+* **C7** a pre-P2/no-`evaluatedPostconditions` prior Run: criterion section omitted; no
+  re-evaluation or reconstruction.
+* **C8** rename source representation is deterministic and unambiguous using the consequence as
+  sole source.
+* **C9** first-step/reassess-only: present only on the first step of a reassess rerun; absent on
+  retry; absent from same-Run resume delivery.
+
+### 11. P3-R2 targeted verification barrier
+
+Smallest sufficient owner matrix after R2:
+
+* `scripts/rerun-mode-evidence-test.js` (C1–C9 behavioral proof at the prompt boundary)
+* `scripts/rerun-admission-gate-test.js` (reassess admission unchanged)
+* `scripts/operator-workflow-test.js` and `scripts/report-generation-test.js` (source-coupled seam
+  consistency)
+* P2 completion owners from section 6 IF shared production code changed in R2
+* `git diff --check`
+* `npm run build`
+
+The P3 phase closure — not the internal R2 implementation pass — is the registered full canonical
+checkpoint boundary.
+
+### 12. Event-seam disposition
+
+The existing `run:contract_completion_deferred` (replay) and `run.contract_completion_deferred`
+(durable) events are reused as the deferral history seam. The event remains history/evidence of
+runtime deferral; it is NOT completion authority; no new canonical consumer is created; its payload
+contains only deterministic already-known unsatisfied criterion information plus the minimal
+provenance the existing conventions require. If implementation determines reusing the exact
+existing event type would make an existing deterministic consumer ambiguous, STOP and report the
+concrete consumer conflict; do not invent a new event type without authority.
+
+### 13. Protected semantics, latitude, and STOP boundaries
+
+Protected without change: P2 completion truth authority, R1 receipt semantics, R2
+`fileContains` admission/evidence/evaluation semantics, the false/unavailable distinction,
+criterion binding, violation/refusal precedence, Ticket projection; T2 lifecycle (Ticket states,
+Run-only FAILED, max one unsettled attempt, resume = same Run, rerun/retry = new attempt,
+cancellation precedence, completed-proof precedence, blocker/open projection); T7 boundaries
+(no same-Run operator→agent delivery, no T7-I7 resolution); no new criterion types; no P4/P5/P6/P7
+surfaces; no generic memory/RAG, semantic-retrieval authority, shell capability, or
+parent/planner/leaf revival; no checkpoint-machinery or test-manifest-authority changes; no
+provider configuration/contact.
+
+Latitude: expected surfaces in sections 4 and 9 may be named without exhausting the implementation.
+A developer may touch another path only when mechanically required for a frozen outcome, the reason
+is explicitly reported, owner/invariant proof is added or rerun, and no protected boundary is
+crossed. STOP rather than proceed if unexpected surface expansion reaches migrations/schema,
+completion-authority semantics, lifecycle semantics, T7, checkpoint machinery, test-manifest
+authority, provider configuration/contact, or later roadmap phases.
+
+### 14. Migration / persistence boundary
+
+NO MIGRATION EXPECTED (published freeze section 5). Prohibited: schema changes, migration SQL,
+migration authorization, dual write, new durable authority records. P3-R1 uses existing
+loop-control/evidence/event structures; P3-R2 projects existing durable
+Run/consequence/completionDecision data into prompt-transient context. If implementation discovers
+a genuinely necessary new durable fact or schema change, STOP for separate authority adjudication
+before any DDL; do not solve around it with an undocumented side store. PostgreSQL remains runtime
+authority.
+
+### 15. Checkpoint policy
+
+Internal barriers are targeted only (sections 6 and 11). The full canonical checkpoint
+(`TEST_DATABASE_URL=... npm run checkpoint:release`) is required ONCE at P3 phase closure, after
+the combined P3-R1+R2 implementation candidate passes both targeted barriers and receives
+independent implementation/closure review acceptance. No full checkpoint per sub-tranche absent a
+new explicit repository-owned trigger. No checkpoint is triggered by THIS docs-only authority
+record.
+
+### 16. Implementation candidate identity requirements
+
+Each tranche implementation report must capture: base HEAD and origin equality; the exact dirty
+path set; `git diff --check` result; the complete working-diff SHA-256; SHA-256 of every modified
+production file; staged empty; stash empty. R1 stays uncommitted through its barrier (section 2).
+Publication follows section 19.
+
+### 17. Cognitive-efficiency / hermeticity requirements
+
+Implementation must leave the repository easier for a fresh model to reason about: one canonical
+prior-context key; one canonical source per projected fact; explicit historical-vs-current
+labeling; no duplicate evaluator; no hidden conversation dependence; no raw history dump; no stale
+compatibility layer absent evidence; test ownership obvious from repository organization. No
+abstraction layers are added merely to make P3 sound architectural.
+
+### 18. Accepted LOW findings carried forward
+
+* **L1** — the receipt-only shortcut restriction may also withhold the old broad shortcut from
+  other non-declared/non-receipt policies: ACCEPTED fail-closed consequence; do not widen the
+  shortcut to "fix" it and add no policy exceptions.
+* **L2** — `priorRunStatus` duplicates projected status information: ACCEPTED bounded benign
+  provenance redundancy; do not remove it.
+
+### 19. Publication requirements and candidate status
+
+This record creates NO authority until: (1) the exact candidate is independently reviewed for
+fidelity to the published freeze, implementation minimality, authority scope, verification
+adequacy, and representation decisions; (2) no material semantic or process defect remains;
+(3) the exact reviewed docs bytes are committed; and (4) pushed to authoritative master. No full
+checkpoint is required merely to publish this docs-only authority record — repository policy has
+not changed since the P3 design-freeze publication, which expressly reserved the full canonical
+checkpoint for P3 IMPLEMENTATION closure. Until then: no implementation, no staging, no commit, no
+migration, no checkpoint. After publication, implementation begins ONLY under this authority,
+section 2's sequence, and section 13's STOP boundaries.
+
+---
+
 ## Execution-semantics provenance fixture shared Ticket-attempt authority (2026-08-17)
 
 **Status: RESOLVED IN SOURCE — independent pre-semantics provenance cases now
