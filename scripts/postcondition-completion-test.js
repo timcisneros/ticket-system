@@ -32,6 +32,7 @@ function createFakeOpenAIPreload() {
   const preloadPath = path.join(os.tmpdir(), `postcondition-openai-${process.pid}-${Date.now()}.js`);
   const source = [
     "const responseCounts = new Map();",
+    "const stamp = '" + STAMP + "';",
     "",
     "function nextCount(key) {",
     "  const count = (responseCounts.get(key) || 0) + 1;",
@@ -392,6 +393,40 @@ function createFakeOpenAIPreload() {
     "            { id: 'done', action: 'stop', input: {} }",
     "          ]",
     "        } } }",
+    "      ],",
+    "      complete: true",
+    "    });",
+    "  }",
+    "",
+    "  if (combined.includes('r2-summary-' + stamp + '.md containing R2MARKER')) {",
+    "    return okResponse({",
+    "      message: 'Writing the requested summary.',",
+    "      actions: [",
+    "        { operation: 'writeFile', args: { path: 'r2-summary-' + stamp + '.md', content: 'the payload includes R2MARKER and more' } }",
+    "      ],",
+    "      complete: true",
+    "    });",
+    "  }",
+    "",
+    "  if (combined.includes('r2-refused-' + stamp + '.md containing R2MARKER')) {",
+    "    return okResponse({",
+    "      message: 'Writing something unrelated.',",
+    "      actions: [",
+    "        { operation: 'writeFile', args: { path: 'r2-refused-' + stamp + '.md', content: 'an unrelated body without the marker' } }",
+    "      ],",
+    "      complete: true",
+    "    });",
+    "  }",
+    "",
+    "  if (combined.includes('r2-busy-' + stamp + '.md containing R2MARKER')) {",
+    "    return okResponse({ message: 'Nothing to do.', actions: [], complete: true });",
+    "  }",
+    "",
+    "  if (combined.includes('r2-amb-a.md')) {",
+    "    return okResponse({",
+    "      message: 'Writing the first requested file.',",
+    "      actions: [",
+    "        { operation: 'writeFile', args: { path: 'r2-amb-a.md', content: 'hello' } }",
     "      ],",
     "      complete: true",
     "    });",
@@ -920,6 +955,150 @@ async function runAllScenarios({ store, preloadPath, agent, mike, runScenario, g
       }
     );
 
+    // ── P2-R2 end-to-end: deterministic fileContains completion authority ────
+    // 21. admitted criterion satisfied: observed positive completes the chain.
+    await runScenario(
+      preloadPath,
+      agent,
+      `create file r2-summary-${STAMP}.md containing R2MARKER`,
+      {
+        AGENT_MAX_EXECUTION_STEPS: '3',
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '3',
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
+        AGENT_MAX_RUNTIME_DURATION_MS: '10000'
+      },
+      {
+        expectedStatus: 'completed',
+        verify: async ({ run, snapshot }) => {
+          const observationEvents = snapshot.events.filter(e => e.type === 'run:direct_postcondition_observed');
+          assert(observationEvents.length >= 1, 'R2-E2E-A: criterion-bound observation was recorded');
+          const lastObservation = observationEvents[observationEvents.length - 1];
+          const lastEntry = lastObservation.observations && lastObservation.observations[0];
+          assert(lastEntry && lastEntry.path === 'r2-summary-' + STAMP + '.md' && lastEntry.present === true,
+            'R2-E2E-A: the latest observation is bound to the admitted path and positively observed');
+          assert(lastObservation.observations[0].containsSha256.length === 64,
+            'R2-E2E-A: the observation binds the exact expected-substring digest');
+          assert(!lastObservation.observations[0].hasOwnProperty('content') &&
+            !lastObservation.observations[0].hasOwnProperty('contains'),
+            'R2-E2E-A: no raw file content or substring is stored in the observation');
+          const storedRun = await waitForStoredRun(run.id, item => item.runConsequence);
+          const decision = storedRun.runConsequence.completionDecision;
+          assert(decision && decision.completionDisposition === 'completed' &&
+            decision.reasonCode === 'OBJECTIVE_COMPLETED',
+            'R2-E2E-A: completion decision is completed under observed criterion truth');
+          const evaluated = (decision.evaluatedPostconditions || []).find(item => item.type === 'fileContains');
+          assert(evaluated && evaluated.passed === true &&
+            evaluated.reasonCode === 'POSTCONDITION_PASSED',
+            'R2-E2E-A: the canonical evaluator decided the admitted criterion from durable observation');
+          const storedTicket = await waitForStoredTicket(run.ticketId, item => item.status === 'completed');
+          assert(storedTicket && storedTicket.status === 'completed',
+            'R2-E2E-A: Ticket projects COMPLETED through the existing chain');
+          assert(fs.existsSync(path.join(WORKSPACE_ROOT, 'r2-summary-' + STAMP + '.md')) &&
+            fs.readFileSync(path.join(WORKSPACE_ROOT, 'r2-summary-' + STAMP + '.md'), 'utf8').includes('R2MARKER'),
+            'R2-E2E-A: the required substring is really in the workspace file');
+        }
+      }
+    );
+
+    // 22. admitted criterion observed-negative: deterministic refusal, not completion.
+    await runScenario(
+      preloadPath,
+      agent,
+      `create file r2-refused-${STAMP}.md containing R2MARKER`,
+      {
+        AGENT_MAX_EXECUTION_STEPS: '3',
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '3',
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
+        AGENT_MAX_RUNTIME_DURATION_MS: '10000'
+      },
+      {
+        expectedStatus: 'completed',
+        verify: async ({ run, snapshot }) => {
+          const observationEvents = snapshot.events.filter(e => e.type === 'run:direct_postcondition_observed');
+          assert(observationEvents.length >= 1, 'R2-E2E-B: the observed negative was durably recorded');
+          const lastEntry = observationEvents[observationEvents.length - 1].observations[0];
+          assert(lastEntry && lastEntry.path === 'r2-refused-' + STAMP + '.md' && lastEntry.present === false,
+            'R2-E2E-B: the latest observation is a bound deterministic negative');
+          const storedRun = await waitForStoredRun(run.id, item => item.runConsequence);
+          const decision = storedRun.runConsequence.completionDecision;
+          assert(decision && decision.completionDisposition === 'incomplete' &&
+            decision.reasonCode === 'VERIFICATION_FAILED',
+            'R2-E2E-B: the observed negative refuses completion');
+          const evaluated = (decision.evaluatedPostconditions || []).find(item => item.type === 'fileContains');
+          assert(evaluated && evaluated.passed === false &&
+            evaluated.reasonCode === 'POSTCONDITION_EVALUATION_FAILED',
+            'R2-E2E-B: the negative is represented as observed-unsatisfied, never unavailable');
+          const finalTicket = await store.getTicket(run.ticketId);
+          assert(finalTicket.status !== 'completed',
+            `R2-E2E-B: Ticket must not project COMPLETED on an observed negative (got ${finalTicket.status})`);
+        }
+      }
+    );
+
+    // 23. admitted criterion unobservable (directory at path): unavailable, never
+    // an observed negative, never completion; no observation event at all.
+    fs.mkdirSync(path.join(WORKSPACE_ROOT, `r2-busy-${STAMP}.md`), { recursive: true });
+    await runScenario(
+      preloadPath,
+      agent,
+      `create file r2-busy-${STAMP}.md containing R2MARKER`,
+      {
+        AGENT_MAX_EXECUTION_STEPS: '3',
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '3',
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
+        AGENT_MAX_RUNTIME_DURATION_MS: '10000'
+      },
+      {
+        expectedStatus: 'completed',
+        verify: async ({ run, snapshot }) => {
+          assert(!snapshot.events.some(e => e.type === 'run:direct_postcondition_observed'),
+            'R2-E2E-C: an unobservable path records NO observation');
+          const storedRun = await waitForStoredRun(run.id, item => item.runConsequence);
+          const decision = storedRun.runConsequence.completionDecision;
+          assert(decision && decision.completionDisposition === 'blocked' &&
+            decision.reasonCode === 'VERIFICATION_UNAVAILABLE',
+            'R2-E2E-C: unavailable criterion evidence fails closed as blocked');
+          const evaluated = (decision.evaluatedPostconditions || []).find(item => item.type === 'fileContains');
+          assert(evaluated && evaluated.passed === null &&
+            evaluated.reasonCode === 'POSTCONDITION_EVIDENCE_UNAVAILABLE',
+            'R2-E2E-C: unavailable is null, never an observed negative');
+          const finalTicket = await store.getTicket(run.ticketId);
+          assert(finalTicket.status !== 'completed',
+            `R2-E2E-C: Ticket must not project COMPLETED on unavailable evidence (got ${finalTicket.status})`);
+        }
+      }
+    );
+
+    // 24. ambiguous two-target objective: NO fileContains admission; the
+    // objective falls through to the existing honest receipt policy.
+    await runScenario(
+      preloadPath,
+      agent,
+      `create file r2-amb-a.md containing hello and create file r2-amb-b.md containing world`,
+      {
+        AGENT_MAX_EXECUTION_STEPS: '3',
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '3',
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
+        AGENT_MAX_RUNTIME_DURATION_MS: '10000'
+      },
+      {
+        expectedStatus: 'completed',
+        verify: async ({ run, snapshot }) => {
+          const storedRun = await waitForStoredRun(run.id, item => item.runConsequence);
+          const authority = storedRun.completionAuthoritySnapshot;
+          const direct = authority && authority.objectiveContract
+            ? authority.objectiveContract.directPostconditions : [];
+          assert(!direct.some(item => item.type === 'fileContains'),
+            'R2-E2E-D: an ambiguous two-target objective admits NO fileContains criterion');
+          assert(direct.length === 0,
+            'R2-E2E-D: the ambiguous objective falls through with an empty direct set');
+          const finalTicket = await store.getTicket(run.ticketId);
+          assert(finalTicket.status === 'completed',
+            'R2-E2E-D: the ambiguous objective still completes under its honest existing policy');
+        }
+      }
+    );
+
     console.log(JSON.stringify({
       folderFileAutoComplete: true,
       repeatedWriteAutoComplete: true,
@@ -939,7 +1118,11 @@ async function runAllScenarios({ store, preloadPath, agent, mike, runScenario, g
       handoffInvalidPathRejected: true,
       handoffUnknownExecutorRejected: true,
       invalidWorkflowDraftRejected: true,
-      compiledPartialCompletionDeferred: true
+      compiledPartialCompletionDeferred: true,
+      r2ContainsPresentCompleted: true,
+      r2ContainsAbsentRefused: true,
+      r2ContainsUnavailableBlocked: true,
+      r2AmbiguousNotAdmitted: true
     }));
   } finally {
     // Workspace and schema cleanup belong to the shared harness; only the
@@ -1080,7 +1263,7 @@ async function main() {
         const ticket = await store.getTicket(run.ticketId);
 
         assert(run.status === expectations.expectedStatus,
-          `${objective}: run status ${run.status} === ${expectations.expectedStatus}`);
+          `${objective}: run status ${run.status} === ${expectations.expectedStatus} (run error: ${run.error || 'none'})`);
 
         const events = (snapshot && Array.isArray(snapshot.events)) ? snapshot.events : [];
         const plans = (snapshot && Array.isArray(snapshot.parsedModelPlans)) ? snapshot.parsedModelPlans : [];

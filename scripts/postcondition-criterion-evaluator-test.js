@@ -78,8 +78,62 @@ for (const type of ['fileExists', 'jsonPathEquals', 'processOperationExists', 'n
     `${type} is reported unsupported rather than failed`);
 }
 assert.deepEqual([...EVALUABLE_CRITERION_TYPES],
-  ['folder_exists', 'path_absent', 'file_content_equals'],
+  ['folder_exists', 'path_absent', 'file_content_equals', 'fileContains'],
   'the evaluable set is closed');
+
+// ── P2-R2: the direct-run fileContains branch ───────────────────────────────
+//
+// Relevance is exact path + exact sha256 of the exact admitted `contains`.
+// The LATEST relevant observation decides (temporal state observations in
+// durable append order — never `.some(present)`); no relevant observation is
+// UNAVAILABLE, never an observed negative.
+const containsCriterion = { type: 'fileContains', path: 'notes/summary.md', contains: 'hello world' };
+const containsDigest = require('node:crypto').createHash('sha256')
+  .update('hello world').digest('hex');
+const foreignDigest = require('node:crypto').createHash('sha256')
+  .update('different text').digest('hex');
+const containsObs = (path, digest, present) => ({ path, containsSha256: digest, present });
+
+// No relevant observation → unavailable (never a negative).
+assert.equal(evaluateCriterion(containsCriterion, []).passed, null,
+  'fileContains with no observation is unavailable');
+assert.equal(evaluateCriterion(containsCriterion, []).reasonCode, 'POSTCONDITION_EVIDENCE_UNAVAILABLE',
+  'fileContains absence of evidence keeps the unavailable reason code');
+assert.equal(evaluateCriterion(containsCriterion, [
+  containsObs('other/file.md', containsDigest, true)
+]).passed, null, 'a foreign path is irrelevant and cannot decide the criterion');
+assert.equal(evaluateCriterion(containsCriterion, [
+  containsObs('notes/summary.md', foreignDigest, true)
+]).passed, null, 'a foreign expected-substring digest is irrelevant and cannot decide the criterion');
+assert.equal(evaluateCriterion(containsCriterion, [
+  { path: 'notes/summary.md', containsSha256: containsDigest }
+]).passed, null, 'a malformed observation without a boolean present is irrelevant');
+
+// Latest relevant observation wins, in durable append order.
+assert.equal(evaluateCriterion(containsCriterion, [
+  containsObs('notes/summary.md', containsDigest, false),
+  containsObs('notes/summary.md', containsDigest, true)
+]).passed, true, 'negative then later positive = PASS');
+assert.equal(evaluateCriterion(containsCriterion, [
+  containsObs('notes/summary.md', containsDigest, true),
+  containsObs('notes/summary.md', containsDigest, false)
+]).passed, false, 'positive then later negative = observed-unsatisfied (FAIL)');
+assert.equal(evaluateCriterion(containsCriterion, [
+  containsObs('notes/summary.md', containsDigest, true),
+  containsObs('notes/summary.md', containsDigest, false)
+]).reasonCode, 'POSTCONDITION_EVALUATION_FAILED',
+  'an observed negative keeps the deterministic-unsatisfied reason code');
+assert.equal(evaluateCriterion(containsCriterion, [
+  containsObs('notes/summary.md', containsDigest, false),
+  containsObs('notes/summary.md', foreignDigest, true),
+  containsObs('notes/summary.md', containsDigest, true)
+]).passed, true,
+  'a newer unrelated/mismatched observation cannot displace the latest bound observation');
+assert.equal(evaluateCriterion(containsCriterion, [
+  containsObs('notes/summary.md', containsDigest, false),
+  { path: 'notes/summary.md', containsSha256: containsDigest, present: 'yes' }
+]).passed, false,
+  'a newer malformed observation is dropped and the latest bound one decides');
 
 // ── THE INVARIANT: both observation sources reach the same verdict ──────────
 //

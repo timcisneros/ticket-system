@@ -19,9 +19,11 @@
 const { deepFreeze, hashCanonical } = require('./declared-work-contract');
 const {
   CRITERION_EVALUATOR_IDENTITY,
-  CRITERION_EVALUATOR_VERSION,
-  EVALUABLE_CRITERION_TYPES
+  CRITERION_EVALUATOR_VERSION
 } = require('./postcondition-criterion-evaluator');
+const {
+  SUPPORTED_CRITERION_TYPES
+} = require('./governed-postcondition-evidence-contract');
 
 const ELIGIBLE_FACTS_REFUSALS = Object.freeze([
   'governed_facts_authority_missing',
@@ -64,10 +66,15 @@ function eligibleExecutionFacts(run) {
   const seen = new Set();
   for (const criterion of declared) {
     if (!isPlainObject(criterion) || typeof criterion.type !== 'string') continue;
-    // Only what the unified evaluator can decide deterministically. An
+    // Only what the unified evaluator can decide deterministically AND what
+    // the governed evidence contract accepts as a governed criterion. The
+    // eligibility set is the GOVERNED-OWNED frozen registry
+    // (SUPPORTED_CRITERION_TYPES), not the evaluator's registry — extending
+    // the evaluator (e.g. the direct-run `fileContains` authority) must not
+    // silently make a governed leaf's criterion evidence-eligible. An
     // unsupported class is skipped here rather than recorded as unsatisfied,
     // which would assert something nobody can check.
-    if (!EVALUABLE_CRITERION_TYPES.includes(criterion.type)) continue;
+    if (!SUPPORTED_CRITERION_TYPES.includes(criterion.type)) continue;
     const identity = hashCanonical(criterion);
     if (seen.has(identity)) continue;
     seen.add(identity);

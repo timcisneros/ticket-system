@@ -41,7 +41,8 @@ const CRITERION_EVALUATOR_VERSION = 1;
 const EVALUABLE_CRITERION_TYPES = Object.freeze([
   'folder_exists',
   'path_absent',
-  'file_content_equals'
+  'file_content_equals',
+  'fileContains'
 ]);
 
 // What an observation may say about one path. `absent` is a positive statement
@@ -104,6 +105,50 @@ function observationFromCheckedPath(checked) {
   });
 }
 
+// The direct-run `fileContains` rule (P2-R2): the LATEST observation relevant
+// to the exact admitted criterion decides. An observation is relevant only
+// when it is durably bound to the same criterion — exact `path` AND the sha256
+// digest of the exact admitted `contains` value — so evidence for another
+// path, another required substring, or another criterion can never decide
+// this one. Relevant observations are temporal state observations consumed in
+// canonical durable append order; the LAST one decides:
+//
+//   no relevant observation              → unavailable (never a negative)
+//   latest present === true              → satisfied
+//   latest present === false             → observed and NOT satisfied
+//
+// `.some(present)` is deliberately NOT used here: satisfying on any
+// historical positive would reduce the criterion to "substring existed at
+// least once", which the frozen P2-R2 authority never authorized. The legacy
+// `.some()` semantics for the three original classes below are unchanged.
+function evaluateFileContainsCriterion(criterion, observations = []) {
+  const expectedContainsSha256 = sha256(String(criterion.contains));
+  const relevant = (observations || [])
+    .filter(observation => observation &&
+      observation.path === criterion.path &&
+      observation.containsSha256 === expectedContainsSha256 &&
+      typeof observation.present === 'boolean');
+
+  if (relevant.length === 0) {
+    return Object.freeze({
+      type: criterion.type,
+      authority: CRITERION_EVALUATOR_IDENTITY,
+      path: criterion.path || null,
+      passed: null,
+      reasonCode: REASON_UNAVAILABLE
+    });
+  }
+
+  const latest = relevant[relevant.length - 1];
+  return Object.freeze({
+    type: criterion.type,
+    authority: CRITERION_EVALUATOR_IDENTITY,
+    path: criterion.path || null,
+    passed: latest.present,
+    reasonCode: latest.present ? REASON_PASSED : REASON_FAILED
+  });
+}
+
 // ── THE RULE ────────────────────────────────────────────────────────────────
 //
 // Given one admitted criterion and the observations available, decide. Three
@@ -130,6 +175,13 @@ function evaluateCriterion(criterion, observations = []) {
       passed: null,
       reasonCode: REASON_UNSUPPORTED
     });
+  }
+
+  // The direct-run contains criterion has its own binding vocabulary (exact
+  // path + exact expected-substring digest + present), so it is decided by its
+  // own branch before the legacy path-observation vocabulary below.
+  if (criterion.type === 'fileContains') {
+    return evaluateFileContainsCriterion(criterion, observations);
   }
 
   const relevant = (observations || [])
@@ -171,6 +223,7 @@ module.exports = {
   EVALUABLE_CRITERION_TYPES,
   OBSERVED_PATH_KINDS,
   evaluateCriterion,
+  evaluateFileContainsCriterion,
   observationFromCheckedPath,
   observationFromPathInfo,
   observedPath

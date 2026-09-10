@@ -33,6 +33,7 @@ const STAMP = Date.now();
 const LIST_OBJECTIVE = 'Create folder A B C and D';
 const SINGLE_FOLDER = `single-folder-${STAMP}`;
 const AMBIGUOUS_FOLDER = `ambiguous-folder-${STAMP}`;
+const CONTAINS_OBJECTIVE = `create file contains-note-${STAMP}.md containing R2 marker ${STAMP}`;
 
 const assert = createAsserter();
 
@@ -60,6 +61,23 @@ global.fetch = async function(_url, options = {}) {
   const combined = (Array.isArray(body.input) ? body.input : [])
     .map(item => item && item.content ? String(item.content) : '')
     .join('\\n');
+
+  if (combined.includes(${JSON.stringify(CONTAINS_OBJECTIVE)})) {
+    // P2-R2 execution-loop trigger: the admitted direct fileContains criterion
+    // is observed at the declared-direct check sites in the same response that
+    // writes the required content and claims completion (the registered
+    // satisfied shape): pre-model observation is a decisive recorded negative
+    // while the file is absent; the post-batch observation is positively bound
+    // to the admitted criterion; the satisfied claim flow then completes the
+    // run exactly like folder runs.
+    return ok({
+      message: 'Writing the requested note.',
+      actions: [
+        { operation: 'writeFile', args: { path: 'contains-note-${STAMP}.md', content: 'the note says R2 marker ${STAMP} inside' } }
+      ],
+      complete: true
+    });
+  }
 
   if (combined.includes(${JSON.stringify(LIST_OBJECTIVE)})) {
     listCallCount += 1;
@@ -154,7 +172,8 @@ async function main() {
           ? replay.snapshot.events : [];
         return {
           run: terminal,
-          postcondition: events.find(e => e.type === 'run:postcondition_completed') || null
+          postcondition: events.find(e => e.type === 'run:postcondition_completed') || null,
+          events
         };
       }
 
@@ -207,6 +226,33 @@ async function main() {
       assert(checkedPathsMatch(single.postcondition.checkedPaths, [
         { type: 'folder', path: SINGLE_FOLDER }
       ]), 'single-folder run checked exactly the requested path');
+
+      // ── P2-R2: the deterministic contains form is observed, not claimed ─────
+      const contains = await runTicket(CONTAINS_OBJECTIVE);
+      assert(contains.run.status === 'completed', 'contains-form run completed');
+      const observations = contains.events.filter(e => e.type === 'run:direct_postcondition_observed');
+      assert(observations.length >= 1,
+        'contains-form run recorded run:direct_postcondition_observed at the declared-direct sites');
+      const lastObservation = observations[observations.length - 1];
+      const lastEntry = lastObservation.observations && lastObservation.observations[0];
+      assert(lastEntry && lastEntry.path === 'contains-note-' + STAMP + '.md' &&
+          lastEntry.present === true,
+        'the latest contains observation is bound to the admitted path and positively observed');
+      const firstEntry = observations[0].observations && observations[0].observations[0];
+      assert(firstEntry && firstEntry.present === false,
+        'the earlier observation of the not-yet-written file is a decisive recorded negative');
+      const containsConsequenceRow = await store.getRunConsequence(contains.run.id);
+      const containsDecision = containsConsequenceRow &&
+        containsConsequenceRow.consequence &&
+        containsConsequenceRow.consequence.completionDecision;
+      assert(containsDecision && containsDecision.completionDisposition === 'completed' &&
+        containsDecision.reasonCode === 'OBJECTIVE_COMPLETED',
+        'contains-form completion decision is completed under the observed criterion truth');
+      const containsEvaluated = (containsDecision.evaluatedPostconditions || [])
+        .find(item => item.type === 'fileContains');
+      assert(containsEvaluated && containsEvaluated.passed === true &&
+        containsEvaluated.reasonCode === 'POSTCONDITION_PASSED',
+        'the completion decision evaluates the admitted fileContains criterion from durable observation');
 
       // ── Ambiguous prose must not take the shortcut ─────────────────────────
       fs.mkdirSync(path.join(workspaceRoot, AMBIGUOUS_FOLDER), { recursive: true });

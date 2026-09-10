@@ -217,8 +217,19 @@ for (const forbidden of [
   assert.equal(source.includes(forbidden), false,
     `declared-work authority must not introduce or consume ${forbidden}`);
 }
-assert.equal(completionSource.includes('declaredWorkSnapshot'), false,
-  'declared work must not enter completion-decision authority in this tranche');
+// P2-R1 (published authority, register §3.2) superseded the blanket form of
+// this Tranche-3 guard in exactly one direction: the completion decision reads
+// the run's IMMUTABLE executed-intent field (declaredWorkSnapshot.objective.text)
+// directly, without any declared-work module dependency or normalization. The
+// protective invariant that remains: the completion-decision authority must not
+// import or re-derive declared-work machinery. EITHER require spelling is
+// forbidden — the guard must reject a single unauthorized import, not require
+// both spellings to be present simultaneously.
+assert.equal(
+  completionSource.includes("require('./declared-work-contract") ||
+  completionSource.includes("require('../declared-work-contract"),
+  false,
+  'completion-decision authority must not depend on declared-work machinery');
 // Tranche 3 gave run admission a second declared-work source: a structured leaf
 // Run declares its Allocation Plan v2 item rather than the parent Ticket. Both
 // branches are still built once, before the admitted run draft is assembled, and

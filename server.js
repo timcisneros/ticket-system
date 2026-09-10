@@ -178,7 +178,9 @@ const {
   buildCompletionAuthoritySnapshot,
   normalizeCompletionAuthoritySnapshot,
   buildCompletionDecision,
-  normalizeCompletionDecision
+  normalizeCompletionDecision,
+  extractObjectivePathTokens: contractExtractObjectivePathTokens,
+  normalizeObjectivePathToken: contractNormalizeObjectivePathToken
 } = require('./runtime/completion-decision-contract');
 const {
   buildOllamaChatBody,
@@ -13609,6 +13611,61 @@ function readWorkspaceFileIfExists(relativePath) {
   return workspaceProvider.readFile(relativePath);
 }
 
+// P2-R2 — criterion-bound durable runtime observation for ADMITTED direct
+// `fileContains` criteria. The criteria come ONLY from the run's immutable
+// completion-authority snapshot (never re-parsed model text). Each observation
+// record freezes the minimum authoritative binding — exact admitted `path`,
+// sha256 of the exact admitted `contains`, and the trusted runtime's
+// deterministic substring verdict — and nothing stores raw file content or
+// the substring itself. Observed path-absence is a decisive negative; an
+// unobservable path (directory at path, read failure) records NO observation
+// and stays unavailable. Observations are temporal state observations in
+// durable append order; the decision consumes them through the canonical
+// evaluator's latest-relevant-observation rule.
+async function recordDeclaredDirectFileContainsObservations(run, step, source) {
+  if (isBrowserRun(run)) return false;
+  const contract = run && run.completionAuthoritySnapshot &&
+    run.completionAuthoritySnapshot.objectiveContract;
+  const admitted = contract && Array.isArray(contract.directPostconditions)
+    ? contract.directPostconditions.filter(criterion =>
+        criterion && criterion.type === 'fileContains' &&
+        typeof criterion.path === 'string' && criterion.path &&
+        typeof criterion.contains === 'string' && criterion.contains.length > 0)
+    : [];
+  if (admitted.length === 0) return false;
+  const observations = [];
+  for (const criterion of admitted) {
+    const containsSha256 = crypto.createHash('sha256')
+      .update(String(criterion.contains))
+      .digest('hex');
+    try {
+      const info = workspaceProvider.getPathInfo(criterion.path);
+      if (!info || info.exists !== true) {
+        observations.push({ path: criterion.path, containsSha256, present: false });
+        continue;
+      }
+      if (info.type !== 'file') continue;
+      const content = workspaceProvider.readFile(criterion.path);
+      if (typeof content !== 'string') continue;
+      observations.push({
+        path: criterion.path,
+        containsSha256,
+        present: content.includes(String(criterion.contains))
+      });
+    } catch (_) {
+      // Unreadable path: no observation; the criterion stays unavailable.
+    }
+  }
+  if (observations.length === 0) return false;
+  await recordRunEvent(run, 'run:direct_postcondition_observed',
+    'Declared direct fileContains criteria observed from runtime workspace state', {
+      step,
+      source,
+      observations
+    });
+  return true;
+}
+
 // Extract the exact delete target(s) from a *simple* delete objective, or null if
 // the objective is not a recognized simple delete. Deliberately conservative: the
 // whole objective must be a single "delete|remove [the] [file|folder|directory|
@@ -13697,6 +13754,36 @@ function buildObviousPostconditionChecks(objective) {
     });
   }
 
+  // P2-R2 deterministic contains admission: exactly ONE anchored form —
+  // `create file <path> containing <substring>` (optional leading "please") —
+  // excluding the `containing exactly` sibling above via negative lookahead.
+  // The path is cleaned by the existing path rules; the substring is cleaned
+  // by the existing content rules and bounded 1–512. Any additional clause,
+  // second target, connector, or plurality fails closed to NO admission
+  // (the form simply does not match, or the remainder still names another
+  // directive) — ambiguous objectives fall through to the existing honest
+  // non-authority policies.
+  match = text.match(/^(?:please\s+)?create file\s+([A-Za-z0-9._/-]+)\s+containing\s+(?!exactly\b)(.+)$/i);
+  if (match) {
+    const containsPath = cleanObjectivePath(match[1]);
+    const containsValue = cleanObjectiveContent(match[2]);
+    // A second directive inside the remainder (another target or another
+    // `containing` clause) is not the single anchored form.
+    const singleDirective = !/\bcreate file\b|\bcontaining\b/i.test(containsValue);
+    if (containsPath && singleDirective &&
+        containsValue.length >= 1 && containsValue.length <= 512) {
+      checks.push({
+        type: 'fileContains',
+        path: containsPath,
+        contains: containsValue,
+        satisfied: () => {
+          const content = readWorkspaceFileIfExists(containsPath);
+          return typeof content === 'string' && content.includes(containsValue);
+        }
+      });
+    }
+  }
+
   return checks.filter((check, index, list) =>
     check.path && list.findIndex(item => item.type === check.type && item.path === check.path) === index
   );
@@ -13717,7 +13804,8 @@ function checkObviousTicketPostcondition(ticket) {
     checkedPaths: checks.map(check => ({
       type: check.type,
       path: check.path,
-      ...(check.expectedContent !== undefined ? { expectedContent: check.expectedContent } : {})
+      ...(check.expectedContent !== undefined ? { expectedContent: check.expectedContent } : {}),
+      ...(check.contains !== undefined ? { contains: check.contains } : {})
     }))
   };
 }
@@ -13754,6 +13842,15 @@ function buildRunCompletionAuthoritySnapshot(ticket, workflow, executionPolicy, 
           contentSha256: crypto.createHash('sha256')
             .update(String(postcondition.expectedContent))
             .digest('hex')
+        });
+      } else if (postcondition.type === 'fileContains' && postcondition.contains !== undefined) {
+        // P2-R2: the deterministic contains form admits the existing canonical
+        // typed criterion with deterministic-objective-contract provenance
+        // through the existing declared-work binding (id optional).
+        addPostcondition({
+          type: 'fileContains',
+          path: postcondition.path,
+          contains: postcondition.contains
         });
       }
     });
@@ -20083,41 +20180,16 @@ function hasSuccessfulWorkflowDraftAction(actionResults) {
   });
 }
 
+// Compatibility wrappers: objective-path token extraction now lives in
+// runtime/completion-decision-contract.js as the single deterministic source.
+// These delegate so the emission site, the execution guard, and the admission
+// shapers keep using the identical rule.
 function normalizeObjectivePathToken(value) {
-  let token = String(value || '')
-    .trim()
-    .replace(/^["'`]+|["'`.,;:!?]+$/g, '')
-    .replace(/\\/g, '/');
-  while (token.startsWith('./')) token = token.slice(2);
-  if (!token || token.startsWith('/') || token.includes('\0')) return null;
-  let segments = token.split('/');
-  if (segments.some(segment => segment === '..')) return null;
-  if (segments[0] === 'workspace-root') {
-    token = segments.slice(1).join('/');
-    segments = token.split('/');
-  }
-  if (!token || token.startsWith('/') || segments.some(segment => segment === '..')) return null;
-  return token;
+  return contractNormalizeObjectivePathToken(value);
 }
 
 function extractObjectivePathTokens(objective) {
-  const text = String(objective || '');
-  const tokens = new Set();
-  const patterns = [
-    /\b(?:file|note|summary|report)\s+(?:named|called)\s+([A-Za-z0-9._/-]+\.[A-Za-z0-9._-]+)/gi,
-    /\b(?:write|create|update)\s+([A-Za-z0-9._/-]+\.[A-Za-z0-9._-]+)/gi,
-    /\b([A-Za-z0-9._/-]+\.(?:md|txt|json|csv|yaml|yml|log|html|js|css))\b/gi
-  ];
-
-  patterns.forEach(pattern => {
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-      const token = normalizeObjectivePathToken(match[1]);
-      if (token) tokens.add(token);
-    }
-  });
-
-  return Array.from(tokens);
+  return contractExtractObjectivePathTokens(objective);
 }
 
 function objectiveRequiresExactArtifactPath(objective) {
@@ -23426,6 +23498,7 @@ async function runAgentTicket(runId) {
         governedBaselineRecorded = true;
       }
       if (!isBrowserRun(run) && !resumedFromPersistedState) {
+        await recordDeclaredDirectFileContainsObservations(run, step, 'pre_model');
         const obviousPostcondition = compiledContract
           ? checkObjectiveContractPostcondition(compiledContract)
           : checkObviousTicketPostcondition(promptTicket);
@@ -24707,6 +24780,9 @@ async function runAgentTicket(runId) {
           run, persistedPostconditionEvidence);
       }
       const compiledPostcondition = isBrowserRun(run) ? null : checkObjectiveContractPostcondition(compiledContract);
+      if (!isBrowserRun(run)) {
+        await recordDeclaredDirectFileContainsObservations(run, step, 'post_batch');
+      }
       const declaredDirectPostcondition = isBrowserRun(run) ? null : checkObviousTicketPostcondition(promptTicket);
       // A REDUNDANT ACTION IS NOT EVIDENCE OF COMPLETION FOR A GOVERNED RUN.
       //

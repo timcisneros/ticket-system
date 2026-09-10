@@ -346,7 +346,17 @@ assert.equal(/browser[A-Z][A-Za-z]*Equals|browserOperationExists/.test(source), 
   'no browser criterion exists without an immutable admission source');
 assert.equal(source.includes('evaluateDeclaredCriteria'), false,
   'binding must not become a second completion evaluator');
-assert.equal(completionSource.includes('declaredWorkSnapshot'), false,
+// P2-R1 (published authority, register §3.2) superseded the blanket form of
+// this Tranche-3 guard in exactly one direction: the completion decision reads
+// the run's IMMUTABLE executed-intent field (declaredWorkSnapshot.objective.text)
+// directly, without any declared-work module dependency or normalization. The
+// protective invariant that remains: declared work stays a checked declaration
+// whose authority enters the decision only through the bound completion-authority
+// snapshot — the decision module must not import declared-work machinery.
+assert.equal(
+  (completionSource.includes("require('./declared-work-contract") ||
+   completionSource.includes("require('../declared-work-contract")),
+  false,
   'declared work remains a checked declaration rather than completion authority');
 assert(serverSource.includes('assertDeclaredWorkCompletionAuthorityBinding({'),
   'public run admission must enforce the binding before execution');

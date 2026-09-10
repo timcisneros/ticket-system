@@ -38,7 +38,8 @@ const OBJECTIVE_KINDS = Object.freeze([
 const DIRECT_POSTCONDITION_TYPES = Object.freeze([
   'folder_exists',
   'path_absent',
-  'file_content_equals'
+  'file_content_equals',
+  'fileContains'
 ]);
 const PROCESS_POSTCONDITION_TYPES = Object.freeze([
   'processOperationExists',
@@ -266,14 +267,28 @@ function normalizeDirectPostcondition(value, index) {
   }
   const allowed = type === 'file_content_equals'
     ? ['type', 'path', 'contentSha256']
-    : ['type', 'path'];
+    : type === 'fileContains'
+      ? ['type', 'path', 'contains']
+      : ['type', 'path'];
   exactKeys(source, allowed, label);
+  if (type === 'fileContains') {
+    // P2-R2: the admitted expected substring is bounded and non-empty (the
+    // admission grammar bounds it to 1–512 after content cleaning; the
+    // authority snapshot refuses anything outside that contract).
+    if (typeof source.contains !== 'string' ||
+        source.contains.length === 0 || source.contains.length > 512) {
+      fail('POSTCONDITION_UNSUPPORTED',
+        `${label}.contains must be a non-empty bounded string`);
+    }
+  }
   return {
     type,
     path: normalizePath(source.path, `${label}.path`),
     ...(type === 'file_content_equals'
       ? { contentSha256: hash(source.contentSha256, `${label}.contentSha256`) }
-      : {})
+      : type === 'fileContains'
+        ? { contains: boundedString(source.contains, `${label}.contains`, 512) }
+        : {})
   };
 }
 
@@ -420,6 +435,39 @@ function replayEvents(snapshot, type) {
 }
 
 function directPostconditionResult(postcondition, snapshot) {
+  // P2-R2: the direct-run contains criterion is decided ONLY from its own
+  // criterion-bound observation channel (`run:direct_postcondition_observed`
+  // replay events, in canonical durable append order). It never reads the
+  // legacy `run:postcondition_completed` claims, and absence of observation is
+  // carried through as unavailable — never as an observed negative. The
+  // evaluator's reason codes are preserved exactly.
+  if (postcondition.type === 'fileContains') {
+    const observationEvents = replayEvents(snapshot, 'run:direct_postcondition_observed');
+    const observations = [];
+    for (const event of observationEvents) {
+      const records = event && Array.isArray(event.observations) ? event.observations : [];
+      for (const record of records) {
+        if (!record || typeof record !== 'object') continue;
+        if (typeof record.path !== 'string' || record.path !== postcondition.path) continue;
+        if (typeof record.containsSha256 !== 'string' ||
+            !/^[0-9a-f]{64}$/.test(record.containsSha256)) continue;
+        if (typeof record.present !== 'boolean') continue;
+        observations.push({
+          path: record.path,
+          containsSha256: record.containsSha256,
+          present: record.present
+        });
+      }
+    }
+    const verdict = evaluateCriterion(postcondition, observations);
+    return {
+      type: postcondition.type,
+      authority: 'objective_contract',
+      path: postcondition.path,
+      passed: verdict.passed,
+      reasonCode: verdict.reasonCode
+    };
+  }
   const claims = replayEvents(snapshot, 'run:postcondition_completed');
   if (claims.length === 0) {
     return {
@@ -690,14 +738,59 @@ function hasWorkflowDraftCompletionEvidence(snapshot) {
   return replayEvents(snapshot, 'workflow.draft_objective_satisfied').length > 0;
 }
 
-function hasWorkspaceObjectiveCompletionEvidence(snapshot, consequence) {
-  const events = replayEvents(snapshot, 'workspace.objective_satisfied');
-  if (events.length !== 1) return false;
-  const objectivePaths = events[0] && Array.isArray(events[0].objectivePaths)
-    ? events[0].objectivePaths
-    : events[0] && events[0].payload && Array.isArray(events[0].payload.objectivePaths)
-      ? events[0].payload.objectivePaths
-      : [];
+function normalizeObjectivePathToken(value) {
+  let token = String(value || '')
+    .trim()
+    .replace(/^["'`]+|["'`.,;:!?]+$/g, '')
+    .replace(/\\/g, '/');
+  while (token.startsWith('./')) token = token.slice(2);
+  if (!token || token.startsWith('/') || token.includes('\0')) return null;
+  let segments = token.split('/');
+  if (segments.some(segment => segment === '..')) return null;
+  if (segments[0] === 'workspace-root') {
+    token = segments.slice(1).join('/');
+    segments = token.split('/');
+  }
+  if (!token || token.startsWith('/') || segments.some(segment => segment === '..')) return null;
+  return token;
+}
+
+function extractObjectivePathTokens(objective) {
+  const text = String(objective || '');
+  const tokens = new Set();
+  const patterns = [
+    /\b(?:file|note|summary|report)\s+(?:named|called)\s+([A-Za-z0-9._/-]+\.[A-Za-z0-9._-]+)/gi,
+    /\b(?:write|create|update)\s+([A-Za-z0-9._/-]+\.[A-Za-z0-9._-]+)/gi,
+    /\b([A-Za-z0-9._/-]+\.(?:md|txt|json|csv|yaml|yml|log|html|js|css))\b/gi
+  ];
+
+  patterns.forEach(pattern => {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      const token = normalizeObjectivePathToken(match[1]);
+      if (token) tokens.add(token);
+    }
+  });
+
+  return Array.from(tokens);
+}
+
+// Positive `workspace_objective_receipt` truth is a function of durable evidence
+// only: the objective-path tokens of the Run's immutable executed intent
+// (declaredWorkSnapshot.objective.text, bound to the completion authority at
+// admission) intersected with committed qualifying consequence paths. The
+// incidental `workspace.objective_satisfied` loop event is durable history and
+// corroboration, never a prerequisite; model response shape, turn count, and
+// resume boundary cannot alter this determination. A Run whose immutable
+// executed intent is unavailable derives no tokens and stays incomplete.
+function hasWorkspaceObjectiveCompletionEvidence(run, consequence) {
+  const objectiveText = run && run.declaredWorkSnapshot &&
+    run.declaredWorkSnapshot.objective &&
+    typeof run.declaredWorkSnapshot.objective.text === 'string'
+    ? run.declaredWorkSnapshot.objective.text
+    : null;
+  if (objectiveText === null) return false;
+  const objectivePaths = extractObjectivePathTokens(objectiveText);
   if (objectivePaths.length === 0) return false;
   const durablePaths = [
     ...(Array.isArray(consequence && consequence.created) ? consequence.created : []),
@@ -823,7 +916,8 @@ function deriveDecisionFacts({ run, snapshot, events, consequence, verificationC
     .filter(event => event && [
       'run.violation_detected',
       'runtime.violation_detected',
-      'workspace.violation_detected'
+      'workspace.violation_detected',
+      'authority.denied'
     ].includes(event.type))
     .map(event => ({
       type: event.type,
@@ -882,7 +976,7 @@ function deriveDecisionFacts({ run, snapshot, events, consequence, verificationC
     reasonCode = 'OBJECTIVE_COMPLETED';
   } else if (authority.objectiveContract.kind === 'deterministic' &&
       authority.objectiveContract.completionPolicy === 'workspace_objective_receipt' &&
-      hasWorkspaceObjectiveCompletionEvidence(snapshot, consequence)) {
+      hasWorkspaceObjectiveCompletionEvidence(run, consequence)) {
     completionDisposition = 'completed';
     reasonCode = 'OBJECTIVE_COMPLETED';
   }
@@ -923,6 +1017,7 @@ function buildCompletionDecision({
   const replayCompletionEvidence = (Array.isArray(snapshot.events) ? snapshot.events : [])
     .filter(event => event && [
       'run:postcondition_completed',
+      'run:direct_postcondition_observed',
       'workflow.draft_objective_satisfied',
       'workspace.objective_satisfied'
     ].includes(event.type))
@@ -1241,6 +1336,8 @@ module.exports = {
   buildCompletionDecision,
   normalizeCompletionDecision,
   completionEvidenceProjection,
+  extractObjectivePathTokens,
+  normalizeObjectivePathToken,
   canonicalJson,
   hashCanonical,
   sha256

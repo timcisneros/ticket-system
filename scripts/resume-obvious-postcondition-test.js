@@ -97,6 +97,16 @@ global.fetch = async function(_url, options = {}) {
       complete: false
     });
   }
+  if (combined.includes('r2f1-' + process.env.TEST_RESTART_R2_STAMP + '.md containing R2F1MARKER')) {
+    // P2-R2 F-1 reachability. Attempt 1 never requests the model: the
+    // pre-model satisfied claim completes the execution loop and the
+    // interruption hook kills the process at before_run.snapshot_finalized,
+    // AFTER the positive pre-model observation is durable. Recovery (the file
+    // has since been rewritten WITHOUT the substring) requests the model here:
+    // an idempotent complete:true whose post-batch observation is the later
+    // decisive negative.
+    return okResponse({ message: 'Nothing to do.', actions: [], complete: true });
+  }
   return okResponse({ message: 'No matching objective.', actions: [], complete: true });
 };
 `);
@@ -229,6 +239,96 @@ async function main() {
         'resumed run did NOT complete through the post-action workspace-objective-satisfied shortcut');
 
       await second.stop();
+
+      // ── P2-R2 F-1 reachability: positive observation → crash/lease-loss →
+      // recovery → later negative observation → terminal decision FAIL ──────
+      const r2Stamp = String(STAMP);
+      const r2File = `r2f1-${r2Stamp}.md`;
+      const r2Objective = `create file r2f1-${r2Stamp}.md containing R2F1MARKER`;
+      // The criterion is satisfied at admission time: the file exists WITH the
+      // required substring, so the FIRST observation of attempt 1 (the durable
+      // pre-model check) is a positive observation.
+      fs.writeFileSync(path.join(workspaceRoot, r2File), 'payload has R2F1MARKER inside');
+
+      const r2First = await startServer({ env: {
+        ...providerEnv,
+        TEST_RESTART_R2_STAMP: r2Stamp,
+        TEST_INTERRUPTION_POINT: 'before_run.snapshot_finalized'
+      } });
+      const r2Cookie = await r2First.login();
+      const r2Created = await r2First.request('POST', '/tickets', {
+        cookie: r2Cookie,
+        form: {
+          objective: r2Objective,
+          assignmentTargetType: 'agent',
+          assignmentTargetId: String(agent.id),
+          assignmentMode: 'individual'
+        }
+      });
+      assert(r2Created.statusCode === 302, `r2 ticket create returned HTTP ${r2Created.statusCode}`);
+      const r2Run = await waitFor(async () => {
+        const page = await store.listRuns({ limit: 50 });
+        return (page.runs || []).find(r => r.agentId === agent.id && r.id !== run.id) || null;
+      }, 30000, 'the r2 run dispatch');
+      await waitFor(async () => {
+        const events = await store.listRunEvents(r2Run.id, { afterSeq: -1, limit: 200 });
+        return (events || []).some(e => e.type === 'interruption.test_hook');
+      }, 30000, 'the r2 interruption point to be reached');
+
+      // The positive observation is DURABLE before the crash: the pre-model
+      // check observed the file containing the required substring.
+      const r2PreCrashReplay = await store.readRunReplay(r2Run.id);
+      const r2PreCrashEvents = r2PreCrashReplay && r2PreCrashReplay.snapshot && Array.isArray(r2PreCrashReplay.snapshot.events)
+        ? r2PreCrashReplay.snapshot.events : [];
+      const r2PreCrashObservations = (r2PreCrashEvents || [])
+        .filter(e => e.type === 'run:direct_postcondition_observed')
+        .flatMap(e => Array.isArray(e && e.observations) ? e.observations : (e && e.payload && Array.isArray(e.payload.observations)) ? e.payload.observations : []);
+      assert(r2PreCrashObservations.some(o => o.path === r2File && o.present === true),
+        'r2 F-1: a positive criterion observation is durable BEFORE the crash/lease-loss');
+      await r2First.stop();
+
+      // Between the crash and recovery the file's content changes: the required
+      // substring is no longer present. Recovery must observe the LATER state.
+      fs.writeFileSync(path.join(workspaceRoot, r2File), 'rewritten without the marker');
+
+      const r2Second = await startServer({ env: {
+        ...providerEnv,
+        TEST_RESTART_R2_STAMP: r2Stamp
+      } });
+      const r2FinalRun = await waitFor(async () => {
+        const current = await store.getRun(r2Run.id);
+        return current && ['completed', 'failed', 'interrupted'].includes(current.status) ? current : null;
+      }, 90000, 'the r2 resumed run to reach a terminal state');
+      const r2Replay = await store.readRunReplay(r2Run.id);
+      const r2Events = r2Replay && r2Replay.snapshot && Array.isArray(r2Replay.snapshot.events)
+        ? r2Replay.snapshot.events : [];
+      const r2Observations = (r2Events || [])
+        .filter(e => e.type === 'run:direct_postcondition_observed')
+        .flatMap(e => Array.isArray(e && e.observations) ? e.observations : (e && e.payload && Array.isArray(e.payload.observations)) ? e.payload.observations : []);
+      const r2BoundObservations = r2Observations.filter(o => o.path === r2File);
+      assert(r2BoundObservations.length >= 2,
+        `r2 F-1: both temporal observations are durable (${r2BoundObservations.length})`);
+      assert(r2BoundObservations[0].present === true &&
+        r2BoundObservations[r2BoundObservations.length - 1].present === false,
+        'r2 F-1: the positive observation is followed by a later negative observation');
+      const r2ConsequenceRow = await store.getRunConsequence(r2Run.id);
+      const r2Decision = r2ConsequenceRow && r2ConsequenceRow.consequence &&
+        r2ConsequenceRow.consequence.completionDecision;
+      assert(r2FinalRun.status === 'completed',
+        `r2 F-1: the recovered run terminalized (status=${r2FinalRun.status})`);
+      assert(r2Decision && r2Decision.completionDisposition === 'incomplete' &&
+        r2Decision.reasonCode === 'VERIFICATION_FAILED',
+        'r2 F-1: the later negative observation makes the terminal decision FAIL');
+      const r2Evaluated = (r2Decision.evaluatedPostconditions || [])
+        .find(item => item.type === 'fileContains');
+      assert(r2Evaluated && r2Evaluated.passed === false &&
+        r2Evaluated.reasonCode === 'POSTCONDITION_EVALUATION_FAILED',
+        'r2 F-1: the recovered negative is observed-unsatisfied, never unavailable');
+      const r2Ticket = await store.getTicket(r2Run.ticketId);
+      assert(r2Ticket.status !== 'completed',
+        `r2 F-1: the Ticket must not complete on the later negative (got ${r2Ticket.status})`);
+      await r2Second.stop();
+
       console.log(`\nPASS: resume obvious postcondition — ${assert.count()} assertions (PostgreSQL-native)`);
     });
   } finally {

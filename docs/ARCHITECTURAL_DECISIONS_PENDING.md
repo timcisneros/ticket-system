@@ -2614,6 +2614,28 @@ completion behavior, presentation polish, fixture enrichment, criterion-class gr
 governed/workflow changes are explicitly NOT authorized by this record, and the P2 closure
 criterion does not activate Domain-Appropriate Quality.
 
+### 9a. Recorded residual (S-A) — declared-postcondition objectives and the
+pre-existing successful-mutation shortcut (recorded during P2 implementation)
+
+The pre-existing execution-loop successful-mutation shortcut
+(`isDirectWorkspaceObjectiveSatisfied` / `workspace.objective_satisfied`) can preempt
+multi-turn continuation for some declared-postcondition direct-write objectives (an
+objective whose admitted direct criteria carry dotted path tokens): the first successful
+workspace write to the objective path ends the execution loop early, before a later model
+turn could run, so a run whose first write does not yet satisfy its admitted criterion stops
+with only its earlier observation durable. This behavior PREDATES R2 and also affects the
+existing `containing exactly` sibling shape. For an admitted `fileContains` criterion the
+Run's completion policy remains `declared_postconditions`: canonical criterion evaluation
+still determines completion from durable criterion-bound evidence, and a negative or
+unavailable criterion does NOT project Ticket COMPLETED — the occurrence shortcut never
+becomes completion authority for the declared policy. Classification:
+**S-A — NON-BLOCKING CAPABILITY/CONTINUATION RESIDUAL.** It can stop useful continuation
+early, but canonical `declared_postconditions` decision enforcement still prevents false
+Ticket completion, so this is NOT a P2 authority-integrity defect. It is NOT fixed inside
+P2; capability/continuation treatment is deferred to the later appropriate roadmap phase,
+currently P3. Standing interpretation: **authority remains honestly bounded; useful
+continuation capability is the residual.**
+
 ### 10. Candidate status
 
 P2 HONEST COMPLETION — IMPLEMENTATION/VERIFICATION-AUTHORITY CANDIDATE — NOT AUTHORITY UNTIL

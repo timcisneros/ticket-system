@@ -26,8 +26,10 @@ const { withHarness } = require('./postgres-test-harness');
 const {
   buildCompletionAuthoritySnapshot,
   buildCompletionDecision,
+  extractObjectivePathTokens,
   normalizeCompletionDecision
 } = require('../runtime/completion-decision-contract');
+const { buildDeclaredWorkSnapshot } = require('../runtime/declared-work-contract');
 const { composeBlockingAuthority } = require('../runtime/ticket-blocking-authority-composer');
 
 const ACTOR = 't2-tranche5';
@@ -168,7 +170,18 @@ async function main() {
         ticketId: ticket.id,
         runDrafts: [{
           ticketId: ticket.id, agentId, status: 'pending', executionMode: 'agent',
-          completionAuthoritySnapshot: snapshot
+          completionAuthoritySnapshot: snapshot,
+          // Real production admission always supplies the immutable executed
+          // intent alongside the completion authority (declared work is bound
+          // to the admitted authority before any decision is built). The
+          // fixture previously omitted it, which stopped being
+          // production-representative once workspace_objective_receipt
+          // satisfaction became derived from the immutable objective path
+          // binding instead of the incidental loop event.
+          declaredWorkSnapshot: buildDeclaredWorkSnapshot({
+            ticket,
+            completionAuthoritySnapshot: snapshot
+          })
         }],
         runEventPayload: () => ({ source: ACTOR })
       });
@@ -187,7 +200,12 @@ async function main() {
       });
       fresh = await store.getRun(run.id);
       const finalizedAt = new Date().toISOString();
-      const objectivePath = `reports/${ticket.id}/summary.md`;
+      // The receipt path is an objective-path token of the ticket's immutable
+      // declared-work objective, exactly as production admission derives it.
+      const objectivePath = extractObjectivePathTokens(ticket.objective)[0];
+      if (!objectivePath) {
+        throw new Error('completeWithExactProof fixture objective must name its receipt path');
+      }
       const replaySnapshot = {
         runId: run.id, ticketId: ticket.id,
         events: [{ type: 'workspace.objective_satisfied', objectivePaths: [objectivePath] }],
@@ -490,7 +508,10 @@ async function main() {
     console.log('completed-attempt precedence');
     {
       // A genuinely completed Ticket (exact proof, not Run-status proxy).
-      const ct = await makeTicket('completion outranks the exhausted ceiling');
+      // The objective names its receipt path so the immutable declared-work
+      // intent carries the same objective-path binding real admission derives.
+      const ct = await makeTicket(
+        'create file reports/summary.md; completion outranks the exhausted ceiling');
       const { snapshot, terminalized } =
         await completeWithExactProof(ct, agent.id);
       const decision = normalizeCompletionDecision(

@@ -9,6 +9,7 @@ const {
   completionEvidenceProjection,
   hashCanonical
 } = require('../runtime/completion-decision-contract');
+const { buildDeclaredWorkSnapshot } = require('../runtime/declared-work-contract');
 
 let assertions = 0;
 function assert(condition, message) {
@@ -88,7 +89,8 @@ function decision({
   processOperations = [],
   browserEvidence = null,
   created = [],
-  modified = []
+  modified = [],
+  declaredObjective = null
 } = {}) {
   const run = {
     id: RUN_ID,
@@ -99,7 +101,10 @@ function decision({
       : null,
     completionAuthoritySnapshot: completionAuthority,
     executionPolicySnapshot: { requireVerification: 'when_declared' },
-    runtimeBudgetSnapshot: { snapshotHash: 'e'.repeat(64) }
+    runtimeBudgetSnapshot: { snapshotHash: 'e'.repeat(64) },
+    declaredWorkSnapshot: declaredObjective === null
+      ? null
+      : buildDeclaredWorkSnapshot({ ticket: { objective: declaredObjective } })
   };
   const replaySnapshot = {
     events: replayEvents,
@@ -200,32 +205,358 @@ const directUnavailable = decision({ completionAuthority: directAuthority, repla
 assert(directUnavailable.verificationDisposition === 'unavailable', 'missing postcondition evidence is unavailable');
 assert(directUnavailable.completionDisposition === 'blocked', 'missing required evidence blocks completion');
 
+// ── P2-R1: workspace_objective_receipt determination independence ─────────
+// Positive truth = objective-path tokens of the immutable executed intent
+// intersected with committed qualifying consequence paths. The incidental
+// workspace.objective_satisfied loop event is corroboration, never a
+// prerequisite; shape, turn count, and resume boundary cannot alter truth.
+const receiptObjective = 'Create result.md';
 const workspaceReceiptAuthority = authority({
   kind: 'deterministic',
   recognized: true,
   intent: 'model_driven',
-  completionPolicy: 'workspace_objective_receipt'
+  completionPolicy: 'workspace_objective_receipt',
+  objective: receiptObjective
 });
-const workspaceReceiptCompleted = decision({
+const objectiveSatisfiedEvent = {
+  type: 'workspace.objective_satisfied',
+  message: 'Workspace objective satisfied by successful mutation evidence',
+  step: 0,
+  source: 'successful_workspace_mutation',
+  objectivePaths: ['result.md']
+};
+
+// R1-T1 — same-turn decision shape: qualifying committed receipt, model
+// complete:true in the same response, NO workspace.objective_satisfied event.
+const receiptSameTurn = decision({
   completionAuthority: workspaceReceiptAuthority,
+  declaredObjective: receiptObjective,
+  created: [{ path: 'result.md' }]
+});
+assert(receiptSameTurn.completionDisposition === 'completed' &&
+    receiptSameTurn.reasonCode === 'OBJECTIVE_COMPLETED',
+  'R1-T1: same-turn qualifying receipt completes without the loop event');
+
+// R1-T2 — event-present multi-turn equivalent: same authoritative receipt and
+// path facts, the loop event IS emitted, model claimed complete:false first.
+const receiptEventPresent = decision({
+  completionAuthority: workspaceReceiptAuthority,
+  declaredObjective: receiptObjective,
   parsedModelPlans: [{ complete: false }],
-  replayEvents: [{
-    type: 'workspace.objective_satisfied',
-    objectivePaths: ['result.md']
+  replayEvents: [objectiveSatisfiedEvent],
+  created: [{ path: 'result.md' }]
+});
+assert(receiptEventPresent.completionDisposition === receiptSameTurn.completionDisposition &&
+    receiptEventPresent.reasonCode === receiptSameTurn.reasonCode,
+  'R1-T2: the loop event does not alter authoritative completion truth');
+
+// R1-T3 — resume-equivalent decision shape: committed qualifying receipt, no
+// shortcut event because the run crossed a resume boundary.
+const receiptResumed = decision({
+  completionAuthority: workspaceReceiptAuthority,
+  declaredObjective: receiptObjective,
+  parsedModelPlans: [{ complete: false }],
+  created: [{ path: 'result.md' }]
+});
+assert(receiptResumed.completionDisposition === 'completed' &&
+    receiptResumed.reasonCode === 'OBJECTIVE_COMPLETED',
+  'R1-T3: resumed run with a committed qualifying receipt completes under the occurrence policy');
+
+// R1-T4 — no qualifying receipt: incomplete, and the event cannot manufacture
+// receipt truth. Absent immutable executed intent also fails closed.
+assert(decision({
+  completionAuthority: workspaceReceiptAuthority,
+  declaredObjective: receiptObjective,
+  created: []
+}).completionDisposition === 'incomplete',
+  'R1-T4: no qualifying receipt stays incomplete');
+assert(decision({
+  completionAuthority: workspaceReceiptAuthority,
+  declaredObjective: receiptObjective,
+  parsedModelPlans: [{ complete: false }],
+  replayEvents: [objectiveSatisfiedEvent],
+  created: []
+}).completionDisposition === 'incomplete',
+  'R1-T4: event presence must not manufacture receipt truth');
+assert(decision({
+  completionAuthority: workspaceReceiptAuthority,
+  created: [{ path: 'result.md' }]
+}).completionDisposition === 'incomplete',
+  'R1-T4: absent immutable executed intent fails closed to incomplete');
+
+// R1-T5 — foreign/unbound path: qualifying-looking receipt that does not
+// intersect the objective-path authority stays incomplete.
+assert(decision({
+  completionAuthority: workspaceReceiptAuthority,
+  declaredObjective: receiptObjective,
+  parsedModelPlans: [{ complete: false }],
+  replayEvents: [objectiveSatisfiedEvent],
+  created: [{ path: 'unrelated.md' }]
+}).completionDisposition === 'incomplete',
+  'R1-T5: receipt path outside the objective-path binding stays incomplete');
+
+// R1-T6 — authority.denied refusal parity with the execution-side guard.
+const receiptAuthorityDenied = decision({
+  completionAuthority: workspaceReceiptAuthority,
+  declaredObjective: receiptObjective,
+  parsedModelPlans: [{ complete: false }],
+  events: [{
+    type: 'authority.denied',
+    payload: { rule: 'protected_path', status: 'denied', reason: 'fixture authority denial' }
   }],
   created: [{ path: 'result.md' }]
 });
-assert(workspaceReceiptCompleted.completionDisposition === 'completed',
-  'existing deterministic workspace objective evidence and receipt permit completion');
-const workspaceReceiptMissing = decision({
+assert(receiptAuthorityDenied.completionDisposition !== 'completed' &&
+    receiptAuthorityDenied.violations.some(item => item.type === 'authority.denied') &&
+    receiptAuthorityDenied.evidenceIssues.some(item => item.code === 'COMPLETION_EVIDENCE_CONTRADICTORY'),
+  'R1-T6: authority.denied refuses completion through the existing fail-closed decision path');
+
+// R1-T7 — existing violation evidence is refused exactly as predecessor.
+const receiptViolation = decision({
   completionAuthority: workspaceReceiptAuthority,
+  declaredObjective: receiptObjective,
+  parsedModelPlans: [{ complete: false }],
+  events: [{
+    type: 'run.violation_detected',
+    payload: { rule: 'fixture_rule' }
+  }],
+  created: [{ path: 'result.md' }]
+});
+assert(receiptViolation.completionDisposition === receiptAuthorityDenied.completionDisposition &&
+    receiptViolation.reasonCode === receiptAuthorityDenied.reasonCode,
+  'R1-T7: existing violation refusal is unchanged by R1');
+
+// R1-T8 — deterministic replay/hash: equivalent durable decision input
+// reproduces identical decision semantics and hash under the existing version.
+const receiptReplayA = decision({
+  completionAuthority: workspaceReceiptAuthority,
+  declaredObjective: receiptObjective,
+  created: [{ path: 'result.md' }]
+});
+const receiptReplayB = decision({
+  completionAuthority: workspaceReceiptAuthority,
+  declaredObjective: receiptObjective,
+  created: [{ path: 'result.md' }]
+});
+assert(receiptReplayA.decisionHash === receiptReplayB.decisionHash &&
+    receiptReplayA.version === 1,
+  'R1-T8: equivalent durable input reproduces the same decision hash under the existing version rule');
+
+// ── P2-R2: direct-run fileContains completion authority ────────────────────
+// The criterion decides ONLY from criterion-bound `run:direct_postcondition_observed`
+// replay observations (exact path + exact expected-substring digest); the
+// LATEST relevant observation wins in durable order; unavailable evidence is
+// never an observed negative; model prose and claims cannot substitute.
+const containsObjectiveText = 'create file notes/summary.md containing hello world';
+const containsCriterion = { type: 'fileContains', path: 'notes/summary.md', contains: 'hello world' };
+const containsAuthority = authority({
+  kind: 'deterministic',
+  recognized: true,
+  intent: 'create_file',
+  completionPolicy: 'declared_postconditions',
+  directPostconditions: [containsCriterion],
+  objective: containsObjectiveText
+});
+const containsDigest = require('node:crypto').createHash('sha256')
+  .update('hello world').digest('hex');
+const foreignDigest = require('node:crypto').createHash('sha256')
+  .update('different text').digest('hex');
+const observedEvent = (observations, extra = {}) => ({
+  type: 'run:direct_postcondition_observed',
+  message: 'Declared direct fileContains criteria observed from runtime workspace state',
+  step: 0,
+  source: extra.source || 'post_batch',
+  observations
+});
+const bound = (path, digest, present) => ({ path, containsSha256: digest, present });
+
+// R2-1 — admitted criterion + latest observation present → completed.
+const containsSatisfied = decision({
+  completionAuthority: containsAuthority,
+  parsedModelPlans: [{ complete: false }],
+  replayEvents: [observedEvent([bound('notes/summary.md', containsDigest, true)])]
+});
+assert(containsSatisfied.evaluatedPostconditions.some(result =>
+    result.type === 'fileContains' && result.passed === true &&
+    result.reasonCode === 'POSTCONDITION_PASSED'),
+  'R2-1: observed-positive fileContains evaluates POSTCONDITION_PASSED');
+assert(containsSatisfied.verificationDisposition === 'passed' &&
+    containsSatisfied.completionDisposition === 'completed' &&
+    containsSatisfied.reasonCode === 'OBJECTIVE_COMPLETED',
+  'R2-1: positive criterion truth participates in the completion decision');
+
+// R2-2 — admitted criterion + latest observation negative → observed-false refused.
+const containsNegative = decision({
+  completionAuthority: containsAuthority,
+  replayEvents: [observedEvent([bound('notes/summary.md', containsDigest, false)])]
+});
+assert(containsNegative.evaluatedPostconditions.some(result =>
+    result.type === 'fileContains' && result.passed === false &&
+    result.reasonCode === 'POSTCONDITION_EVALUATION_FAILED'),
+  'R2-2: observed-negative fileContains is a known deterministic negative');
+assert(containsNegative.verificationDisposition === 'failed' &&
+    containsNegative.completionDisposition === 'incomplete' &&
+    containsNegative.reasonCode === 'VERIFICATION_FAILED',
+  'R2-2: an observed negative does not complete');
+
+// R2-3 — no relevant observation → unavailable, never a negative.
+const containsUnavailable = decision({
+  completionAuthority: containsAuthority,
+  replayEvents: []
+});
+assert(containsUnavailable.evaluatedPostconditions.some(result =>
+    result.type === 'fileContains' && result.passed === null &&
+    result.reasonCode === 'POSTCONDITION_EVIDENCE_UNAVAILABLE'),
+  'R2-3: absence of observation stays POSTCONDITION_EVIDENCE_UNAVAILABLE');
+assert(containsUnavailable.verificationDisposition === 'unavailable' &&
+    containsUnavailable.completionDisposition === 'blocked',
+  'R2-3: unavailable evidence blocks instead of completing');
+
+// R2-4/R2-7/R2-8 — criterion binding: foreign path and foreign expected
+// substring cannot satisfy; malformed entries are dropped, failing closed.
+assert(decision({
+  completionAuthority: containsAuthority,
+  replayEvents: [observedEvent([bound('other/file.md', containsDigest, true)])]
+}).completionDisposition === 'blocked',
+  'R2-7: evidence for a foreign path cannot satisfy the criterion');
+assert(decision({
+  completionAuthority: containsAuthority,
+  replayEvents: [observedEvent([bound('notes/summary.md', foreignDigest, true)])]
+}).completionDisposition === 'blocked',
+  'R2-8: evidence for a foreign required-content value cannot satisfy the criterion');
+assert(decision({
+  completionAuthority: containsAuthority,
+  replayEvents: [observedEvent([
+    { path: 'notes/summary.md', containsSha256: containsDigest },
+    { path: 'notes/summary.md', present: true },
+    'garbage'
+  ])]
+}).completionDisposition === 'blocked',
+  'R2-4: malformed observation records are dropped and fail closed to unavailable');
+
+// R2-9 — replay determinism: identical durable input reproduces the same hash.
+const containsReplayA = decision({
+  completionAuthority: containsAuthority,
+  replayEvents: [observedEvent([bound('notes/summary.md', containsDigest, true)])]
+});
+const containsReplayB = decision({
+  completionAuthority: containsAuthority,
+  replayEvents: [observedEvent([bound('notes/summary.md', containsDigest, true)])]
+});
+assert(containsReplayA.decisionHash === containsReplayB.decisionHash &&
+    containsReplayA.version === 1,
+  'R2-9: replay produces the same criterion result and hash under the existing version');
+
+// The consumed observation evidence is hash-bound into the decision.
+const withoutObservation = decision({
+  completionAuthority: containsAuthority,
+  replayEvents: []
+});
+assert(containsReplayA.requiredEvidenceAuthority.hash !==
+    withoutObservation.requiredEvidenceAuthority.hash,
+  'R2: the fileContains observation evidence is hash-bound into requiredEvidenceAuthority');
+
+// R2-10 — model shape independence: model prose/claims cannot manufacture or
+// revoke criterion truth; turn/response shape does not change the decision.
+const modelCannotBypass = decision({
+  completionAuthority: containsAuthority,
+  parsedModelPlans: [{ complete: true, message: 'the file definitely contains it' }],
+  replayEvents: []
+});
+assert(modelCannotBypass.completionDisposition === 'blocked',
+  'R2-6: a model complete:true claim cannot manufacture criterion satisfaction');
+const modelCannotSatisfyAbsent = decision({
+  completionAuthority: containsAuthority,
+  parsedModelPlans: [{ complete: false }],
+  replayEvents: [observedEvent([bound('notes/summary.md', containsDigest, true)])]
+});
+assert(modelCannotSatisfyAbsent.completionDisposition === 'completed',
+  'R2-10: model complete:false does not revoke observed criterion truth');
+const claimCannotSubstitute = decision({
+  completionAuthority: containsAuthority,
+  parsedModelPlans: [{ complete: false }],
   replayEvents: [{
-    type: 'workspace.objective_satisfied',
-    objectivePaths: ['result.md']
+    type: 'run:postcondition_completed',
+    message: 'Requested workspace state is already satisfied',
+    checkedPaths: [{ type: 'fileContains', path: 'notes/summary.md', contains: 'hello world' }],
+    source: 'pre_model'
   }]
 });
-assert(workspaceReceiptMissing.completionDisposition === 'incomplete',
-  'workspace objective evidence without a matching durable mutation consequence is insufficient');
+assert(claimCannotSubstitute.completionDisposition === 'blocked',
+  'R2-6: a run:postcondition_completed claim cannot substitute for criterion-bound observation');
+const resumedShapeEquivalent = decision({
+  completionAuthority: containsAuthority,
+  parsedModelPlans: [{ complete: false }],
+  replayEvents: [
+    observedEvent([bound('notes/summary.md', containsDigest, false)], { source: 'pre_model' }),
+    observedEvent([bound('notes/summary.md', containsDigest, true)], { source: 'post_batch' })
+  ]
+});
+assert(resumedShapeEquivalent.completionDisposition === 'completed' &&
+    resumedShapeEquivalent.reasonCode === 'OBJECTIVE_COMPLETED',
+  'R2-10: response/turn shape does not change the same durable criterion truth');
+
+// R2 temporal decision-level cases — negative → later positive PASS;
+// positive → later negative FAIL; a newer unrelated observation cannot
+// displace the latest bound one.
+const temporalPass = decision({
+  completionAuthority: containsAuthority,
+  replayEvents: [
+    observedEvent([bound('notes/summary.md', containsDigest, false)]),
+    observedEvent([bound('notes/summary.md', containsDigest, true)])
+  ]
+});
+assert(temporalPass.completionDisposition === 'completed',
+  'R2 temporal: negative → later positive = PASS');
+const temporalFail = decision({
+  completionAuthority: containsAuthority,
+  replayEvents: [
+    observedEvent([bound('notes/summary.md', containsDigest, true)]),
+    observedEvent([bound('notes/summary.md', containsDigest, false)])
+  ]
+});
+assert(temporalFail.completionDisposition === 'incomplete' &&
+    temporalFail.reasonCode === 'VERIFICATION_FAILED',
+  'R2 temporal: positive → later negative = FAIL');
+const displacedCheck = decision({
+  completionAuthority: containsAuthority,
+  replayEvents: [
+    observedEvent([bound('notes/summary.md', containsDigest, false)]),
+    observedEvent([bound('other/file.md', foreignDigest, true)]),
+    observedEvent([bound('notes/summary.md', containsDigest, true)])
+  ]
+});
+assert(displacedCheck.completionDisposition === 'completed',
+  'R2 temporal: a newer unrelated observation cannot displace the latest bound observation');
+
+// R2-14 — existing refusal/violation behavior still dominates completion.
+const violatesContains = decision({
+  completionAuthority: containsAuthority,
+  replayEvents: [observedEvent([bound('notes/summary.md', containsDigest, true)])],
+  events: [{ type: 'run.violation_detected', payload: { rule: 'fixture_rule' } }]
+});
+assert(violatesContains.completionDisposition !== 'completed' &&
+    violatesContains.evidenceIssues.some(issue => issue.code === 'COMPLETION_EVIDENCE_CONTRADICTORY'),
+  'R2-14: violation evidence still dominates a satisfied criterion');
+
+// R2-12b — authority normalization refuses malformed fileContains admissions.
+const malformedAuthority = (() => {
+  try {
+    authority({
+      kind: 'deterministic',
+      recognized: true,
+      intent: 'create_file',
+      completionPolicy: 'declared_postconditions',
+      directPostconditions: [{ type: 'fileContains', path: 'x.md', contains: '' }],
+      objective: containsObjectiveText
+    });
+    return 'admitted';
+  } catch (error) {
+    return error.code;
+  }
+})();
+assert(malformedAuthority === 'POSTCONDITION_UNSUPPORTED',
+  'R2-4: malformed fileContains admission (empty contains) refuses deterministically');
 
 const workflowAuthority = authority({
   kind: 'workflow',

@@ -35,6 +35,13 @@ global.fetch = async function(_url, options = {}) {
   const prompt = (Array.isArray(body.input) ? body.input : [])
     .map(item => item && item.content ? String(item.content) : '')
     .join('\\n');
+  if (prompt.includes('r2-persist-${STAMP}.md containing R2PERSIST')) {
+    return response({
+      message: 'Writing the requested note.',
+      actions: [{ operation: 'writeFile', args: { path: 'r2-persist-${STAMP}.md', content: 'the note embeds R2PERSIST as required' } }],
+      complete: true
+    });
+  }
   if (prompt.includes('t6-model-claim-${STAMP}')) {
     return response({
       message: 'MODEL-PROSE-MUST-NOT-BECOME-AUTHORITY',
@@ -219,6 +226,41 @@ async function main() {
       const decisionEventsAfterReplay = await store.listRunEvents(completed.run.id, { limit: 400 });
       assert(decisionEventsAfterReplay.filter(event => event.type === 'run.completion_decided').length === 1,
         'repeated projection creates no duplicate completion evidence');
+
+      // ── P2-R2: the contains criterion decides from DURABLE criterion-bound
+      // observation; the evidence roundtrips through PostgreSQL and the
+      // decision is replay-stable. ─────────────────────────────────────────────
+      const r2Persisted = await waitForDecision(await createTicket(
+        `create file r2-persist-${STAMP}.md containing R2PERSIST`));
+      const r2Replay = await store.readRunReplay(r2Persisted.run.id);
+      assert(r2Persisted.ticket.status === 'completed',
+        'an observed-positive contains objective completes through the persisted chain');
+      const r2ObservationEvents = (r2Replay.snapshot.events || [])
+        .filter(event => event.type === 'run:direct_postcondition_observed');
+      assert(r2ObservationEvents.length >= 1,
+        'the fileContains observation evidence is durable in the replay snapshot');
+      const r2LastObservation = r2ObservationEvents[r2ObservationEvents.length - 1].observations[0];
+      assert(r2LastObservation.path === `r2-persist-${STAMP}.md` &&
+        /^[0-9a-f]{64}$/.test(r2LastObservation.containsSha256) &&
+        r2LastObservation.present === true,
+        'the durable observation binds the admitted path, the expected-substring digest, and the verdict');
+      assert(!JSON.stringify(r2ObservationEvents).includes('R2PERSIST'),
+        'no raw substring or file content is stored in the observation evidence');
+      const r2Decision = r2Persisted.consequence.completionDecision;
+      const r2Evaluated = (r2Decision.evaluatedPostconditions || [])
+        .find(item => item.type === 'fileContains');
+      assert(r2Evaluated && r2Evaluated.passed === true &&
+        r2Evaluated.reasonCode === 'POSTCONDITION_PASSED',
+        'the persisted decision evaluates the admitted criterion from the durable observation');
+      assert(r2Decision.completionDisposition === 'completed' &&
+        r2Decision.reasonCode === 'OBJECTIVE_COMPLETED',
+        'the persisted decision completes under observed criterion truth');
+      const r2Replayed = await store.getRunConsequence(r2Persisted.run.id);
+      assert(r2Replayed.consequence.completionDecision.decisionHash === r2Decision.decisionHash,
+        'PostgreSQL replay preserves the contains-criterion decision hash');
+      const r2Duplicate = await store.transitionTicketAfterRun({ runId: r2Persisted.run.id });
+      assert(r2Duplicate.changed === false && r2Duplicate.ticket.status === 'completed',
+        'contains-criterion ticket projection replay is idempotent');
 
       try { await server.stop(); } catch (_) { /* best effort */ }
 
