@@ -3321,6 +3321,496 @@ no dedicated mixed-state scenario is added as a P3 closure blocker.**
 
 ---
 
+## P4 — GOVERNED SURFACE EXPANSION — semantic design-freeze candidate (2026-09-12)
+
+**STATUS:** candidate — NOT AUTHORITY until independent review, acceptance, commit, and
+publication. This record creates NO runtime behavior change, NO implementation authorization, NO
+schema/migration authorization, and NO pre-acceptance of any implementation candidate. Roadmap
+authority remains register §6 (P4 — Governed Surface Expansion; advances CAP-3) and §8 (priority
+sequence head after P3 closure, no new dependency edge). The two-plane model and the
+capability-frontier criterion in register §3 remain controlling. This freeze pre-authorizes no
+implementation before it is independently reviewed and published.
+
+### 1. IDENTITY AND OUTCOME
+
+P4 = Governed Surface Expansion.
+
+Published outcome (register §6): make already-governed substrate usable as bounded-agent product
+capability, one reviewed surface slice at a time.
+
+P4 is NOT generic feature expansion. Exactly two slices are frozen here, both named by the
+published roadmap record; a third surface is NOT implicitly authorized, and any additional P4
+slice requires a later explicit design/roadmap adjudication:
+
+* **P4-R1 — Governed Process-Execution Product Enablement.**
+* **P4-R2 — Browser Phase-2 Safe Interaction.**
+
+### 2. GOVERNING PRINCIPLE AND TWO-PLANE MODEL
+
+**Bound authority without unnecessarily bounding capability.**
+
+The two authority planes remain distinct:
+
+* the privileged developer/source agent working on the repository;
+* the bounded/product agent operating through governed ticket-system primitives.
+
+P4 expands useful bounded-agent capability toward the useful-work capability frontier of the
+developer plane. It does NOT seek authority parity with the developer/source plane, and no
+current feature/mechanism parity is claimed (T10 final-audit anti-lock-in entry remains
+controlling). A lower-authority governed primitive that achieves the useful outcome satisfies the
+criterion.
+
+Every surface added by P4 must remain: explicitly authorized; bounded; durably evidenced;
+replayable/auditable where repository semantics require it; fail-closed; economically bounded;
+compatible with canonical completion authority; and hermetic from hidden conversational knowledge.
+
+### 3. P4-R1 — GOVERNED PROCESS-EXECUTION PRODUCT ENABLEMENT
+
+#### 3.1 Existing fact — no new mechanism
+
+The process-execution substrate is already implemented and governed (authoritative eight-tranche
+roadmap: `docs/PROCESS_EXECUTION_ROADMAP.md`, all eight tranches COMPLETE):
+
+* trusted process targets and declarative profiles; explicit agent grants to target/profile
+  combinations;
+* immutable launch plan and per-Run authority snapshot (`run.processPolicySnapshot`, hashed,
+  appended to `run.created`, copied to `replaySnapshot.processPolicySnapshot`; dispatch never
+  rereads the live catalog);
+* process receipts and `process.operation_resolution`, whose typed authority outcomes are owned
+  live by `PROCESS_RESOLUTION_AUTHORITIES` in `runtime/process-execution-contract.js` together
+  with `docs/PROCESS_EXECUTION_CONTRACT.md`; examples include `PROCESS_CAPABILITY_DISABLED`,
+  `PROCESS_TARGET_UNKNOWN`, and `PROCESS_SANDBOX_UNAVAILABLE`, but the live registry — not this
+  freeze — is the closed authority and it contains further entries (including
+  `PROCESS_RUNTIME_CAPABILITY_UNAVAILABLE` and the successful authorization outcome);
+* stdout/stderr output-artifact identity and hashing;
+* supervision/lifecycle evidence and the bounded `processSupervision` projection;
+* cancellation with confirmed-empty process-tree evidence;
+* per-profile filesystem/resource/execution policy and `maxProcessOperationsPerRun`;
+* release contract and GA runbook.
+
+P4-R1 does NOT create a new process-execution mechanism, a new grant model, or a parallel
+authority object. It makes the EXISTING governed capability usable as product capability.
+
+#### 3.2 CL-1 RESOLUTION — release authority versus product authority
+
+**Deployment-level process release admission remains RELEASE authority.**
+
+The existing release/runbook enable/disable boundary MUST NOT become an ordinary product-agent
+action or ordinary operator CRUD toggle. P4-R1 MUST NOT bypass or duplicate: release readiness
+(`release:db-preflight`, `release:ga-check`), staged release admission
+(`npm run release:admission -- --enable/--disable` under
+`docs/PROCESS_EXECUTION_GA_RUNBOOK.md`), canary/release health
+(`processExecutionReleaseHealth`), or the durable deployment-level admission authority (the
+PostgreSQL `process_execution_release_state` singleton binding the validated release contract).
+
+The product surface exists BELOW that boundary:
+
+* **Release authority permits the capability class** (deployment-level admission enabled and the
+  existing release-readiness authority reporting the admission-ready state required by
+  `assertAdmissionReady` in `runtime/process-execution-release-readiness.js`; that state is
+  currently `ready`; every other state — including `disabled` and `degraded_read_only` — refuses
+  new process admission according to the existing contract);
+* **Product authority determines whether this particular governed Run may use an
+  already-defined process target/profile/grant** (exact resolved grants, admission-time
+  snapshot, phase permission, runtime limits).
+
+Both must permit execution. Neither can substitute for the other.
+
+For hermeticity it is recorded explicitly: **no current repository document grants ordinary
+product control over deployment release admission.** Release authority is owned by
+`docs/PROCESS_EXECUTION_GA_RUNBOOK.md` together with the release-contract/readiness/health
+runtime modules and the durable release-state singleton. P4-R1 does not change that ownership.
+
+#### 3.3 Product capability unlocked
+
+A bounded agent may perform `runProcess` work through the normal Run loop ONLY
+when all existing process authorities authorize it. `runProcess` is the canonical model-facing
+process operation (canonical owners: `docs/PROCESS_EXECUTION_CONTRACT.md` and the
+process-execution contract/controller runtime modules). Implementation must REUSE existing
+canonical authority without reinvention:
+
+* process target/profile catalog authority (catalog management itself remains
+  deployment/developer-plane configuration per section 3.7);
+* grants/eligibility resolution at admission from the existing
+  `runtimeConfig.processProfileGrants` path;
+* the immutable per-Run process authority snapshot and its hash;
+* release readiness/admission state;
+* runtime limits;
+* mutation/admission control and deployment concurrency.
+
+#### 3.4 Fail-closed rule
+
+If any required authority is absent, disabled, stale, invalid, or unavailable — release-readiness
+state other than the admission-ready state required by `assertAdmissionReady` (currently exactly
+`ready`; `disabled` and `degraded_read_only` refuse new admission), grant missing, profile
+unknown, phase denied, sandbox/executor unavailable —
+process execution is unavailable to the Run. No permissive fallback, no default-on, no
+normalization of invalid authority. Existing typed refusal semantics are the canonical behavior.
+
+#### 3.5 Evidence
+
+Reuse existing canonical process evidence. No new evidence class unless implementation proves
+existing evidence inadequate AND returns for design amendment. Required truth continues to
+include, as applicable: process operation receipt; immutable launch identity; exit/lifecycle
+result; stdout/stderr artifact identity/hashes; supervision state; cancellation/tree-empty
+evidence; refusal/failure reason via the existing typed resolution results.
+
+#### 3.6 Bounds
+
+Preserve existing limits, including `maxProcessOperationsPerRun`, per-profile resource policy,
+filesystem/execution policy, deployment concurrency/admission, and economic/runtime limits.
+P4-R1 grants no authority to silently raise any of them.
+
+#### 3.7 Operator surface — configured-agent grant assignment and inspection ONLY
+
+**P4-R1 authorizes the minimum product surface for assignment and inspection of EXISTING process
+target/profile grants and derived eligibility for configured agents, under the existing release
+gate.**
+
+Current fact (base `021c26bfad4b723112e45eb643d721dd794535cb`): process target/profile grants
+already exist as `processProfileGrants` inside configured-agent `runtimeConfig`
+(`docs/PROCESS_EXECUTION_CONTRACT.md` "Exact grant assignment"; storage path
+`runtimeConfig.processProfileGrants`); they are consumed at Run admission to build
+`run.processPolicySnapshot`; they currently have NO operator/product write seam; and the public
+configured-agent projection (`publicConfiguredAgent`) omits them, so operators cannot inspect
+what a configured agent is granted or is eligible to run. That narrow assignment/inspection gap
+IS the R1 product-enablement tranche. Everything else — process mechanism, model-facing
+`runProcess`, target/profile catalog, grant schema, Run-loop dispatch, release gate, immutable
+snapshot, receipts/evidence — already exists.
+
+Explicit boundaries:
+
+* trusted process target/profile catalog management REMAINS deployment/developer-plane
+  configuration; P4-R1 does NOT create operator CRUD for that catalog;
+* P4-R1 does NOT create a second grant model; it reuses the existing configured-agent
+  `runtimeConfig.processProfileGrants` authority/storage path, unless implementation discovers a
+  correctness blocker and returns for adjudication.
+
+No specific route, schema, or UI shape is frozen by this record. No new permission is frozen;
+if implementation authority later proves one is required, that is assigned at implementation
+under independent review. Observation surfaces that already exist (the bounded
+`processSupervision` projection, release health in the runtime status API) remain canonical and
+are not duplicated.
+
+#### 3.8 R1 non-goals
+
+Arbitrary shell authority; PID control; signal control; arbitrary path control; new process
+capability classes; expansion of trusted profile semantics; weakening release admission or the
+release contract; new execution-target semantics; new completion authority; process composition.
+
+#### 3.9 R1 verification boundary
+
+Targeted owners are REQUIRED for: release gate still dominates product enablement; an enabled +
+properly granted Run can execute through the normal bounded-agent path; a disabled deployment
+refuses; missing/invalid product authority refuses; immutable Run authority cannot drift after
+admission; receipts/evidence remain truthful; existing process release/health/admission suites
+remain green; build/syntax remains green. No full canonical checkpoint solely for R1 unless
+repository checkpoint policy is independently triggered (section 10). STOP for independent R1
+review before P4-R2 implementation.
+
+### 4. P4-R2 — BROWSER PHASE-2 SAFE INTERACTION
+
+#### 4.1 CL-2 RESOLUTION — strictly Phase 2
+
+P4-R2 is limited STRICTLY to Phase 2 of the canonical browser design
+(`docs/BROWSER_TARGET_DESIGN.md`, "Phase 2 — safe interaction") and satisfies that design's
+confirm-before-phase-2 boundary through this freeze plus its independent review.
+
+Authorized interaction operations: `click`, `fill`, `press` — as receipted mutation-tier
+operations. Existing read-oriented browser operations (`navigate`, `observe`, `readPageText`,
+`screenshot`, `wait`; current source `AGENT_BROWSER_OPERATIONS` /
+`BROWSER_PHASE_ONE_OPERATIONS`) remain governed exactly as currently implemented. Phase 3
+(downloads, persistent sessions, credential stores) is NOT imported.
+
+#### 4.2 Authority model
+
+Browser interaction is MUTATION-tier authority, separately authorized from browser
+observation/read authority. Implementation must use the repository-designed semantic equivalent
+of:
+
+* an explicit browser-interaction permission, distinct from the existing browser read/operate
+  permissions;
+* ticket/Run execution-policy authorization for interactions, **default false**
+  (design name: `executionPolicy.allowBrowserInteractions`);
+* target/browser snapshot authority (config frozen into the Run at admission, as Phase 1
+  already does);
+* the target origin allowlist (`allowedOrigins`, exact origins, no wildcards);
+* mutation admission;
+* the browser interaction budget (`maxInteractionsPerRun`).
+
+Current-source naming note (semantic authority over stale text): current builtin permissions are
+`browser:read` and `browser:operate` (`persistence/access-catalog.js`); no interaction
+permission exists at base, and existing `browser:operate` (manual operator-browser
+operation) is NOT assumed sufficient for Run-loop browser interaction. The historical design
+doc's candidate names (`browserTarget:manage`, `browser:interact`) are DESIGN-DAY PROPOSALS,
+not current attachment authority; the permission string is NOT frozen here. Implementation
+freezes the SEMANTIC requirements above and assigns the canonical permission identity within
+the EXISTING access catalog at implementation, subject to independent review; it must not
+invent a second permission registry or duplicate the existing access-catalog authority. If a
+NEW access permission is required, registration follows the narrow migration-owned path
+authorized in section 9, including its checkpoint consequence in section 10.
+
+#### 4.3 Element provenance
+
+`click` and `fill` MUST operate only on model-visible element identities (`elementId`) minted by
+a prior authoritative `observe` in the SAME Run, bound to the corresponding page-state identity
+(`pageStateHash`). If the page state has changed such that the element provenance is stale,
+the operation is refused with the canonical staleness semantics (recoverable: re-`observe`).
+No selector guessing, no fallback DOM search, no path that bypasses the provenance contract.
+
+#### 4.4 Navigation and origin containment
+
+Interaction may cause navigation. The origin boundary MUST be revalidated after
+interaction/navigation effects. A redirect or navigation that leaves the authorized origin set
+must not become usable authority; it must fail/refuse according to canonical browser semantics
+(`BROWSER_ORIGIN_BLOCKED` class: navigation aborted, evidence recorded, operation fails,
+recoverable within bounds), leaving durable evidence of the boundary result.
+
+#### 4.5 Fill handling
+
+The design's credential-sensitive-field handling is preserved. Values for fields identified by
+the canonical credential-sensitive mechanism MUST NOT be written into durable evidence in
+plaintext; only the repository-authorized redacted/hash representation is persisted
+(`{ redacted: true, valueHash }` shape per the canonical design). P4-R2 does NOT create a
+general credential-store feature, does not resolve `credentialRef`s, and does not introduce
+credential authority.
+
+#### 4.6 Press handling
+
+`press` is restricted to the canonical key allowlist (design: `Enter`, `Tab`, `Escape`, arrow
+keys). No arbitrary browser automation command channel.
+
+#### 4.7 Evidence
+
+Interactions require durable mutation-tier evidence preserving enough provenance to establish:
+the operation; the authoritative target element/key; the source page-state identity; the
+resulting page-state identity; success/refusal/failure; origin containment; and
+screenshot/evidence references where the existing design requires them (mutation receipts with
+pre/post state, the minting observation receipt identity, and the existing
+`browserOperations` replay stream). No second browser evidence model may be created if existing
+browser replay/operation evidence can carry this canonically — it can; reuse it.
+
+#### 4.8 Bounds
+
+`maxInteractionsPerRun` is frozen as the designed Phase-2 interaction budget, additive to the
+existing browser-operation budgets (`maxNavigationsPerRun`, `maxActionsPerRun`) and the
+run-level `maxBrowserOperationsPerRun`, not a replacement for any of them. Precise
+default semantics: the browser Phase-2 DESIGN specifies a default value of **8**; current
+Phase-1 target configuration requires explicit existing limit values and HAS NO
+interaction-limit field (interaction fields are excluded from `BROWSER_TARGET_LIMIT_FIELDS` and
+forbidden in target-form input). R2 implementation must decide, consistently with the canonical
+browser-target configuration model, whether Phase 2 materializes the design default during
+normalization/creation or requires an explicitly configured value; EITHER WAY the effective
+interaction budget must be bounded and the design-default semantics must not become an implicit
+unvalidated omission. If this decision materially affects authority semantics during R2
+implementation, STOP for independent review. Implementation may not weaken the existing
+forbidden-field guard for Phase-3 fields while adding the interaction bound. Budget exhaustion
+must fail honestly (limit-exceeded semantics, recoverable/terminal exactly as the existing
+browser budget classes behave).
+
+#### 4.9 R2 non-goals
+
+Browser Phase 3; downloads; sessions; credential storage; arbitrary JavaScript; arbitrary
+network access; blind selector control; broadening allowed origins; composition across targets;
+workflow invocation.
+
+#### 4.10 R2 verification boundary
+
+Targeted verification is REQUIRED for at least: interaction denied by default; authorized
+interaction succeeds; unauthorized interaction refuses; stale element provenance refuses;
+mismatched page-state identity refuses; post-click redirect/origin escape is blocked/refused and
+evidenced; `fill` redaction semantics; `press` key allowlist; interaction budget exhaustion;
+durable receipts/replay evidence; existing browser read-only behavior remains green;
+phase-gated catalog behavior remains correct; build/syntax remains green. STOP for independent
+R2 review before P4 closure.
+
+### 5. IMPLEMENTATION SEQUENCE AND REVIEW BARRIERS
+
+1. P4 design freeze publication (this record, after independent review).
+2. P4-R1 implementation (targeted verification only).
+3. Independent P4-R1 review (established implementation-report identity requirements: base
+   HEAD/origin equality, exact dirty path set, `git diff --check`, working-diff SHA-256,
+   per-file SHA-256, staged empty, stash empty; R1 stays uncommitted through its barrier).
+4. P4-R2 implementation (targeted verification only).
+5. Independent P4-R2 review (same identity requirements).
+6. Combined P4 closure review.
+7. One canonical full P4 closure checkpoint if no earlier repository-owned trigger requires one
+   (section 10).
+8. Publication.
+
+R1 precedes R2 because **R1 has lower semantic novelty: it exposes an already-complete governed
+substrate through the product boundary, while R2 introduces a new mutation-tier browser
+interaction surface.** This is NOT a claim that process execution is intrinsically lower
+authority than browser mutation; both are governed mutation-class capabilities.
+
+If combined closure becomes misleading because the two slices acquire materially different
+trust/closure boundaries, STOP and amend/adjudicate the P4 authority rather than improvising
+separate closure (register §6 already reserves this split option for P4).
+
+### 6. SHARED PROTECTED INVARIANTS
+
+P4 MUST NOT alter: five-state Ticket semantics; Run-only failure semantics; attempt/resume/
+reassess distinctions; completion-authority ownership; declared-work semantics; deterministic
+postcondition evaluation; P3 `priorAttemptContext` semantics and its context-only (never
+authority) status; the prior-versus-current truth boundary; continuation semantics; canonical
+consequence sourcing; routing/economic authority; immutable execution-target semantics.
+
+P4 adds usable governed surfaces. It does not redefine completion or continuation.
+
+Later-phase boundaries (explicitly reserved, NOT P4):
+
+* **P5:** executable `invokeWorkflow`; child/subwork composition; multi-target composition.
+* **P6:** deployment/operations expansion not necessary to ship the two P4 slices.
+* **P7:** external connectors/integrations.
+* Also outside P4: event triggering (T9 remains EMPTY/DEFERRED); same-Run operator→agent
+  delivery (T7-extension-gated; T7-I7 ownership remains unassigned); structured-planner revival
+  (FINAL STOP); browser Phase 3.
+
+### 7. HERMETICITY AND AUTHORITY-LOCATION RULES
+
+The implementation sessions must resolve authority by SEMANTIC OWNER, not by stale source line
+number:
+
+* **Process release authority owner:** `docs/PROCESS_EXECUTION_GA_RUNBOOK.md` + the
+  process-execution release-contract/release-readiness/release-health runtime modules + the
+  durable PostgreSQL `process_execution_release_state` singleton. As of base
+  `021c26bfad4b723112e45eb643d721dd794535cb`, NO document grants ordinary product control over
+  deployment release admission, and P4-R1 must not create such control.
+* **Process product authority owner:** `docs/PROCESS_EXECUTION_CONTRACT.md` + the
+  process-execution contract/controller runtime modules (target/profile catalog, grants,
+  `run.processPolicySnapshot`, `process.operation_resolution`).
+* **Browser canonical design owner:** `docs/BROWSER_TARGET_DESIGN.md` (phase definitions,
+  operation catalog, failure codes, target-config limits).
+* **Historical browser review:** `docs/BROWSER_TARGET_DESIGN_REVIEW.md` is review EVIDENCE and
+  HISTORY. Its `server.js:NNNN` line numbers described design-day source and do NOT match the
+  current file; they are not current attachment authority. Implementation must re-derive current
+  attachment points from source at implementation time.
+* This record is the single phase-authority entry point for P4 boundaries; the canonical design
+  documents remain the owners of their own full designs and are referenced, not duplicated.
+
+### 8. VERIFICATION MATRIX (repository-owned; implementation authority assigns exact test owners; canonical owners are reused where they already exist)
+
+**P4-R1**
+
+* Release dominance: release-disabled deployment → product-path execution refused by release
+  authority even with valid grants.
+* Product grant/eligibility: valid release + valid target/profile/grant → resolution allowed;
+  missing/unknown/stale grant → typed refusal.
+* Bounded-agent reachability: one enabled, properly granted Run executes a bounded authorized
+  process through the normal Run loop with canonical receipts.
+* Denial/refusal: every typed resolution refusal remains typed, evidenced, fail-closed.
+* Immutable authority: admitted `run.processPolicySnapshot` (and hash) cannot drift after
+  admission via catalog/grant mutation.
+* Evidence: receipt, artifact hashes, supervision, cancellation/tree-empty evidence remain
+  truthful and replay-consistent.
+* Bounds: `maxProcessOperationsPerRun` and profile policies enforced on the product path.
+
+**P4-R2**
+
+* Default deny: without interaction authorization, click/fill/press refuse as authority denial.
+* Permission/policy authorization: with explicit permission + execution-policy authorization,
+  interaction proceeds; one missing leg refuses.
+* Element provenance: interaction on an `elementId` not minted by a same-Run `observe` refuses.
+* Staleness: page-state change since the minting observation refuses (recoverable).
+* Origin containment: post-interaction navigation/redirect outside `allowedOrigins` is blocked,
+  evidenced, and yields no usable authority.
+* Fill redaction: credential-sensitive field values never persist in plaintext anywhere in
+  events/logs/receipts/replay.
+* Press allowlist: non-allowlisted key refuses.
+* Interaction budget: exhaustion fails honestly within existing budget semantics.
+* Evidence: mutation receipts carry pre/post page state, minting-observation identity, and
+  replay-stream entries.
+* Existing read-only regression: Phase-1 browser behavior and phase-gated catalog behavior
+  remain green.
+
+### 9. SCHEMA/MIGRATION POLICY
+
+No automatic arbitrary schema/migration authority is granted. Current expectation is REUSE of
+existing catalogs/authority (process target/profile/grant catalogs and release state;
+browser-target configuration). If either R1 or R2 requires a schema or migration change NOT
+already implied by canonical repository design, STOP for design adjudication before implementing
+that schema change.
+
+**Narrow R2 permission-registration authorization (already-implied by the frozen design):** if
+implementation assigns a NEW canonical access-catalog permission for browser interaction,
+registering that permission through the repository's established migration-owned
+access-permission lifecycle is part of the frozen P4-R2 design, NOT an unexpected design
+expansion. Repository precedent: access permissions are migration-owned authority — the
+`access_permissions` table and its `access_permissions_migration_owned` trigger
+(migration `019_access_catalog_authority.sql`; builtin-floor parity in
+`persistence/access-catalog.js`; the same lifecycle inserted `apiToken:manage` via migration
+043). No migration number is frozen; no permission string is frozen; NO other schema/migration
+is authorized.
+
+**Checkpoint consequence (explicit):** if R2 uses that migration-owned permission-row path, the
+existing migration-authority checkpoint trigger applies AT R2. Therefore the default combined
+P4 closure checkpoint remains the phase plan, BUT a permission migration during R2 independently
+triggers the full canonical checkpoint at that protected boundary under existing `AGENTS.md`
+policy, and the later P4 closure checkpoint remains required if repository closure policy still
+requires it. No existing trigger is waived or merged away.
+
+### 10. CHECKPOINT POLICY
+
+The published repository checkpoint policy (`AGENTS.md`, "Verification workflow") remains
+controlling and is not waived by this freeze:
+
+* the docs-only freeze publication triggers NO full checkpoint;
+* targeted verification is the default implementation loop;
+* no automatic full checkpoint after R1; none after R2;
+* ONE full canonical checkpoint at combined P4 closure (default plan).
+
+However: if an implementation tranche ACTUALLY changes a repository-defined protected
+cross-cutting surface — canonical checkpoint machinery/owner lists, migration/release authority
+(including the tracked migration-execution authorization record), cross-cutting canonical
+invariant/contract registries, or another explicit published trigger — the EXISTING checkpoint
+policy applies immediately. No existing trigger may be waived merely because this freeze
+expected closure-only checkpointing. Section 9's R2 permission-registration path is a concrete
+instance: an R2 access-permission migration triggers the full canonical checkpoint at R2
+independently of the combined-closure plan.
+
+### 11. STOP CONDITIONS (any one requires design adjudication before further work)
+
+* need for a new completion-authority class;
+* need for a new evidence class instead of extending canonical evidence;
+* need for a migration/schema beyond the narrow section 9 R2 permission-registration
+  authorization;
+* need to expose release-admission enable/disable as ordinary product authority;
+* need to change process runtime semantics;
+* need to broaden browser Phase 2 into Phase 3;
+* need for arbitrary selector/script/network authority;
+* need for P5 composition (workflow invocation/child/multi-target);
+* a protected checkpoint trigger is discovered;
+* contradiction with P2/P3 frozen semantics.
+
+### 12. RESIDUALS (carried unchanged)
+
+* **RECOVERY-A** — accepted non-blocking pre-existing operational/recovery residual; NOT
+  resolved; NOT P4 work; any correction requires separately authorized recovery/terminalization
+  authority (registration record: "P3 combined implementation closure residuals" above).
+* **F2** — accepted LOW/non-blocking verification residual; NOT resolved; no dedicated
+  mixed-state test is added under P4 authority.
+
+### 13. PHASE-LEVEL NON-GOALS (summary)
+
+No authority parity with the developer plane; no third surface; no composition; no external
+connectors; no event triggering; no T7 delivery extension; no structured-planner revival; no
+browser Phase 3; no release-admission productization; no new completion/continuation semantics;
+no runtime-limit relaxation; no legacy JSON runtime path.
+
+### 14. DESIGN-AUTHORITY STATUS AND NEXT BOUNDARY
+
+This freeze: authorizes later implementation work ONLY after independent review and publication;
+does not itself change runtime behavior; does not authorize a particular schema/API/UI
+implementation beyond the semantic requirements stated above; does not pre-accept any
+implementation candidate; does not authorize implementation before the freeze is reviewed and
+published.
+
+NEXT BOUNDARY: independent review of this exact uncommitted candidate → commit/publish →
+P4-R1 implementation under this authority, its section 5 sequence, and its section 11 STOP
+boundaries.
+
+---
+
 ## Execution-semantics provenance fixture shared Ticket-attempt authority (2026-08-17)
 
 **Status: RESOLVED IN SOURCE — independent pre-semantics provenance cases now
