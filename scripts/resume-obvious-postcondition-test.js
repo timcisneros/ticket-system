@@ -314,16 +314,37 @@ async function main() {
       const r2ConsequenceRow = await store.getRunConsequence(r2Run.id);
       const r2Decision = r2ConsequenceRow && r2ConsequenceRow.consequence &&
         r2ConsequenceRow.consequence.completionDecision;
-      assert(r2FinalRun.status === 'completed',
-        `r2 F-1: the recovered run terminalized (status=${r2FinalRun.status})`);
+      // P3-R1: the recovered idempotent complete:true no longer stops the loop
+      // through the plain completion branch. The later observed negative is the
+      // deferred declared continuation hinge, so the same Run continues a
+      // bounded turn; the second zero-action deferral trips the EXISTING shared
+      // stalled-response bound and terminalizes honestly (RUN_LIMIT_EXCEEDED,
+      // step limit). P2 truth semantics are unchanged: the terminal decision
+      // stays incomplete — completion authority is never granted, the negative
+      // is represented as observed-unsatisfied, never unavailable, and the
+      // Ticket never projects completed.
+      assert(r2FinalRun.status === 'failed' &&
+        r2Replay && r2Replay.snapshot && r2Replay.snapshot.failure &&
+        r2Replay.snapshot.failure.code === 'RUN_LIMIT_EXCEEDED' &&
+        r2Replay.snapshot.failure.kind === 'budget_exhausted',
+        `r2 F-1: the recovered run terminalizes at the shared stalled-response bound (status=${r2FinalRun.status}, ` +
+        `failure=${JSON.stringify(r2Replay && r2Replay.snapshot && r2Replay.snapshot.failure)})`);
       assert(r2Decision && r2Decision.completionDisposition === 'incomplete' &&
-        r2Decision.reasonCode === 'VERIFICATION_FAILED',
-        'r2 F-1: the later negative observation makes the terminal decision FAIL');
+        r2Decision.reasonCode === 'RUN_BUDGET_EXHAUSTED',
+        'r2 F-1: the bounded terminal decision refuses completion under the exhausted budget');
       const r2Evaluated = (r2Decision.evaluatedPostconditions || [])
         .find(item => item.type === 'fileContains');
       assert(r2Evaluated && r2Evaluated.passed === false &&
         r2Evaluated.reasonCode === 'POSTCONDITION_EVALUATION_FAILED',
         'r2 F-1: the recovered negative is observed-unsatisfied, never unavailable');
+      const r2ReplayEvents = r2Events.filter(event =>
+        event.type === 'run:contract_completion_deferred');
+      assert(r2ReplayEvents.length === 2,
+        `r2 F-1: both zero-action deferred completions were recorded (got ${r2ReplayEvents.length})`);
+      assert(r2ReplayEvents.every(event =>
+        Array.isArray(event.pendingPostconditions) &&
+        event.pendingPostconditions.some(check => check.path === r2File)),
+        'r2 F-1: every deferral names the deterministic unsatisfied declared criterion');
       const r2Ticket = await store.getTicket(r2Run.ticketId);
       assert(r2Ticket.status !== 'completed',
         `r2 F-1: the Ticket must not complete on the later negative (got ${r2Ticket.status})`);

@@ -525,11 +525,13 @@ needs to write outside the owned path, it needs a different ticket type.
 ### No-progress stall
 
 ```
-Model stalled twice with complete:false and no workspace actions
+Model stalled twice with no workspace actions (complete:false stall or deferred complete:true completion)
 ```
 
-**Meaning**: The model returned empty actions without completing. This is
-a transient model behavior issue.
+**Meaning**: The model returned empty actions without completing, either as a
+`complete:false` stall or as a deferred `complete:true` completion whose
+declared postconditions remain unsatisfied. This is a transient model behavior
+issue.
 
 **Action**: Re-run the same ticket. If it happens repeatedly, the ticket
 may be confusing the model — simplify the wording.

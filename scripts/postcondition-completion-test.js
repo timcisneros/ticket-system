@@ -3,7 +3,7 @@
 // Postcondition-based completion, workflow-draft intents, and handoff tasks —
 // PostgreSQL-native (docs/ARCHITECTURAL_DECISIONS_PENDING.md, A10).
 //
-// Twenty scenarios, ported one-for-one from the JSON-era original against the
+// Scenarios 1-20 are ported one-for-one from the JSON-era original against the
 // inventory recorded in A10. Each keeps its own server restart, its own runtime
 // budget, its own objective and provider-response branch, and the exact negative
 // regression it guards. They are deliberately NOT collapsed into shared
@@ -11,8 +11,18 @@
 // draft intents, 16-18 cover handoff tasks, 19 covers draft rejection, and 20
 // covers compiled partial completion.
 //
-// Repaired, not rewritten. The provider preload (21 objective branches) and every
-// scenario body are preserved verbatim from the original; only the storage layer
+// P3-R1 (bounded declared-postcondition continuation) extends this owner with
+// the M-matrix it authorizes: scenario 22 now proves the bounded declared
+// continuation (wrong first write + advisory complete:true -> one corrective
+// bounded turn -> deterministic satisfied stop exactly once), and scenarios
+// 23, 25-27 plus the crafted M5 control pin the deferred seam, the shared
+// stalled-response bound, the blanket redundant-operation exclusion for
+// declared Runs (observed-negative AND unavailable/mixed state), and the
+// receipt-policy shortcut eligibility decided only by the immutable
+// completion-authority snapshot.
+//
+// Repaired, not rewritten. The provider preload (objective branches) and the
+// scenario bodies are preserved from the original; only the storage layer
 // changed. Seeding, run/ticket/workflow lookups, and event waits now go through
 // the PostgreSQL store via scripts/postgres-test-harness.js instead of a DATA_DIR
 // of JSON files the server no longer reads.
@@ -24,8 +34,42 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { withHarness, createAsserter, sleep } = require('./postgres-test-harness');
+const { currentRuntimeLimitsSnapshot } = require('./current-run-fixture');
+const {
+  buildCompletionAuthoritySnapshot,
+  normalizeCompletionAuthoritySnapshot
+} = require('../runtime/completion-decision-contract');
 
 const STAMP = Date.now();
+
+// Brace-balanced extraction of one top-level function from server.js source,
+// same discipline as scripts/evidence-truthfulness-contract-test.js. Used only
+// to execute an existing production helper against the REAL canonical
+// normalizer in tests — it adds no production instrumentation.
+function extractServerFunction(code, name) {
+  const match = code.match(new RegExp(`function ${name}\\s*\\(`));
+  if (!match) throw new Error(`could not locate function ${name} in server.js`);
+  const start = match.index;
+  let i = start + match[0].length;
+  let parens = 1;
+  while (i < code.length && parens > 0) {
+    if (code[i] === '(') parens += 1;
+    else if (code[i] === ')') parens -= 1;
+    i += 1;
+  }
+  const bodyStart = code.indexOf('{', i);
+  if (bodyStart === -1) throw new Error(`could not locate body of ${name}`);
+  let depth = 0;
+  let j = bodyStart;
+  while (j < code.length) {
+    if (code[j] === '{') depth += 1;
+    else if (code[j] === '}') depth -= 1;
+    j += 1;
+    if (depth === 0) break;
+  }
+  if (depth !== 0) throw new Error(`unbalanced braces extracting ${name}`);
+  return code.slice(start, j);
+}
 const assert = createAsserter();
 
 function createFakeOpenAIPreload() {
@@ -409,12 +453,117 @@ function createFakeOpenAIPreload() {
     "  }",
     "",
     "  if (combined.includes('r2-refused-' + stamp + '.md containing R2MARKER')) {",
+    "    // P3-R1 M1: the first execution turn writes the WRONG content and claims",
+    "    // complete:true; the admitted declared criterion is observably false, so",
+    "    // completion is deferred and the same Run continues one corrective bounded",
+    "    // turn that satisfies it.",
+    "    const count = nextCount('r2-refused');",
+    "    if (count === 1) {",
+    "      return okResponse({",
+    "        message: 'Writing something unrelated.',",
+    "        actions: [",
+    "          { operation: 'writeFile', args: { path: 'r2-refused-' + stamp + '.md', content: 'an unrelated body without the marker' } }",
+    "        ],",
+    "        complete: true",
+    "      });",
+    "    }",
     "    return okResponse({",
-    "      message: 'Writing something unrelated.',",
+    "      message: 'Correcting the requested summary.',",
     "      actions: [",
-    "        { operation: 'writeFile', args: { path: 'r2-refused-' + stamp + '.md', content: 'an unrelated body without the marker' } }",
+    "        { operation: 'writeFile', args: { path: 'r2-refused-' + stamp + '.md', content: 'the payload includes R2MARKER and more' } }",
     "      ],",
     "      complete: true",
+    "    });",
+    "  }",
+    "",
+    "  if (combined.includes('p3-stall-' + stamp + '.md containing P3STALL')) {",
+    "    // P3-R1 M2: repeated zero-action deferred completion. The model never",
+    "    // mutates and always claims complete:true while the admitted criterion is",
+    "    // observably false; the shared stalled-response bound must terminalize",
+    "    // honestly.",
+    "    return okResponse({ message: 'Nothing to do.', actions: [], complete: true });",
+    "  }",
+    "",
+    "  if (combined.includes('p3-declared-false-' + stamp + '.md containing P3FALSE')) {",
+    "    // P3-R1 M3: wrong write with complete:false. Neither the receipt shortcut",
+    "    // nor the redundant-operation heuristic may claim the declared Run; it",
+    "    // continues while bounded instead.",
+    "    return okResponse({",
+    "      message: 'Writing wrong content.',",
+    "      actions: [",
+    "        { operation: 'writeFile', args: { path: 'p3-declared-false-' + stamp + '.md', content: 'wrong content without the marker' } }",
+    "      ],",
+    "      complete: false",
+    "    });",
+    "  }",
+    "",
+    "  if (combined.includes('p3-persistent-' + stamp + '.md containing P3PERSIST')) {",
+    "    // P3-R1 M7: persistent unsatisfied work with complete:true stays bounded",
+    "    // by the existing execution limits; no infinite continuation.",
+    "    return okResponse({",
+    "      message: 'Writing wrong content again.',",
+    "      actions: [",
+    "        { operation: 'writeFile', args: { path: 'p3-persistent-' + stamp + '.md', content: 'wrong content without the marker' } }",
+    "      ],",
+    "      complete: true",
+    "    });",
+    "  }",
+    "",
+    "  if (combined.includes('p3-mixed-unavailable-' + stamp + '.md containing P3MIXED')) {",
+    "    // P3-R1 blanket redundant-operation exclusion, unavailable/mixed case:",
+    "    // the model's mutation is a redundant no-op on an unrelated path while",
+    "    // the admitted criterion is structurally unobservable (directory at",
+    "    // path). The heuristic must never claim the declared Run, and the",
+    "    // unavailable criterion must not become a continuation hinge either.",
+    "    return okResponse({",
+    "      message: 'Rewriting the other file identically.',",
+    "      actions: [",
+    "        { operation: 'writeFile', args: { path: 'p3-mixed-other-' + stamp + '.md', content: 'mixed baseline' } }",
+    "      ],",
+    "      complete: true",
+    "    });",
+    "  }",
+    "",
+    "  if (combined.includes('write note p3-shortcut-receipt-' + stamp)) {",
+    "    // P3-R1 M5 crafted positive control: a direct-write Run whose admitted",
+    "    // snapshot proves the workspace_objective_receipt policy. The provider",
+    "    // writes the objective path and claims complete:false, which trips the",
+    "    // successful-mutation shortcut exactly as in the predecessor.",
+    "    return okResponse({",
+    "      message: 'Writing the requested note.',",
+    "      actions: [",
+    "        { operation: 'writeFile', args: { path: 'p3-shortcut-receipt-' + stamp + '.md', content: 'crafted shortcut control content' } }",
+    "      ],",
+    "      complete: false",
+    "    });",
+    "  }",
+    "",
+    "  if (combined.includes('write note p3-shortcut-withhold-' + stamp)) {",
+    "    // P3-R1 M5 crafted withhold control: the same behavior for a Run admitted",
+    "    // WITHOUT a completion-authority snapshot. The shortcut must be withheld",
+    "    // fail-closed and the Run continues while bounded instead.",
+    "    return okResponse({",
+    "      message: 'Writing the requested note.',",
+    "      actions: [",
+    "        { operation: 'writeFile', args: { path: 'p3-shortcut-withhold-' + stamp + '.md', content: 'crafted shortcut control content' } }",
+    "      ],",
+    "      complete: false",
+    "    });",
+    "  }",
+    "",
+    "  if (combined.includes('write note p3-shortcut-corrupt-' + stamp)) {",
+    "    // P3-R1 M5 crafted corrupt control (F1): the same behavior for a Run",
+    "    // whose completion-authority snapshot is PRESENT but fails canonical",
+    "    // normalization. If any path defaulted the unreadable authority to the",
+    "    // receipt policy, this shortcut-shaped response would be consumed and",
+    "    // workspace.objective_satisfied would fire; the control exists so that",
+    "    // regression is deterministic.",
+    "    return okResponse({",
+    "      message: 'Writing the requested note.',",
+    "      actions: [",
+    "        { operation: 'writeFile', args: { path: 'p3-shortcut-corrupt-' + stamp + '.md', content: 'crafted shortcut control content' } }",
+    "      ],",
+    "      complete: false",
     "    });",
     "  }",
     "",
@@ -1000,14 +1149,22 @@ async function runAllScenarios({ store, preloadPath, agent, mike, runScenario, g
       }
     );
 
-    // 22. admitted criterion observed-negative: deterministic refusal, not completion.
+    // 22. P3-R1 M1: bounded declared continuation. The first turn writes the
+    // WRONG content and claims complete:true while the admitted criterion is
+    // observably false, so completion is DEFERRED (existing deferral seam,
+    // non-authoritative history) and the same Run continues one corrective
+    // bounded turn. The corrective write satisfies the criterion; the existing
+    // deterministic declared-direct check then owns the satisfied stop, and the
+    // Run settles exactly once. P2 truth pins preserved: the criterion-bound
+    // observation channel still records both states, no raw content is stored,
+    // and completion authority stays with the canonical decision.
     await runScenario(
       preloadPath,
       agent,
       `create file r2-refused-${STAMP}.md containing R2MARKER`,
       {
         AGENT_MAX_EXECUTION_STEPS: '3',
-        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '3',
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '4',
         AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
         AGENT_MAX_RUNTIME_DURATION_MS: '10000'
       },
@@ -1015,22 +1172,43 @@ async function runAllScenarios({ store, preloadPath, agent, mike, runScenario, g
         expectedStatus: 'completed',
         verify: async ({ run, snapshot }) => {
           const observationEvents = snapshot.events.filter(e => e.type === 'run:direct_postcondition_observed');
-          assert(observationEvents.length >= 1, 'R2-E2E-B: the observed negative was durably recorded');
+          assert(observationEvents.length >= 2, 'M1: the wrong-write turn durably recorded the observed negative and the corrective turn the positive');
           const lastEntry = observationEvents[observationEvents.length - 1].observations[0];
-          assert(lastEntry && lastEntry.path === 'r2-refused-' + STAMP + '.md' && lastEntry.present === false,
-            'R2-E2E-B: the latest observation is a bound deterministic negative');
+          assert(lastEntry && lastEntry.path === 'r2-refused-' + STAMP + '.md' && lastEntry.present === true,
+            'M1: the latest observation is bound to the admitted path and positively observed');
+          assert(snapshot.parsedModelPlans.length === 2, 'M1: the premature complete:true must continue exactly one corrective bounded turn');
+          const deferredEvents = snapshot.events.filter(e => e.type === 'run:contract_completion_deferred');
+          assert(deferredEvents.length === 1, `M1: completion deferred exactly once before the corrective turn (got ${deferredEvents.length})`);
+          assert(deferredEvents[0].pendingPostconditions &&
+            deferredEvents[0].pendingPostconditions.some(check =>
+              check.type === 'fileContains' && check.path === 'r2-refused-' + STAMP + '.md'),
+            'M1: the deferral names the deterministic unsatisfied declared criterion');
+          const persistedDeferred = await waitForEvent(event =>
+            event.type === 'run.contract_completion_deferred' && event.runId === run.id);
+          assert(persistedDeferred && persistedDeferred.payload &&
+            persistedDeferred.payload.pendingPostconditions.some(check =>
+              check.path === 'r2-refused-' + STAMP + '.md'),
+            'M1: the durable deferral evidence carries the pending declared criterion');
+          assert(!snapshot.events.some(event => event.type === 'workspace.objective_satisfied'),
+            'M1: the successful-mutation shortcut never terminates a declared-postcondition Run');
+          assert(!snapshot.events.some(event =>
+            event.type === 'run:postcondition_completed' && event.source === 'redundant_operation'),
+            'M1: the redundant-operation heuristic never claims a declared-postcondition Run');
           const storedRun = await waitForStoredRun(run.id, item => item.runConsequence);
           const decision = storedRun.runConsequence.completionDecision;
-          assert(decision && decision.completionDisposition === 'incomplete' &&
-            decision.reasonCode === 'VERIFICATION_FAILED',
-            'R2-E2E-B: the observed negative refuses completion');
+          assert(decision && decision.completionDisposition === 'completed' &&
+            decision.reasonCode === 'OBJECTIVE_COMPLETED',
+            'M1: the corrected criterion completes through the canonical decision');
           const evaluated = (decision.evaluatedPostconditions || []).find(item => item.type === 'fileContains');
-          assert(evaluated && evaluated.passed === false &&
-            evaluated.reasonCode === 'POSTCONDITION_EVALUATION_FAILED',
-            'R2-E2E-B: the negative is represented as observed-unsatisfied, never unavailable');
-          const finalTicket = await store.getTicket(run.ticketId);
-          assert(finalTicket.status !== 'completed',
-            `R2-E2E-B: Ticket must not project COMPLETED on an observed negative (got ${finalTicket.status})`);
+          assert(evaluated && evaluated.passed === true &&
+            evaluated.reasonCode === 'POSTCONDITION_PASSED',
+            'M1: the canonical evaluator decided the admitted criterion from durable observation');
+          const storedTicket = await waitForStoredTicket(run.ticketId, item => item.status === 'completed');
+          assert(storedTicket && storedTicket.status === 'completed',
+            'M1: the Ticket completes exactly once');
+          assert(fs.existsSync(path.join(WORKSPACE_ROOT, 'r2-refused-' + STAMP + '.md')) &&
+            fs.readFileSync(path.join(WORKSPACE_ROOT, 'r2-refused-' + STAMP + '.md'), 'utf8').includes('R2MARKER'),
+            'M1: the corrected content is really in the workspace file');
         }
       }
     );
@@ -1053,6 +1231,10 @@ async function runAllScenarios({ store, preloadPath, agent, mike, runScenario, g
         verify: async ({ run, snapshot }) => {
           assert(!snapshot.events.some(e => e.type === 'run:direct_postcondition_observed'),
             'R2-E2E-C: an unobservable path records NO observation');
+          assert(!snapshot.events.some(e => e.type === 'run:contract_completion_deferred'),
+            'M4: unavailable criterion state is never used as an observed-negative continuation hinge');
+          assert(snapshot.parsedModelPlans.length === 1,
+            'M4: model complete:true with unavailable criteria keeps the existing single-turn stop');
           const storedRun = await waitForStoredRun(run.id, item => item.runConsequence);
           const decision = storedRun.runConsequence.completionDecision;
           assert(decision && decision.completionDisposition === 'blocked' &&
@@ -1092,9 +1274,201 @@ async function runAllScenarios({ store, preloadPath, agent, mike, runScenario, g
             'R2-E2E-D: an ambiguous two-target objective admits NO fileContains criterion');
           assert(direct.length === 0,
             'R2-E2E-D: the ambiguous objective falls through with an empty direct set');
-          const finalTicket = await store.getTicket(run.ticketId);
-          assert(finalTicket.status === 'completed',
+          const finalTicket = await waitForStoredTicket(run.ticketId, item => item.status === 'completed');
+          assert(finalTicket && finalTicket.status === 'completed',
             'R2-E2E-D: the ambiguous objective still completes under its honest existing policy');
+        }
+      }
+    );
+
+    // 25. P3-R1 M2: repeated zero-action deferred completion is bounded by the
+    // EXISTING shared stalled-response threshold. The model never mutates and
+    // always claims complete:true while the admitted criterion is observably
+    // false, so completion is deferred each turn; the second zero-action
+    // deferral trips the stalled bound and terminalizes honestly.
+    await runScenario(
+      preloadPath,
+      agent,
+      `create file p3-stall-${STAMP}.md containing P3STALL`,
+      {
+        AGENT_MAX_EXECUTION_STEPS: '4',
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '4',
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
+        AGENT_MAX_RUNTIME_DURATION_MS: '10000'
+      },
+      {
+        expectedStatus: 'failed',
+        verify: async ({ run, snapshot }) => {
+          assert(run.error && /Model stalled twice with no workspace actions/.test(run.error),
+            `M2: the terminal error names the shared stalled-response bound honestly (got ${run.error})`);
+          assert(snapshot.failure && snapshot.failure.code === 'RUN_LIMIT_EXCEEDED' &&
+            snapshot.failure.kind === 'budget_exhausted' &&
+            snapshot.failure.detail && snapshot.failure.detail.limitType === 'step',
+            'M2: the stall bound terminalizes with RUN_LIMIT_EXCEEDED (step_limit)');
+          const observationEvents = snapshot.events.filter(e => e.type === 'run:direct_postcondition_observed');
+          assert(observationEvents.length >= 1, 'M2: the absent criterion path is a durable observed negative, not unavailable');
+          const lastEntry = observationEvents[observationEvents.length - 1].observations[0];
+          assert(lastEntry && lastEntry.path === 'p3-stall-' + STAMP + '.md' && lastEntry.present === false,
+            'M2: the latest observation is the bound deterministic negative');
+          const deferredEvents = snapshot.events.filter(e => e.type === 'run:contract_completion_deferred');
+          assert(deferredEvents.length === 2, `M2: both zero-action deferrals were recorded before the bound tripped (got ${deferredEvents.length})`);
+          assert(deferredEvents.every(event =>
+            event.pendingPostconditions &&
+            event.pendingPostconditions.some(check =>
+              check.type === 'fileContains' && check.path === 'p3-stall-' + STAMP + '.md')),
+            'M2: every deferral names the deterministic unsatisfied declared criterion');
+          assert(!snapshot.events.some(event => event.type === 'run:completed_noop'),
+            'M2: a deferred declared completion is not recorded as a satisfied no-op completion');
+          const durableDeferred = (await store.listRunEvents(run.id, { afterSeq: -1, limit: 300 }))
+            .filter(event => event.type === 'run.contract_completion_deferred');
+          assert(durableDeferred.length === 2,
+            `M2: the durable journal carries both deferrals (got ${durableDeferred.length})`);
+          const storedRun = await waitForStoredRun(run.id, item => item.runConsequence);
+          const decision = storedRun.runConsequence.completionDecision;
+          assert(decision && decision.completionDisposition === 'incomplete' &&
+            decision.reasonCode === 'RUN_BUDGET_EXHAUSTED',
+            'M2: the honest terminal decision remains incomplete under the exhausted budget');
+          const evaluated = (decision.evaluatedPostconditions || []).find(item => item.type === 'fileContains');
+          assert(evaluated && evaluated.passed === false &&
+            evaluated.reasonCode === 'POSTCONDITION_EVALUATION_FAILED',
+            'M2: the negative is still represented as observed-unsatisfied, never unavailable');
+          const finalTicket = await store.getTicket(run.ticketId);
+          assert(finalTicket.status !== 'completed',
+            `M2: Ticket must not project COMPLETED on a bounded stall (got ${finalTicket.status})`);
+          assert(!fs.existsSync(path.join(WORKSPACE_ROOT, 'p3-stall-' + STAMP + '.md')),
+            'M2: no workspace mutation was ever committed');
+        }
+      }
+    );
+
+    // 26. P3-R1 M3: wrong write with complete:false. The declared Run must NOT
+    // stop through the successful-mutation shortcut or the redundant-operation
+    // heuristic, the negative criterion observation stays durable, and the same
+    // Run continues a bounded turn. The contract compiler is disabled so the
+    // final-step incomplete-mutation budget guard stays out of the way and the
+    // plain execution step limit owns the bound.
+    await runScenario(
+      preloadPath,
+      agent,
+      `create file p3-declared-false-${STAMP}.md containing P3FALSE`,
+      {
+        ENABLE_MODEL_CONTRACT_COMPILER: 'false',
+        AGENT_MAX_EXECUTION_STEPS: '3',
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '4',
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
+        AGENT_MAX_RUNTIME_DURATION_MS: '10000'
+      },
+      {
+        expectedStatus: 'failed',
+        verify: async ({ run, snapshot }) => {
+          assert(snapshot.failure && (snapshot.failure.code === 'RUN_BUDGET_EXHAUSTED' ||
+            snapshot.failure.code === 'RUN_LIMIT_EXCEEDED'),
+            `M3: bounded continuation terminalizes at an execution budget limit (got ${snapshot.failure && snapshot.failure.code})`);
+          const observationEvents = snapshot.events.filter(e => e.type === 'run:direct_postcondition_observed');
+          assert(observationEvents.length >= 1, 'M3: the post-batch negative criterion evidence is durable');
+          const lastEntry = observationEvents[observationEvents.length - 1].observations[0];
+          assert(lastEntry && lastEntry.path === 'p3-declared-false-' + STAMP + '.md' && lastEntry.present === false,
+            'M3: the latest observation is the bound deterministic negative');
+          assert(snapshot.parsedModelPlans.length === 3,
+            'M3: the same Run continued past the first wrong write instead of stopping');
+          assert(!snapshot.events.some(event => event.type === 'workspace.objective_satisfied'),
+            'M3: no receipt shortcut fires for the declared policy');
+          assert(!snapshot.events.some(event => event.type === 'run:postcondition_completed'),
+            'M3: neither the redundant-operation heuristic nor any other shortcut claims the declared Run');
+          assert(!snapshot.events.some(event => event.type === 'run:contract_completion_deferred'),
+            'M3: complete:false responses do not enter the deferred declared completion seam');
+          const storedRun = await waitForStoredRun(run.id, item => item.runConsequence);
+          const decision = storedRun.runConsequence.completionDecision;
+          assert(decision && decision.completionDisposition === 'incomplete',
+            'M3: the bounded terminal decision stays incomplete');
+          const evaluated = (decision.evaluatedPostconditions || []).find(item => item.type === 'fileContains');
+          assert(evaluated && evaluated.passed === false &&
+            evaluated.reasonCode === 'POSTCONDITION_EVALUATION_FAILED',
+            'M3: the durable negative stays observed-unsatisfied, never unavailable');
+          const finalTicket = await store.getTicket(run.ticketId);
+          assert(finalTicket.status !== 'completed',
+            `M3: Ticket must not project COMPLETED on the negative (got ${finalTicket.status})`);
+        }
+      }
+    );
+
+    // 26. P3-R1 M7: persistent unsatisfied work with complete:true stays
+    // bounded by the existing execution limits; no infinite keep-trying loop.
+    // The contract compiler is disabled so the bound is owned by the plain
+    // execution step limit deterministically.
+    await runScenario(
+      preloadPath,
+      agent,
+      `create file p3-persistent-${STAMP}.md containing P3PERSIST`,
+      {
+        ENABLE_MODEL_CONTRACT_COMPILER: 'false',
+        AGENT_MAX_EXECUTION_STEPS: '3',
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '4',
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
+        AGENT_MAX_RUNTIME_DURATION_MS: '10000'
+      },
+      {
+        expectedStatus: 'failed',
+        verify: async ({ run, snapshot }) => {
+          assert(snapshot.failure && (snapshot.failure.code === 'RUN_BUDGET_EXHAUSTED' ||
+            snapshot.failure.code === 'RUN_LIMIT_EXCEEDED'),
+            `M7: persistent unsatisfied work stops at an execution budget limit (got ${snapshot.failure && snapshot.failure.code})`);
+          assert(snapshot.parsedModelPlans.length === 3,
+            'M7: exactly the bounded number of turns ran, then the limit terminalized');
+          const deferredEvents = snapshot.events.filter(e => e.type === 'run:contract_completion_deferred');
+          assert(deferredEvents.length === 3,
+            `M7: every premature complete:true with a false criterion was deferred (got ${deferredEvents.length})`);
+          assert(!snapshot.events.some(event => event.type === 'workspace.objective_satisfied'),
+            'M7: no receipt shortcut fires for the declared policy');
+          const finalTicket = await store.getTicket(run.ticketId);
+          assert(finalTicket.status !== 'completed',
+            `M7: Ticket must not project COMPLETED on persistently unsatisfied work (got ${finalTicket.status})`);
+          const workspaceOperations = (snapshot.workspaceOperations || [])
+            .filter(item => item && item.operation && item.operation.operation === 'writeFile' &&
+              item.operation.args.path === 'p3-persistent-' + STAMP + '.md' && !item.error);
+          assert(workspaceOperations.length === 3,
+            `M7: each bounded turn's wrong write was committed and bounded (got ${workspaceOperations.length})`);
+        }
+      }
+    );
+
+    // 27. P3-R1 blanket redundant-operation exclusion, unavailable/mixed state:
+    // a declared Run whose mutation is a redundant no-op on an unrelated path
+    // while the admitted criterion is structurally unobservable. The heuristic
+    // must never claim the Run, and the unavailable criterion must not become
+    // a continuation hinge; the existing plain stop and canonical blocked
+    // decision remain.
+    fs.mkdirSync(path.join(WORKSPACE_ROOT, `p3-mixed-unavailable-${STAMP}.md`), { recursive: true });
+    fs.writeFileSync(path.join(WORKSPACE_ROOT, `p3-mixed-other-${STAMP}.md`), 'mixed baseline');
+    await runScenario(
+      preloadPath,
+      agent,
+      `create file p3-mixed-unavailable-${STAMP}.md containing P3MIXED`,
+      {
+        AGENT_MAX_EXECUTION_STEPS: '3',
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '3',
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
+        AGENT_MAX_RUNTIME_DURATION_MS: '10000'
+      },
+      {
+        expectedStatus: 'completed',
+        verify: async ({ run, snapshot }) => {
+          assert(!snapshot.events.some(event => event.type === 'run:postcondition_completed'),
+            'M5b: the redundant-operation heuristic never claims a declared-postcondition Run, even with unavailable criteria');
+          assert(!snapshot.events.some(event => event.type === 'run:contract_completion_deferred'),
+            'M5b: unavailable criterion state never becomes a deferred continuation hinge');
+          assert(snapshot.parsedModelPlans.length === 1,
+            'M5b: the Run settled on the existing plain completion stop in one bounded turn');
+          assert(fs.readFileSync(path.join(WORKSPACE_ROOT, `p3-mixed-other-${STAMP}.md`), 'utf8') === 'mixed baseline',
+            'M5b: the redundant identical write stayed a no-op');
+          const storedRun = await waitForStoredRun(run.id, item => item.runConsequence);
+          const decision = storedRun.runConsequence.completionDecision;
+          assert(decision && decision.completionDisposition === 'blocked' &&
+            decision.reasonCode === 'VERIFICATION_UNAVAILABLE',
+            'M5b: the canonical decision stays fail-closed blocked on the unavailable criterion');
+          const finalTicket = await waitForStoredTicket(run.ticketId, item => item.status !== 'in_progress');
+          assert(finalTicket && finalTicket.status !== 'completed',
+            `M5b: Ticket must not project COMPLETED on the unavailable criterion (got ${finalTicket && finalTicket.status})`);
         }
       }
     );
@@ -1120,20 +1494,26 @@ async function runAllScenarios({ store, preloadPath, agent, mike, runScenario, g
       invalidWorkflowDraftRejected: true,
       compiledPartialCompletionDeferred: true,
       r2ContainsPresentCompleted: true,
-      r2ContainsAbsentRefused: true,
+      declaredContinuationCorrectedOnce: true,
       r2ContainsUnavailableBlocked: true,
+      declaredZeroActionDeferredStallBounded: true,
+      declaredFalseContinuedBounded: true,
+      declaredPersistentBounded: true,
+      declaredMixedUnavailableExclusion: true,
       r2AmbiguousNotAdmitted: true
     }));
   } finally {
-    // Workspace and schema cleanup belong to the shared harness; only the
-    // generated provider preload is owned by this suite.
-    try { require('fs').unlinkSync(preloadPath); } catch (_) { /* best effort */ }
+    // Workspace and schema cleanup belong to the shared harness. The generated
+    // provider preload stays until the suite is fully done (main() unlinks it
+    // after the crafted controls below), so a later block can still start a
+    // server with it.
   }
 }
 
 async function main() {
-  await withHarness('postcondition completion', async ({ store, workspaceRoot, startServer }) => {
-    const preloadPath = createFakeOpenAIPreload();
+  const preloadPath = createFakeOpenAIPreload();
+  try {
+    await withHarness('postcondition completion', async ({ store, workspaceRoot, startServer }) => {
 
     const agent = (await store.createConfiguredAgent({
       value: { name: `PostconditionAgent-${STAMP}`, provider: 'openai', model: 'gpt-4.1-mini', apiKey: 'test-key-postcondition' },
@@ -1299,8 +1679,264 @@ async function main() {
       waitForEvent, waitForStoredTicket, waitForStoredRun, assert, workspaceRoot
     });
 
-    console.log(`\nPASS: postcondition completion, workflow drafts, and handoffs — ${assert.count()} assertions (PostgreSQL-native, 20 scenarios)`);
+    // ── P3-R1 M5: receipt-policy shortcut eligibility is decided ONLY by the
+    // Run's immutable completion-authority snapshot. Two crafted direct-write
+    // Runs with identical objectives and identical provider behavior differ
+    // only in the admitted snapshot: a Run whose proven policy is
+    // workspace_objective_receipt keeps the predecessor successful-mutation
+    // shortcut, while a Run admitted WITHOUT the snapshot withholds it
+    // fail-closed — never defaulted on. ────────────────────────────────────────
+    {
+      const now = () => new Date().toISOString();
+      const m5Server = await startServer({ env: {
+        NODE_OPTIONS: `--require ${preloadPath}`,
+        ENABLE_MODEL_CONTRACT_COMPILER: 'false',
+        AGENT_MAX_EXECUTION_STEPS: '3',
+        AGENT_MAX_MODEL_REQUESTS_PER_RUN: '3',
+        AGENT_MAX_WORKSPACE_OPERATIONS_PER_RUN: '10',
+        AGENT_MAX_RUNTIME_DURATION_MS: '10000',
+        RUNTIME_SCHEDULER_INTERVAL_MS: '200'
+      } });
+      try {
+        const makeCraftedRun = async (objective, completionAuthoritySnapshot) => {
+          const ticket = (await store.createTicketWithEvent({
+            ticket: {
+              objective, acceptanceCriteria: null,
+              assignmentTargetType: 'agent', assignmentTargetId: agent.id, assignmentMode: 'individual',
+              ownedOutputPaths: null, targetRef: null, executionMode: 'agent',
+              workflowId: null, workflowInput: null,
+              capabilityType: 'directAction', capabilityId: 'agent-selected-actions', capabilityInput: null,
+              executionPolicy: {
+                mode: 'assisted', requireVerification: 'when_declared', autoRetry: false,
+                maxAttempts: null, maxRuntimeMs: null, maxModelRequests: null, maxWorkspaceOperations: null,
+                allowWorkspaceWrites: true, allowParallelRuns: false, allowChildTickets: false, workspaceScope: 'shared'
+              },
+              workTypeId: null, workTypeSnapshot: null, workContextId: null, workContextSnapshot: null,
+              status: 'open', createdBy: 'postcondition-completion-test', changedBy: 'postcondition-completion-test',
+              changedAt: now(), createdAt: now(), updatedAt: now()
+            },
+            eventPayload: { source: 'postcondition-completion-test' }
+          })).ticket;
+          return store.createRun({
+            ticketId: ticket.id, agentId: agent.id, agentName: agent.name,
+            runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot({
+              maxExecutionSteps: 3,
+              maxModelRequestsPerRun: 3,
+              maxWorkspaceOperationsPerRun: 10,
+              maxRuntimeDurationMs: 10000
+            }),
+            executionPolicySnapshot: { requireVerification: 'when_declared' },
+            ...(completionAuthoritySnapshot ? { completionAuthoritySnapshot } : {}),
+            status: 'pending'
+          });
+        };
+        const waitForCraftedTerminal = async (runId, label) => {
+          const deadline = Date.now() + 60000;
+          while (Date.now() < deadline) {
+            const current = await store.getRun(runId);
+            if (current && ['completed', 'failed', 'interrupted'].includes(current.status)) return current;
+            await sleep(200);
+          }
+          throw new Error(`timed out waiting for the ${label} crafted run to terminalize`);
+        };
+        const replayEventsOf = async runId => {
+          const replay = await store.readRunReplay(runId);
+          return replay && replay.snapshot && Array.isArray(replay.snapshot.events)
+            ? replay.snapshot.events : [];
+        };
+
+        // Positive control: the proven receipt policy keeps the shortcut.
+        const receiptObjective = `write note p3-shortcut-receipt-${STAMP}.md`;
+        const receiptAuthority = buildCompletionAuthoritySnapshot({
+          objective: receiptObjective,
+          kind: 'deterministic',
+          recognized: true,
+          intent: 'direct_write',
+          completionPolicy: 'workspace_objective_receipt',
+          directPostconditions: [],
+          verificationPolicy: 'when_declared',
+          capturedAt: now()
+        });
+        const receiptRun = await makeCraftedRun(receiptObjective, receiptAuthority);
+        const receiptTerminal = await waitForCraftedTerminal(receiptRun.id, 'receipt-policy');
+        const receiptEvents = await replayEventsOf(receiptRun.id);
+        assert(receiptTerminal.status === 'completed',
+          `M5: the proven receipt-policy Run settles completed (got ${receiptTerminal.status})`);
+        assert(receiptEvents.some(event =>
+          event.type === 'workspace.objective_satisfied' &&
+          Array.isArray(event.objectivePaths) &&
+          event.objectivePaths.includes(`p3-shortcut-receipt-${STAMP}.md`)),
+          'M5: the predecessor successful-mutation shortcut still fires where the receipt policy is proven from the snapshot');
+        assert(receiptEvents.filter(event => event.parsedModelPlans || event.type === 'model:stalled').length === 0,
+          'M5: the receipt-policy Run needed no further model turn');
+
+        // Fail-closed control: no snapshot withholds the shortcut entirely. The
+        // Run continues past the first turn (the predecessor would have stopped
+        // there through the shortcut) and only then settles through the
+        // unchanged redundant-operation heuristic, which stays eligible for
+        // non-declared policies.
+        const withheldObjective = `write note p3-shortcut-withhold-${STAMP}.md`;
+        const withheldRun = await makeCraftedRun(withheldObjective, null);
+        const withheldTerminal = await waitForCraftedTerminal(withheldRun.id, 'snapshot-withhold');
+        const withheldEvents = await replayEventsOf(withheldRun.id);
+        assert(withheldTerminal.status === 'completed',
+          `M5: the snapshot-less Run continues while bounded and settles through the unchanged heuristic ` +
+          `(got status=${withheldTerminal.status} error=${withheldTerminal.error} ` +
+          `events=${JSON.stringify((withheldEvents || []).map(e => e.type))})`);
+        assert(withheldEvents.some(event => event.type === 'workspace.objective_satisfied') === false,
+          'M5: the successful-mutation shortcut is WITHHELD when the admitted policy cannot be proven');
+        assert(withheldEvents.filter(event => event.type === 'model:action_contract_passed').length === 2,
+          'M5: the withheld Run continued exactly one more bounded turn instead of shortcut-stopping');
+        const withheldClaim = withheldEvents.find(event =>
+          event.type === 'run:postcondition_completed');
+        assert(withheldClaim && withheldClaim.source === 'redundant_operation',
+          'M5: the unchanged redundant-operation heuristic remains eligible for the non-declared policy');
+
+        // ── F1: the PRESENT-but-unreadable completion-authority control ──────
+        //
+        // The third fail-closed input state. The snapshot is PRESENT and
+        // structurally recognizable but fails the SAME canonical
+        // normalization the production gate calls (its immutable snapshotHash
+        // integrity field is tampered), so no admitted policy can be proven
+        // from it. The shortcut must be withheld exactly like the
+        // missing-snapshot control above, no path may default the unreadable
+        // authority to workspace_objective_receipt, and the canonical
+        // completion-authority path keeps owning the integrity failure.
+        const corruptObjective = `write note p3-shortcut-corrupt-${STAMP}.md`;
+        const corruptSource = buildCompletionAuthoritySnapshot({
+          objective: corruptObjective,
+          kind: 'deterministic',
+          recognized: true,
+          intent: 'direct_write',
+          completionPolicy: 'workspace_objective_receipt',
+          directPostconditions: [],
+          verificationPolicy: 'when_declared',
+          capturedAt: now()
+        });
+        const corruptSnapshot = JSON.parse(JSON.stringify(corruptSource));
+        const corruptedHash = 'f'.repeat(64);
+        corruptSnapshot.snapshotHash = corruptedHash;
+
+        // F1-F: the corruption is a NORMALIZATION FAILURE, not absence. The
+        // same canonical normalizer the gate calls rejects the tampered
+        // snapshot on integrity grounds while accepting the untouched
+        // authority it was cloned from.
+        let corruptionRejection = null;
+        try { normalizeCompletionAuthoritySnapshot(corruptSnapshot); }
+        catch (error) { corruptionRejection = error; }
+        assert(corruptionRejection && corruptionRejection.code === 'COMPLETION_DECISION_CONFLICT',
+          `F1: the crafted snapshot is PRESENT but rejected by canonical normalization ` +
+          `(got ${corruptionRejection && corruptionRejection.code})`);
+        assert(normalizeCompletionAuthoritySnapshot(corruptSource)
+            .objectiveContract.completionPolicy === 'workspace_objective_receipt',
+          'F1: the intact authority the corruption was cloned from remains a valid receipt snapshot');
+
+        const corruptRun = await makeCraftedRun(corruptObjective, corruptSnapshot);
+        const corruptRunRow = await store.getRun(corruptRun.id);
+        // F1-A: the snapshot is PRESENT on the crafted Run, structurally
+        // recognizable, and carries the corrupted integrity hash rather than
+        // the canonical one.
+        assert(corruptRunRow && corruptRunRow.completionAuthoritySnapshot &&
+          corruptRunRow.completionAuthoritySnapshot.snapshotHash === corruptedHash &&
+          corruptRunRow.completionAuthoritySnapshot.snapshotHash !== corruptSource.snapshotHash &&
+          corruptRunRow.completionAuthoritySnapshot.objectiveContract &&
+          corruptRunRow.completionAuthoritySnapshot.objectiveContract.completionPolicy ===
+            'workspace_objective_receipt',
+          'F1: the crafted Run retains a PRESENT, structurally recognizable completion-authority snapshot whose corrupted hash differs from the canonical valid snapshot');
+
+        const readCraftedJournal = async runId => {
+          const journal = [];
+          let afterSeq = -1;
+          for (;;) {
+            const page = await store.listRunEvents(runId, { afterSeq, limit: 300 });
+            if (!Array.isArray(page) || page.length === 0) break;
+            journal.push(...page);
+            afterSeq = page[page.length - 1].seq;
+          }
+          return journal;
+        };
+        const waitForCraftedJournalEvent = async (runId, predicate, timeoutMs, label) => {
+          const deadline = Date.now() + timeoutMs;
+          while (Date.now() < deadline) {
+            const hit = (await readCraftedJournal(runId)).find(predicate);
+            if (hit) return hit;
+            await sleep(200);
+          }
+          throw new Error(`timed out waiting for ${label}`);
+        };
+
+        await waitForCraftedJournalEvent(corruptRun.id, event => event.type === 'run.started',
+          30000, 'the corrupt-snapshot Run to be dispatched');
+        // The integrity boundary fails before any execution; a bounded
+        // stabilization window observes the stable fail-closed state (the
+        // default lease keeps the pre-existing reclaim alarm out of this
+        // window).
+        await sleep(2500);
+        const corruptJournal = await readCraftedJournal(corruptRun.id);
+        const corruptTypes = corruptJournal.map(event => event.type);
+        // F1-B: the shortcut is withheld for the unreadable authority.
+        assert(corruptTypes.includes('workspace.objective_satisfied') === false,
+          `F1: the successful-mutation shortcut is WITHHELD for the present-but-unreadable authority (journal=${JSON.stringify(corruptTypes)})`);
+        // F1-C: no mutation ever executes, so the predecessor shortcut point is
+        // deterministically never reached and cannot terminalize the Run — the
+        // fail-closed response happens strictly earlier, at the canonical
+        // run-start authority capture.
+        assert(corruptTypes.every(type =>
+          ['run.lease_acquired', 'scheduler.run_selected', 'run.started',
+            'scheduler.run_skipped', 'run.recovery_claimed', 'run.resumed'].includes(type)),
+          `F1: the corrupt-authority Run executes nothing — the shortcut point is never reached (journal=${JSON.stringify(corruptTypes)})`);
+        // F1-D: no path defaults the unreadable authority to the receipt
+        // policy: no receipt-shaped settlement, no postcondition claim, no
+        // fabricated terminalization.
+        assert(corruptTypes.includes('run.terminalized') === false &&
+          corruptTypes.includes('run:postcondition_completed') === false,
+          'F1: no path interpreted the corrupt snapshot as workspace_objective_receipt or settled the Run under it');
+        const corruptCurrent = await store.getRun(corruptRun.id);
+        assert(!['completed', 'failed', 'interrupted'].includes(corruptCurrent.status),
+          `F1: the corrupt-authority Run does not shortcut-terminalize (status=${corruptCurrent.status})`);
+        assert(!(await store.readRunReplay(corruptRun.id)),
+          'F1: the canonical authority path refused the run-start capture before fabricating any replay evidence');
+        // F1-E: the pre-existing run-start integrity refusal is observed intact:
+        // dispatch starts, the canonical completion-authority capture refuses the
+        // corrupt snapshot before any work, and the Run remains unsettled under
+        // the existing recovery machinery. P3-R1 neither changed nor widened that
+        // behavior.
+        assert(corruptTypes.includes('run.started'),
+          'F1: the pre-existing run-start integrity refusal is observed intact — dispatch starts, the canonical completion-authority capture refuses the corrupt snapshot before work, and the Run remains unsettled under the existing recovery machinery; P3-R1 neither changed nor widened that behavior');
+        assert(fs.existsSync(path.join(workspaceRoot, `p3-shortcut-corrupt-${STAMP}.md`)) === false,
+          'F1: the corrupt-authority Run committed no workspace mutation');
+
+        // F1-F gate-level: the unreadable branch of the production gate is
+        // exercised directly. The actual gate source is executed against the
+        // REAL canonical normalizer, so the assertion pins the intended
+        // behavior itself: absent OR normalization-invalid authority yields no
+        // admitted policy, and the exact shortcut-site condition therefore
+        // withholds instead of defaulting to the receipt policy.
+        const gateSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+        const gatePolicy = new Function('normalizeCompletionAuthoritySnapshot',
+          `${extractServerFunction(gateSource, 'getRunAdmittedCompletionPolicy')}\n` +
+          'return getRunAdmittedCompletionPolicy;')(
+          normalizeCompletionAuthoritySnapshot);
+        assert(gatePolicy({ completionAuthoritySnapshot: corruptSource }) ===
+          'workspace_objective_receipt',
+          'F1: the gate provenance is real — the intact receipt authority reads as the receipt policy through the same helper');
+        assert(gatePolicy({}) === null,
+          'F1: the gate helper yields no admitted policy for an absent snapshot');
+        assert(gatePolicy({ completionAuthoritySnapshot: corruptSnapshot }) === null &&
+          gatePolicy({ completionAuthoritySnapshot: corruptSnapshot }) !== 'workspace_objective_receipt',
+          'F1: the gate helper yields no admitted policy for the PRESENT-but-normalization-invalid snapshot and never defaults to the receipt policy');
+      } finally {
+        await m5Server.stop();
+      }
+    }
+
+    console.log(`\nPASS: postcondition completion, workflow drafts, and handoffs — ${assert.count()} assertions (PostgreSQL-native, 25 scenarios)`);
   });
+  } finally {
+    // The generated provider preload is owned by this suite and outlives the
+    // harness body so every block can start servers with it.
+    try { fs.unlinkSync(preloadPath); } catch (_) { /* best effort */ }
+  }
 }
 
 

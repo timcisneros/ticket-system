@@ -17,7 +17,12 @@
 //   A ONE ACTION    — a valid single createFolder response traverses the WHOLE
 //                     production ungoverned pipeline: real envelope, extraction,
 //                     parse, per-response action authority, workspace execution,
-//                     durable receipt, truthful completion.
+//                     durable receipt. The scripted single action cannot satisfy
+//                     the declared objective's two folders, so the trial ALSO
+//                     proves published P3-R1 bounded continuation: the same Run
+//                     continues while bounded and terminalizes honestly at the
+//                     pinned per-run model-request limit — never a premature
+//                     successful completion.
 //
 //   A FOUR ACTIONS  — four canonical createFolder mutations are STRUCTURALLY
 //                     VALID and are refused by the per-response mutating-action
@@ -295,14 +300,34 @@ async function main() {
           'A one action: the per-response action authority refused NOTHING');
 
         // The workspace operation was reached and its receipt is durable.
-        assertThat(eventsOfType(oneAction.facts, 'workspace.operation').length >= 1,
-          'A one action: production reached the workspace operation');
+        // P3-PIPE-6: the receipt count is BOUND-DERIVED, not the predecessor's
+        // premature one-receipt stop. The served response is complete:true over
+        // `family-1-simple`, whose objective ("Create folders reports/alpha and
+        // reports/beta") admits TWO folder_exists declared criteria — the one
+        // scripted mutation cannot satisfy both. Published P3-R1 therefore
+        // DEFERS the completion and continues the same Run while runtime
+        // authority remains: each continued turn re-emits the same scripted
+        // createFolder (the slot key contains the turn, so each executes against
+        // the now-existing folder as an already-exists no-op with its own
+        // receipt), until the PINNED per-run model-request ceiling
+        // (liveManifest.economics.liability.runtimeMaxModelRequestsPerRun = 3,
+        // this trial's AGENT_MAX_MODEL_REQUESTS_PER_RUN — the ungoverned Run's
+        // only provider bound) refuses the next request. Three turns, three
+        // receipts: the count is the configured bound, not a hard-code.
+        assertThat(eventsOfType(oneAction.facts, 'workspace.operation').length ===
+          liveManifest.economics.liability.runtimeMaxModelRequestsPerRun,
+          'A one action: production reached the workspace operation on every ' +
+          'bounded continuation turn');
         const created = oneAction.facts.receipts.filter(row =>
           row.operation === 'createFolder' && row.outcome === 'succeeded');
-        assertThat(created.length === 1,
-          `A one action: exactly one durable createFolder receipt (${created.length})`);
-        assertThat(created[0].workspace_path === ONE_ACTION_BY_OWNED_ROOT[''],
-          `A one action: the receipt names the declared child ${created[0].workspace_path}`);
+        assertThat(created.length ===
+          liveManifest.economics.liability.runtimeMaxModelRequestsPerRun,
+          `A one action: exactly the bound-derived number of durable createFolder ` +
+          `receipts (${created.length}) — one per bounded continuation turn`);
+        assertThat(created.every(row =>
+          row.workspace_path === ONE_ACTION_BY_OWNED_ROOT['']),
+          `A one action: every receipt names the declared child ` +
+          `${ONE_ACTION_BY_OWNED_ROOT['']}`);
 
         // ABSENT BEFORE, PRESENT AFTER — from the receipt's own captured states,
         // which are the durable record of the workspace immediately around the
@@ -312,14 +337,79 @@ async function main() {
           'A one action: the child was ABSENT immediately before the mutation');
         assertThat(receipt.after && receipt.after.existed === true,
           'A one action: and EXISTS immediately after it');
+        assertThat(created.slice(1).every(row =>
+          row.receipt && row.receipt.before && row.receipt.before.existed === true),
+          'A one action: the continued turns re-executed against the already-' +
+          'existing child (already-exists no-ops), never a second creation');
         assertThat(fs.existsSync(path.join(workspaceRoot, ONE_ACTION_BY_OWNED_ROOT[''])),
           'A one action: the folder is really on disk in the trial workspace');
 
-        // Truthful completion.
+        // P3-PIPE-2: the one scripted mutation does NOT satisfy the admitted
+        // declared criteria, and the durable declared-postcondition evidence
+        // says so — the existing deferral seam recorded the unsatisfied
+        // declared facts, which is why the Run did not stop after the first
+        // response.
+        // P3-PIPE-2: the one scripted mutation does NOT satisfy all admitted
+        // declared criteria. The trial fixture pre-creates the allocated roots
+        // (`reports/alpha/`, `reports-b/beta/`) as part of the scenario's
+        // initial state, so `reports/alpha` is already satisfied at run start,
+        // and the scripted mutation (its own child under the arm's owned root)
+        // satisfies neither remaining declared folder — the durable declared
+        // postcondition evidence records exactly which criterion is
+        // observably unsatisfied: `reports/beta`.
+        const deferred = replayDecisions(oneAction.facts, 'run:contract_completion_deferred');
+        const deferredFingerprint = event => JSON.stringify(
+          (event.pendingPostconditions || []).map(check =>
+            ({ type: check.type, path: check.path })));
+        assertThat(deferred.length >= 1 && deferred.every(event =>
+          deferredFingerprint(event) === deferredFingerprint(deferred[0]) &&
+          deferredFingerprint(event) === JSON.stringify([
+            { type: 'folder_exists', path: 'reports/beta' }
+          ])),
+        'A one action: the served complete:true left an admitted declared ' +
+        'criterion observably unsatisfied, durably recorded through the ' +
+        'existing deferral seam');
+
+        // P3-PIPE-4: the SAME Run continued while bounded — multiple parsed
+        // responses and multiple passing action-contract decisions on the ONE
+        // Run, one per model request up to the pinned bound.
+        assertThat(parsed.length ===
+          liveManifest.economics.liability.runtimeMaxModelRequestsPerRun,
+          `A one action: the same Run continued across ${parsed.length} parsed ` +
+          'model responses under the pinned per-run request bound');
+        assertThat(passed.length ===
+          liveManifest.economics.liability.runtimeMaxModelRequestsPerRun,
+          'A one action: every bounded turn passed the per-response action gates');
+
+        // P3-PIPE-3 / P3-PIPE-7: HONEST BOUNDED TERMINAL — no false successful
+        // completion. The Run is terminalized by the EXISTING per-run
+        // model-request bound (RUN_LIMIT_EXCEEDED, limitType model_request,
+        // failure kind budget_exhausted), the canonical completion decision
+        // stays INCOMPLETE (budget-exhausted disposition), and the Ticket is
+        // not completed.
         assertThat(oneAction.facts.runs.length === 1 &&
-          oneAction.facts.runs[0].status === 'completed',
-        `A one action: the Run truthfully completes (${oneAction.facts.runs
-          .map(run => run.status).join(',')})`);
+          oneAction.facts.runs[0].status === 'failed',
+        `A one action: the Run terminalizes honestly at the bounded limit ` +
+          `(${oneAction.facts.runs.map(run => run.status).join(',')})`);
+        const oneTerminalFailure = oneAction.facts.snapshots
+          .map(row => row.snapshot.failure).filter(Boolean)[0] || {};
+        assertThat(oneTerminalFailure.code === 'RUN_LIMIT_EXCEEDED' &&
+          oneTerminalFailure.kind === 'budget_exhausted' &&
+          oneTerminalFailure.detail && oneTerminalFailure.detail.limitType === 'model_request' &&
+          oneTerminalFailure.detail.configuredLimit ===
+            liveManifest.economics.liability.runtimeMaxModelRequestsPerRun,
+        'A one action: the bounded terminalization is the existing per-run ' +
+        'model-request limit, from the run\'s own durable failure record');
+        const oneConsequenceRow = await store.getRunConsequence(oneAction.facts.runs[0].id);
+        const oneDecision = oneConsequenceRow && oneConsequenceRow.consequence &&
+          oneConsequenceRow.consequence.completionDecision;
+        assertThat(oneDecision && oneDecision.completionDisposition === 'incomplete' &&
+          oneDecision.reasonCode === 'RUN_BUDGET_EXHAUSTED',
+        'A one action: the canonical completion decision remains incomplete ' +
+        '(budget-exhausted) — the priorRun complete:true never became completion');
+        const oneTicketRow = await store.getTicket(oneAction.ticketId);
+        assertThat(oneTicketRow && oneTicketRow.status !== 'completed',
+        'A one action: the Ticket is not falsely completed');
         assertThat(oneAction.harnessError === null,
           'A one action: the trial produced its artifact without a harness error');
 
@@ -427,14 +517,45 @@ async function main() {
             row.operation === 'createFolder' && row.outcome === 'succeeded');
           assertThat(receipts.length >= 1,
             `${armId}: durable createFolder receipt(s) were produced (${receipts.length})`);
-          assertThat(receipts.every(row => row.receipt &&
-            row.receipt.before && row.receipt.before.existed === false &&
-            row.receipt.after && row.receipt.after.existed === true),
-          `${armId}: every created child was absent before and exists after`);
+          // The mapped children each worker's owned root produces: every
+          // succeeded createFolder receipt is one of them.
+          const mappedChildren = Object.entries(ONE_ACTION_BY_OWNED_ROOT)
+            .filter(([ownedRoot]) => ownedRoot !== '')
+            .map(([, child]) => child);
+          assertThat(receipts.every(row => mappedChildren.includes(row.workspace_path)),
+            `${armId}: every receipt names a declared child of an allocated root`);
+          // P3-PIPE-6, per worker Run: the published P3-R1 bounded continuation
+          // executes the scripted one-action response once per bounded turn —
+          // the FIRST receipt per Run commits the child (absent before, exists
+          // after) and each CONTINUATION turn re-executes the same scripted
+          // action against the already-satisfied child (present before and
+          // after) up to the pinned per-run model-request bound.
+          const receiptsByRun = new Map();
+          for (const row of receipts) {
+            if (!receiptsByRun.has(row.run_id)) receiptsByRun.set(row.run_id, []);
+            receiptsByRun.get(row.run_id).push(row);
+          }
+          assertThat(receiptsByRun.size >= 1 &&
+            [...receiptsByRun.values()].every(rows =>
+              rows.length === liveManifest.economics.liability.runtimeMaxModelRequestsPerRun &&
+              rows[0].receipt && rows[0].receipt.before &&
+              rows[0].receipt.before.existed === false &&
+              rows[0].receipt.after && rows[0].receipt.after.existed === true &&
+              rows.slice(1).every(row => row.receipt && row.receipt.before &&
+                row.receipt.before.existed === true &&
+                row.receipt.after && row.receipt.after.existed === true)),
+          `${armId}: each worker Run's receipts are the bound-derived bounded ` +
+          `continuation (first commits the child, continuations no-op against it)`);
+          // P3-PIPE-3/7: the declared objective ("Create folders reports/alpha
+          // and reports/beta") is only partially satisfiable from each worker's
+          // own single scripted response, so published P3-R1 bounded
+          // continuation applies per worker Run: each terminalizes honestly at
+          // the existing per-run model-request bound instead of completing on
+          // the premature stop.
           assertThat(trial.facts.runs.length >= 1 &&
-            trial.facts.runs.every(run => run.status === 'completed'),
-          `${armId}: its Runs truthfully complete ` +
-            `(${trial.facts.runs.map(run => run.status).join(',')})`);
+            trial.facts.runs.every(run => run.status === 'failed'),
+          `${armId}: its Runs terminalize honestly at the bounded continuation ` +
+            `limit (${trial.facts.runs.map(run => run.status).join(',')})`);
           assertThat(eventsOfType(trial.facts, PROVIDER_TRANSPORT_INVOKED_EVENT).length >=
             trial.facts.runs.length,
           `${armId}: a durable transport-invocation observation per worker Run`);
@@ -479,12 +600,14 @@ async function main() {
         'observation fault: response parsing is unchanged');
         const faultedReceipts = faulted.facts.receipts.filter(row =>
           row.operation === 'createFolder' && row.outcome === 'succeeded');
-        assertThat(faultedReceipts.length === 1 &&
-          faultedReceipts[0].workspace_path === created[0].workspace_path,
-        'observation fault: the same single createFolder receipt was committed');
+        assertThat(faultedReceipts.length === created.length &&
+          faultedReceipts.every(row => row.workspace_path ===
+            ONE_ACTION_BY_OWNED_ROOT['']),
+        'observation fault: the same bound-derived createFolder receipt set was committed');
         assertThat(faulted.facts.runs.length === oneAction.facts.runs.length &&
-          faulted.facts.runs.every(row => row.status === 'completed'),
-        `observation fault: the Run still truthfully completes ` +
+          faulted.facts.runs.every(row => row.status === 'failed') &&
+          oneAction.facts.runs.every(row => row.status === 'failed'),
+        `observation fault: the Run reaches the same honest bounded terminal ` +
         `(${faulted.facts.runs.map(row => row.status).join(',')})`);
         assertThat(faulted.harnessError === null,
           'observation fault: the trial still produced its artifact');
@@ -519,10 +642,12 @@ async function main() {
           'and never NOT_INVOKED — the record cannot prove invocation, which is ' +
           'a different statement from proving non-invocation');
         assertThat(projected.response.state === 'PERSISTED' &&
-          projected.operationReceipts.count === 1 &&
-          projected.terminal.statuses.completed === 1,
+          projected.operationReceipts.count === created.length &&
+          !projected.terminal.statuses.completed &&
+          projected.terminal.statuses.failed === 1,
         'while the rest of the projection is complete and truthful — one field ' +
-        'degraded, the record intact');
+        'degraded, the record intact, and the terminal statuses truthful about ' +
+        'the bounded failed Run');
 
         console.log(`\n  (${assertThat.count()} ungoverned real-envelope assertions)`);
         console.log('  EXTERNAL PROVIDER CALLS MADE: 0');

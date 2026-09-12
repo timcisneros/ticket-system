@@ -744,12 +744,14 @@ function auditLiveReadiness({ liveManifest, sources = {} } = {}) {
     `${envelopeSuite} — persisted provider response body`);
 
   record('ungovernedOneActionResponsePipelineProved',
-    envelopeProves('exactly one durable createFolder receipt') &&
+    envelopeProves('exactly the bound-derived number of durable createFolder ') &&
       envelopeProves('the child was ABSENT immediately before the mutation') &&
-      envelopeProves('the Run truthfully completes')
+      envelopeProves('the Run terminalizes honestly at the bounded limit ')
       ? 'FROZEN' : 'UNRESOLVED',
-    'one valid createFolder traverses the whole ungoverned pipeline to a durable ' +
-    'receipt and a truthful completion, against the real envelope',
+    'one valid createFolder traverses the whole ungoverned pipeline to durable ' +
+    'receipts, one per bounded P3-R1 continuation turn under the pinned per-run ' +
+    'model-request bound, with an honest bounded terminalization instead of a ' +
+    'premature successful completion, against the real envelope',
     `${envelopeSuite} — A one action`);
 
   record('ungovernedActionLimitProductRefusalProved',
@@ -850,7 +852,7 @@ function auditLiveReadiness({ liveManifest, sources = {} } = {}) {
   // AND AT THE REAL PIPELINE, on both transports. A unit proof of the seam does
   // not show that production above it survives a failed write.
   const envelopeProvesInert =
-    envelopeProves('observation fault: the Run still truthfully completes') &&
+    envelopeProves('observation fault: the Run reaches the same honest bounded terminal ') &&
     envelopeProves('no retry, no duplicate') &&
     envelopeProves('the artifact projects transport UNKNOWN');
   const governedProvesInert = transportRegistered &&

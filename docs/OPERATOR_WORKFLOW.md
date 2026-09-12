@@ -90,7 +90,7 @@ curl -X POST http://127.0.0.1:3099/api/tickets/<ticketId>/rerun \
 ```
 
 #### B. Reassess
-Use when the model failed with a specific error and the operator wants the next run to see the prior failure context. Injects `priorFailureContext` into the first model request.
+Use when the model failed with a specific error and the operator wants the next run to see the prior failure context. Injects `priorAttemptContext` into the first model request.
 
 **API:**
 ```bash
@@ -185,6 +185,6 @@ $ pnpm developer-agent:trace -- --run 65
 1. Every ticket creates at least one run.
 2. Every terminal run has a `replaySummary` with a `failure.kind` or `terminalStatus === 'completed'`.
 3. The rerun endpoint always accepts `mode` (defaults to `retry`).
-4. Reassess mode injects `priorFailureContext` only on the first model request of the new run.
+4. Reassess mode injects `priorAttemptContext` only on the first model request of the new run.
 5. Terminal evidence remains queryable from PostgreSQL through the trace and API surfaces.
 6. Artifacts are inspectable through the workspace API and CLI.

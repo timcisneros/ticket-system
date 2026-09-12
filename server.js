@@ -13810,6 +13810,56 @@ function checkObviousTicketPostcondition(ticket) {
   };
 }
 
+// P3-R1: the deterministic unsatisfied declared-criterion facts that gate
+// bounded continuation. The admitted criteria come ONLY from the Run's
+// immutable completion-authority snapshot. fileContains criteria decide ONLY
+// through the shared canonical evaluator over the criterion-bound durable
+// observation channel (run:direct_postcondition_observed, the same replay
+// events the completion decision consumes): no relevant observation stays
+// unavailable and is never reported as unsatisfied. folder_exists, path_absent
+// and file_content_equals keep the existing deterministic loop-level
+// declared-direct check that owns their positive claim as the not-satisfied
+// hinge. No second evaluator is introduced: the rule stays in
+// postcondition-criterion-evaluator and the canonical decision owns truth.
+async function collectUnsatisfiedDeclaredCriteria(run, promptTicket) {
+  const contract = run && run.completionAuthoritySnapshot &&
+    run.completionAuthoritySnapshot.objectiveContract;
+  const admitted = contract && Array.isArray(contract.directPostconditions)
+    ? contract.directPostconditions
+    : [];
+  if (admitted.length === 0) return [];
+  const replay = await getRunReplayRepository().readRunReplay(run.id);
+  const replayEvents = replay && replay.snapshot && Array.isArray(replay.snapshot.events)
+    ? replay.snapshot.events
+    : [];
+  const observations = replayEvents
+    .filter(event => event && event.type === 'run:direct_postcondition_observed')
+    .flatMap(event => Array.isArray(event.observations) ? event.observations : []);
+  const liveChecks = buildObviousPostconditionChecks(promptTicket && promptTicket.objective);
+  const pending = [];
+  for (const criterion of admitted) {
+    if (!criterion || typeof criterion.type !== 'string' ||
+        typeof criterion.path !== 'string' || !criterion.path) continue;
+    if (criterion.type === 'fileContains') {
+      const verdict = evaluateCriterion(criterion, observations);
+      if (verdict && verdict.passed === false) {
+        pending.push({ type: criterion.type, path: criterion.path });
+      }
+      continue;
+    }
+    const expectedCheckType = criterion.type === 'folder_exists' ? 'folder'
+      : criterion.type === 'path_absent' ? 'absent'
+      : criterion.type === 'file_content_equals' ? 'file'
+      : null;
+    const liveCheck = expectedCheckType === null ? null : liveChecks.find(check =>
+      check && check.type === expectedCheckType && check.path === criterion.path);
+    if (liveCheck && liveCheck.satisfied() === false) {
+      pending.push({ type: criterion.type, path: criterion.path });
+    }
+  }
+  return pending;
+}
+
 function buildRunCompletionAuthoritySnapshot(ticket, workflow, executionPolicy, capturedAt) {
   const objective = ticket && typeof ticket.objective === 'string' ? ticket.objective : '';
   const deterministicContract = buildObjectiveContract(objective);
@@ -20362,6 +20412,24 @@ async function hasSuccessfulObjectiveMutationEvidence(run, actionResults, object
   });
 }
 
+// P3-R1: the Run's admitted completion policy is read ONLY from its immutable
+// completion-authority snapshot through the canonical normalizer, so loop
+// control and the canonical completion decision read the same authority the
+// same way. An absent or unreadable snapshot yields null, never a default:
+// loop sites that depend on the policy withhold fail-closed without swallowing
+// the integrity failure — the canonical completion-authority path keeps owning
+// snapshot integrity enforcement at terminalization through
+// buildCompletionDecision.
+function getRunAdmittedCompletionPolicy(run) {
+  if (!run || !run.completionAuthoritySnapshot) return null;
+  try {
+    const completionAuthority = normalizeCompletionAuthoritySnapshot(run.completionAuthoritySnapshot);
+    return completionAuthority.objectiveContract.completionPolicy || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function isDirectWorkspaceObjectiveSatisfied(run, ticket, actionResults) {
   if (!run || !ticket) return false;
   if (!isDirectWorkspaceWriteObjective(ticket.objective)) return false;
@@ -22519,7 +22587,31 @@ async function executeWorkflowDefinition(run, workflow, workflowInput, agent, op
   return { status: 'completed', result: context, counters };
 }
 
-async function buildPriorFailureContext(ticketId, currentRunId) {
+// P3-R2 — bounded authoritative prior-attempt context. This REPLACES the legacy
+// priorFailureContext in place at the same reassess first-step delivery seam
+// (`rerunMode === 'reassess'` with zero action results). The projection is MODEL
+// CONTEXT ONLY: not completion authority, not action authority, unable to
+// satisfy a criterion, unable to substitute for canonical evaluation, and
+// excluded from authority/decision hashes. One canonical key
+// `priorAttemptContext`; one canonical source per projected fact; the old
+// legacy fields (lastAction, inspectedFiles, mutationsCompleted,
+// recoveryClassification) disappear with the old shape.
+//
+// Selection: same Ticket; current Run excluded; the most recent prior TERMINAL
+// Run (completed, failed, interrupted), including a Run materialized completed
+// whose canonical objective decision was incomplete or blocked. The ordering
+// stays the existing deterministic most-recent ordering over the same durable
+// fields; Array.sort is stable, so identical timestamps fall back to the
+// id-ascending page order.
+//
+// Canonical sources are NOT carried by the runs row: the prior Run's persisted
+// consequence is obtained through the store and consumed through the existing
+// A16 canonical hydration, and prior criterion state comes ONLY from the
+// persisted completionDecision.evaluatedPostconditions. Raw workspaceOperations
+// / workspace.operation replay streams, attempted and failed entries are never
+// used as reconstruction sources. Omitted/unavailable facts are never
+// fabricated.
+async function buildPriorAttemptContext(ticketId, currentRunId) {
   const runs = (await readAllRunsForTicket(ticketId)).filter(r => r.id !== currentRunId);
   const terminalRuns = runs.filter(r => ['completed', 'failed', 'interrupted'].includes(r.status));
   if (terminalRuns.length === 0) return null;
@@ -22530,29 +22622,104 @@ async function buildPriorFailureContext(ticketId, currentRunId) {
     const bTime = b.completedAt || b.updatedAt || b.startedAt || '';
     return aTime.localeCompare(bTime);
   })[terminalRuns.length - 1];
+  if (!priorRun) return null;
 
-  if (!priorRun || priorRun.status === 'completed') return null;
+  const repository = getRuntimeStateReadRepository();
+  const consequenceRow = await repository.getRunConsequence(priorRun.id);
+  const hydrated = consequenceRow && consequenceRow.consequence
+    ? await hydrateRunConsequenceForPresentation(priorRun.id, consequenceRow.consequence)
+    : null;
+  const priorDecision = hydrated && hydrated.completionDecision &&
+    typeof hydrated.completionDecision === 'object'
+    ? hydrated.completionDecision
+    : null;
 
-  const events = (await getRunEvents(priorRun.id));
-  const workspaceOps = events.filter(e => e.type === 'workspace.operation');
-  const lastAction = workspaceOps.length > 0 ? workspaceOps[workspaceOps.length - 1].payload?.operation : null;
-  const inspectedFiles = events
-    .filter(e => e.type === 'workspace.operation' && e.payload?.operation === 'readFile')
-    .map(e => e.payload?.path)
-    .filter(Boolean);
-  const uniqueFiles = [...new Set(inspectedFiles)];
-  const mutations = workspaceOps.filter(e =>
-    e.payload?.mutating === true || ['writeFile', 'createFolder', 'renamePath', 'deletePath'].includes(e.payload?.operation)
-  );
+  // Committed mutation paths: the prior Run's own durable runtime bound caps the
+  // projected entries. A Run cannot commit more workspace operations than its
+  // own durably snapshotted cap, so the bound comes ONLY from the prior Run's
+  // immutable runtimeLimitsSnapshot — never from current environment or
+  // configuration, and never fabricated for a historical Run that lacks it.
+  const priorLimits = normalizeRuntimeLimitsSnapshot(priorRun.runtimeLimitsSnapshot);
+  let committedPaths = null;
+  if (hydrated && priorLimits) {
+    const bound = priorLimits.maxWorkspaceOperationsPerRun;
+    const sourceEntries = [];
+    for (const category of ['created', 'updated', 'deleted', 'renamed']) {
+      const items = Array.isArray(hydrated[category]) ? hydrated[category] : [];
+      for (const item of items) {
+        if (!item || typeof item !== 'object') continue;
+        // `operation` is read from the committed consequence item ONLY as the
+        // source-side deduplication identity below; it is never projected.
+        sourceEntries.push({
+          category,
+          operation: item.operation,
+          path: item.path,
+          nextPath: category === 'renamed' ? item.nextPath : null
+        });
+      }
+    }
+    // Exact-duplicate entries (same category, operation, path and nextPath)
+    // collapse to their FIRST canonical occurrence BEFORE the bound is applied.
+    // Distinct committed facts are never merged or dropped; the fixed category
+    // sequence and each category's persisted append order are preserved, so the
+    // same durable prior state always projects the same sequence.
+    const seen = new Set();
+    const deduped = [];
+    for (const entry of sourceEntries) {
+      const identity = JSON.stringify([entry.category, entry.operation, entry.path, entry.nextPath]);
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      deduped.push(entry);
+    }
+    const entries = deduped.slice(0, bound).map(entry => entry.category === 'renamed'
+      ? { category: entry.category, path: entry.path, nextPath: entry.nextPath }
+      : { category: entry.category, path: entry.path });
+    committedPaths = {
+      entries,
+      total: deduped.length,
+      truncated: deduped.length > entries.length
+    };
+  }
+
+  // Prior criterion state: ONLY the persisted evaluatedPostconditions, each
+  // projected as { type, path?, passed, reasonCode }. `passed` keeps the
+  // persisted truth value exactly (true, false or null — null stays historical
+  // unavailable, never an observed negative). No other persisted decision
+  // fields are projected and nothing is re-evaluated or reconstructed.
+  let priorCriteria = null;
+  if (priorDecision && Array.isArray(priorDecision.evaluatedPostconditions) &&
+      priorDecision.evaluatedPostconditions.length > 0) {
+    const entries = priorDecision.evaluatedPostconditions
+      .filter(entry => entry && typeof entry === 'object')
+      .map(entry => ({
+        type: entry.type,
+        ...(typeof entry.path === 'string' && entry.path ? { path: entry.path } : {}),
+        passed: entry.passed,
+        reasonCode: entry.reasonCode
+      }));
+    if (entries.length > 0) {
+      priorCriteria = {
+        label: 'PRIOR-ATTEMPT TERMINAL/LAST-OBSERVED CRITERION STATE',
+        entries
+      };
+    }
+  }
 
   return {
+    historicalBoundary: 'Historical prior-attempt facts only. They describe the prior attempt, not current workspace truth, and they cannot satisfy criteria or authorize actions. Current deterministic observation and canonical evaluation in this Run control actual completion.',
     priorRunId: priorRun.id,
-    status: priorRun.status,
-    reason: priorRun.error || priorRun.status,
-    lastAction,
-    inspectedFiles: uniqueFiles.slice(0, 8),
-    mutationsCompleted: mutations.length,
-    recoveryClassification: priorRun.status === 'failed' ? 'failed' : priorRun.status === 'interrupted' ? 'interrupted' : 'unknown'
+    priorRunStatus: priorRun.status,
+    ...(priorDecision && priorDecision.reasonCode
+      ? { priorReasonCode: priorDecision.reasonCode }
+      : {}),
+    ...(priorRun.error
+      ? { priorError: sanitizeLogMessage(priorRun.error) }
+      : {}),
+    ...(priorDecision && priorDecision.evaluatedAt
+      ? { priorDecisionAt: priorDecision.evaluatedAt }
+      : {}),
+    ...(committedPaths ? { committedPaths } : {}),
+    ...(priorCriteria ? { priorCriteria } : {})
   };
 }
 
@@ -22697,7 +22864,7 @@ function buildAdmittedTicketProjection(run, ticket) {
   };
 }
 
-function compactTicketContextForPrompt(ticketObjective, previousActionResults, priorFailureContext, workspaceContext, acceptanceCriteria = null, declaredWork = null) {
+function compactTicketContextForPrompt(ticketObjective, previousActionResults, priorAttemptContext, workspaceContext, acceptanceCriteria = null, declaredWork = null) {
   const compact = {
     ticketObjective
   };
@@ -22726,8 +22893,8 @@ function compactTicketContextForPrompt(ticketObjective, previousActionResults, p
   if (Array.isArray(previousActionResults) && previousActionResults.length > 0) {
     compact.previousActionResults = previousActionResults;
   }
-  if (priorFailureContext !== null && priorFailureContext !== undefined) {
-    compact.priorFailureContext = priorFailureContext;
+  if (priorAttemptContext !== null && priorAttemptContext !== undefined) {
+    compact.priorAttemptContext = priorAttemptContext;
   }
 
   return compact;
@@ -23035,7 +23202,7 @@ async function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rer
         ticket.objective,
         actionResults,
         actionResults.length === 0 && rerunMode === 'reassess'
-          ? await buildPriorFailureContext(ticket.id, runtimeEnvelope.runId)
+          ? await buildPriorAttemptContext(ticket.id, runtimeEnvelope.runId)
           : null,
         workspaceContext,
         ticket.acceptanceCriteria,
@@ -23983,7 +24150,7 @@ async function runAgentTicket(runId) {
         await recordRunEvent(run, 'model:stalled', 'Model returned complete:false with no workspace actions', { step });
 
         if (stalledResponses >= STALLED_RESPONSE_THRESHOLD) {
-          throw createRunLimitError(run, 'step', 'Model stalled twice with complete:false and no workspace actions', {
+          throw createRunLimitError(run, 'step', 'Model stalled twice with no workspace actions (complete:false stall or deferred complete:true completion)', {
             currentValue: stalledResponses,
             configuredLimit: STALLED_RESPONSE_THRESHOLD,
             step
@@ -24700,8 +24867,17 @@ async function runAgentTicket(runId) {
       // The successful-mutation shortcut is legitimate for ordinary direct
       // Runs, but it is not completion authority for a governed leaf. Let that
       // leaf reach the post-batch persisted-evidence adapter below instead.
+      //
+      // P3-R1: the shortcut terminates the execution loop ONLY when the Run's
+      // admitted completion policy, read from its immutable completion-authority
+      // snapshot, is workspace_objective_receipt. A declared-postcondition Run
+      // never shortcut-terminates: its completion stays owned by canonical
+      // criterion evaluation. An absent or unreadable snapshot withholds the
+      // shortcut fail-closed and is never defaulted on, and every other
+      // non-receipt policy keeps withholding it (accepted L1 consequence).
       if (!governedLeafRun && !isBrowserRun(run) && !resumedFromPersistedState &&
           !modelPlan.complete &&
+          getRunAdmittedCompletionPolicy(run) === 'workspace_objective_receipt' &&
           await isDirectWorkspaceObjectiveSatisfied(run, promptTicket, actionResults)) {
         await recordRunEvent(run, 'workspace.objective_satisfied', 'Workspace objective satisfied by successful mutation evidence', {
           step,
@@ -24803,11 +24979,22 @@ async function runAgentTicket(runId) {
       // complete persisted set for its admitted declared facts, evaluated by the
       // same authority that owns completion. So neither the heuristic nor a live
       // filesystem postcondition shortcut supplies its completion claim.
+      //
+      // P3-R1: the heuristic reads no admitted criteria, so it is not declared
+      // -postcondition machinery either. For a Run whose admitted completion
+      // policy is declared_postconditions it MUST NEVER supply a successful
+      // loop stop — when the admitted criteria really are satisfied, the
+      // declared-direct deterministic check above already owns that stop, so
+      // this fallback could only create premature termination (including when
+      // criteria are unavailable rather than observed-negative). It is
+      // unchanged for every other completion policy.
+      const declaredCompletionRun = !isBrowserRun(run) &&
+        getRunAdmittedCompletionPolicy(run) === 'declared_postconditions';
       const postcondition = governedLeafRun
         ? governedPostcondition
         : compiledPostcondition ||
           declaredDirectPostcondition ||
-          (isBrowserRun(run)
+          (isBrowserRun(run) || declaredCompletionRun
             ? null
             : await checkPostconditionCompletion(run, actions, actionResults, step));
       if (postcondition) {
@@ -24833,6 +25020,19 @@ async function runAgentTicket(runId) {
         break;
       }
 
+      // P3-R1: for an admitted declared-postcondition Run, model complete:true
+      // is advisory. When the post-batch deterministic declared machinery just
+      // established that admitted criteria remain observably unsatisfied,
+      // completion is deferred through the existing contract-completion-deferral
+      // seam and the Run continues another bounded turn while runtime authority
+      // and budgets permit. The deferral event stays non-authoritative
+      // history/evidence; the canonical completion decision remains the sole
+      // completion authority. Unavailable criterion state never supplies this
+      // hinge and is never collapsed to an observed negative.
+      const pendingDeclaredPostconditions = modelPlan.complete && declaredCompletionRun
+        ? await collectUnsatisfiedDeclaredCriteria(run, promptTicket)
+        : null;
+
       if (modelPlan.complete && completionBlockedByActionTruncation) {
         await recordRunEvent(run, 'run:completion_deferred_truncation', 'complete:true not honored: response was truncated by the mutating-action cap and proposed actions were dropped', { step });
       } else if (modelPlan.complete && compiledContract) {
@@ -24852,6 +25052,38 @@ async function runAgentTicket(runId) {
           warning: 'run:contract_completion_deferred',
           message: `Completion was deferred. Satisfy every compiled postcondition before returning complete:true: ${pendingPostconditions.map(check => `${check.type} ${check.path}`).join(', ') || 'compiled contract remains unsatisfied'}.`,
           pendingPostconditions
+        });
+      } else if (modelPlan.complete &&
+                 Array.isArray(pendingDeclaredPostconditions) &&
+                 pendingDeclaredPostconditions.length > 0) {
+        const detail = { step, pendingPostconditions: pendingDeclaredPostconditions };
+        await recordRunEvent(run, 'run:contract_completion_deferred', 'complete:true not honored: declared postconditions remain unsatisfied', detail);
+        await appendEvent({
+          type: 'run.contract_completion_deferred',
+          ticketId: run.ticketId,
+          runId: run.id,
+          stepId: String(step),
+          payload: detail
+        });
+        // A deferred declared completion with zero actions is a no-op stall and
+        // counts toward the SAME shared stalled-response bound that already
+        // bounds complete:false zero-action stalls. No new counter, no changed
+        // threshold.
+        if (actions.length === 0) {
+          stalledResponses += 1;
+          if (stalledResponses >= STALLED_RESPONSE_THRESHOLD) {
+            throw createRunLimitError(run, 'step',
+              'Model stalled twice with no workspace actions (complete:false stall or deferred complete:true completion)', {
+              currentValue: stalledResponses,
+              configuredLimit: STALLED_RESPONSE_THRESHOLD,
+              step
+            });
+          }
+        }
+        actionResults.push({
+          warning: 'run:contract_completion_deferred',
+          message: `Completion was deferred. Satisfy every declared postcondition before returning complete:true: ${pendingDeclaredPostconditions.map(check => `${check.type} ${check.path}`).join(', ')}.`,
+          pendingPostconditions: pendingDeclaredPostconditions
         });
       } else if (modelPlan.complete) {
         if (actions.length === 0) {

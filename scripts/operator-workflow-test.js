@@ -145,8 +145,8 @@ function testReassessModeAccepted() {
   // Verify rerunMode is stored on run
   assert(code.includes('rerunMode: ticket.rerunMode'), 'rerunMode should be copied to run record');
 
-  // Verify priorFailureContext is gated on reassess
-  assert(code.includes("rerunMode === 'reassess'"), 'priorFailureContext should only inject for reassess');
+  // Verify priorAttemptContext is gated on reassess
+  assert(code.includes("rerunMode === 'reassess'"), 'priorAttemptContext should only inject for reassess');
 
   console.log('  ✓ reassess-mode-accepted: rerun endpoint accepts retry and reassess modes');
 }

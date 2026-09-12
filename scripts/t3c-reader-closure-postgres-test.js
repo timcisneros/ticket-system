@@ -77,11 +77,15 @@ async function firstRun(store, ticketId) {
 // that will consume the Ticket revision must first observe the exact Run's
 // write-once attempt disposition, then read the Ticket afterwards so the row it
 // returns is necessarily post-settlement. The disposition itself is not
-// prescribed here: this fixture truthfully settles blocked.
+// prescribed here: the fixture requires only a TERMINAL Run and a settled
+// attempt. P3-R1 notes: a declared Run whose admitted criteria are observably
+// unsatisfied continues while bounded and settles FAILED rather than stopping
+// at the superseded successful-mutation shortcut, so the fixture accepts the
+// truthful terminal status.
 async function waitForSettledTicketForRun(store, runId, label) {
   return waitFor(async () => {
     const run = await store.getRun(runId);
-    if (!run || run.status !== 'completed') return null;
+    if (!run || !['completed', 'failed', 'interrupted'].includes(run.status)) return null;
 
     const attempt = await store.getCurrentTicketAttempt(run.ticketId);
     if (!attempt || attempt.id !== run.ticketAttemptId ||
@@ -109,7 +113,11 @@ function declaredTextCriterion(snapshot) {
 // Reader-level proof: some durable replay event of this Run records the
 // expected path inside the completion-evidence fields written by the changed
 // readers (workspace.objective_satisfied -> objectivePaths,
-//  run:postcondition_completed -> checkedPaths).
+//  run:postcondition_completed -> checkedPaths,
+//  run:contract_completion_deferred -> pendingPostconditions). The deferral
+// seam is P3-R1's non-authoritative history record for a declared Run whose
+// admitted criteria remain observably unsatisfied; it names exactly the same
+// Run-bound criterion facts the canonical readers bind.
 async function assertCompletionEvidenceMentionsPath(store, runId, expectedPath, label) {
   const hit = await waitFor(async () => {
     const record = await store.readRunReplay(runId);
@@ -117,7 +125,8 @@ async function assertCompletionEvidenceMentionsPath(store, runId, expectedPath, 
       ? record.snapshot.events : [];
     return events.some(event =>
       (event.type === 'workspace.objective_satisfied' ||
-       event.type === 'run:postcondition_completed') &&
+       event.type === 'run:postcondition_completed' ||
+       event.type === 'run:contract_completion_deferred') &&
       JSON.stringify(event).includes(expectedPath)) || null;
   }, `${label} completion evidence naming ${expectedPath}`);
   ok(Boolean(hit), `${label}: completion reader observed Run-bound path ${expectedPath}`);
@@ -173,6 +182,21 @@ global.fetch = async function(_url, options = {}) {
   const marker = combined.match(/T3C-MARKER-(OLD|NEW)-[a-z0-9]+/);
   if (marker) {
     const branch = marker[1].toLowerCase();
+    if (branch === 'old') {
+      // P3-R1: the first attempt's admitted criterion stays observably
+      // unsatisfied. Under the published bounded-continuation semantics the
+      // Run can no longer stop at the superseded successful-mutation shortcut
+      // after its first write; it defers completion and continues while
+      // bounded, so the stub never writes the admitted content and never
+      // claims completion. The ticket is left truthfully blocked and the
+      // revision scenarios exercise revision authority against a settled
+      // FAILED attempt.
+      return t3cOk({
+        message: 'Writing stale content.',
+        actions: [{ operation: 'writeFile', args: { path: 't3cold-${STAMP}.txt', content: 'stalecontent' } }],
+        complete: true
+      });
+    }
     return t3cOk({
       message: 'Writing the requested file.',
       actions: [{ operation: 'writeFile', args: { path: 't3c' + branch + '-${STAMP}.txt', content: branch + 'evidence' } }],

@@ -92,23 +92,23 @@ function testParentFolderCreation() {
   console.log('  ✓ parent-folder-creation: recursive mkdir in writeFile');
 }
 
-// ── Test 4: Prior failure context function ──────────────────────────
-function testPriorFailureContext() {
+// ── Test 4: Prior-attempt context function ──────────────────────────
+function testPriorAttemptContext() {
   const code = loadServerModule();
 
-  const hasFunction = code.includes('function buildPriorFailureContext');
-  assert(hasFunction, 'buildPriorFailureContext should exist');
+  const hasFunction = code.includes('function buildPriorAttemptContext');
+  assert(hasFunction, 'buildPriorAttemptContext should exist');
 
   const hasPriorRunId = code.includes('priorRunId');
   assert(hasPriorRunId, 'context should include priorRunId');
 
-  const hasInspectedFiles = code.includes('inspectedFiles');
-  assert(hasInspectedFiles, 'context should include inspectedFiles');
+  const hasCommittedPaths = code.includes('committedPaths');
+  assert(hasCommittedPaths, 'context should include committedPaths');
 
-  const hasRecoveryClass = code.includes('recoveryClassification');
-  assert(hasRecoveryClass, 'context should include recoveryClassification');
+  const hasPriorCriteria = code.includes('priorCriteria');
+  assert(hasPriorCriteria, 'context should include priorCriteria');
 
-  console.log('  ✓ prior-failure-context: function exists with required fields');
+  console.log('  ✓ prior-attempt-context: function exists with required fields');
 }
 
 // ── Test 5: List/read limit enforcement in execution loop ──────────
@@ -153,7 +153,7 @@ function main() {
     testReportObjectiveDetection();
     testReportRuntimeLimits();
     testParentFolderCreation();
-    testPriorFailureContext();
+    testPriorAttemptContext();
     testListReadLimitEnforcement();
     testReportSystemPrompt();
 

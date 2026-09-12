@@ -3280,6 +3280,47 @@ section 2's sequence, and section 13's STOP boundaries.
 
 ---
 
+## P3 combined implementation closure residuals — RECOVERY-A and F2 (2026-09-10)
+
+**Status: RESIDUAL REGISTRATION ONLY — registered before the P3 combined implementation/closure
+checkpoint. This record creates NO authority to change recovery, terminalization, completion
+authority, or verification coverage, and prescribes no implementation fix. It exists so the
+residuals below are discoverable from the repository without the implementation conversation.**
+
+### RECOVERY-A — NON-BLOCKING PRE-EXISTING OPERATIONAL/RECOVERY RESIDUAL
+
+**Factual behavior.** For a low-level Run carrying a PRESENT but integrity-invalid immutable
+completion-authority snapshot (reachable only through the low-level crafted persistence seam or
+external corruption, never through legitimate validated admission): canonical run-start
+completion-authority capture fails closed before any provider/workspace execution; no workspace
+mutation occurs; no receipt or completion authority is fabricated — safety and integrity therefore
+remain fail-closed. However, failure handling attempts to construct failure replay, and that path
+re-normalizes the same corrupt immutable completion-authority snapshot, so the same integrity
+failure can escape failure handling; the Run may remain materialized `running`, lease
+expiry/recovery may repeatedly reclaim and resume the same Run, and it may therefore fail to reach
+an honest durable terminal state. Liveness/boundedness is defective for exactly that corrupt state.
+
+**Classification.** PRE-EXISTING at base
+`7807cfbe01d951bf2f36f079c6aed117e4e0e67a`; NOT introduced by P3-R1 or P3-R2; P3-R1/P3-R2 do not
+modify the responsible recovery/terminalization machinery. No authority leakage and no false
+Ticket completion occur; safety is intact while liveness/boundedness is defective for the corrupt
+state. NON-BLOCKING for P3 closure; does NOT need to be fixed before P3 closure. Any future
+correction requires separately authorized recovery/terminalization work.
+
+**Responsible existing owner (location only).** `failAgentRunUnlocked` →
+`ensureFailedRunReplaySnapshot` and completion-authority normalization during failure-replay
+construction; there is no authority-conflict terminalization route analogous to the existing
+replay-integrity terminalizer (`terminalizeRunForReplayIntegrityFailure`). Recorded as residual
+registration only; no fix is prescribed or authorized here.
+
+### F2 — carried LOW verification residual
+
+**F2 — LOW — no dedicated mixed observed-negative + unavailable declared-postcondition scenario:
+remains accepted LOW/non-blocking; the combined P3 evidence did not contradict that disposition;
+no dedicated mixed-state scenario is added as a P3 closure blocker.**
+
+---
+
 ## Execution-semantics provenance fixture shared Ticket-attempt authority (2026-08-17)
 
 **Status: RESOLVED IN SOURCE — independent pre-semantics provenance cases now

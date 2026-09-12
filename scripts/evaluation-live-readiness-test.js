@@ -195,7 +195,8 @@ function main() {
     'ungoverned-real-envelope-pipeline-postgres-test.js'), 'utf8');
   const falsifications = [
     ['realProviderEnvelopeShapeProved', 'carries NO top-level output_text'],
-    ['ungovernedOneActionResponsePipelineProved', 'exactly one durable createFolder receipt'],
+    ['ungovernedOneActionResponsePipelineProved',
+      'exactly the bound-derived number of durable createFolder '],
     ['ungovernedActionLimitProductRefusalProved', 'the refused response produced ZERO operations']
   ];
   for (const [id, proof] of falsifications) {
@@ -258,7 +259,8 @@ function main() {
         'governed observation fault: identical reservation states', 'REMOVED') }],
     ['the ungoverned pipeline proof', {
       envelopeSuiteSource: envelopeSource.replace(
-        'observation fault: the Run still truthfully completes', 'REMOVED') }],
+        'observation fault: the Run reaches the same honest bounded terminal ',
+        'REMOVED') }],
     ['the UNKNOWN-projection proof', {
       envelopeSuiteSource: envelopeSource.replace(
         'the artifact projects transport UNKNOWN', 'REMOVED') }]
