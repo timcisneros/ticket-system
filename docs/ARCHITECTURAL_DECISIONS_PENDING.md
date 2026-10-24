@@ -16401,6 +16401,18 @@ P4, does NOT commit the candidate, does NOT authorize operational migration
 execution, and does NOT resolve any carried residual. The combined P4 closure
 review remains outstanding.
 
+> **PUBLICATION STATUS UPDATE (2026-10-24).** Every statement above was true
+> when recorded and is preserved as historical truth: P4 was unpublished and
+> the combined closure review was outstanding at that time. The combined P4
+> closure review has since completed and was independently accepted
+> (disposition B, `FINAL-CHECKPOINT-B` — no additional checkpoint), and the
+> exact accepted combined candidate was then published as ONE combined
+> non-force commit `a97c8280f4d65d3127649ca97c53dbe8123b3a3f` ("Publish P4
+> governed surface expansion") with `HEAD = origin/master` equality — see
+> "P4 governed surface expansion — PUBLISHED (recorded 2026-10-24)" below.
+> The section 17 non-claims of this record were correct as of its date; they
+> do not describe the current repository state.
+
 ### 1. The attempt-4 green implementation candidate — protected-checkpoint evidence identity
 
 The exact 23-path uncommitted candidate that attempt 4 passed:
@@ -16820,3 +16832,162 @@ migration-authority separation and the schema-version-29 namespace); no
 accidental scope import from P5/P6/P7 or Browser Phase 3; the exact
 docs-adjusted candidate identity; and whether repository authority requires a
 final closure checkpoint after the register edit before publication.
+
+---
+
+## P4 governed surface expansion — PUBLISHED (recorded 2026-10-24)
+
+**Status: P4 GOVERNED SURFACE EXPANSION — PUBLISHED.** The combined P4 closure
+review independently accepted the exact 24-path docs-adjusted candidate
+(disposition B), and the accepted combined P4 candidate was then published as
+ONE combined publication commit, pushed normally (non-force) to the published
+remote branch. This record records that publication durably. It is a
+publication-status record only: it does NOT modify any implementation byte,
+does NOT authorize operational migration execution, does NOT resolve any
+carried residual, and does NOT begin any later phase.
+
+### 1. Publication facts
+
+* Published commit: `a97c8280f4d65d3127649ca97c53dbe8123b3a3f`
+* Parent: `e4bd3e49059beb0a1f3998ef607a5b1d76721698` (the P4 design-freeze
+  commit, "Register P4 governed surface expansion design freeze")
+* Tree: `3bfa7e7a9b6a95388301a43f32d2fe77f3e015d7`
+* Subject: `Publish P4 governed surface expansion`
+* Publication branch: `master`
+* Publication proof: `HEAD = origin/master = a97c8280f4d65d3127649ca97c53dbe8123b3a3f`
+* Push method: NORMAL non-force push (`git push origin master`); no `--force`,
+  no `--force-with-lease`; push pre-verified `origin/master` equality against
+  the design-freeze parent after a fresh fetch.
+* One combined commit contains the complete accepted candidate — R1, R2,
+  migration 044, the lockstep correction, the governed-dispatch corrective
+  maintenance, and the register completion were NOT split into separate
+  publication commits; they were reviewed and closed as one exact combined
+  candidate.
+* Staging/content identity proven before commit: the 24-path candidate set was
+  staged exactly (24 staged paths, 0 unstaged tracked changes, 0 untracked);
+  the INDEX-byte per-file manifest reproduced the accepted candidate-manifest
+  SHA `284ea918c477d2dfb989ba889dcca8ad721c7ecb4476d792dd9e3e85177fcf49`, and
+  the staged tracked-delta binary diff (over the same 22 tracked candidate
+  paths) reproduced the accepted tracked-diff SHA
+  `2106264414c2d198f23012886bf299f61325e3667717f4eb5286804e4e72b042`; after the
+  commit, both identities were re-proven from the COMMIT TREE bytes
+  (commit-tree manifest `284ea918…fcf49` exact; commit paths exact-set match
+  with the candidate; full commit diff stat `24 files changed, 3428
+  insertions(+), 74 deletions(-)` including the two newly added files
+  `persistence/postgres/migrations/044_browser_interaction_authority.sql` and
+  `scripts/browser-interaction-authority-postgres-test.js`; tracked subset
+  `22 files changed, 2172 insertions(+), 74 deletions(-)`). The register bytes
+  at publication carried SHA
+  `2c172c264b88077bc8db80ba04b2adc02073e40c0d1d552a5904ff346bd1c61f`.
+
+### 2. What the publication commit contains
+
+The one combined publication commit contains the accepted combined P4
+candidate:
+
+* P4-R1 — governed process-execution product enablement;
+* P4-R2 — Browser Phase-2 click/fill/press interaction authority;
+* migration 044 source registration
+  (`persistence/postgres/migrations/044_browser_interaction_authority.sql`);
+* the process-execution schema-head lockstep correction (43/43/43 → 44/44/44
+  exact head lockstep in
+  `runtime/process-execution-release-contract.js`);
+* the pre-existing governed dispatch-window lease-liveness corrective
+  maintenance (`server.js` + its required owner);
+* the durable P4-R2 checkpoint/correction register completion (the
+  2026-10-19 record above).
+
+Publishing migration 044's SOURCE bytes does NOT imply or state that migration
+044 was executed operationally — it was not (section 4 below).
+
+### 3. Closure authority chain, preserved
+
+Before publication, a fresh independent COMBINED P4 CLOSURE REVIEW accepted:
+P4-R1; P4-R2; the schema-head lockstep correction; the governed-dispatch
+corrective maintenance; the protected checkpoint evidence; the durable
+architectural register; the residual disposition; hermeticity/coherence — and
+found NO HIGH findings, NO MEDIUM findings, and NO new LOW findings. Its
+final-checkpoint adjudication was **FINAL-CHECKPOINT-B**: no additional full
+canonical checkpoint was required, because all 23 non-register implementation
+paths remained byte-identical to the attempt-4 green candidate, the only later
+delta was the architectural-register documentation, and repository policy does
+not automatically trigger a new checkpoint for such docs-only publication
+authority.
+
+### 4. The recoverable checkpoint-to-publication chain
+
+1. Protected checkpoint attempt 4 (identity
+   `7e322cd5-9445-44c9-a19d-8674e5469098`, registry hash
+   `ab8a46ec532ece6b7e519f04a855443bc547460dbae55a7bc74a44ba4817cac8`,
+   ordered-owner-list hash
+   `b9c6e7cb2ea6370b03aa479966cf643ec0d7e0e118c62d74e4d22c674ad3124b`) PASSED
+   **259/259** on the exact implementation bytes; result directory
+   `.local-artifacts/release-checkpoint-results/20261019T184436558Z-7e322cd5-9445-44c9-a19d-8674e5469098`
+   preserved.
+2. Register-only durable completion followed (the 2026-10-19 record above).
+3. The combined closure review proved the implementation bytes still identical
+   to the green attempt-4 barrier.
+4. `FINAL-CHECKPOINT-B` established no further checkpoint.
+5. Combined publication commit `a97c8280f4d65d3127649ca97c53dbe8123b3a3f`
+   published the accepted candidate, and `HEAD = origin/master` matched
+   afterward.
+
+### 5. Operational migration authority — unchanged and separate
+
+At publication and throughout the publication task:
+
+* `config/migration-execution-authorization.json` remains
+  `authorizationState = NOT_AUTHORIZED`.
+* The last durable operational-database observation before publication was:
+  operational migration head `043_api_token_authority.sql`; migration 044
+  applied count `0`. (The publication task itself performed no database
+  operations, because PostgreSQL was unavailable at publication time; nothing
+  in the publication path can have altered the guarded operational database.)
+* **P4 publication does NOT authorize or imply operational execution of
+  migration 044.** Operational migration requires its own separately
+  authorized governed migration-execution act under the existing
+  migration-execution authority.
+
+### 6. Carried residuals — publication resolves none
+
+Publication does NOT resolve or change the disposition of:
+`R2-RESIDUAL-TRIAGE` (LOW), `R2-RESIDUAL-ORIGIN-RECOVERY` (INFO/LOW), and
+`R2-RESIDUAL-CANDIDATE-FINGERPRINT-RECIPE` (INFO) — all remain registered and
+open as recorded in the 2026-10-19 record above. **RECOVERY-A** and **P3 F2**
+also remain separately open, not folded into P4.
+
+### 7. Scope after publication — what P4 publication closes and does not open
+
+P4 publication closes P4 only. It does NOT authorize:
+
+* Browser Phase 3; downloads; persistent browser sessions;
+  credential/session authority;
+* P5 composition (executable governed workflow invocation, child/subwork
+  execution, multi-target composition);
+* P6 deployment/operations expansion;
+* P7 external connectors;
+* operational migration 044 execution.
+
+### 8. Next roadmap boundary — recorded, not begun
+
+The register's authoritative sequencing policy is
+`P2 → P3 → P4 → P5 → P6 → P7` (priority policy; the only hard dependency edge
+inside the span is P2 → P5, and P2 is long published). With P4 now published,
+the next phase in the policy sequence is **P5 — Governed Bounded Composition**
+(executable governed workflow invocation, child/subwork execution, and
+multi-target composition through existing Ticket/Run/Workflow authority,
+advancing CAP-4). This record records that boundary only: P5 remains a
+SEPARATE FUTURE AUTHORITY BOUNDARY requiring its own design freeze,
+independent review, implementation, and closure evidence under the existing
+roadmap/phase conventions. Nothing of P5 is begun, designed, or authorized by
+this record.
+
+### 9. NEXT BOUNDARY
+
+FRESH INDEPENDENT NARROW REVIEW of this docs-only publication-status record
+(no checkpoint required): the reviewer must verify the publication facts are
+exact, history was not rewritten, no operational migration authorization was
+introduced, no residual was silently resolved, P4 closure is stated precisely,
+no next-phase implementation authority was accidentally granted, and the exact
+docs-only candidate identity reproduces. Committing and pushing that reviewed
+docs record is a separate, later publication act.
