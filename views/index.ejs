@@ -32,7 +32,7 @@
     <label for="executionTargetKind">Execution Target *</label>
     <select id="executionTargetKind" name="executionTargetKind" required>
       <option value="workspace" selected>Workspace / filesystem</option>
-      <option value="browser" <%= (typeof browserTargets === 'undefined' || browserTargets.length === 0) ? 'disabled' : '' %>>Browser (read-only Phase 1)</option>
+      <option value="browser" <%= (typeof browserTargets === 'undefined' || browserTargets.length === 0) ? 'disabled' : '' %>>Browser</option>
     </select>
   </div>
 
@@ -44,7 +44,13 @@
         <option value="<%= target.id %>"><%= target.name %> (<%= target.id %>)</option>
       <% }); %>
     </select>
-    <p class="form-hint"><strong>Read-only:</strong> Browser Phase 1 supports only <code>navigate</code>, <code>observe</code>, <code>readPageText</code>, <code>screenshot</code>, and <code>wait</code>. No click, fill, press, downloads, credentials, or persistent sessions.</p>
+    <div class="checkbox-group">
+      <label for="allowBrowserInteractions">
+        <input type="checkbox" id="allowBrowserInteractions" name="allowBrowserInteractions" disabled>
+        Allow browser interactions (click, fill, press) — requires the <code>browser:interact</code> permission and is recorded as default-off unless explicitly enabled
+      </label>
+    </div>
+    <p class="form-hint"><strong>Read operations:</strong> <code>navigate</code>, <code>observe</code>, <code>readPageText</code>, <code>screenshot</code>, and <code>wait</code>. Interactions are mutation-tier, budgeted by the target's <code>maxInteractionsPerRun</code>, and provenance-bound to observed elements. No downloads, credentials, or persistent sessions.</p>
   </div>
 
   <div class="form-group">
@@ -283,6 +289,11 @@ function updateExecutionTargetControls() {
   browserTargetSelect.required = isBrowser;
   browserTargetSelect.disabled = !isBrowser;
   if (!isBrowser) browserTargetSelect.value = '';
+  const allowBrowserInteractions = document.getElementById('allowBrowserInteractions');
+  if (allowBrowserInteractions) {
+    allowBrowserInteractions.disabled = !isBrowser;
+    if (!isBrowser) allowBrowserInteractions.checked = false;
+  }
   const selectedTargetKind = isBrowser ? 'browser' : 'workspace';
   Array.from(workTypeSelect.options).forEach(option => {
     if (!option.value) return;

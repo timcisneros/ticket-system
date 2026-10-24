@@ -1,5 +1,5 @@
 <h1>Browser Targets</h1>
-<p class="text-muted">Phase 1 browser targets authorize read-only navigation and inspection. They do not grant interaction, downloads, credentials, persistent sessions, or workflow execution.</p>
+<p class="text-muted">Browser targets authorize read-only navigation and inspection, plus a bounded interaction budget (<code>maxInteractionsPerRun</code>) used only when a run's execution policy separately authorizes click/fill/press. Targets never grant downloads, credentials, persistent sessions, or workflow execution.</p>
 
 <div class="actions actions--page-header">
   <a href="/admin" class="btn-small">Back to Admin</a>
@@ -49,6 +49,7 @@
               <div>waitTimeoutMsCap: <code><%= limits.waitTimeoutMsCap %></code></div>
               <div>maxPageTextBytes: <code><%= limits.maxPageTextBytes %></code></div>
               <div>maxScreenshotsPerRun: <code><%= limits.maxScreenshotsPerRun %></code></div>
+              <div>maxInteractionsPerRun: <code><%= limits.maxInteractionsPerRun %></code></div>
             </td>
             <td>
               <% if (canManageBrowserTargets) { %>
@@ -98,10 +99,13 @@
     </div>
 
     <h3>Per-run limits</h3>
-    <% ['maxNavigationsPerRun','maxActionsPerRun','navTimeoutMs','waitTimeoutMsCap','maxPageTextBytes','maxScreenshotsPerRun'].forEach(function(field) { %>
+    <% ['maxNavigationsPerRun','maxActionsPerRun','navTimeoutMs','waitTimeoutMsCap','maxPageTextBytes','maxScreenshotsPerRun','maxInteractionsPerRun'].forEach(function(field) { %>
       <div class="form-group">
         <label for="<%= field %>"><%= field %> *</label>
         <input id="<%= field %>" name="<%= field %>" type="number" min="1" step="1" required value="<%= formTarget[field] %>">
+        <% if (field === 'maxInteractionsPerRun') { %>
+          <p class="form-hint">Phase-2 click/fill/press budget per run, additive to maxActionsPerRun. Consulted only when a run's execution policy separately authorizes interactions; omission fails closed.</p>
+        <% } %>
       </div>
     <% }); %>
 
@@ -114,7 +118,8 @@
 <% } %>
 
 <section class="admin-block admin-block--spaced">
-  <h2>Phase 1 Boundary</h2>
-  <p>Allowed operations: <% browserPhaseOneOperations.forEach(function(operation, index) { %><code><%= operation %></code><%= index < browserPhaseOneOperations.length - 1 ? ', ' : '' %><% }); %>.</p>
-  <p class="text-muted">No click, fill, press, uploads, downloads, credentials, persistent sessions, browser workflows, skills, templates, or autonomy.</p>
+  <h2>Operation Boundary</h2>
+  <p>Read operations: <% browserPhaseOneOperations.forEach(function(operation, index) { %><code><%= operation %></code><%= index < browserPhaseOneOperations.length - 1 ? ', ' : '' %><% }); %>.</p>
+  <p>Interaction operations (<code>click</code>, <code>fill</code>, <code>press</code>) are mutation-tier: they require the <code>browser:interact</code> permission at ticket creation/configuration, the run's execution policy opt-in (default false), and this target's <code>maxInteractionsPerRun</code> budget.</p>
+  <p class="text-muted">No uploads, downloads, credentials, persistent sessions, browser workflows, skills, templates, or autonomy.</p>
 </section>

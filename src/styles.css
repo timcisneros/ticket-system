@@ -1511,6 +1511,20 @@ code {
   margin-top: 8px;
 }
 
+.process-grant-target {
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 8px 0;
+}
+
+.process-grant-target legend {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #374151;
+  padding: 0 4px;
+}
+
 label.checkbox-label {
   display: inline-flex;
   align-items: center;

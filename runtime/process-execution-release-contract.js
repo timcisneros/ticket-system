@@ -49,9 +49,14 @@ const PROCESS_EXECUTION_RELEASE_CONTRACT_VERSION = 1;
 // process execution authority, but the preflight requires an exact head, so
 // the release contract tracks it (the same lockstep the register documents
 // for every head-advancing migration).
-const PROCESS_EXECUTION_DATABASE_SCHEMA_VERSION = 43;
-const PROCESS_EXECUTION_MINIMUM_DATABASE_SCHEMA_VERSION = 43;
-const PROCESS_EXECUTION_MAXIMUM_DATABASE_SCHEMA_VERSION = 43;
+// P4-R2 Browser Phase-2 Safe Interaction: migration 044 registers the
+// browser:interact permission row through the migration-owned access-permission
+// lifecycle. It does not touch process execution authority, but the preflight
+// requires an exact head, so the release contract tracks it (the same lockstep
+// the register documents for every head-advancing migration).
+const PROCESS_EXECUTION_DATABASE_SCHEMA_VERSION = 44;
+const PROCESS_EXECUTION_MINIMUM_DATABASE_SCHEMA_VERSION = 44;
+const PROCESS_EXECUTION_MAXIMUM_DATABASE_SCHEMA_VERSION = 44;
 const PROCESS_OPERATION_SCHEMA_VERSION = 29;
 const PROCESS_EXECUTION_ROOTFS_REGISTRY_SCHEMA_VERSION = 1;
 const PROCESS_EXECUTION_RELEASE_READINESS_VERSION = 1;

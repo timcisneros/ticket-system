@@ -402,6 +402,13 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // browser-evidence verdict in both places the runtime writes it, so a model's claim
   // of success can never stand in for captured page text or DOM observation.
   'browser-evidence-verdict-test.js',
+  // P4-R2 — Browser Phase-2 safe interaction authority: default deny, the
+  // permission + execution-policy conjunction, click/fill/press through the real
+  // run loop and engine seam, provenance/staleness recovery, origin containment,
+  // fill redaction, press allowlist, additive budgets, receipt idempotency,
+  // Phase-1 regression, Phase-3 exclusion, and admitted-Run authority immutability.
+  // PostgreSQL-native (needs the real permission catalog and run evidence).
+  'browser-interaction-authority-postgres-test.js',
   // A20 — replaces the five JSON-era er* recoverable-error orphans. Pins the one
   // discriminator that separates an environmental workspace failure (contained, the
   // model gets one more turn) from a policy refusal (terminal, recorded as blocked).

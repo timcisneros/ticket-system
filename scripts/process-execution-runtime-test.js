@@ -528,6 +528,210 @@ async function main() {
       assert(filesystem.run.processPolicySnapshot.profiles.length === 0 &&
         !JSON.stringify(filesystem.replay.providerRequests || []).includes('runProcess'),
       'an ungranted existing agent receives no implicit process authority');
+      fs.writeFileSync(catalogPath, catalogSource);
+
+      // ── P4-R1: operator grant assignment and inspection product surface ──
+      // The product seam assigns/inspects the EXISTING runtimeConfig.processProfileGrants
+      // authority through the existing configured-agent edit surface. Admission,
+      // snapshot, dispatch, receipts, and release authority are unchanged.
+      const productAgent = await createAgent('ProcessProductSurface', []);
+      const unrelatedRuntimeConfigValue = `unrelated-runtime-config-keep-me-${STAMP}`;
+      await store.updateConfiguredAgent({
+        agentId: productAgent.id,
+        expectedRevision: productAgent.revision,
+        value: {
+          ...productAgent,
+          runtimeConfig: { unrelatedOperatorNote: unrelatedRuntimeConfigValue }
+        },
+        groupIds: [],
+        changedBy: 'process-execution-runtime-test'
+      });
+      const productAgentWithNote = await store.getConfiguredAgentById(productAgent.id);
+      assert(productAgentWithNote.runtimeConfig.unrelatedOperatorNote === unrelatedRuntimeConfigValue &&
+        productAgentWithNote.revision === productAgent.revision + 1,
+      'product-surface fixture agent carries unrelated runtime configuration');
+
+      const initialProjection = await server.request(
+        'GET', `/api/configured-agents/${productAgent.id}`, { cookie });
+      assert(initialProjection.statusCode === 200,
+        'configured-agent API detail is readable by the operator');
+      const initialAgent = JSON.parse(initialProjection.body).agent;
+      assert(Array.isArray(initialAgent.processProfileGrants) &&
+        initialAgent.processProfileGrants.length === 0 &&
+        initialAgent.processEligibility &&
+        initialAgent.processEligibility.grantsResolveAgainstCatalog === true,
+      'R1: an agent with no grants projects an explicit empty grant list with eligibility');
+      assert(!Object.hasOwn(initialAgent, 'runtimeConfig') &&
+        !Object.hasOwn(initialAgent, 'apiKey'),
+      'R1: the operator projection leaks neither private runtimeConfig nor provider keys');
+      assert(JSON.stringify(initialAgent).includes(unrelatedRuntimeConfigValue) === false,
+      'R1: the operator projection omits unrelated runtime configuration');
+
+      const staleGrantUpdate = await server.request(
+        'POST', `/admin/users/${productAgent.id}`, {
+          cookie,
+          form: {
+            accountType: 'agent',
+            agentName: productAgent.name,
+            provider: 'openai',
+            model: 'gpt-4.1-mini',
+            revision: String(productAgentWithNote.revision + 1000),
+            processProfile: ['ticket-system-local|inspection-check']
+          }
+        });
+      assert(staleGrantUpdate.statusCode === 409,
+        'R1: a stale configured-agent grant assignment refuses with 409');
+      const afterStale = await store.getConfiguredAgentById(productAgent.id);
+      assert((afterStale.runtimeConfig.processProfileGrants || []).length === 0 &&
+        afterStale.revision === productAgentWithNote.revision,
+      'R1: a refused stale grant assignment changes nothing');
+
+      const assignResponse = await server.request(
+        'POST', `/admin/users/${productAgent.id}`, {
+          cookie,
+          form: {
+            accountType: 'agent',
+            agentName: productAgent.name,
+            provider: 'openai',
+            model: 'gpt-4.1-mini',
+            revision: String(productAgentWithNote.revision),
+            processProfile: 'ticket-system-local|inspection-check'
+          }
+        });
+      assert(assignResponse.statusCode === 302,
+        'R1: an authorized operator assigns valid existing target/profile grants');
+      const assignedAgent = await store.getConfiguredAgentById(productAgent.id);
+      assert(JSON.stringify(assignedAgent.runtimeConfig.processProfileGrants) ===
+        JSON.stringify([
+          { targetId: 'ticket-system-local', profileIds: ['inspection-check'] }
+        ]),
+      'R1: assignment stores the canonical deduplicated ordered grant shape');
+      assert(assignedAgent.runtimeConfig.unrelatedOperatorNote === unrelatedRuntimeConfigValue,
+      'R1: grant assignment preserves unrelated configured-agent runtime configuration');
+      assert(assignedAgent.apiKey === 'test-key-process-contract',
+      'R1: grant assignment preserves the existing provider credential handling');
+
+      const assignedProjection = await server.request(
+        'GET', `/api/configured-agents/${productAgent.id}`, { cookie });
+      const assignedPublicAgent = JSON.parse(assignedProjection.body).agent;
+      assert(JSON.stringify(assignedPublicAgent.processProfileGrants) ===
+        JSON.stringify([{
+          targetId: 'ticket-system-local',
+          profileIds: ['inspection-check']
+        }]) &&
+        assignedPublicAgent.processEligibility.grantsResolveAgainstCatalog === true,
+      'R1: assigned grants are visible through the operator projection with eligibility');
+      const listedAgents = JSON.parse((await server.request(
+        'GET', '/api/configured-agents?limit=100', { cookie })).body).agents;
+      assert(listedAgents.some(agent => agent.id === productAgent.id &&
+        JSON.stringify(agent.processProfileGrants) ===
+          JSON.stringify([{ targetId: 'ticket-system-local', profileIds: ['inspection-check'] }])),
+      'R1: the agent list projection carries the same explicit grant shape');
+
+      const invalidTargetUpdate = await server.request(
+        'POST', `/admin/users/${productAgent.id}`, {
+          cookie,
+          form: {
+            accountType: 'agent',
+            agentName: productAgent.name,
+            provider: 'openai',
+            model: 'gpt-4.1-mini',
+            revision: String(assignedAgent.revision),
+            processProfile: 'missing-target|inspection-check'
+          }
+        });
+      assert(invalidTargetUpdate.statusCode === 400,
+        'R1: an unknown process target assignment fails closed');
+      assert((await server.request(
+        'POST', `/admin/users/${productAgent.id}`, {
+          cookie,
+          form: {
+            accountType: 'agent',
+            agentName: productAgent.name,
+            provider: 'openai',
+            model: 'gpt-4.1-mini',
+            revision: String(assignedAgent.revision),
+            processProfile: 'ticket-system-local|missing-profile'
+          }
+        })).statusCode === 400,
+      'R1: an unknown process profile assignment fails closed');
+      const afterInvalid = await store.getConfiguredAgentById(productAgent.id);
+      assert(afterInvalid.revision === assignedAgent.revision &&
+        JSON.stringify(afterInvalid.runtimeConfig.processProfileGrants) ===
+          JSON.stringify(assignedAgent.runtimeConfig.processProfileGrants),
+      'R1: failed grant assignments leave stored grants and revision unchanged');
+
+      const productObjective = `process-contract product-assigned ${STAMP}`;
+      const productAssigned = await runPlans('product-assigned', productAgent, [
+        inspectionPlan,
+        {
+          message: 'Request the operator-assigned inspection profile.',
+          actions: [exactRequest],
+          complete: true
+        }
+      ]);
+      assert(productAssigned.run.processPolicySnapshot.version === 2 &&
+        productAssigned.run.processPolicySnapshot.profiles.some(profile =>
+          profile.targetId === 'ticket-system-local' && profile.profileId === 'inspection-check'),
+      'R1: a new Run admission resolves operator-assigned grants into the canonical snapshot');
+      const productResolution = productAssigned.events.find(event =>
+        event.type === 'process.operation_resolution');
+      assert(productResolution &&
+        productResolution.payload.code === 'PROCESS_EXECUTOR_UNAVAILABLE' &&
+        productResolution.payload.authorityStatus === 'allowed' &&
+        productResolution.payload.policySnapshotHash ===
+          productAssigned.run.processPolicySnapshot.snapshotHash,
+      'R1: the assigned grant flows through the normal bounded-agent runtime envelope to runProcess');
+
+      const productSnapshot = JSON.stringify(productAssigned.run.processPolicySnapshot);
+      const productHash = productAssigned.run.processPolicySnapshot.snapshotHash;
+      const afterAssignedRevision = (await store.getConfiguredAgentById(productAgent.id)).revision;
+      const removalResponse = await server.request(
+        'POST', `/admin/users/${productAgent.id}`, {
+          cookie,
+          form: {
+            accountType: 'agent',
+            agentName: productAgent.name,
+            provider: 'openai',
+            model: 'gpt-4.1-mini',
+            revision: String(afterAssignedRevision)
+          }
+        });
+      assert(removalResponse.statusCode === 302,
+        'R1: an operator removes grants by submitting no selections');
+      const removedAgent = await store.getConfiguredAgentById(productAgent.id);
+      assert(removedAgent.runtimeConfig.processProfileGrants.length === 0 &&
+        removedAgent.runtimeConfig.unrelatedOperatorNote === unrelatedRuntimeConfigValue,
+      'R1: deliberate grant removal stores an explicit empty grant list');
+      const rereadProductRun = await store.getRun(productAssigned.run.id);
+      assert(JSON.stringify(rereadProductRun.processPolicySnapshot) === productSnapshot &&
+        rereadProductRun.processPolicySnapshot.snapshotHash === productHash,
+      'R1: a later grant removal cannot rewrite the already-admitted Run snapshot');
+      assert((await server.request(
+        'GET', `/api/configured-agents/${productAgent.id}`, { cookie })).body.includes('inspection-check') === false,
+      'R1: grant removal is reflected in the operator projection');
+
+      const ungrantedRun = await runPlans('product-ungranted', productAgent, [{
+        message: 'Request a process profile without any grant.',
+        actions: [{
+          operation: 'runProcess',
+          args: {
+            targetId: 'ticket-system-local',
+            profileId: 'inspection-check',
+            operationId: `product-ungranted-${STAMP}`
+          }
+        }],
+        complete: true
+      }]);
+      assert(ungrantedRun.run.processPolicySnapshot.profiles.length === 0 &&
+        ungrantedRun.events.some(event =>
+          event.type === 'process.operation_resolution' &&
+          event.payload.code === 'PROCESS_TARGET_UNKNOWN' &&
+          event.payload.authorityStatus === 'denied'),
+      'R1: a configured agent with no grants cannot gain runProcess');
+
+      assert(fs.readFileSync(catalogPath, 'utf8') === catalogSource,
+      'R1: product grant assignment does not modify the trusted target/profile catalog');
 
       fs.writeFileSync(catalogPath, catalogSource);
       await server.stop();

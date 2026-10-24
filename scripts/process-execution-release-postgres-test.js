@@ -15,10 +15,11 @@ async function main() {
     databaseUrl,
     schema
   }) => {
-    // P1: the migration head is now the API-token authority kernel (043).
+    // P4-R2: the migration head is now the browser-interaction permission
+    // authority (044).
     const migration = await store.getMigrationStatus();
-    assert.equal(migration.currentVersion, 43);
-    assert.equal(migration.headVersion, 43);
+    assert.equal(migration.currentVersion, 44);
+    assert.equal(migration.headVersion, 44);
     assert.equal(migration.fullyApplied, true);
     assert.equal(migration.checksumsValid, true);
     assert.equal(migration.unknownMigrations, 0);
@@ -26,7 +27,7 @@ async function main() {
       connectionString: databaseUrl,
       schema
     });
-    assert.equal(preflight.currentVersion, 43);
+    assert.equal(preflight.currentVersion, 44);
     assert.equal(preflight.fullyApplied, true,
       'production migration preflight accepts the isolated fully migrated schema');
 

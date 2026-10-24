@@ -68,6 +68,40 @@
       <input type="password" id="apiKey" name="apiKey" placeholder="sk-..." <%= accountType === 'agent' && !editAccount && !hasOpenAIApiKeyFallback ? 'required' : '' %> <%= accountType === 'user' ? 'disabled' : '' %>>
       <p class="form-hint">Required for providers that need hosted API credentials. Leave blank for local providers such as Ollama unless your provider requires a key.</p>
     </div>
+
+    <% if (editAccount && accountType === 'agent') { %>
+      <div class="form-group">
+        <label>Process Execution Grants</label>
+        <p class="form-hint">
+          Grant this agent specific process target/profile combinations from the trusted catalog.
+          Selections here do not create execution authority by themselves: deployment release admission
+          and the existing run admission path must also permit each run.
+        </p>
+        <% if (processReleaseState) { %>
+          <p class="form-hint">Process execution release state: <code><%= processReleaseState %></code></p>
+        <% } %>
+        <% if (processCatalogTargets.length === 0) { %>
+          <p class="help-text">No process targets exist in the trusted catalog; no grants can be assigned.</p>
+        <% } else { %>
+          <% processCatalogTargets.forEach(function(target) { %>
+            <fieldset class="process-grant-target">
+              <legend><%= target.id %></legend>
+              <% target.profiles.forEach(function(profile) { %>
+                <label class="checkbox-label">
+                  <input type="checkbox" name="processProfile" value="<%= target.id %>|<%= profile.id %>"
+                    <%= grantedProcessProfileKeys.includes(target.id + '|' + profile.id) ? 'checked' : '' %>>
+                  <%= profile.id %> (phases: <%= profile.allowedPhases.join(', ') %>)
+                </label>
+              <% }); %>
+            </fieldset>
+          <% }); %>
+          <p class="form-hint">Unchecked entries are removed from this agent on submit. Grants never define new targets, profiles, or commands.</p>
+        <% } %>
+        <% if (grantedProcessProfileKeys.length === 0) { %>
+          <p class="help-text">No process grants assigned to this agent.</p>
+        <% } %>
+      </div>
+    <% } %>
   </div>
 
   <div class="form-group">

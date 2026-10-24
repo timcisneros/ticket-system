@@ -21,6 +21,18 @@ const BUILTIN_PERMISSIONS = Object.freeze([
   'workspace.delete.cross_ticket_artifact',
   'browser:read',
   'browser:operate',
+  // P4-R2 (Browser Phase-2 safe interaction). Means EXACTLY: create or
+  // configure tickets whose execution policy authorizes bounded browser
+  // interaction (click/fill/press) — the product-plane counterpart of the
+  // manual operator-browser `browser:operate` permission, which does NOT
+  // confer Run-loop interaction authority. It confers no target management,
+  // no Phase-3 authority (downloads/sessions/credentials), and no run-loop
+  // bypass: the admitted Run still needs its own execution-policy opt-in
+  // (default false), target snapshot authority, budgets, and provenance.
+  // The canonical durable row is inserted by migration 044; this builtin
+  // floor is the repository-owned bootstrap-parity expectation only, never
+  // a second permission authority.
+  'browser:interact',
   'processTemplate:manage',
   'workContext:manage',
   'watcher:manage',

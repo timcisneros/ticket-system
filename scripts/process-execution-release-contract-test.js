@@ -45,10 +45,10 @@ const baseReadiness = {
     sourceRevision,
     applicationVersion: '1.1.1'
   },
-  // P1: the repository migration head is now migration 043.
+  // P4-R2: the repository migration head is now migration 044.
   migrationStatus: {
-    currentVersion: 43,
-    headVersion: 43,
+    currentVersion: 44,
+    headVersion: 44,
     fullyApplied: true,
     checksumsValid: true,
     partial: false,

@@ -11457,6 +11457,23 @@ remains prohibited through the triage owner, not through this field.
 same day, which was honest about not knowing the cause and is replaced now that
 the cause is proved rather than guessed.
 
+> **SUPERSEDED IN PART (2026-10-19).** The atomic-start-loser /
+> `concurrentStartObserved` correction below remains valid. The implication
+> that the duplicate-dispatch anomaly family was thereby completely closed was
+> too strong: the sibling PREPARE-OBSERVED seam (finding a `request_started`
+> reservation durably on entry) remained vulnerable, because governed provider
+> transport did not maintain the Run-lease liveness assertion that
+> conservative abandonment recovery depends on. Protected P4-R2 checkpoint
+> attempt 3 (identity `39c5f939-60be-4750-b55d-58f8cc6c396a`, ordinal 176,
+> `governed-leaf-production-path-postgres-test.js`) supplied the durable
+> reproduction that closed that remaining gap; the correction and its
+> authority model are recorded under "Governed dispatch-window lease liveness
+> — protected P4-R2 checkpoint and correction history (recorded 2026-10-19)"
+> below. The historical statements here — including the "not reproducible in
+> 78 subsequent concurrent runs" observation — remain historical evidence of
+> what was known at the time; the later canonical checkpoint evidence did
+> reproduce the remaining sibling race.
+
 The observation — one transport, one reservation, one ordinal, and NO caller
 reporting `received` — is reproduced deterministically by a barrier that holds
 the dispatch owner at a chosen boundary instead of racing the scheduler. Two
@@ -16368,3 +16385,438 @@ Implementation of this record is UNAUTHORIZED until: (1) one fresh independent a
 review accepts it; and (2) the exact reviewed docs bytes are published. Until then this
 section is a candidate, the register's published authorities remain controlling, and the
 uncommitted P2-R1 candidate remains preserved byte-exactly in the primary working tree.
+
+---
+
+## Governed dispatch-window lease liveness — protected P4-R2 checkpoint and correction history (recorded 2026-10-19)
+
+**Status: DURABLE REGISTER COMPLETION.** The protected P4-R2 full canonical
+checkpoint attempt 4 PASSED 259/259 on the exact independently accepted
+23-path implementation candidate, after three protected failures whose
+corrections were each separately adjudicated, independently reviewed, and
+re-verified. This record completes the register obligations created by those
+adjudications, from durable repository evidence and preserved checkpoint
+artifact directories. It is a HISTORY and EVIDENCE record: it does NOT publish
+P4, does NOT commit the candidate, does NOT authorize operational migration
+execution, and does NOT resolve any carried residual. The combined P4 closure
+review remains outstanding.
+
+### 1. The attempt-4 green implementation candidate — protected-checkpoint evidence identity
+
+The exact 23-path uncommitted candidate that attempt 4 passed:
+
+* base commit `e4bd3e49059beb0a1f3998ef607a5b1d76721698` (subject "Register P4
+  governed surface expansion design freeze"); branch `master`;
+  `HEAD = origin/master`; nothing staged; stash empty; `git diff --check`
+  clean.
+* 23 candidate paths: 21 tracked modified plus exactly 2 intentional untracked
+  files (`persistence/postgres/migrations/044_browser_interaction_authority.sql`,
+  `scripts/browser-interaction-authority-postgres-test.js`).
+* tracked binary diff SHA-256 `8001a8d18ad68bd7c62943f2c3d0b8c928bfd7bc18a493bddf5a0fd2019c7453`;
+  diff stat `21 files changed, 1720 insertions(+), 74 deletions(-)`.
+* candidate-manifest SHA-256
+  `2441f36ec3b2f7b7cb4873fe9e39b48063ea549c100ca5c729cd30a751f8543b` over the
+  explicit recipe in section 16 below.
+* key accepted R2 semantics carried by the candidate: canonical
+  `browser:interact` permission; migration 044 registration; strict
+  default-false `executionPolicy.allowBrowserInteractions`; immutable admitted
+  Run authority; same-Run observed-element provenance; stale-element refusal
+  and re-observe recovery; sensitive-fill redaction; restricted press-key
+  allowlist; post-interaction origin containment; `maxInteractionsPerRun`;
+  additive target action and run browser-operation budgets; mutation
+  admission; canonical browser evidence/replay; stable same-action identity
+  across crash/recovery; prepared intent before browser mutation effect;
+  committed-receipt replay gate preventing duplicate browser side effects;
+  fail-closed uncertain prepared-but-uncommitted recovery; no Browser Phase 3.
+
+This section 1 identity is the protected-checkpoint EVIDENCE identity. The
+register edit that adds this record intentionally creates a NEW docs-adjusted
+candidate identity afterward; the new identity is captured in its own task
+report and must be re-derived, not assumed.
+
+### 2. Protected P4-R2 checkpoint attempt 1 — FAILED at ordinal 70 (stale browser-family owner)
+
+* Result directory (PRESERVED, unaltered):
+  `.local-artifacts/release-checkpoint-results/20260914T191926180Z-7bd93c03-b51e-4b18-a7ab-bbfb2ee68a8d`.
+* Checkpoint identity `7bd93c03-b51e-4b18-a7ab-bbfb2ee68a8d`; registry hash
+  `549c8a991655744fda8d81fe1ea522d78c38b4b12ed64c8cc901b1d962804577`;
+  started `2026-09-14T19:19:26.180Z`, completed `2026-09-14T19:21:28.339Z`.
+* Result FAILED: 69/259 passed before fail-fast; first failure ordinal **70**,
+  owner `scripts/mixed-family-work-model-test.js` (deterministic).
+* Exact assertion shape: the owner pinned the browser-operation family as
+  EXACTLY `['navigate', 'observe', 'readPageText', 'screenshot', 'wait']`,
+  while the current repository source exposes exactly that family PLUS the
+  already-authorized P4-R2 interaction operations `click`, `fill`, `press`.
+* **Disposition: required source-coupled owner maintenance, NOT a production
+  browser defect.** The stale exact five-operation family pin did not include
+  the already-authorized R2 interaction operations. The candidate remained
+  unpublished; no production bytes changed in this correction.
+
+### 3. Attempt-1 companion correction (same owner audit)
+
+The same stale-owner audit found and corrected the directly coupled
+`scripts/typed-evidence-projection-test.js` owner in the same narrow pass.
+Both owners were corrected WITHOUT weakening exact-family assertions (the
+exact deep-equal family pin was extended to the authorized family, not
+relaxed to subset membership). No production bytes changed. Historical
+accepted correction hashes:
+
+* `scripts/mixed-family-work-model-test.js`
+  `7fd535c84cf35526672cdc58a703ff9bcbfed2b5d17e4593aa4c7a9976822875`
+* `scripts/typed-evidence-projection-test.js`
+  `014f2c5064879f8040f09c2c6b6c45d0c50c67c70cad33063e8546afb0371a46`
+
+### 4. Protected P4-R2 checkpoint attempt 2 — FAILED at ordinal 140 (stale migration-tail owner)
+
+* Result directory (PRESERVED, unaltered):
+  `.local-artifacts/release-checkpoint-results/20260914T201002234Z-6ed20635-6089-48df-9b2a-ddb6270d511e`.
+* Checkpoint identity `6ed20635-6089-48df-9b2a-ddb6270d511e`; registry hash
+  `2661c05ac2d61bc603edef6a2c97acdf9129e3103dd54b9ef7895c39f3aaee7a`;
+  started `2026-09-14T20:10:02.234Z`, completed `2026-09-14T20:50:37.987Z`.
+* Result FAILED: 139/259 passed (all 125 deterministic owners green) before
+  fail-fast at the first failing PostgreSQL owner; ordinal **140**, owner
+  `scripts/ticket-attempt-backfill-postgres-test.js`.
+* Exact assertion shape: "the real runner applies exactly the pending
+  039..043 sequence in order" — the owner's exact expected applied-migrations
+  sequence ended at migration 043, while the real runner from its pre-039
+  disposable fixture correctly also applied the already-authorized migration
+  044 (`044_browser_interaction_authority.sql`).
+* **Disposition: stale CURRENT-MIGRATION-TAIL owner, NOT operational migration
+  authorization.** Migration 044 legitimately advanced the canonical
+  repository migration head. The owner was corrected (independently reviewed
+  and accepted) to require the EXACT sequence 039, 040, 041, 042, 043, 044 —
+  exact deep-equal ordering preserved, not weakened to subset membership.
+  Corrected owner hash:
+  `bc2d977966f71256c0263ec714bfd705939f1cd821d33e42a450805dc3f941ae`. The
+  guarded operational database remained at 043 and the tracked
+  `config/migration-execution-authorization.json` remained `NOT_AUTHORIZED`
+  throughout; migration 044 was exercised only in disposable test schemas.
+
+### 5. The schema-head lockstep discovery — LOCKSTEP-VERDICT-A
+
+The complete migration-tail owner audit (a required sweep across all 259
+checkpoint owners before editing) then exposed a second and more important
+omission: migration 044 advanced the canonical repository schema head
+`43 -> 44` while the production process-execution release-contract
+compatibility window remained `43 / 43 / 43`
+(`PROCESS_EXECUTION_DATABASE_SCHEMA_VERSION`,
+`..._MINIMUM_DATABASE_SCHEMA_VERSION`,
+`..._MAXIMUM_DATABASE_SCHEMA_VERSION` in
+`runtime/process-execution-release-contract.js`). A healthy fully migrated
+disposable schema reporting `currentVersion = 44`, `headVersion = 44`,
+`fullyApplied = true` was REJECTED by the actual production release preflight
+(`scripts/release-db-preflight.js`, `inspectDatabase`) with
+`PROCESS_RELEASE_SCHEMA_INCOMPATIBLE` (headVersion 44 vs pin 43) — proven by a
+direct disposable-schema probe during the audit. This is exactly the failure
+the register's standing convention predicts ("Advancing the repository
+migration head requires advancing the process-execution release contract's
+compatible-schema window"; historical precedent commit
+`c4fd97cf531658117d206fcf7f74f63b2735d118`, "Correct P1 process-execution
+schema head lockstep"). Required owner
+`scripts/process-execution-release-postgres-test.js` (ordinal 147 in the
+attempt-3 registry) also failed under the stale pin and was NOT test-only
+correctable, because the production preflight itself refused.
+
+Independent adjudication **LOCKSTEP-VERDICT-A**: migration 044 REQUIRED the
+established process-execution schema-head lockstep bump. This was an omitted
+CONSEQUENCE of the already-authorized P4-R2 permission-registration migration,
+not a new process-execution semantic; the design decision was not reopened.
+
+### 6. The exact schema-head correction (43/43/43 -> 44/44/44)
+
+Production correction, exactly one file —
+`runtime/process-execution-release-contract.js`: database schema version
+`43 -> 44`; minimum compatible schema version `43 -> 44`; maximum compatible
+schema version `43 -> 44`. The compatible window remains EXACT head lockstep
+(`44 / 44 / 44`) — this is NOT a compatibility-range expansion. The bump
+comment block was extended with the P4-R2/migration-044 entry in the
+established style. Direct owners synchronized (exact equality preserved):
+
+* `scripts/process-execution-release-postgres-test.js`
+  `ee2721981d4b4b7c69dcf0864154a218612f2baf94ab3cb185e4bdea73557573`
+* `scripts/process-execution-release-contract-test.js`
+  `85d067894e53205e8cbbe19dd5588ae457900c6c3062d269f5e13bc8ad5e82fc`
+* production file accepted hash:
+  `ad2d47c334786fdb4ea190845fc23001ed6851c2f7c8ca2997bbf0069c5f78b1`
+
+After the correction, the actual production preflight demonstrably ACCEPTED a
+healthy fully migrated disposable 44/44 schema (the pre-correction probe had
+refused it). **The separate process/runtime capability-descriptor authority is
+explicitly PRESERVED: `PROCESS_EXECUTION_DATABASE_SCHEMA_VERSION = 29` in
+`runtime/process-execution-contract.js` is a DIFFERENT, untouched authority
+(process policy/runtime capability descriptor schema) and must remain 29; it
+is not conflated with migration-head version 44.**
+`runtime/process-execution-contract.js`, `runtime/process-runtime-capability.js`,
+and `docs/PROCESS_EXECUTION_CONTRACT.md` were byte-untouched.
+
+### 7. Operational migration authority — a separate authority, unchanged throughout
+
+Throughout every correction above and the successful checkpoint below:
+
+* `config/migration-execution-authorization.json` remained
+  `authorizationState = NOT_AUTHORIZED` (byte-unmodified, tracked at base).
+* The guarded operational database remained at migration head
+  `043_api_token_authority.sql` (43 applied).
+* Migration 044's operational applied count remained `0`.
+
+Source compatibility at repository head 44 did NOT authorize operational
+migration execution. Repository schema compatibility and operational
+deployment/migration execution are SEPARATE authorities; this distinction is a
+required repository invariant and is not blurred anywhere in this record.
+
+### 8. Protected P4-R2 checkpoint attempt 3 — FAILED at ordinal 176 (pre-existing governed dispatch race)
+
+* Result directory (PRESERVED, unaltered):
+  `.local-artifacts/release-checkpoint-results/20261018T213843218Z-39c5f939-60be-4750-b55d-58f8cc6c396a`.
+* Checkpoint identity `39c5f939-60be-4750-b55d-58f8cc6c396a`; registry hash
+  `3c53f601586aa19bce15035877a2ee01dbe6a3631a1318c8810dcd95aa59811c`;
+  ordered-owner-list hash
+  `a51804d6264a83f62ab699cb386ffe3f4fea547275ca3f171b3496c4095b5cb5`.
+* Registry: syntax 1, deterministic 125, PostgreSQL 133, total 259.
+* Result FAILED: 175 passed / 1 failed before fail-fast; started
+  `2026-10-18T21:38:43.218Z`, completed `2026-10-18T22:20:44.118Z`.
+* All previously corrected boundaries had already PASSED in this attempt
+  before the new failure: mixed-family (70), lockstep contract test (85),
+  typed-evidence projection (119), backfill migration tail (140),
+  process-execution release PostgreSQL (147).
+* Failure ordinal **176** (PostgreSQL), owner
+  `scripts/governed-leaf-production-path-postgres-test.js` (unchanged from
+  base, SHA `5c2bfa3f322ed588382950965f946b27959f048215f44e7e327d65db346e6968`):
+  `AssertionError: a duplicate caller reports an observer outcome, got
+  already_dispatched_unresolved` — a prepare-observed duplicate returned the
+  conservative-settlement race status instead of an observer outcome. The P4-R2
+  browser-interaction owner (ordinal 252) was scheduled after the failure
+  point and was NOT reached by this attempt.
+
+### 9. Attempt-3 adjudication and defect mechanism — FAILURE-CLASS-B
+
+Independent adjudication: **FAILURE-CLASS-B: PRE-EXISTING PRODUCTION RACE
+DEFECT** — a real pre-existing production defect exposed by the protected
+barrier. It predates P4 and was NOT caused by browser interaction authority,
+migration 044, the P4 process-execution surface, or the schema-head
+correction; the failing owner's bytes were unchanged from base.
+
+**Defect mechanism, at the authority level:**
+
+* `started_claim_event_position` already correctly identified the claim that
+  acquired request-start/dispatch authority.
+* Run-lease liveness was — and remains — the repository's abandonment/recovery
+  authority (conservative settlement of a started request is authorized when
+  the executor is durably gone by the lease predicate).
+* Governed provider transport did NOT maintain that lease throughout the
+  provider-transport window. A healthy dispatch could therefore outlive its
+  lease horizon (unleased Run, lease held elsewhere, or one expired mid-flight).
+* A prepare-observed duplicate could then see `request_started` + no durable
+  response + no live Run lease and conservatively settle a reservation whose
+  actual dispatch owner was still executing.
+
+**Consequences observed/possible:** false `already_dispatched_unresolved`;
+premature conservative settlement at the reserved maximum (discarding the
+metered usage the winner was about to report);
+`ECONOMIC_RESERVATION_STATE_CONFLICT` when the real owner later attempted
+`markEconomicResponsePersisted` (which requires `request_started`); and
+potential loss of a legitimate provider response. No automatic retransmission
+was or is authorized; delivery uncertainty remains fail-closed.
+
+The first-line analysis that the failure was "environmental contention only"
+was rejected by adjudication: the owner's own historical note about a prior
+unreproducible contention flake does not classify this failure — the
+settlement-ownership defect is real and reachable in production (notably via
+lease expiry mid-transport).
+
+### 10. Supersession of the 2026-08-04 "Duplicate-Dispatch Outcome Anomaly" record — IN PART
+
+The 2026-08-04 record (its evidence preserved verbatim above in the register)
+closed the duplicate-dispatch anomaly as of its date. That closure is now
+SUPERSEDED IN PART, not erased:
+
+* Its atomic-start-loser / `concurrentStartObserved` correction remains VALID
+  (one authority, `resolveStartedRequest`, against freshly read state; the
+  race loser never settles).
+* Its broader implication that the duplicate-dispatch anomaly family was
+  completely closed was TOO STRONG. The prepare-observed sibling seam (finding
+  a `request_started` reservation durably on entry) remained vulnerable, because
+  governed provider transport did not maintain the lease-liveness assertion
+  that conservative abandonment recovery depends upon.
+* The record's historical statement that the observation was "not reproducible
+  in 78 subsequent concurrent runs" remains HISTORICAL EVIDENCE of what was
+  known then; later canonical checkpoint evidence (attempt 3, ordinal 176)
+  DID reproduce the remaining sibling race durably.
+* Checkpoint attempt 3 supplied the durable reproduction that closed this
+  remaining gap; the correction is recorded in sections 11–12 below.
+
+### 11. The authority-model adjudication — selected correction semantic
+
+An independent authority-model adjudication (which had first confirmed, from
+source, that NO existing durable or caller-owned fact could distinguish a
+live owned dispatch from genuine abandonment in the no-live-lease cell — the
+register's own delivery-uncertainty position proves no durable in-flight
+marker can exist, and elapsed-time reasoning is explicitly forbidden) selected
+the narrow authorized semantic:
+
+**Existing dispatch identity + existing Run-lease authority + governed
+dispatch-window lease maintenance.** Specifically:
+
+* `started_claim_event_position` remains dispatch identity; no new dispatch
+  token, no new ownership column, no new recovery actor, no new migration.
+* The Run lease remains the liveness/abandonment authority.
+* Governed provider transport MUST maintain that lease throughout the
+  provider-transport window using the existing `withInFlightRunLeaseRenewal`
+  seam (the same maintenance the ungoverned path already performs).
+* Genuine lease lapse remains the existing abandonment/recovery boundary;
+  crash-after-send delivery uncertainty remains fail-closed; no automatic
+  retransmission; `resolveStartedRequest` and `closeUnconfirmed` were NOT
+  rewritten.
+
+This is independent PRE-EXISTING corrective maintenance discovered by the P4
+closure barrier; it does NOT alter P4 browser semantics and is not a P4
+feature expansion.
+
+### 12. The exact governed-dispatch correction and its independent acceptance
+
+* Production — `server.js` (SHA-256
+  `0008377a40b8b7ddb439c4540e80624b7db287665ee34190eee3b46ee7590f01`):
+  `dispatchGovernedLeafModelRequest` now wraps the governed provider transport
+  in the existing `withInFlightRunLeaseRenewal` seam, so lease liveness is
+  asserted for the full transport window; renewal failure does not
+  manufacture provider-delivery certainty; renewal stops when transport
+  completes; post-response/state-machine authority unchanged. (The planner
+  transport call site in the same file is a different surface and was
+  deliberately left untouched by the adjudicated scope.)
+* Required owner — `scripts/governed-leaf-production-path-postgres-test.js`
+  (SHA-256 `a6dd54d1705ba8c6da9b61748f120c51259d7084228483b24adc58933c8acda4`):
+  the duplicate-race surface now executes under the same canonical
+  `claimPendingRun` Run-claim discipline production uses (previously it raced
+  direct callers on an unclaimed Run — a test-only authority shape); every
+  existing duplicate-race assertion was preserved (the observer-outcome
+  assertion still rejects `already_dispatched_unresolved`); a deterministic
+  dispatch-window liveness proof was added (barrier-held transport longer than
+  the lease horizon, renewal proven through durable `run.heartbeat` events
+  with phase `provider_call_in_flight` and the extended durable lease expiry,
+  a prepare-observed duplicate reporting `request_in_flight` with no transport
+  and no settlement, the owner persisting and settling exactly once with the
+  response durably recoverable, and the server wiring pinned by source
+  assertions); genuine abandonment recovery (conservative settlement after a
+  durably lapsed lease, at the reserved maximum, exactly once, idempotent) and
+  delivery-uncertainty behavior remain covered.
+* Reliability evidence beyond the deterministic proof: 20/20 sequential runs
+  and 10 waves x 4 concurrent executions of the corrected owner, all passing,
+  with zero `already_dispatched_unresolved` and zero settlement conflicts.
+* Independent correction review disposition: **A — GOVERNED
+  DISPATCH-WINDOW LEASE-LIVENESS CORRECTION INDEPENDENTLY ACCEPTED.**
+
+### 13. Protected P4-R2 checkpoint attempt 4 — PASSED 259/259
+
+* Result directory (PRESERVED):
+  `.local-artifacts/release-checkpoint-results/20261019T184436558Z-7e322cd5-9445-44c9-a19d-8674e5469098`.
+* Checkpoint identity `7e322cd5-9445-44c9-a19d-8674e5469098`; repository
+  commit `e4bd3e49059beb0a1f3998ef607a5b1d76721698` (branch `master`).
+* Registry hash `ab8a46ec532ece6b7e519f04a855443bc547460dbae55a7bc74a44ba4817cac8`;
+  ordered-owner-list hash
+  `b9c6e7cb2ea6370b03aa479966cf643ec0d7e0e118c62d74e4d22c674ad3124b`.
+* Registry counts: syntax 1, deterministic 125, PostgreSQL 133, total 259.
+* Result **PASSED**: 259 passed / 0 failed; terminal state `PASSED`; exit 0;
+  started `2026-10-19T18:44:36.558Z`, completed `2026-10-19T19:38:27.062Z`
+  (3230.6s). All 259 owner-result records were mechanically verified PASS.
+* Post-checkpoint candidate re-proof: the candidate remained byte-exact at the
+  section 1 identity (tracked diff, manifest, 23 paths, 21 tracked modified,
+  2 intentional untracked, nothing staged, stash empty, `git diff --check`
+  clean).
+
+### 14. Historically significant attempt-4 owners (attempt 4's actual ordinals)
+
+* `mixed-family-work-model-test.js` — ordinal 70 — PASS (attempt-1 boundary).
+* `process-execution-release-contract-test.js` — ordinal 85 — PASS
+  (deterministic lockstep owner).
+* `typed-evidence-projection-test.js` — ordinal 119 — PASS (companion
+  correction).
+* `ticket-attempt-backfill-postgres-test.js` — ordinal 140 — PASS
+  (attempt-2 boundary; exact 039..044 sequence).
+* `process-execution-release-postgres-test.js` — ordinal 147 — PASS
+  (previously latent schema-lockstep owner).
+* `governed-leaf-production-path-postgres-test.js` — ordinal 176 — PASS;
+  source SHA `a6dd54d1705ba8c6da9b61748f120c51259d7084228483b24adc58933c8acda4`
+  (attempt-3 boundary under its corrected bytes).
+* `browser-interaction-authority-postgres-test.js` — ordinal 252 — PASS;
+  source SHA `a2caa287297a4f651a0dcc6e40ca74a880543f7222e509049620b7978d1c9be1`.
+  **Attempt 4 was the FIRST complete protected P4-R2 barrier to reach and pass
+  this owner** (attempts 1–3 terminated before it: 70, 140, 176 respectively).
+
+### 15. Carried P4-R2 residuals — registered, NOT resolved
+
+Registered here so they are discoverable from the repository without the
+implementation conversation, using the same residual-registration convention
+as the P3 record. None is resolved by this record; none blocks the combined
+P4 closure review by itself; any correction requires separately authorized
+work.
+
+* **R2-RESIDUAL-TRIAGE — LOW.** Non-workspace authority failures, including
+  the R2 `authority_denied` class and the pre-existing `process_policy_denied`
+  class, can classify as `runtime_failed` rather than `authority_blocked`,
+  because the failure-normalization triage path does not consume the durable
+  authority evidence. Safety and durable evidence remain correct; only the
+  failure-class label can be less precise than the truth.
+* **R2-RESIDUAL-ORIGIN-RECOVERY — INFO/LOW.** The browser design
+  documentation describes `BROWSER_ORIGIN_BLOCKED` as recoverable, while the
+  accepted runtime terminalizes it. The design language and the accepted
+  runtime semantics disagree on recoverability; neither side was changed by
+  the R2 acceptance.
+* **R2-RESIDUAL-CANDIDATE-FINGERPRINT-RECIPE — INFO.** The historical old
+  aggregate candidate manifest
+  `194d47e411e461c4ad992d165c0f71bbd8ab641c512fac52d43850177afb0dc8` was not
+  independently reproducible because its aggregation recipe was not durably
+  specified; the underlying old candidate identity was independently proven
+  by path/file evidence. The later explicit recipe (section 16) is
+  deterministic and reproducible. This is NOT a defect in the current
+  candidate identity and no reinterpretation is made.
+
+Preserved separately, NOT folded into P4: **RECOVERY-A** (registered 2026-09-10
+above; non-blocking pre-existing operational/recovery residual) and **P3 F2**
+(carried LOW verification residual).
+
+### 16. Candidate-fingerprint recipe for this P4 evidence — explicit and deterministic
+
+The established explicit recipe, recorded as the forward convention for THIS
+P4 evidence identity (an evidence recipe for the recorded candidate; it does
+NOT change checkpoint semantics and is not a broader global release rule):
+
+1. take the complete candidate path set (tracked modified paths plus
+   intentional untracked paths);
+2. sort the paths lexically;
+3. compute SHA-256 of each current file;
+4. emit exactly `<sha256><two spaces><path>\n` per path;
+5. SHA-256 the complete newline-terminated manifest.
+
+This recipe reproduces both recorded identities:
+`2441f36ec3b2f7b7cb4873fe9e39b48063ea549c100ca5c729cd30a751f8543b`
+(attempt-4 green candidate) and, earlier,
+`3e67a0543d61cabffc13ae0cfea15d750122b38d7868e08da1644a4c7fe84ee0`
+(pre-lockstep candidate) and
+`2b4e482eff660184232a01df69679fc1746e5ff70f940a742d7d649625ec6140`
+(post-migration-tail, pre-lockstep correction candidate) and
+`629f47e630444fff4ed92b04e283b7198cd85f1b1311b7a5b785549a274ba46a`
+(historical R2-candidate manifest at attempt-1/2 time).
+
+### 17. What this record does NOT claim
+
+Checkpoint attempt 4 PASS means ONLY: the exact 23-path implementation
+candidate passed the required protected full canonical barrier; every
+registered owner passed; and the R2 browser-interaction owner finally executed
+inside a complete green barrier. It does NOT mean: P4 is published; P4 is
+committed; the P4 combined closure review has passed; any residual is
+resolved; or migration 044 is operationally authorized. Publication requires
+the combined P4 closure review and, if repository authority requires one after
+the docs adjustment, a final closure checkpoint — in that order.
+
+### 18. NEXT BOUNDARY
+
+FRESH INDEPENDENT COMBINED P4 CLOSURE REVIEW on the docs-adjusted exact
+candidate (the register edit in this record changes the candidate identity;
+the new identity must be captured by its own task report). The closure
+reviewer must assess: complete P4-R1 implementation; complete P4-R2
+implementation; this correction history; the attempt-4 PASS evidence; durable
+residual registration; authority boundaries (including the operational
+migration-authority separation and the schema-version-29 namespace); no
+accidental scope import from P5/P6/P7 or Browser Phase 3; the exact
+docs-adjusted candidate identity; and whether repository authority requires a
+final closure checkpoint after the register edit before publication.

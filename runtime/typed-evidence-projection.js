@@ -9,7 +9,12 @@ const BROWSER_OPERATIONS = Object.freeze([
   'observe',
   'readPageText',
   'screenshot',
-  'wait'
+  'wait',
+  // P4-R2 mutation-tier browser interactions: receipted through the same
+  // canonical browser operation/replay evidence model.
+  'click',
+  'fill',
+  'press'
 ]);
 const BROWSER_OPERATION_SET = new Set(BROWSER_OPERATIONS);
 const WORKSPACE_OPERATIONS = Object.freeze([

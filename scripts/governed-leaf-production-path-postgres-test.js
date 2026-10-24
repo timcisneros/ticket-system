@@ -461,6 +461,18 @@ async function main() {
     // ── Duplicate concurrency ──────────────────────────────────────────────
 
     const dupRun = await store.getRun(runs[1].id);
+    // Production governed dispatches enter under a claimed Run — the claim is
+    // the Run-lease liveness authority every observer consults. Racing callers
+    // on an unclaimed Run exercised a test-only authority shape: a duplicate
+    // whose PREPARE observed the started reservation found no live lease and
+    // reached conservative settlement of a dispatch a live winner still owned
+    // (the ordinal-176 protected-checkpoint failure). Under the production
+    // lease discipline the winner's dispatch window is lease-backed, so this
+    // block now races the way production races.
+    assert.ok(await store.claimPendingRun({
+      leaseOwner: 'duplicate-race-proof', leaseDurationMs: 60_000,
+      eligibleRunIds: [dupRun.id]
+    }), 'the duplicate race executes under a claim, as production does');
     const dupTransport = recordingTransport();
     const duplicated = await Promise.allSettled([
       runGoverned(dupRun, 'model-request:agent:1:provider', { transport: dupTransport }),
@@ -1018,6 +1030,180 @@ async function main() {
         'the reservation records a started request');
       assert.equal(ledger.responses, 0, 'and no durable response was invented');
       assert.equal(ledger.settlements, 0, 'and nothing was settled on a lost response');
+    }
+
+    // ── GOVERNED DISPATCH-WINDOW LEASE LIVENESS, forced ────────────────────
+    //
+    // The ungoverned provider path asserts Run-lease liveness for the whole
+    // provider-transport window through `withInFlightRunLeaseRenewal`; the
+    // governed leaf path now does the same — the production wiring is pinned
+    // by source below. Without that assertion a governed model call
+    // outlasting the lease horizon reads as an abandoned executor, and a
+    // duplicate whose PREPARE observes the started reservation then settles
+    // books the dispatch owner still owns — the ordinal-176
+    // protected-checkpoint failure.
+    //
+    // The window here is forced with a barrier: the owner's transport is held
+    // longer than the lease horizon while the worker maintains its lease
+    // through the repository's real heartbeat seam (the exact call the server
+    // helper drives, at the helper's exact cadence). The proof is the durable
+    // record — heartbeat events, the extended lease expiry, and the liveness
+    // predicate — never the wall-clock hold itself.
+    {
+      // The production wiring, pinned the way the claim classifier pins its
+      // own source: the governed leaf dispatch must wrap its governed
+      // transport in the existing in-flight lease-renewal seam, and the seam
+      // must keep its established semantics.
+      const fs = require('node:fs');
+      const nodePath = require('node:path');
+      const serverSource = fs.readFileSync(
+        nodePath.join(__dirname, '..', 'server.js'), 'utf8');
+      const helperAt = serverSource.indexOf(
+        'async function withInFlightRunLeaseRenewal(run, fn) {');
+      assert.ok(helperAt > 0, 'the in-flight lease-renewal seam exists');
+      const helperBody = serverSource.slice(helperAt,
+        serverSource.indexOf('\n}\n', helperAt));
+      assert.ok(helperBody.includes('Math.max(1000, Math.floor(leaseDurationMs / 3))'),
+        'renewal runs at the established bounded cadence');
+      assert.ok(helperBody.includes(
+        "heartbeatRunLease(run.id, { phase: 'provider_call_in_flight' })"),
+        'renewal drives the repository Run-lease heartbeat');
+      assert.ok(helperBody.includes('.catch(() => {') &&
+        helperBody.includes('renewalStopped = true'),
+        'a failed renewal stops renewing without failing the transport');
+      assert.ok(helperBody.includes('timer.unref()'),
+        'the renewal timer never holds the process open');
+      assert.ok(helperBody.includes('finally {') &&
+        helperBody.includes('clearInterval(timer)'),
+        'renewal stops when the transport window completes');
+      const dispatchAt = serverSource.indexOf(
+        'async function dispatchGovernedLeafModelRequest({');
+      assert.ok(dispatchAt > 0, 'the governed leaf dispatch exists');
+      const dispatchBody = serverSource.slice(dispatchAt,
+        serverSource.indexOf('\nasync function ', dispatchAt + 10));
+      assert.match(dispatchBody,
+        /transport: \(\.\.\.transportArgs\) => withInFlightRunLeaseRenewal\(run, \(\) =>\s*\n\s*resolveGovernedPlannerTransport\(\)\(\.\.\.transportArgs\)\),/,
+        'the governed leaf dispatch wraps its transport in the existing renewal seam');
+
+      const liveRun = await store.getRun((await store.listRunsForTicket({
+        ticketId: (await admitLeafSet('Governed leaf dispatch-window liveness')).ticket.id
+      })).runs[0].id);
+      // A SHORT lease horizon on purpose: without renewal the lease lapses
+      // while the transport is still held, which is exactly the abandonment
+      // ambiguity the in-flight renewal exists to prevent. The helper's
+      // cadence is max(1000, floor(duration / 3)) — 1000ms here — so the hold
+      // spans the original horizon more than twice and more than one beat.
+      const LEASE_MS = 1500;
+      assert.ok(await store.claimPendingRun({
+        leaseOwner: 'dispatch-liveness-proof', leaseDurationMs: LEASE_MS,
+        eligibleRunIds: [liveRun.id]
+      }), 'the Run executes under a claim, as production does');
+      const originalHorizonMs = Date.parse((await store.pool.query(
+        `SELECT lease_expires_at FROM ${store.table('runs')} WHERE id = $1`,
+        [liveRun.id])).rows[0].lease_expires_at);
+
+      const t = recordingTransport();
+      const owner = traceCaller('A-owner');
+      const observer = traceCaller('B-observer');
+      const inFlight = signal();
+
+      // The worker's lease maintenance across the transport window: the SAME
+      // repository heartbeat seam the server helper drives, at the helper's
+      // exact cadence, under the worker's own lease owner.
+      let renewing = true;
+      const renewalTimer = setInterval(() => {
+        if (!renewing) return;
+        store.heartbeatRunLease({
+          runId: liveRun.id, leaseOwner: 'dispatch-liveness-proof',
+          leaseDurationMs: LEASE_MS, payload: { phase: 'provider_call_in_flight' }
+        }).catch(() => { renewing = false; });
+      }, Math.max(1000, Math.floor(LEASE_MS / 3)));
+      if (typeof renewalTimer.unref === 'function') renewalTimer.unref();
+      const beatCount = async () => (await store.pool.query(
+        `SELECT count(*)::int AS n FROM ${store.table('events')}
+          WHERE run_id = $1 AND type = 'run.heartbeat'
+            AND payload->>'phase' = 'provider_call_in_flight'`,
+        [liveRun.id])).rows[0].n;
+
+      // Held INSIDE the transport: the transport is entered (recorded at
+      // entry) and the response does not come back until the test opens the
+      // barrier — the exact window production must keep lease-live.
+      const heldTransport = async args => {
+        t.calls.push(args);
+        inFlight.arrive();
+        await inFlight.opened;
+        return { text: '{"ok":true}', identity: 'resp_liveness' };
+      };
+
+      const ownerPromise = runGoverned(liveRun, 'model-request:agent:1:provider',
+        { transport: heldTransport, repository: owner.repository() });
+      await inFlight.arrived;
+
+      // Renewal beats are awaited through their DURABLE record; the short
+      // pacing waits only poll for the fact, they are not the proof. Two
+      // beats guarantee the hold spans the original horizon, where an
+      // unrenewed lease would already read as abandoned.
+      const beatsAtEntry = await beatCount();
+      let heldBeats = 0;
+      for (let i = 0; i < 200 && heldBeats < 2; i++) {
+        heldBeats = (await beatCount()) - beatsAtEntry;
+        if (heldBeats < 2) await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      assert.ok(heldBeats >= 2,
+        `lease renewal fired while the governed transport was held ` +
+        `(${heldBeats} durable in-flight heartbeat beats)`);
+      const heldExecutor = await store.isRunExecutorActive(liveRun.id);
+      assert.equal(heldExecutor.active, true,
+        'the Run lease is still live past the original horizon while the transport is held');
+      const heldExpiryMs = Date.parse((await store.pool.query(
+        `SELECT lease_expires_at FROM ${store.table('runs')} WHERE id = $1`,
+        [liveRun.id])).rows[0].lease_expires_at);
+      assert.ok(heldExpiryMs > originalHorizonMs,
+        'the durable lease expiry extended beyond the original horizon');
+
+      // The duplicate enters through the PREPARE-OBSERVED started seam — its
+      // prepare observes the reservation after the winner's start committed —
+      // while the winner remains held and the lease is maintained. It stays
+      // an observer: no transport, no settlement, no race report.
+      const dupTransport = recordingTransport();
+      const observerResult = await runGoverned(liveRun, 'model-request:agent:1:provider',
+        { transport: dupTransport, repository: observer.repository() });
+      assert.equal(observerResult.status, 'request_in_flight',
+        `a prepare-observed duplicate of a lease-maintained in-flight dispatch ` +
+        `reports in flight, got ${observerResult.status}`);
+      assert.notEqual(observerResult.status, 'already_dispatched_unresolved',
+        'the duplicate never reports the conservative-settlement race status');
+      assert.equal(dupTransport.calls.length, 0,
+        'the duplicate performs no provider transport');
+      assert.equal(observer.dispatchAuthority, false,
+        'the duplicate acquires no dispatch authority');
+      const midReservation = await store.getEconomicReservation(owner.reservationId);
+      assert.equal(midReservation.state, 'request_started',
+        'the duplicate did not settle the winner’s reservation');
+      assert.equal(midReservation.settlementReceipt, null,
+        'and wrote no settlement receipt');
+
+      // The owner finishes its held transport, persists, and settles.
+      inFlight.open();
+      renewing = false;
+      clearInterval(renewalTimer);
+      const ownerResult = await ownerPromise;
+      assert.equal(ownerResult.status, 'received',
+        `the held owner still carries its own result, got ${ownerResult.status}`);
+      assert.equal(t.calls.length, 1, 'exactly one provider transport');
+      const ledger = await ledgerOf(liveRun.id);
+      assert.equal(ledger.reservations.length, 1, 'one reservation');
+      assert.equal(ledger.responses, 1, 'exactly one durable response');
+      assert.equal(ledger.settlements, 1, 'settled exactly once — no duplicate settlement');
+      const finalReservation = await store.getEconomicReservation(owner.reservationId);
+      assert.equal(finalReservation.state, 'settled',
+        'no ECONOMIC_RESERVATION_STATE_CONFLICT — the owner persisted and settled its own reservation');
+      assert.match(finalReservation.responseHash, /^[0-9a-f]{64}$/,
+        'the response is durably bound to the reservation');
+      const recover = await runGoverned(liveRun, 'model-request:agent:1:provider',
+        { transport: recordingTransport() });
+      assert.equal(recover.status, 'reused_durable_response',
+        'the durable response remains recoverable without another provider call');
     }
 
     // ── Multi-request sequencing ───────────────────────────────────────────

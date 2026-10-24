@@ -60,7 +60,10 @@ assert.match(inbox, /if \(thread\.kind === 'blocker'\) \{[\s\S]*runWithNewMutati
 assert.doesNotMatch(routeOptions('post', '/api/inbox/threads/:id/resolve'), /mutationAdmission:\s*true/,
   'deliverable acknowledgement must not reserve the mixed route as if it emitted triage evidence');
 
-assert.match(server, /const BROWSER_OPERATIONS_REQUIRING_MUTATION_ADMISSION = new Set\(\['navigate', 'screenshot'\]\);/);
+// P4-R2: browser Phase-2 interactions (click/fill/press) are mutation-tier
+// receipts and join navigate/screenshot in the mutation-admission set; the
+// frozen spread keeps the interaction catalog the single source of membership.
+assert.match(server, /const BROWSER_OPERATIONS_REQUIRING_MUTATION_ADMISSION = new Set\(\[\s*'navigate',\s*'screenshot',\s*\.\.\.BROWSER_INTERACTION_OPERATIONS\s*\]\);/);
 assert.match(server, /isBrowserRun\(run\) && BROWSER_OPERATIONS_REQUIRING_MUTATION_ADMISSION\.has\(proposedOperation\)/);
 
 const appendStart = server.indexOf('async function appendEvent(event = {})');

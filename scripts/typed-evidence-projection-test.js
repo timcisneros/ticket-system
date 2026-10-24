@@ -135,7 +135,12 @@ const processSummary = summarizeTypedOperationConsequences({
 });
 assert.match(processSummary.lines.join('\n'), /Process operations \(1\): syntax-check completed/);
 
-assert.deepEqual(BROWSER_OPERATIONS, ['navigate', 'observe', 'readPageText', 'screenshot', 'wait']);
+// P4-R2: the canonical browser operation family is the Phase-1 read family
+// plus the receipted mutation-tier interactions (runtime/typed-evidence-projection.js).
+// This owner still pins the EXACT canonical family — additions or omissions fail.
+assert.deepEqual(BROWSER_OPERATIONS, [
+  'navigate', 'observe', 'readPageText', 'screenshot', 'wait', 'click', 'fill', 'press'
+]);
 assert.deepEqual(WORKSPACE_OPERATIONS, [
   'listDirectory', 'readFile', 'createFolder', 'writeFile', 'renamePath', 'deletePath'
 ]);

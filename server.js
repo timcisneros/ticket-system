@@ -53,6 +53,7 @@ const {
 } = require('./runtime/process-execution-contract');
 const {
   PROCESS_TARGET_CATALOG_HISTORICAL_VERSION,
+  ProcessTargetCatalogError,
   loadProcessTargetCatalog,
   normalizeProcessProfileGrants,
   resolveProcessProfileGrants
@@ -400,9 +401,32 @@ const BROWSER_TARGET_LIMIT_FIELDS = Object.freeze([
   'navTimeoutMs',
   'waitTimeoutMsCap',
   'maxPageTextBytes',
-  'maxScreenshotsPerRun'
+  'maxScreenshotsPerRun',
+  'maxInteractionsPerRun'
 ]);
 const BROWSER_PHASE_ONE_OPERATIONS = Object.freeze(['navigate', 'observe', 'readPageText', 'screenshot', 'wait']);
+// P4-R2 (Browser Phase-2 safe interaction): receipted mutation-tier operations.
+// They exist in the bounded-agent catalog ONLY when the admitted Run's
+// execution policy authorizes interactions; see getRunBrowserOperations.
+const BROWSER_INTERACTION_OPERATIONS = Object.freeze(['click', 'fill', 'press']);
+// Canonical access-catalog permission identity for browser-interaction
+// authority (distinct from the manual operator-browser `browser:read` /
+// `browser:operate` permissions). Its durable row is migration-owned
+// (migration 044); this string is the single reference for the ticket
+// creation/configuration gate.
+const BROWSER_INTERACTION_PERMISSION = 'browser:interact';
+// Canonical press key allowlist. The design names Enter, Tab, Escape, and the
+// arrow keys; arrows use the canonical Chromium/Playwright spellings. No
+// arbitrary key strings or browser shortcuts are accepted anywhere.
+const BROWSER_INTERACTION_PRESS_KEYS = Object.freeze([
+  'Enter',
+  'Tab',
+  'Escape',
+  'ArrowUp',
+  'ArrowDown',
+  'ArrowLeft',
+  'ArrowRight'
+]);
 
 console.log(`WORKSPACE_ROOT=${WORKSPACE_ROOT}`);
 console.log(`ARTIFACT_ROOT=${ARTIFACT_ROOT}`);
@@ -414,13 +438,21 @@ const AGENT_PROCESS_OPERATIONS = [PROCESS_OPERATION];
 // Navigation changes browser-session state and screenshots create artifacts. Pure
 // observation and bounded waits do not need to reserve worst-case event capacity
 // for the duration of the operation; their evidence append waits on record-sized capacity.
-const BROWSER_OPERATIONS_REQUIRING_MUTATION_ADMISSION = new Set(['navigate', 'screenshot']);
+// Phase-2 interactions are mutation-tier receipts and join navigate/screenshot here.
+const BROWSER_OPERATIONS_REQUIRING_MUTATION_ADMISSION = new Set([
+  'navigate',
+  'screenshot',
+  ...BROWSER_INTERACTION_OPERATIONS
+]);
 const BROWSER_OPERATION_ARGS = Object.freeze({
   navigate: ['url'],
   observe: [],
   readPageText: [],
   screenshot: [],
-  wait: ['forMs']
+  wait: ['forMs'],
+  click: ['elementId'],
+  fill: ['elementId', 'value'],
+  press: ['key']
 });
 const AGENT_CANONICAL_WORKFLOW_DRAFTS_ENABLED = process.env.AGENT_ALLOW_CANONICAL_WORKFLOW_DRAFT === '1';
 // Model-assisted objective compilation is an opt-in experimental capability. It
@@ -1314,6 +1346,15 @@ function inferPhaseFromActions(run, actions) {
     // PROCESS_PHASE_DENIED instead of a contradictory global phase result.
     if (op === PROCESS_OPERATION) {
       phases.add(run.currentPhase || 'planning');
+      continue;
+    }
+    // Browser interaction operations are mutation-tier for browser runs, the
+    // same run-scoped classification pattern as the process operation: they
+    // are deliberately NOT globally classified in PHASE_OPERATIONS, so a
+    // filesystem run's unsupported click batch keeps its existing inference
+    // and a browser interaction batch classifies as mutation.
+    if (isBrowserRun(run) && BROWSER_INTERACTION_OPERATIONS.includes(op)) {
+      phases.add('mutation');
       continue;
     }
     for (const [phase, allowed] of Object.entries(PHASE_OPERATIONS)) {
@@ -2444,12 +2485,15 @@ function getBrowserEngineAdminStatus() {
 }
 
 function parseBrowserTargetForm(input = {}, expectedId = null) {
+  // Phase-3 authority stays forbidden in target configuration. P4-R2 graduates
+  // ONLY `maxInteractionsPerRun` from this list into the validated limit
+  // fields; every other interaction/Phase-3 field remains rejected here.
   const forbiddenFields = [
     'credentialRef', 'credentials', 'sessionMode', 'persistentSessions',
-    'artifactDir', 'maxInteractionsPerRun', 'maxDownloadBytes',
+    'artifactDir', 'maxDownloadBytes',
     'downloads', 'uploads', 'allowDownloads', 'allowUploads',
     'click', 'fill', 'press', 'allowClick', 'allowFill', 'allowPress',
-    'workflowId', 'allowedOperations'
+    'allowBrowserInteractions', 'workflowId', 'allowedOperations'
   ];
   const forbidden = forbiddenFields.find(field => Object.prototype.hasOwnProperty.call(input, field));
   if (forbidden) return { ok: false, error: `Browser target field is not supported in Phase 1: ${forbidden}` };
@@ -2529,6 +2573,26 @@ function normalizeBrowserTargetSnapshot(target) {
 
 function isBrowserRun(run) {
   return Boolean(run && run.targetRef && run.targetRef.kind === 'browser' && run.browserTargetSnapshot);
+}
+
+// P4-R2 interaction authority, as frozen into the admitted Run. The only
+// source is the immutable executionPolicySnapshot — never the live ticket,
+// target catalog, or actor permissions, so later changes cannot retroactively
+// expand an admitted Run. The interaction access permission is enforced at the
+// surfaces that SET this policy (ticket creation/configuration), not here.
+function runBrowserInteractionsAuthorized(run) {
+  return Boolean(isBrowserRun(run) &&
+    run.executionPolicySnapshot &&
+    run.executionPolicySnapshot.allowBrowserInteractions === true);
+}
+
+// The bounded-agent browser operation catalog for a Run: Phase-1 operations
+// always; Phase-2 interaction operations only under interaction authority. The
+// model envelope, prompt, and action parser all read from this one catalog.
+function getRunBrowserOperations(run) {
+  return runBrowserInteractionsAuthorized(run)
+    ? [...AGENT_BROWSER_OPERATIONS, ...BROWSER_INTERACTION_OPERATIONS]
+    : [...AGENT_BROWSER_OPERATIONS];
 }
 
 function createDemoWorkflowDefinition(now = new Date().toISOString()) {
@@ -3741,6 +3805,12 @@ function normalizeExecutionPolicy(policy, workspaceScope = 'shared') {
     allowWorkspaceWrites: source.allowWorkspaceWrites === undefined
       ? DEFAULT_EXECUTION_POLICY.allowWorkspaceWrites
       : source.allowWorkspaceWrites === true,
+    // P4-R2: browser interaction (click/fill/press) is separately authorized at
+    // ticket/Run authority level and DEFAULTS FALSE. Strict boolean opt-in;
+    // absent/invalid means false, never a permissive fallback. The admitted Run
+    // reads only this snapshot — later ticket/config edits cannot retroactively
+    // expand an admitted Run's interaction authority.
+    allowBrowserInteractions: source.allowBrowserInteractions === true,
     allowParallelRuns: source.allowParallelRuns === true,
     allowChildTickets: source.allowChildTickets === true,
     workspaceScope: workspaceScope === 'owned_paths' ? 'owned_paths' : 'shared'
@@ -8344,8 +8414,13 @@ async function expireStaleRunLeases() {
 
 async function reconcilePreparedTargetOperations(run, suppliedEvents = null) {
   const events = Array.isArray(suppliedEvents) ? suppliedEvents : (await getRunEvents(run.id));
+  // P4-R2: committed browser interactions carry their completion evidence as
+  // `browser.operation` events under the same operation identity, so a prepared
+  // interaction whose outcome already committed reconciles as a no-op instead
+  // of re-entering the workspace evidence path.
   const completedOperationKeys = new Set(events
-    .filter(event => event && event.type === 'workspace.operation' && event.payload && event.payload.operationKey)
+    .filter(event => event && (event.type === 'workspace.operation' || event.type === 'browser.operation') &&
+      event.payload && event.payload.operationKey)
     .map(event => event.payload.operationKey));
   const preparedEvents = events.filter(event =>
     event && event.type === 'workspace.operation_prepared' && event.payload && event.payload.operationKey
@@ -8357,12 +8432,21 @@ async function reconcilePreparedTargetOperations(run, suppliedEvents = null) {
   for (const preparedEvent of preparedEvents) {
     const preparedIntent = preparedEvent.payload.intent || {};
     const args = preparedIntent.args || {};
+    // P4-R2: prepared browser interactions are not path-addressed. They take
+    // the target-root lock (the same resource family withWorkspaceMutationBoundary
+    // uses) so the reconcile remains serialized per target without inventing a
+    // second lock family.
+    const preparedTargetIsBrowser = preparedIntent.target &&
+      preparedIntent.target.targetKind === 'browser';
+    const lockPaths = preparedTargetIsBrowser
+      ? ['']
+      : [args.path, args.nextPath].filter(value => typeof value === 'string');
     const status = await getNonTerminalEvidenceRepository().withTargetOperationLock({
       run,
       targetId: preparedIntent.target && preparedIntent.target.targetId
         ? preparedIntent.target.targetId
         : getRunWorkspaceProvider(run).id,
-      paths: [args.path, args.nextPath].filter(value => typeof value === 'string'),
+      paths: lockPaths,
       operation: preparedIntent.operation,
       args
     }, () => reconcilePreparedTargetOperation(
@@ -11545,6 +11629,24 @@ async function renderAdminUserForm(reply, request, options = {}) {
   const editAccount = options.editAccount || null;
   const userGroups = options.userGroups ?? (editAccount ? editAccount.groupIds || [] : []);
 
+  // P4-R1: grant assignment selects from the existing trusted target/profile
+  // catalog only. The operator-facing projection carries identifiers and
+  // permitted phases; executable, argument, environment, limit, and launch
+  // material never enter the operator surface.
+  const processCatalogTargets = accountType === 'agent' && editAccount
+    ? PROCESS_TARGET_CATALOG.targets.map(target => ({
+      id: target.id,
+      profiles: target.profiles.map(profile => ({
+        id: profile.id,
+        allowedPhases: [...profile.allowedPhases]
+      }))
+    }))
+    : [];
+  const grantedProcessProfileKeys = accountType === 'agent' && editAccount
+    ? projectConfiguredAgentProcessProfileGrants(editAccount)
+      .flatMap(grant => grant.profileIds.map(profileId => `${grant.targetId}|${profileId}`))
+    : [];
+
   return reply.view('admin/user-form.ejs', viewData({
     user: request.user,
     editAccount,
@@ -11556,6 +11658,11 @@ async function renderAdminUserForm(reply, request, options = {}) {
     hasOpenAIApiKeyFallback: Boolean(String(process.env.OPENAI_API_KEY || '').trim()),
     hasOpenAIModelFallback: Boolean(String(process.env.OPENAI_MODEL || '').trim()),
     hasOllamaModelFallback: Boolean(String(process.env.OLLAMA_MODEL || '').trim()),
+    processCatalogTargets,
+    grantedProcessProfileKeys,
+    processReleaseState: accountType === 'agent' && editAccount
+      ? processReleaseStateProjection()
+      : null,
     error: options.error || null
   }, request.session.userId));
 }
@@ -11627,8 +11734,8 @@ function createReplaySnapshotBase(run, overrides = {}) {
     assignedAgentId: run.agentId,
     agentNameSnapshot: run.agentName,
     primitiveContract: browserRun ? {
-      allowedOperations: [...AGENT_BROWSER_OPERATIONS],
-      mutatingOperations: [],
+      allowedOperations: getRunBrowserOperations(run),
+      mutatingOperations: runBrowserInteractionsAuthorized(run) ? [...BROWSER_INTERACTION_OPERATIONS] : [],
       requiredArgs: BROWSER_OPERATION_ARGS
     } : {
       allowedOperations: [...AGENT_ALLOWED_OPERATIONS],
@@ -12582,7 +12689,21 @@ async function dispatchGovernedLeafModelRequest({
     logicalSourceIdentity: budgetSourceIdentity,
     canonicalBody,
     endpointIdentity: GOVERNED_OPENAI_ENDPOINT,
-    transport: resolveGovernedPlannerTransport(),
+    // GOVERNED PROVIDER DISPATCH ASSERTS RUN-LEASE LIVENESS FOR ITS FULL
+    // TRANSPORT WINDOW, exactly as the ungoverned path does through
+    // `withInFlightRunLeaseRenewal`. A model call routinely outlasts the lease
+    // horizon; without mid-transport renewal a healthy governed dispatch reads
+    // as an abandoned executor, and an observer that finds the started
+    // reservation settles books the dispatch owner still owns (the duplicate
+    // settlement-ownership race the protected checkpoint exposed). The helper
+    // renews through the repository's Run-lease heartbeat at its established
+    // bounded cadence, stops renewing on a lost lease without manufacturing
+    // provider-delivery certainty, and clears when transport completes.
+    // Dispatch identity remains `started_claim_event_position`; a lease that
+    // genuinely lapses remains the abandonment/recovery predicate, and
+    // post-response ownership fences are unchanged.
+    transport: (...transportArgs) => withInFlightRunLeaseRenewal(run, () =>
+      resolveGovernedPlannerTransport()(...transportArgs)),
     resolveCredentials: resolveGovernedPlannerCredentials,
     // The same remaining-run-time bound the ungoverned path applies, so
     // governed dispatch is not permitted to outlive the Run's duration limit.
@@ -18074,6 +18195,7 @@ async function buildRuntimeEnvelope(run, step = 0, objective = null, resolvedLim
 
   if (isBrowserRun(run)) {
     const target = run.browserTargetSnapshot;
+    const interactionAuthorized = runBrowserInteractionsAuthorized(run);
     return {
       runId: run.id,
       ticketId: run.ticketId,
@@ -18084,9 +18206,10 @@ async function buildRuntimeEnvelope(run, step = 0, objective = null, resolvedLim
       browserTargetId: target.id,
       allowedOrigins: target.allowedOrigins,
       startUrl: target.startUrl,
-      allowedOperations: [...AGENT_BROWSER_OPERATIONS],
+      allowedOperations: getRunBrowserOperations(run),
+      browserInteractionAuthorized: interactionAuthorized,
       maxActionsPerResponse: MAX_AGENT_ACTIONS_PER_RESPONSE,
-      maxMutatingActionsPerResponse: 0,
+      maxMutatingActionsPerResponse: interactionAuthorized ? MAX_MUTATING_ACTIONS_PER_RESPONSE : 0,
       currentStep: step,
       maxExecutionSteps: limits.maxExecutionSteps,
       workloadProfile: null,
@@ -18209,7 +18332,9 @@ async function buildSimulationRuntimeEnvelope(ticket, agent) {
 
 function countMutatingActions(actions) {
   return (actions || []).filter(action =>
-    action && typeof action === 'object' && AGENT_MUTATING_OPERATIONS.includes(action.operation)
+    action && typeof action === 'object' &&
+    (AGENT_MUTATING_OPERATIONS.includes(action.operation) ||
+      BROWSER_INTERACTION_OPERATIONS.includes(action.operation))
   ).length;
 }
 
@@ -19552,7 +19677,15 @@ function parseBrowserDirectAction(run, action) {
     throw error;
   }
   const operation = action.operation.trim();
-  if (!AGENT_BROWSER_OPERATIONS.includes(operation)) {
+  // P4-R2: an interaction operation on a run whose admitted policy does not
+  // authorize interactions is deliberately NOT refused here. Parsing stays
+  // catalog-scoped only, so the operation reaches the canonical authority gate
+  // in executeBrowserOperation, which records the typed authority denial
+  // evidence (BROWSER_INTERACTION_NOT_AUTHORIZED, authority_denied, an
+  // authorityChecks entry and a refused browserOperations receipt) before any
+  // session or effect exists. Unknown operations still refuse at parse.
+  const catalogOperations = [...AGENT_BROWSER_OPERATIONS, ...BROWSER_INTERACTION_OPERATIONS];
+  if (!catalogOperations.includes(operation)) {
     const error = new Error(`Unsupported browser operation: ${operation}`);
     error.code = 'AGENT_ACTION_UNSUPPORTED';
     error.failureKind = 'browser_error';
@@ -21305,26 +21438,28 @@ function browserTargetMetadata(run, resourceUrl = null) {
   };
 }
 
-async function recordBrowserOperationEvidence(run, step, operation, args, receipt, error, startedAt, durationMs, operationContext) {
-  const safeArgs = operation === 'navigate'
-    ? { url: redactBrowserUrl(args.url) }
-    : sanitizeSnapshotValue(args);
+async function recordBrowserOperationEvidence(run, step, operation, args, receipt, error, startedAt, durationMs, operationContext, extras = {}) {
+  const safeArgs = extras.argsForEvidence !== undefined
+    ? sanitizeSnapshotValue(extras.argsForEvidence)
+    : (operation === 'navigate'
+      ? { url: redactBrowserUrl(args.url) }
+      : sanitizeSnapshotValue(args));
   const historyRecord = {
     allocationPlanId: run.allocationPlanId || null,
     allocationItemId: run.allocationItemId || null,
     step,
     operation,
     args: sanitizeSnapshotValue(safeArgs),
-    preState: null,
-    postState: null,
+    preState: extras.preState !== undefined ? sanitizeSnapshotValue(extras.preState) : null,
+    postState: extras.postState !== undefined ? sanitizeSnapshotValue(extras.postState) : null,
     result: error ? null : sanitizeSnapshotValue(receipt),
     error: error ? sanitizeLogMessage(error.message || String(error)) : null,
     errorCode: error ? error.code || null : null,
     failureKind: error ? error.failureKind || 'browser_error' : null,
     ...browserTargetMetadata(run, receipt && receipt.resourceUrl),
-    authorityDecision: null,
+    authorityDecision: extras.authorityDecision ? sanitizeSnapshotValue(extras.authorityDecision) : null,
     readReceipt: sanitizeSnapshotValue(receipt),
-    mutationReceipt: null
+    mutationReceipt: extras.mutationReceipt ? sanitizeSnapshotValue(extras.mutationReceipt) : null
   };
   const evidence = {
     operation: { operation, args: safeArgs },
@@ -21374,7 +21509,15 @@ async function getOrCreateBrowserSession(run) {
     allowedOrigins: target.allowedOrigins,
     navTimeoutMs: browserLimit(target, 'navTimeoutMs')
   });
-  const entry = { session, actions: 0, navigations: 0, screenshots: 0, artifactSequence: 0 };
+  const entry = {
+    session,
+    actions: 0,
+    navigations: 0,
+    screenshots: 0,
+    interactions: 0,
+    artifactSequence: 0,
+    observations: new Map()
+  };
   browserSessions.set(run.id, entry);
   return entry;
 }
@@ -21410,11 +21553,493 @@ async function captureBrowserCurrentState(run) {
   }
 }
 
+// ── P4-R2 browser interaction (click/fill/press) ──────────────────
+// Mutation-tier browser operations. Every gate below must pass and no single
+// gate substitutes for another: run execution policy (default false), active
+// target snapshot, additive interaction/action/browser-operation budgets,
+// canonical element provenance minted by a same-Run observe (click/fill), the
+// restricted press key allowlist, and the engine-level origin guard which is
+// revalidated over interaction effects. Refusals are recorded as authority
+// evidence; completions are recorded as mutation receipts in the canonical
+// browser evidence model.
+const BROWSER_MINTED_OBSERVATION_LIMIT = 32;
+
+function registerBrowserObservationMints(entry, operationKey, pageStateHash, inventory) {
+  if (!entry || !pageStateHash) return;
+  entry.observations = entry.observations || new Map();
+  const elements = Array.isArray(inventory) ? inventory : [];
+  const elementIds = new Set();
+  const sensitiveByElementId = {};
+  for (const element of elements) {
+    if (!element || typeof element.elementId !== 'string' || !element.elementId) continue;
+    elementIds.add(element.elementId);
+    if (element.sensitive === true) sensitiveByElementId[element.elementId] = true;
+  }
+  entry.observations.set(pageStateHash, {
+    operationKey: operationKey || null,
+    elementIds,
+    sensitiveByElementId
+  });
+  while (entry.observations.size > BROWSER_MINTED_OBSERVATION_LIMIT) {
+    const oldest = entry.observations.keys().next().value;
+    entry.observations.delete(oldest);
+  }
+}
+
+function browserMintedPageStateHashes(entry, elementId) {
+  if (!entry || !(entry.observations instanceof Map) || typeof elementId !== 'string') return [];
+  const hashes = [];
+  for (const [pageStateHash, minted] of entry.observations.entries()) {
+    if (minted && minted.elementIds instanceof Set && minted.elementIds.has(elementId)) {
+      hashes.push(pageStateHash);
+    }
+  }
+  return hashes;
+}
+
+function browserMintedOperationKey(entry, pageStateHash) {
+  if (!entry || !(entry.observations instanceof Map)) return null;
+  const minted = entry.observations.get(pageStateHash);
+  return minted ? minted.operationKey || null : null;
+}
+
+function browserMintedSensitive(entry, elementId, mintedHashes) {
+  if (!entry || !(entry.observations instanceof Map) || typeof elementId !== 'string') return false;
+  for (const hash of mintedHashes) {
+    const minted = entry.observations.get(hash);
+    if (minted && minted.sensitiveByElementId && minted.sensitiveByElementId[elementId] === true) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function buildBrowserInteractionAuthorityEvidence(run, operation, status, reason) {
+  return {
+    ...buildAuthorityEvidence(run, operation, null, status, 'browser_interaction', reason),
+    targetId: isBrowserRun(run) ? `browser:${run.browserTargetSnapshot.id}` : null,
+    ...buildTargetActorContext(run)
+  };
+}
+
+// Default-deny policy gate. A refusal is recorded as authority denial evidence
+// for exactly this operation key before any session or effect exists.
+async function refuseBrowserInteraction(run, operation, operationKey) {
+  const evidence = buildBrowserInteractionAuthorityEvidence(
+    run,
+    operation,
+    'denied',
+    'executionPolicy.allowBrowserInteractions is false for this admitted run (browser interaction authority is default-off)'
+  );
+  await recordAuthorityEvidence(run, evidence, `authority:${operationKey}`);
+  const error = createBrowserOperationError(
+    'BROWSER_INTERACTION_NOT_AUTHORIZED',
+    'Browser interaction is not authorized for this run',
+    { operation }
+  );
+  error.failureKind = 'authority_denied';
+  throw error;
+}
+
+// Authority decision for a valid interaction, recorded after provenance
+// lookup and before the effect so the durable chain shows allow for exactly
+// this operation key.
+async function recordBrowserInteractionAuthority(run, operation, operationKey) {
+  const evidence = buildBrowserInteractionAuthorityEvidence(
+    run,
+    operation,
+    'allowed',
+    'Run execution policy authorizes browser interactions for this admitted run'
+  );
+  await recordAuthorityEvidence(run, evidence, `authority:${operationKey}`);
+  return evidence;
+}
+
+// ── Canonical interaction idempotency gate (P4-R2) ─────────────────────────
+// The repository mutation boundary for target operations: prepared intent,
+// committed receipt, replay-without-repetition (AGENTS.md operational
+// boundaries). Workspace mutations take it through beginWorkspaceMutation;
+// browser interactions take the SAME gate here, keyed by the attempt-stable
+// action-slot operation identity:
+//
+//   committed receipt (succeeded or refused) -> the recorded outcome is
+//     returned marked skipped/replayed; the engine is never consulted and no
+//     second receipt, replay item, or event is written (the original evidence
+//     stands unchanged, and the replayed run continues exactly where the
+//     committed outcome left it);
+//   prepared intent without a committed receipt -> the effect's outcome is
+//     not derivable from durable bytes alone, so the interaction refuses
+//     fail-closed for explicit reconciliation (the recovery sweep reaches the
+//     same answer through reconcilePreparedTargetOperations);
+//   nothing durable -> the intent is prepared BEFORE the effect, so a crash in
+//     the effect window leaves the recovery sweep durable intent evidence
+//     instead of a silent gap.
+async function beginBrowserInteraction(run, operation, args, operationKey, operationContext, authorityDecision, intentArgs, preState) {
+  const state = await getNonTerminalEvidenceRepository().getTargetOperation(run.id, operationKey);
+  if (state.receipt) {
+    const postState = state.receipt.postState && typeof state.receipt.postState === 'object'
+      ? state.receipt.postState
+      : {};
+    return {
+      completedOutcome: {
+        ...postState,
+        historyId: state.receipt.id,
+        operationKey,
+        skipped: true,
+        replayed: true,
+        ...(state.receipt.outcome !== 'succeeded'
+          ? {
+              replayedRefusal: true,
+              error: state.receipt.error || null,
+              errorCode: state.receipt.errorCode || null,
+              failureKind: state.receipt.failureKind || null
+            }
+          : {})
+      }
+    };
+  }
+  if (state.intent) {
+    throw createTargetReconciliationError(operationKey, state.intent.intent, {
+      reason: 'prepared browser interaction has no committed outcome; the live page state is required to classify the prepared effect',
+      operation: state.intent.operation,
+      targetId: state.intent.target && state.intent.target.targetId
+        ? state.intent.target.targetId
+        : null
+    });
+  }
+  const replayIdentity = operationContext.replayMetadata || {};
+  const preparationInput = {
+    runId: run.id,
+    ticketId: run.ticketId,
+    operationKey,
+    stepId: String(operationContext.step != null ? operationContext.step : 0),
+    leaseOwner: RUN_LEASE_OWNER,
+    ...(Number.isInteger(replayIdentity.executionTurn) &&
+        typeof replayIdentity.planKey === 'string' && replayIdentity.planKey &&
+        Number.isInteger(replayIdentity.actionIndex)
+      ? {
+          identity: {
+            executionTurn: replayIdentity.executionTurn,
+            planKey: replayIdentity.planKey,
+            actionIndex: replayIdentity.actionIndex
+          }
+        }
+      : {}),
+    intent: {
+      operation,
+      args: sanitizeSnapshotValue(intentArgs),
+      preState: sanitizeSnapshotValue(preState),
+      authorityDecision: sanitizeSnapshotValue(authorityDecision),
+      attemptStartedAt: new Date(operationContext.startedAt || Date.now()).toISOString(),
+      target: {
+        targetId: isBrowserRun(run) ? `browser:${run.browserTargetSnapshot.id}` : null,
+        targetKind: 'browser'
+      }
+    }
+  };
+  await getNonTerminalEvidenceRepository().prepareTargetOperation(preparationInput);
+  return { prepared: true };
+}
+
+// Canonical Phase-2 fill-value representation. Credential-sensitive fields
+// (identified by the canonical observation mechanism) never persist plaintext
+// values; only the repository-authorized redacted/hash shape is durable.
+// Non-sensitive fields keep the canonical Phase-2 plaintext representation.
+function buildFillEvidenceValue(rawValue, sensitive) {
+  return sensitive ? { redacted: true, valueHash: hashContent(rawValue) } : rawValue;
+}
+
+function buildBrowserInteractionMutationReceipt({
+  run,
+  operation,
+  before,
+  after,
+  authorityDecision,
+  sourcePageStateHash,
+  sourceObservationOperationKey,
+  targetElementId,
+  requestedKey,
+  sensitive,
+  fillValue,
+  error,
+  result
+}) {
+  return {
+    operationId: null,
+    ...browserTargetMetadata(run, after ? after.url : null),
+    operation,
+    timestamp: createLogTimestamp(),
+    before: sanitizeSnapshotValue(before),
+    after: sanitizeSnapshotValue(after),
+    providerResponse: error ? null : sanitizeSnapshotValue(result),
+    authorityDecision: authorityDecision ? sanitizeSnapshotValue(authorityDecision) : null,
+    sourcePageStateHash: sourcePageStateHash || null,
+    sourceObservationOperationKey: sourceObservationOperationKey || null,
+    targetElementId: targetElementId || null,
+    requestedKey: requestedKey || null,
+    sensitive: operation === 'fill' ? Boolean(sensitive) : null,
+    fillValue: fillValue === undefined ? null : fillValue,
+    error: error ? {
+      message: sanitizeLogMessage(error.message || String(error)),
+      code: error.code || null,
+      failureKind: error.failureKind || null
+    } : null,
+    ...buildTargetActorContext(run)
+  };
+}
+
+function buildBrowserInteractionReceiptMetadata({
+  operation,
+  before,
+  after,
+  sourcePageStateHash,
+  sourceObservationOperationKey,
+  targetElementId,
+  requestedKey,
+  sensitive,
+  fillValue
+}) {
+  return {
+    sourcePageStateHash: sourcePageStateHash || null,
+    sourceObservationOperationKey: sourceObservationOperationKey || null,
+    prePageStateHash: before.pageStateHash,
+    preUrl: redactBrowserUrl(before.url),
+    postPageStateHash: after.pageStateHash,
+    postUrl: redactBrowserUrl(after.url),
+    originContained: true,
+    ...(targetElementId ? { targetElementId } : {}),
+    ...(requestedKey ? { requestedKey } : {}),
+    ...(operation === 'fill' ? { sensitive, fillValue } : {})
+  };
+}
+
+async function executeBrowserInteraction(run, entry, operation, args, operationContext) {
+  const operationKey = operationContext.operationKey;
+
+  if (operation === 'click' || operation === 'fill') {
+    const elementId = typeof args.elementId === 'string' ? args.elementId.trim() : '';
+    if (!elementId) {
+      throw createBrowserOperationError(
+        'BROWSER_ELEMENT_NOT_FOUND',
+        `${operation} requires an elementId minted by a prior observe in this run`,
+        { elementId: args.elementId === undefined ? null : args.elementId }
+      );
+    }
+    const mintedHashes = browserMintedPageStateHashes(entry, elementId);
+    if (mintedHashes.length === 0) {
+      throw createBrowserOperationError(
+        'BROWSER_ELEMENT_NOT_FOUND',
+        `Observed element is unknown for this run: ${elementId}`,
+        { elementId }
+      );
+    }
+    operationContext.browserInteraction = {
+      elementId,
+      requestedKey: null,
+      authorityDecision: null,
+      sourcePageStateHash: null,
+      sourceObservationOperationKey: null,
+      sensitive: false,
+      fillValue: null,
+      before: null,
+      after: null
+    };
+    const authorityDecision = await recordBrowserInteractionAuthority(run, operation, operationKey);
+    operationContext.browserInteraction.authorityDecision = authorityDecision;
+    // ── Canonical interaction idempotency gate (P4-R2) ──────────────────────
+    // Placed after the authority decision and before the engine effect, exactly
+    // where beginWorkspaceMutation sits for workspace mutations. The prepared
+    // intent carries the provenance-bound page-state identity and the redacted
+    // durable fill representation.
+    const begunInteraction = await beginBrowserInteraction(
+      run, operation, args, operationKey, operationContext, authorityDecision,
+      operation === 'fill'
+        ? { elementId, value: buildFillEvidenceValue(
+            typeof args.value === 'string' ? args.value : '',
+            browserMintedSensitive(entry, elementId, mintedHashes)) }
+        : { elementId },
+      { pageStateHash: mintedHashes[mintedHashes.length - 1] }
+    );
+    if (begunInteraction.completedOutcome) return { skippedCommittedOutcome: begunInteraction.completedOutcome };
+    let interactionResult;
+    if (operation === 'click') {
+      interactionResult = await entry.session.clickElement(elementId, mintedHashes);
+    } else {
+      if (typeof args.value !== 'string') {
+        throw createBrowserOperationError('BROWSER_FILL_VALUE_INVALID', 'fill requires a string value', { elementId });
+      }
+      const sensitive = browserMintedSensitive(entry, elementId, mintedHashes);
+      interactionResult = await entry.session.fillElement(elementId, args.value, mintedHashes);
+      // The minting-observation sensitivity marker is the canonical redaction
+      // authority; the durable record keeps the minting-time truth.
+      interactionResult.sensitive = sensitive;
+    }
+    const sourcePageStateHash = interactionResult.before.pageStateHash;
+    const sourceObservationOperationKey = browserMintedOperationKey(entry, sourcePageStateHash);
+    const sensitive = operation === 'fill' ? Boolean(interactionResult.sensitive) : false;
+    const before = {
+      url: interactionResult.before.url,
+      title: interactionResult.before.title,
+      pageStateHash: sourcePageStateHash
+    };
+    const after = {
+      url: interactionResult.after.url,
+      title: interactionResult.after.title,
+      pageStateHash: interactionResult.after.pageStateHash
+    };
+    operationContext.browserInteraction.sourcePageStateHash = sourcePageStateHash;
+    operationContext.browserInteraction.sourceObservationOperationKey = sourceObservationOperationKey;
+    operationContext.browserInteraction.sensitive = sensitive;
+    operationContext.browserInteraction.before = before;
+    operationContext.browserInteraction.after = after;
+    const fillValue = operation === 'fill' ? buildFillEvidenceValue(args.value, sensitive) : null;
+    operationContext.browserInteraction.fillValue = fillValue;
+    const mutationReceipt = buildBrowserInteractionMutationReceipt({
+      run,
+      operation,
+      before,
+      after,
+      authorityDecision,
+      sourcePageStateHash,
+      sourceObservationOperationKey,
+      targetElementId: elementId,
+      requestedKey: null,
+      sensitive,
+      fillValue,
+      error: null,
+      result: { url: after.url, title: after.title, pageStateHash: after.pageStateHash }
+    });
+    mutationReceipt.operationKey = operationKey;
+    return {
+      result: {
+        url: after.url,
+        title: after.title,
+        pageStateHash: after.pageStateHash,
+        before: { url: before.url, title: before.title, pageStateHash: before.pageStateHash },
+        originContained: true
+      },
+      mutationReceipt,
+      argsForEvidence: operation === 'fill' ? { elementId, value: fillValue } : { elementId },
+      receiptMetadata: buildBrowserInteractionReceiptMetadata({
+        operation,
+        before,
+        after,
+        sourcePageStateHash,
+        sourceObservationOperationKey,
+        targetElementId: elementId,
+        requestedKey: null,
+        sensitive,
+        fillValue
+      }),
+      preState: before,
+      postState: after
+    };
+  }
+
+  const key = typeof args.key === 'string' ? args.key : '';
+  if (!BROWSER_INTERACTION_PRESS_KEYS.includes(key)) {
+    throw createBrowserOperationError(
+      'BROWSER_KEY_NOT_ALLOWED',
+      `Keyboard key is not on the press allowlist: ${key}`,
+      { key: args.key === undefined ? null : args.key }
+    );
+  }
+  operationContext.browserInteraction = {
+    elementId: null,
+    requestedKey: key,
+    authorityDecision: null,
+    sourcePageStateHash: null,
+    sourceObservationOperationKey: null,
+    sensitive: false,
+    fillValue: null,
+    before: null,
+    after: null
+  };
+  const authorityDecision = await recordBrowserInteractionAuthority(run, operation, operationKey);
+  operationContext.browserInteraction.authorityDecision = authorityDecision;
+  // Canonical interaction idempotency gate (P4-R2), same placement as the
+  // click/fill branch: after the authority decision, before the effect. A
+  // press is not provenance-bound, so its prepared intent carries the
+  // requested key without a page-state identity.
+  const begunInteraction = await beginBrowserInteraction(
+    run, operation, args, operationKey, operationContext, authorityDecision,
+    { key }, null
+  );
+  if (begunInteraction.completedOutcome) {
+    return { skippedCommittedOutcome: begunInteraction.completedOutcome };
+  }
+  const interactionResult = await entry.session.pressKey(key);
+  const before = {
+    url: interactionResult.before.url,
+    title: interactionResult.before.title,
+    pageStateHash: interactionResult.before.pageStateHash
+  };
+  const after = {
+    url: interactionResult.after.url,
+    title: interactionResult.after.title,
+    pageStateHash: interactionResult.after.pageStateHash
+  };
+  operationContext.browserInteraction.before = before;
+  operationContext.browserInteraction.after = after;
+  const mutationReceipt = buildBrowserInteractionMutationReceipt({
+    run,
+    operation,
+    before,
+    after,
+    authorityDecision,
+    sourcePageStateHash: null,
+    sourceObservationOperationKey: null,
+    targetElementId: null,
+    requestedKey: key,
+    sensitive: false,
+    fillValue: null,
+    error: null,
+    result: { url: after.url, title: after.title, pageStateHash: after.pageStateHash }
+  });
+  mutationReceipt.operationKey = operationKey;
+  return {
+    result: {
+      key,
+      url: after.url,
+      title: after.title,
+      pageStateHash: after.pageStateHash,
+      before: { url: before.url, title: before.title, pageStateHash: before.pageStateHash },
+      originContained: true
+    },
+    mutationReceipt,
+    argsForEvidence: { key },
+    receiptMetadata: buildBrowserInteractionReceiptMetadata({
+      operation,
+      before,
+      after,
+      sourcePageStateHash: null,
+      sourceObservationOperationKey: null,
+      targetElementId: null,
+      requestedKey: key,
+      sensitive: false,
+      fillValue: null
+    }),
+    preState: before,
+    postState: after
+  };
+}
+
 async function executeBrowserOperation(run, action, step = 0, options = {}) {
   const operation = action.operation;
   const args = action.args || {};
   const target = run.browserTargetSnapshot;
   const startedAt = Date.now();
+  // P4-R2 replay identity: interaction operations (click/fill/press) use the
+  // attempt-stable action-slot identity — the same convention workspace
+  // mutations use — so a recovery/replay re-entering the SAME committed
+  // interaction re-encounters the SAME operation identity and the canonical
+  // prepared-intent/receipt idempotency gate refuses to repeat the external
+  // browser effect. Read-tier browser operations keep the historical
+  // attempt-scoped identity (unchanged Phase-1 behavior).
+  const interactionOperation = BROWSER_INTERACTION_OPERATIONS.includes(operation);
+  const operationKeySlot = interactionOperation
+    ? (options.slot || `browser:${step}`)
+    : `attempt:${getRunExecutionEvidenceAttempt(run)}:${options.slot || `browser:${step}`}`;
   const operationContext = {
     ...options,
     startedAt,
@@ -21422,7 +22047,7 @@ async function executeBrowserOperation(run, action, step = 0, options = {}) {
       run,
       operation,
       args,
-      `attempt:${getRunExecutionEvidenceAttempt(run)}:${options.slot || `browser:${step}`}`
+      operationKeySlot
     )
   };
   let entry = browserSessions.get(run.id) || null;
@@ -21437,6 +22062,13 @@ async function executeBrowserOperation(run, action, step = 0, options = {}) {
   };
 
   try {
+    // P4-R2 default deny: without interaction authority in the admitted Run's
+    // frozen policy snapshot, click/fill/press refuse as authority denial
+    // before any budget, session, or effect exists.
+    if (BROWSER_INTERACTION_OPERATIONS.includes(operation) &&
+        !runBrowserInteractionsAuthorized(run)) {
+      await refuseBrowserInteraction(run, operation, operationContext.operationKey);
+    }
     if (!target || target.status !== 'active') {
       throw createBrowserOperationError('BROWSER_TARGET_UNAVAILABLE', 'Browser target snapshot is unavailable or inactive');
     }
@@ -21468,10 +22100,24 @@ async function executeBrowserOperation(run, action, step = 0, options = {}) {
         });
       }
     }
+    if (BROWSER_INTERACTION_OPERATIONS.includes(operation)) {
+      const maxInteractions = browserLimit(target, 'maxInteractionsPerRun');
+      const interactionCount = entry ? (entry.interactions || 0) + 1 : 1;
+      if (interactionCount > maxInteractions) {
+        throw createBrowserOperationError('BROWSER_INTERACTION_LIMIT_EXCEEDED', `Browser interaction limit of ${maxInteractions} exceeded`, {
+          currentValue: interactionCount,
+          configuredLimit: maxInteractions
+        });
+      }
+    }
 
     entry = await getOrCreateBrowserSession(run);
     entry.actions += 1;
+    if (BROWSER_INTERACTION_OPERATIONS.includes(operation)) {
+      entry.interactions = (entry.interactions || 0) + 1;
+    }
     let result;
+    let interactionExtras = null;
     if (operation === 'navigate') {
       if (typeof args.url !== 'string' || !args.url.trim()) {
         throw createBrowserOperationError('BROWSER_ORIGIN_BLOCKED', 'navigate requires a non-empty URL');
@@ -21490,12 +22136,17 @@ async function executeBrowserOperation(run, action, step = 0, options = {}) {
     } else if (operation === 'observe') {
       result = await entry.session.observe();
       const inventory = Array.isArray(result.elements) ? result.elements : [];
+      const pageStateHash = hashContent(JSON.stringify({ url: result.url, title: result.title, elements: inventory }));
+      // P4-R2 provenance: this observe receipt is the authoritative minting
+      // identity for every elementId it exposed, bound to this page-state
+      // hash. Later same-Run interactions must prove against it.
+      registerBrowserObservationMints(entry, operationContext.operationKey, pageStateHash, inventory);
       receipt.resourceUrl = redactBrowserUrl(result.url);
       receipt.targetResourceId = receipt.resourceUrl;
       receipt.truncated = Boolean(result.truncated);
       receipt.metadata = {
         elementCount: inventory.length,
-        pageStateHash: hashContent(JSON.stringify({ url: result.url, title: result.title, elements: inventory }))
+        pageStateHash
       };
     } else if (operation === 'readPageText') {
       result = await entry.session.readPageText(browserLimit(target, 'maxPageTextBytes'));
@@ -21548,32 +22199,103 @@ async function executeBrowserOperation(run, action, step = 0, options = {}) {
       receipt.targetResourceId = receipt.resourceUrl;
       receipt.truncated = Boolean(result.truncated);
       receipt.metadata = { requestedMs: result.requestedMs, waitedMs: result.waitedMs };
+    } else if (BROWSER_INTERACTION_OPERATIONS.includes(operation)) {
+      const interaction = await executeBrowserInteraction(run, entry, operation, args, operationContext);
+      if (interaction.skippedCommittedOutcome) {
+        // A committed interaction replayed under the SAME operation identity:
+        // the recorded outcome is returned without re-issuing the engine
+        // effect and without writing any second receipt, replay item, or
+        // event. The original committed evidence stands unchanged.
+        return interaction.skippedCommittedOutcome;
+      }      result = interaction.result;
+      interactionExtras = interaction;
+      receipt.resourceUrl = redactBrowserUrl(interaction.postState.url);
+      receipt.targetResourceId = receipt.resourceUrl;
+      receipt.metadata = interaction.receiptMetadata;
     } else {
       throw createBrowserOperationError('AGENT_ACTION_UNSUPPORTED', `Unsupported browser operation: ${operation}`);
     }
 
-    await recordBrowserOperationEvidence(run, step, operation, args, receipt, null, startedAt, Date.now() - startedAt, operationContext);
+    await recordBrowserOperationEvidence(
+      run, step, operation, args, receipt, null, startedAt, Date.now() - startedAt, operationContext,
+      interactionExtras ? {
+        mutationReceipt: interactionExtras.mutationReceipt,
+        authorityDecision: interactionExtras.mutationReceipt && interactionExtras.mutationReceipt.authorityDecision,
+        argsForEvidence: interactionExtras.argsForEvidence,
+        preState: interactionExtras.preState,
+        postState: interactionExtras.postState
+      } : {}
+    );
     return { ...result, receipt };
   } catch (cause) {
     if (cause && cause.nonTerminalEvidencePersistenceFailure) throw cause;
     const error = cause && cause.code
       ? cause
       : createBrowserOperationError('BROWSER_SESSION_LOST', cause && cause.message ? cause.message : String(cause));
-    error.failureKind = 'browser_error';
+    error.failureKind = cause && cause.failureKind ? cause.failureKind : 'browser_error';
     if (error.detail && error.detail.blockedUrl) {
       receipt.resourceUrl = redactBrowserUrl(error.detail.blockedUrl);
       receipt.targetResourceId = receipt.resourceUrl;
     }
+    const interactionContext = operationContext.browserInteraction || null;
+    let interactionExtras = null;
+    if (interactionContext) {
+      // A refused interaction keeps its provenance identity and authority
+      // decision truthful: pre/post state is recorded only when actually
+      // captured, and a staleness refusal names the page state at refusal.
+      const mutationReceipt = buildBrowserInteractionMutationReceipt({
+        run,
+        operation,
+        before: interactionContext.before || null,
+        after: null,
+        authorityDecision: interactionContext.authorityDecision || null,
+        sourcePageStateHash: interactionContext.sourcePageStateHash || null,
+        sourceObservationOperationKey: interactionContext.sourceObservationOperationKey || null,
+        targetElementId: interactionContext.elementId || null,
+        requestedKey: interactionContext.requestedKey || null,
+        sensitive: interactionContext.sensitive || false,
+        fillValue: interactionContext.fillValue,
+        error,
+        result: null
+      });
+      mutationReceipt.operationKey = operationContext.operationKey;
+      interactionExtras = {
+        mutationReceipt,
+        authorityDecision: interactionContext.authorityDecision || null,
+        argsForEvidence: interactionContext.elementId != null
+          ? { elementId: interactionContext.elementId, ...(interactionContext.fillValue !== null ? { value: interactionContext.fillValue } : {}) }
+          : { key: interactionContext.requestedKey },
+        preState: interactionContext.before || null,
+        postState: null
+      };
+    }
     receipt.metadata = {
       status: 'refused',
       code: error.code,
+      ...(error.detail && error.detail.actualPageStateHash ? { refusedAtPageStateHash: error.detail.actualPageStateHash } : {}),
       ...(error.detail && error.detail.blockedUrl ? { blockedUrl: redactBrowserUrl(error.detail.blockedUrl) } : {}),
       ...(error.detail && error.detail.configuredLimit != null ? {
         currentValue: error.detail.currentValue,
         configuredLimit: error.detail.configuredLimit
       } : {})
     };
-    await recordBrowserOperationEvidence(run, step, operation, args, receipt, error, startedAt, Date.now() - startedAt, operationContext);
+    if (interactionExtras) {
+      receipt.metadata = {
+        ...receipt.metadata,
+        ...(interactionContext && interactionContext.elementId ? { targetElementId: interactionContext.elementId } : {}),
+        ...(interactionContext && interactionContext.requestedKey ? { requestedKey: interactionContext.requestedKey } : {}),
+        ...(interactionContext && interactionContext.sourcePageStateHash ? { sourcePageStateHash: interactionContext.sourcePageStateHash } : {}),
+        ...(interactionContext && interactionContext.sourceObservationOperationKey ? { sourceObservationOperationKey: interactionContext.sourceObservationOperationKey } : {}),
+        ...(interactionContext && interactionContext.fillValue !== null && interactionContext.fillValue !== undefined
+          ? { fillValue: interactionContext.fillValue, sensitive: interactionContext.sensitive === true }
+          : {}),
+        originContained: error.code === 'BROWSER_ORIGIN_BLOCKED' ? false : true
+      };
+    }
+    await recordBrowserOperationEvidence(
+      run, step, operation, args, receipt, error, startedAt, Date.now() - startedAt, operationContext,
+      interactionExtras || {}
+    );
     throw error;
   }
 }
@@ -23048,6 +23770,9 @@ function captureRunWorkspaceRootSnapshot(run) {
 
 async function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rerunMode = null, workspaceContext = null) {
   if (runtimeEnvelope && runtimeEnvelope.targetKind === 'browser') {
+    const browserInteractionsAuthorized = Array.isArray(runtimeEnvelope.allowedOperations) &&
+      runtimeEnvelope.allowedOperations.includes('click');
+    if (!browserInteractionsAuthorized) {
     return [
       {
         role: 'system',
@@ -23060,6 +23785,41 @@ async function buildAgentPrompt(ticket, runtimeEnvelope, actionResults = [], rer
           'Set complete:true as soon as the objective is satisfied by the returned browser evidence. Read-only browser runs do not complete through filesystem postconditions or no-progress detection; they end only when you set complete:true or a runtime limit is reached.',
           'If acceptanceCriteria is present, treat it as part of the requested outcome and do not set complete:true until the returned evidence addresses it.',
           `Emit at most ${MAX_AGENT_ACTIONS_PER_RESPONSE} actions in one response and keep each response within one inspection phase.`,
+          'Do not repeat inspections that are not needed for the objective.'
+        ].join('\n')
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({ runtimeEnvelope: compactRuntimeEnvelopeForPrompt(runtimeEnvelope) })
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({
+          objective: ticket.objective,
+          acceptanceCriteria: ticket.acceptanceCriteria || null,
+          declaredWork: ticket.declaredWork || null,
+          previousActionResults: sanitizeSnapshotValue(actionResults),
+          browserContext: sanitizeSnapshotValue(workspaceContext)
+        })
+      }
+    ];
+    }
+    return [
+      {
+        role: 'system',
+        content: [
+          'You are a bounded browser agent. You may inspect the configured browser target and perform its authorized safe interactions (click, fill, press).',
+          'Allowed operations are navigate, observe, readPageText, screenshot, and wait, plus the authorized interactions click, fill, and press.',
+          'Use navigate with {"url":"absolute URL"}; observe, readPageText, and screenshot with {}; wait with {"forMs":number}.',
+          'Interactions are mutation-tier: click takes {"elementId":"..."}; fill takes {"elementId":"...","value":"string"}; press takes {"key":"Enter|Tab|Escape|ArrowUp|ArrowDown|ArrowLeft|ArrowRight"}.',
+          'click and fill act only on an elementId minted by a prior observe in THIS run. After any navigation or page change, previously minted elementIds are stale and refused; recovery is always a fresh observe, never a selector guess.',
+          'Emit interaction actions alone in one response (a single-phase mutation batch); use observe/readPageText/screenshot in separate inspection responses.',
+          'Fields marked sensitive in observe results are credential-sensitive: fill values for them are recorded only as an authorized redaction, and you must never request credentials or secret resolution.',
+          'All navigation and page requests must remain inside runtimeEnvelope.allowedOrigins; an interaction that causes an out-of-bounds navigation is refused and evidenced, and the run continues from the actual bounded result.',
+          'Every response must be JSON: {"message":"string","actions":[{"operation":"navigate|observe|readPageText|screenshot|wait|click|fill|press","args":{}}],"complete":boolean}.',
+          'Set complete:true as soon as the objective is satisfied by the returned browser evidence. Browser runs do not complete through filesystem postconditions or no-progress detection; they end only when you set complete:true or a runtime limit is reached.',
+          'If acceptanceCriteria is present, treat it as part of the requested outcome and do not set complete:true until the returned evidence addresses it.',
+          `Emit at most ${MAX_AGENT_ACTIONS_PER_RESPONSE} actions in one response and at most ${MAX_MUTATING_ACTIONS_PER_RESPONSE} interaction action(s) per response.`,
           'Do not repeat inspections that are not needed for the objective.'
         ].join('\n')
       },
@@ -24466,7 +25226,15 @@ async function runAgentTicket(runId) {
               leaseDurationMs: getRunLeaseDurationMs()
             }, () => executeBrowserOperation(run, operation, step, {
               slot: actionSlot,
-              artifactByteLimit: artifactBudgetReservedAmount
+              artifactByteLimit: artifactBudgetReservedAmount,
+              // Same execution-turn identity as workspace mutations: the
+              // prepared-interaction intent must satisfy the resume safety
+              // contract (execution turn, plan, action position).
+              replayMetadata: {
+                executionTurn: providerCall.executionTurn,
+                planKey: `${providerCall.modelCallKey}:plan`,
+                actionIndex
+              }
             }));
           } else if (operation.operation === 'createWorkflowDraft') {
             result = await createWorkflowDraftFromAgent(run, operation.args.workflow, step, {
@@ -24830,6 +25598,15 @@ async function runAgentTicket(runId) {
           if (canRetryPriorOwnerConflict) {
             recoverableOwnershipConflict = true;
             break;
+          }
+          // P4-R2: a stale-element refusal is recoverable per the canonical
+          // browser design ("recoverable — re-observe"): the refusal evidence is
+          // already recorded by the browser operation path, the corrective
+          // result above tells the next response what happened, and the run
+          // continues so a fresh observe can re-mint provenance. Every other
+          // browser error keeps the accepted Phase-1 terminal behavior.
+          if (isBrowserRun(run) && error.code === 'BROWSER_ELEMENT_STALE') {
+            continue;
           }
           if (error.failureKind !== 'workspace_error') {
             throw error;
@@ -26025,6 +26802,27 @@ async function createTicketFromInput(input, actor, options = {}) {
 
   const resolvedCapabilityType = input.capabilityType === 'workflow' || input.executionMode === 'workflow' ? 'workflow' : 'directAction';
   const resolvedExecutionMode = resolvedCapabilityType === 'workflow' ? 'workflow' : 'agent';
+  // P4-R2: requesting browser interaction authority is a permissioned act.
+  // The canonical `browser:interact` permission is required from the acting
+  // principal exactly when a ticket is created with
+  // `executionPolicy.allowBrowserInteractions: true`. Without it the request
+  // is refused rather than silently downgraded, so an author never gets less
+  // authority than they asked for. Fail closed: an unidentifiable principal
+  // can never enable interaction authority.
+  const requestedBrowserInteractions = Boolean(
+    input.executionPolicy && typeof input.executionPolicy === 'object' && !Array.isArray(input.executionPolicy) &&
+    input.executionPolicy.allowBrowserInteractions === true
+  );
+  if (requestedBrowserInteractions) {
+    const permitted = actor && actor.userId != null &&
+      await userHasPermission(actor.userId, BROWSER_INTERACTION_PERMISSION);
+    if (!permitted) {
+      return {
+        ok: false,
+        error: 'Browser interaction authority requires the browser:interact permission'
+      };
+    }
+  }
   let resolvedTargetRef = null;
   if (input.targetRef != null) {
     if (!input.targetRef || typeof input.targetRef !== 'object' || Array.isArray(input.targetRef) ||
@@ -26294,6 +27092,18 @@ fastify.post('/tickets', {
   if (parsedExecutionPolicy !== undefined && parsedExecutionPolicy !== null &&
       (typeof parsedExecutionPolicy !== 'object' || Array.isArray(parsedExecutionPolicy))) {
     return await renderTicketForm('Execution policy must be a JSON object');
+  }
+
+  // P4-R2: the ticket form carries browser-interaction authorization as an
+  // explicit opt-in checkbox. When the field is present it is the governing
+  // transport for this surface; an unchecked submission omits it, leaving the
+  // policy JSON (default false) unchanged.
+  if (request.body && Object.prototype.hasOwnProperty.call(request.body, 'allowBrowserInteractions')) {
+    parsedExecutionPolicy = {
+      ...(parsedExecutionPolicy || {}),
+      allowBrowserInteractions: request.body.allowBrowserInteractions === 'on' ||
+        request.body.allowBrowserInteractions === 'true'
+    };
   }
 
   let parsedTargetRef = null;
@@ -30752,15 +31562,99 @@ fastify.get('/agents', { preHandler: fastify.requireAuth }, async (request, repl
   }, request.session.userId));
 });
 
+// P4-R1 operator projection for configured-agent process grants. Deliberately
+// explicit: only the canonical grant shape leaves runtimeConfig, never the
+// private runtime configuration wholesale. Derived eligibility reuses the
+// canonical admission resolver (resolveProcessProfileGrants) against the live
+// trusted catalog so inspection cannot disagree with admission semantics.
+// Eligibility is a read-only projection: it grants nothing, mutates nothing,
+// and never replaces admission-time validation or the release gate.
+function projectConfiguredAgentProcessProfileGrants(agent) {
+  const grants = normalizeProcessProfileGrants(
+    agent && agent.runtimeConfig ? agent.runtimeConfig.processProfileGrants : []
+  );
+  return grants.map(grant => ({
+    targetId: grant.targetId,
+    profileIds: [...grant.profileIds]
+  }));
+}
+
+function processProfileGrantsResolveAgainstCatalog(grants) {
+  try {
+    resolveProcessProfileGrants({
+      capabilityEnabled: true,
+      catalog: PROCESS_TARGET_CATALOG,
+      grants
+    });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function processReleaseStateProjection() {
+  return processExecutionReleaseReadinessSnapshot
+    ? processExecutionReleaseReadinessSnapshot.state
+    : null;
+}
+
 function publicConfiguredAgent(agent) {
-  return agent ? {
+  if (!agent) return null;
+  const processProfileGrants = projectConfiguredAgentProcessProfileGrants(agent);
+  return {
     id: agent.id,
     name: agent.name,
     type: 'agent',
     provider: agent.provider,
     model: agent.model,
-    revision: agent.revision
-  } : null;
+    revision: agent.revision,
+    processProfileGrants,
+    processEligibility: {
+      grantsResolveAgainstCatalog:
+        processProfileGrantsResolveAgainstCatalog(processProfileGrants),
+      processReleaseState: processReleaseStateProjection()
+    }
+  };
+}
+
+// Operator grant assignment parses the submitted trusted-catalog selections
+// into the canonical grant shape, then fails closed on every canonical grant
+// validation failure (shape, cardinality, unknown target, unknown profile).
+// No invalid entry is dropped and no authority is broadened by normalization.
+function parseSubmittedProcessProfileGrants(rawSelections) {
+  const selections = Array.isArray(rawSelections)
+    ? rawSelections
+    : rawSelections === undefined || rawSelections === null ? [] : [rawSelections];
+  const profileIdsByTarget = new Map();
+  for (const raw of selections) {
+    if (typeof raw !== 'string' || !raw.includes('|')) {
+      throw new ProcessTargetCatalogError(
+        'Submitted process grant selections must be trusted target/profile pairs',
+        'PROCESS_PROFILE_GRANTS_INVALID'
+      );
+    }
+    const separator = raw.indexOf('|');
+    const targetId = raw.slice(0, separator);
+    const profileId = raw.slice(separator + 1);
+    if (!profileIdsByTarget.has(targetId)) profileIdsByTarget.set(targetId, new Set());
+    profileIdsByTarget.get(targetId).add(profileId);
+  }
+  const grants = [...profileIdsByTarget.entries()].map(([targetId, profileIds]) => ({
+    targetId,
+    profileIds: [...profileIds]
+  }));
+  const normalized = normalizeProcessProfileGrants(grants);
+  try {
+    resolveProcessProfileGrants({
+      capabilityEnabled: true,
+      catalog: PROCESS_TARGET_CATALOG,
+      grants: normalized
+    });
+  } catch (error) {
+    if (error instanceof ProcessTargetCatalogError) throw error;
+    throw new ProcessTargetCatalogError(error.message, 'PROCESS_PROFILE_GRANTS_INVALID');
+  }
+  return JSON.parse(JSON.stringify(normalized));
 }
 
 function configuredAgentReadGuard(request, reply) {
@@ -31507,7 +32401,12 @@ fastify.get('/admin', { preHandler: fastify.requireAuth }, async (request, reply
       .filter(membership => membership.agentId === agent.id)
       .map(membership => membership.groupId)));
     const accountGroups = groups.filter(group => accountGroupIds.includes(group.id));
-    return { ...agent, type: 'agent', groups: accountGroups };
+    return {
+      ...agent,
+      type: 'agent',
+      groups: accountGroups,
+      processProfileGrants: projectConfiguredAgentProcessProfileGrants(agent)
+    };
   });
 
   const accounts = [...usersWithGroups, ...agentsWithMaskedKeys].sort(
@@ -31780,6 +32679,17 @@ fastify.post('/admin/users/:id', { preHandler: fastify.requireAuth }, async (req
         error: error.message
       });
     }
+    let processProfileGrants;
+    try {
+      processProfileGrants = parseSubmittedProcessProfileGrants(request.body.processProfile);
+    } catch (error) {
+      reply.code(400);
+      return renderAdminUserForm(reply, request, {
+        editAccount: existingAgent,
+        accountType: 'agent',
+        error: `Invalid process grant assignment: ${error.message}`
+      });
+    }
     if (!sameValueSet(existingAgent.groupIds, normalizedGroupIds) && !hasPermission(request.session.userId, 'permission:assign')) {
       reply.code(403);
       return 'permission:assign is required to change group membership';
@@ -31795,7 +32705,11 @@ fastify.post('/admin/users/:id', { preHandler: fastify.requireAuth }, async (req
           name: agentName.trim(),
           provider,
           model: model ? model.trim() : '',
-          apiKey: apiKey && apiKey.trim() ? apiKey.trim() : existingAgent.apiKey
+          apiKey: apiKey && apiKey.trim() ? apiKey.trim() : existingAgent.apiKey,
+          runtimeConfig: {
+            ...(existingAgent.runtimeConfig || {}),
+            processProfileGrants
+          }
         },
         groupIds: normalizedGroupIds,
         changedBy
