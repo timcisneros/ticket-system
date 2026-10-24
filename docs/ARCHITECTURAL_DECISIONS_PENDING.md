@@ -16991,3 +16991,668 @@ introduced, no residual was silently resolved, P4 closure is stated precisely,
 no next-phase implementation authority was accidentally granted, and the exact
 docs-only candidate identity reproduces. Committing and pushing that reviewed
 docs record is a separate, later publication act.
+
+---
+
+## P5 — GOVERNED BOUNDED COMPOSITION — semantic design-freeze candidate
+
+**STATUS:** P5 SEMANTIC DESIGN-FREEZE CANDIDATE — NOT AUTHORITY UNTIL INDEPENDENT REVIEW,
+ACCEPTANCE, COMMIT, AND PUBLICATION — UNCOMMITTED AND UNPUBLISHED — IMPLEMENTATION NOT
+AUTHORIZED BY THIS RECORD. This candidate was narrowed in place after an independent design
+review (see §27); its next boundary is a NARROW independent CORRECTION review of these exact
+docs bytes. **NO MIGRATION IS EXPECTED AND NO MIGRATION AUTHORITY
+IS CREATED.** Canonical migration execution authorization remains `NOT_AUTHORIZED`; P5 does not
+apply or operationalize migration 044. P4 residuals (`R2-RESIDUAL-TRIAGE`,
+`R2-RESIDUAL-ORIGIN-RECOVERY`, `R2-RESIDUAL-CANDIDATE-FINGERPRINT-RECIPE`, `RECOVERY-A`,
+`P3 F2`) remain separate open work. P6/P7 and Browser Phase 3 remain unopened. This is ONE
+coherent section in this register; it does not duplicate and does not alter the published
+roadmap reconciliation, the P1/P2/P3/P4 records, any T0–T10 closure, or the FINAL STOP
+constraint.
+
+### 1. CANDIDATE BASELINE (opening repository gate)
+
+Candidate baseline: branch `master`; local HEAD = cached origin/master =
+`5f8fe4e7167a743bfe738251134af18d51f95e45` ("Record P4 publication status"); worktree clean;
+nothing staged; stash empty; `git diff --check` clean; zero untracked. Repository migration
+head is `044_browser_interaction_authority.sql`; the operational database remains at applied
+head `043_api_token_authority.sql` with migration 044 applied count 0;
+`config/migration-execution-authorization.json` remains in the exact deterministic
+`NOT_AUTHORIZED` shape. No P5 kernel implementation exists anywhere in tracked source; no
+earlier P5 design-freeze record exists in this register. The purpose of this record is
+hermeticity: a fresh implementation agent must be able to recover the frozen P5 contract from
+this register and existing repository authority alone, without prior-agent memory or
+conversation context.
+
+### 2. IDENTITY, OUTCOME, AND AUTHORITY ANCHORS
+
+P5 = Governed Bounded Composition.
+
+Published outcome (register §6 roadmap record): make currently inert/deferred composition
+paths usable by bounded agents through the existing Ticket / Run / Workflow authority, with
+every delegated unit independently evidenced. P5 advances **CAP-4**. The **P2 → P5 hard
+dependency is satisfied** (P2 honest completion is published): composed child work is expected
+to terminate truthfully under deterministic completion authority before the parent may ever
+consume it. P5 is the current sequence head after P4 publication (register §8 policy sequence
+`P2 → P3 → P4 → P5 → P6 → P7`).
+
+**FINAL STOP remains controlling: NO revival of structured parent/planner/leaf authority.**
+Composition is expressed ONLY through existing Ticket/Run/Workflow primitives; the attempt
+remains topology-neutral; no orchestration layer, no planner identity, no leaf bindings beyond
+the existing structured-allocation substrate, no second execution graph.
+
+### 3. PRESERVED FROZEN INVARIANTS (owned by their existing authorities — referenced, not duplicated)
+
+P5 preserves, byte-for-byte in meaning, each of the following; the named owner remains
+canonical and unchanged unless an explicit STOP condition (§26) fires:
+
+- **Five frozen Ticket states** — `open`, `in_progress`, `blocked`, `completed`, `canceled`;
+  `failed` is Run/attempt disposition only (owner: `runtime/ticket-lifecycle-contract.js`,
+  migration `041_ticket_five_state_cutover.sql`, `server.js` `TICKET_STATUSES`).
+- **Projection priority** — cancellation → latest unsettled attempt → completed proof →
+  blocker → open (owner: the canonical lifecycle projector + blocking-authority composer).
+- **Max one unsettled attempt per Ticket**; retry/rerun = new attempt; resume = same Run
+  (owner: `docs/TICKET_ATTEMPT_AUTHORITY.md`, migration 039, `createRunsAndStartTicket`).
+- **Raw model prose never blocker or completion authority** — parent prose AND child prose
+  (owner: `runtime/completion-decision-contract.js`, the v2 completion authority,
+  `run_consequences`).
+- **Global lock order: Ticket last** (owner: the canonical 041-H1 relative order and every
+  admission/settlement writer).
+- **Attempt topology-neutrality** — an attempt carries no plan items, edges, planner identity,
+  roles, sibling dependencies, target kind, retry policy, or decomposition reason. P5 may not
+  introduce attempt edges, planner roles, sibling dependencies, or a second lifecycle graph.
+- **Deterministic completion authority** — completion decisions remain hash-bound,
+  append-only, derived only from durable evidence through completion decision → attempt
+  settlement → Ticket projection (owner: the published P2 record and its runtime contracts).
+- **Immutable admitted intent/snapshots** — declared work, completion-authority snapshot,
+  verification-contract snapshot, execution-policy snapshot, runtime-budget snapshot, process
+  policy snapshot, and target snapshots are admission-time and immutable for an admitted Run
+  (owner: `runtime/declared-work-contract.js`, `normalizeExecutionPolicy`,
+  `buildRuntimeBudgetSnapshot`, the process/browser snapshot owners).
+
+### 4. SELECTED ARCHITECTURE — MODEL-D (HYBRID, SINGLE GRAPH)
+
+Ticket/Run remain the SOLE executable lifecycle graph; Workflow remains the declarative,
+operator-curated bounded step plan executed through the existing `executeWorkflowDefinition`
+engine inside Runs. P5 adds executable composition capability at exactly three narrow seams —
+no new lifecycle object, no second graph, no workflow-owned execution authority.
+
+- **P5-R1 — Executable governed workflow invocation.**
+- **P5-R2 — Governed delegated child execution** (canonical-lifecycle-sensitive slice).
+- **P5-R3 — Deterministic composition consumption.**
+
+P5 v1 establishes bounded child composition on the existing workspace/default target only;
+target-diverse delegated composition is DEFERRED, NOT PRE-AUTHORIZED (§16).
+
+### 5. FORMAL AUTHORITY NON-AMPLIFICATION RULE
+
+**A composed child never inherits arbitrary authority from its parent.** Effective child
+authority is bounded by:
+
+> `existing child admission authority ∩ workflow-authored delegation bounds`
+
+- The parent may **cause admission** and **narrow** authority. It may never MINT authority:
+  no permissions, no grants, no provider authority, no target authority, no economic
+  authority, no runtime authority.
+- Each child receives its own ordinary immutable admission snapshots (execution policy, runtime
+  budget, target snapshot, workflow contract) resolved at the child's own admission from
+  standing repositories — the configured-agent catalog, access permissions, the child workflow
+  contract, and the child Ticket's own execution policy.
+- Delegation cannot produce authority greater than the same acting agent could obtain through
+  canonical direct admission for that child. Economic liability remains charged to the acting
+  agent's existing role-scoped economic account; delegation cannot bypass it.
+- Same-Run `invokeWorkflow` executes entirely inside the parent Run's existing authority
+  envelope (its policy snapshot, budgets, workspace provider, capacity) and is structurally
+  incapable of widening it.
+
+### 6. P5-R1 — EXECUTABLE GOVERNED WORKFLOW INVOCATION
+
+Current fact: `invokeWorkflow` exists in the action catalog as an agent-invoker entry ONLY —
+no dispatch/execution path exists at current source, and it is NOT workflow-usable as a step
+(`isWorkflowUsableAction` excludes it). P5-R1 makes it executable under a bounded authority.
+
+Agent may propose `invokeWorkflow { workflowId, input }` ONLY when authorized by a NEW
+immutable execution-policy field: **`allowWorkflowInvocation`**. Properties, all mandatory:
+
+- default **false**; strict operator opt-in at Ticket authority level; absent/invalid means
+  false, never a permissive fallback (same pattern as `allowBrowserInteractions`, P4-R2);
+- operator-authored; frozen in the admitted Run's `executionPolicySnapshot` (hash-bound into
+  `runtimeBudgetSnapshot.executionPolicyHash`);
+- approved and ENABLED workflow only (catalog authority; disabled workflows refuse);
+- schema-valid input only (`workflow.inputSchema` validation; typed refusal otherwise);
+- executes inside the **SAME Run** through the existing `executeWorkflowDefinition` —
+  consuming the parent Run's existing budgets (transitions, loop iterations, model requests,
+  workspace operations, artifact bytes, duration) and its existing authority envelope;
+- creates NO Ticket, NO attempt, NO Run, and no second execution graph;
+- **no workflow self-nesting through workflow steps** — `invokeWorkflow` remains
+  non-workflow-usable; workflow definitions may not contain it;
+- invocation identity/evidence per §13 (INVOKE-RECOVERY-B requirements).
+
+The invocation result flows back to the proposing Run as a model-observable action result.
+It is never completion authority by itself.
+
+### 7. P5-R2 — GOVERNED DELEGATED CHILD EXECUTION (DELEGATED-HOLD-A)
+
+Current fact: the canonical `executeTicketPlan` (workflow-only action) is the ONLY child-Ticket
+creation producer (single sanctioned constructor
+`runtime/workflow-ticket-spawn-construction.js` → `createTicketWithEvent`). Children are
+created `blocked` with zero attempts and carry the complete T4 spawn-provenance set;
+admission-hold authority is owned by the frozen T2 blocking-authority composer (rank 4);
+the only current supersession is explicit operator release (`/api/tickets/:id/release-admission`,
+`admissionIntent: 'release_hold'`, validated once under the admission locks).
+
+P5-R2 adds governed delegated execution WITHOUT touching any of that:
+
+**Delegation requires BOTH (conjunctive; either alone is insufficient):**
+
+1. **workflow-authored delegated-execution authorization** — part of the validated workflow
+   definition (the same operator authority class as `allowedWorkflowIds`/`maxTickets`), never
+   model-suppliable, re-validated at every execution of the definition;
+2. the **current acting parent Run's own immutable
+   `executionPolicySnapshot.allowChildTickets === true`** — operator-authored at Ticket
+   authority, default false, strict opt-in, snapshot-bound. (This IMPLEMENTS the previously
+   dead `allowChildTickets` intent field with real semantics, resolving register A8 for that
+   field by implementation rather than retirement.)
+
+**Children created exactly as today:** complete T4 provenance; zero attempts; **admission hold
+ACTIVE**. **The delegation block NEVER suppresses the hold.** It proves only that an authorized
+parent Run is permitted to request the special delegated admission transition. There is no
+passive suppression, no live-policy projection dependency, no auto-run.
+
+**Delegated execution occurs only through a NEW atomic admission intent:
+`delegated_release`** — the exact structural analogue of operator release: a single-transaction,
+lock-fenced admission act that independently authorizes all required facts (§10) and then
+atomically creates the child attempt/Run exactly once. The full final rule is §10.
+
+**Non-delegated children remain operator-release-only** — their hold semantics are unchanged
+byte-for-byte in meaning. An operator may also release a delegated child manually at any time;
+any later delegated-release intent for that child is then stale and refuses typed.
+
+### 8. CHILD LOGICAL IDENTITY AND RERUN SEMANTICS (CHILD-RERUN-A)
+
+**Semantic choice: CHILD-RERUN-A.** A parent rerun intentionally REUSES the same logical
+delegated children. (Repository authority already determines this: the published WF-6A
+parent-rerun idempotency and the existing Ticket-scoped key derivation
+`[run.ticketId, workflowId, vendorId]` make duplicate child creation across parent runs the
+anomaly, and `projectParentSpawnChildren` is parent-Ticket-scoped.)
+
+Two identity roles, strictly distinguished:
+
+- **Logical delegated-unit identity — stable across parent Runs.** The existing durable
+  `spawnIdempotencyKey`. For DELEGATED units the key is derived canonically from
+  Ticket-stable, workflow-authored facts only:
+  `ticket:{parentTicketId}:{parentWorkflowId}:{spawnedByStepId}:{childWorkflowId}:{unitKey}`.
+  `unitKey` provenance (UNITKEY-A enforcement, mandatory): **the authoritative
+  delegated-unit key set is derived from LITERAL `unitKey` values present in the
+  operator-owned workflow definition BEFORE template resolution.** Every delegated logical
+  unit has one literal stable `unitKey` in the workflow definition; the runtime plan may
+  provide/template dynamic objective and `workflowInput`; the runtime/model may NOT create,
+  replace, template, or widen `unitKey`; after template resolution, each delegated plan item
+  must match a literal authored unit key for that exact workflow step. Unknown, duplicate,
+  template-derived, missing, or conflicting unit keys FAIL CLOSED. A workflow step whose
+  delegated unit identities exist only inside a model/template-produced object is NOT valid
+  for delegated execution. This preserves bounded dynamic content while keeping logical
+  identity operator-authoritative; it introduces no second graph and no new durable identity
+  object. Whole-object workflow template resolution can carry model-produced objects, so
+  runtime type/schema validation alone does NOT prove a `unitKey` was operator-authored —
+  the literal-definition match is the proof. The existing
+  key derivation stays byte-for-byte for non-delegated children (historical rows and the
+  vendor fixtures unchanged). Distinct logical units differ in at least one key component;
+  the same logical unit across attempts shares the full key — no accidental aliasing of
+  distinct units or generations is possible.
+- **Execution reference — Run-scoped.** `spawnPlanId` remains
+  `${run.id}:{workflow.id}:{step.id}:transition:${n}`. It identifies the particular parent
+  Run/step/transition execution of a plan, NOT the logical child identity. It never
+  participates in unit deduplication.
+
+**Parent rerun behavior.** Parent rerun = new attempt / new Run. Re-deriving the same logical
+delegated key: **adopts the existing child** (delegated items resolve/adopt rather than the
+non-delegated rejected-duplicate outcome — a narrow delegated-path-only change so the
+ensure-admission step can act idempotently; non-delegated duplicates keep the existing
+rejected-duplicate evidence semantics), does NOT create another child, and emits
+adoption/replay evidence. If the child has zero attempts, the current parent Run may attempt
+delegated admission under ITS OWN authority (§10). If the child already has any attempt —
+pending, running, or terminal — it is NEVER auto-re-admitted; a failed delegated child is not
+auto-retried by the parent (the child's own `maxAttempts` governs child retries; the parent's
+declared criteria decide what failure means for the parent). A genuinely new logical
+delegated unit requires a NEW authored key.
+
+### 9. DELEGATED CHILD CREATION EVIDENCE
+
+The child's immutable `ticket.created` provenance REMAINS the relationship authority
+(T4-I1). P5 adds a delegation block ONLY as creation-time historical proof, riding the same
+event payload — no rewrite, no second producer, no new identity object:
+
+- authorized delegation scheme/version (canonical scheme id, e.g. `workflow_delegation_v1`);
+- parent Ticket id;
+- ORIGINAL parent Run id (historical provenance only — never adoption authority);
+- parent workflow id;
+- spawning step id;
+- spawn plan id (Run-scoped execution reference);
+- spawn idempotency key (logical unit identity);
+- ORIGINAL parent execution-policy hash (historical provenance only).
+
+Original Run/policy facts are never rewritten and are never used as authority for a later
+adopting Run. Corroboration: `workflow.ticket_plan.executed` event + `workflowTicketPlans`
+replay evidence (existing classes).
+
+### 10. FINAL DELEGATED-RELEASE AUTHORITY (the corrected, frozen rule)
+
+A delegated child remains admission-held until a successful atomic `delegated_release`
+action. A current parent Run may request it only if ALL of the following hold — conjunctive,
+fail-closed:
+
+1. the child has ONE coherent T4-resolved delegated creation relation (complete provenance
+   set; malformed/multiple/conflicting → typed refusal);
+2. the logical spawn key matches the unit the CURRENT Run re-derived;
+3. the CURRENT ACTING parent Run has immutable
+   `executionPolicySnapshot.allowChildTickets === true`;
+4. the parent workflow is still enabled;
+5. its delegation authorization is valid for the current action;
+6. existing plan/input/allowedWorkflowIds/maxTickets validation passes;
+7. the child has zero attempts and no unsettled attempt;
+8. the existing atomic child admission authority succeeds (Ticket lock, Ticket-last order,
+   `createRunsAndStartTicket`-family atomicity).
+
+**Success:** the hold is superseded BY THE ADMISSION ITSELF (not by any projection rule); the
+child attempt + Run are created exactly once; durable `delegated_release` evidence is recorded
+(admission event carrying the intent, the authorizing parent Run identity, and the spawn key,
+plus the parent-side adoption evidence).
+
+**Failure:** zero mutation; the child REMAINS held; typed refusal. Validation and admission
+occur in ONE transaction under the admission locks; a validation failure rolls back with no
+side effects.
+
+### 11. COMPOSER INVARIANT
+
+**P5 does NOT change the admissionHold composer semantics.** It remains exactly:
+spawn provenance + zero attempts → admission hold (rank 4 of the frozen precedence list). No
+parent live-policy dependency enters Ticket projection. Once an attempt exists, the
+zero-attempt predicate naturally becomes false and normal projection proceeds. This preserves
+projection purity, the existing precedence order, and the migration-041-pinned composer copy
+(`persistence/postgres/migration-semantics/041/runtime/` remains frozen for historical
+classification; the live runtime composer is the only live consumer and its behavior for
+legacy shapes must remain byte-for-byte in meaning, pinned by owner test).
+
+### 12. IMMUTABLE-POLICY DOCTRINE
+
+Authority of an admitted parent Run comes from its immutable admitted snapshot.
+
+- If Ticket policy is revoked BEFORE a later Run is admitted: the later Run's snapshot carries
+  `allowChildTickets = false` and it cannot delegated-release children (§10 leg 3).
+- If policy is edited AFTER a Run is already admitted: the edit does NOT retroactively contract
+  that Run's authority — the frozen snapshot remains controlling. This is the SAME
+  admission-snapshot doctrine as existing bounded execution (the browser-interaction policy's
+  non-retroactivity precedent).
+
+### 13. invokeWorkflow RECOVERY SEMANTICS (INVOKE-RECOVERY-B)
+
+**No claim that durable workflow step position exists.** Workflow-step position is in-memory
+only; an interrupted same-Run invocation may re-enter the definition from step 1 on resume
+ONLY because every effect is required to be one of:
+
+- **pure** (`condition`, `stop`);
+- committed under **existing stable exactly-once operation identities**
+  (`operation_receipts UNIQUE (run_id, idempotency_key)`;
+  `target_operation_intents UNIQUE (run_id, operation_key)`;
+  `buildTargetOperationKey = run:{runId}:slot:{slotHash}:input:{inputHash}`;
+  prepare-before-effect replays a committed result instead of re-executing it);
+- provider calls protected by the **existing durable governed request/reuse authority**
+  (reservation lifecycle; a `request_started` reservation is never re-dispatched;
+  `reused_durable_response` is a first-class outcome).
+
+Requirements, all mandatory:
+
+- durable invocation identity/evidence recorded BEFORE any effect (`workflow.invoked` event +
+  `workflowInvocation` replay item). **The P5 workflow invocation identity is Run-stable
+  across safe resume: its canonical evidence identity is explicitly derived from stable
+  Run/action-slot/invocation facts and MUST NOT derive from the lease-recovery
+  execution-attempt counter** (the ordinary execution-evidence helper incorporates such a
+  counter, which can change after lease-expiry recovery; the invocation identity must not).
+  Repeated recording of the same invocation reuses the SAME durable evidence identity;
+  a differing payload under the same identity fails closed through existing idempotency
+  conflict semantics. A re-executed invocation never mints a second independent invocation
+  identity;
+- stable slot/input identities for every step effect;
+- committed effects REPLAY rather than re-execute;
+- started provider requests never re-dispatched; durable responses reused;
+- **deterministic re-execution required** — step inputs and condition branches must resolve
+  deterministically from durable run context and reused durable responses, so re-execution
+  converges to the same terminal step; template resolution must not introduce wall-clock or
+  nondeterministic values into effect keys;
+- any divergence or uncertain effect FAILS CLOSED (typed refusal; existing
+  `RUN_RESUME_UNSAFE` duplicate-mutation/broken-chain refusals remain the recovery guards);
+- NO new invocation execution graph and NO workflow-progress table.
+
+Run duration remains bounded from the EXISTING DB-stamped epoch (the database-clock duration
+authority); workflow-internal timers reset only inside the Run's already-admitted duration
+ceiling. Effect-level operation identities are unchanged by this section.
+
+### 14. childTerminalOutcome — COMPLETION AUTHORITY (CRITERION-A)
+
+One new canonical criterion type: **`childTerminalOutcome`**, evaluated through the SINGLE
+existing workflow postcondition evaluator (`evaluateWorkflowPostcondition` gains one type
+branch). No second evaluator is created.
+
+**Completion-authority form (the ONLY permitted completion form) requires:**
+
+- `parentBinding = self`;
+- authored workflow/step/unit selector (`parentWorkflowId`/`spawnedByStepId`/
+  `childWorkflowId` — workflow-authored, schema-validated identities);
+- **explicit non-empty `expectedUnits`** — an explicit authored set of stable `unitKey`
+  identities; empty/absent → structurally invalid → fail closed;
+- terminal expectation (`expect.disposition` — a settled attempt disposition value:
+  `completed` / `failed` / `blocked` / `interrupted`; any value is authorable).
+
+**Evaluator requirements (all mandatory):**
+
+1. resolve the COMPLETE T4 child relation of the parent Ticket (no filtered subset may
+   establish truth);
+2. resolve EXACTLY ONE child for every expected unit (`unitKey` equality within the
+   selector-filtered set);
+3. ZERO resolved child for an expected unit → unavailable / fail closed — an authored
+   expected unit that was never created can NEVER be waived by "all currently matched
+   children";
+4. duplicate/conflicting child for a unit → typed refusal;
+5. malformed lineage → typed refusal;
+6. evaluate CURRENT durable child attempt/Run/completion-decision facts (settled attempt
+   disposition + Run terminal status + completion-decision truth) — never cached await output
+   and never model prose;
+7. satisfied ONLY when EVERY explicitly expected unit satisfies the authored expectation;
+   non-terminal children and unavailable evidence fail closed; observed failure is a known
+   negative, never "unavailable" and never satisfaction.
+
+Broad/optional selectors (counts, "all children of step", `childWorkflowId`-only rollups) may
+exist ONLY for observation/UI presentation, always labeled non-authoritative, and never feed a
+completion decision.
+
+### 15. awaitChildTickets — BOUNDED OBSERVATION STEP
+
+A new workflow-usable, READ-ONLY workflow step: `awaitChildTickets`.
+
+- Returns a bounded deterministic observation per observed child: child id; `unitKey`; Ticket
+  state; attempt disposition; Run terminal state; completion-decision reason; and an explicit
+  truncation/omission marker. Omitted/unavailable facts are not fabricated.
+- It has **ZERO completion authority**. Its output is prompt/workflow context only (the P3
+  discipline: bounded, deterministic, omission-explicit, never authority).
+- Non-terminal children at budget/duration exhaustion produce an honest non-success result
+  within the parent Run's existing duration/transition bounds — never an indefinite hidden
+  wait.
+- No hidden polling authority: the step observes durable facts deterministically under the
+  Run's existing budgets; no background poller, no new scheduler surface.
+
+### 16. P5 V1 TARGET ADJUDICATION — WORKSPACE/DEFAULT ONLY; TARGET DIVERSITY DEFERRED
+
+**Delegated P5 children use the existing workspace/default target only.**
+
+The roadmap's "multi-target composition" item is adjudicated as: **DEFERRED, NOT
+PRE-AUTHORIZED.** P5 establishes bounded child composition through existing Ticket/Run/
+Workflow authority WITHOUT freezing an incorrect target-diversity mechanism.
+
+Why the previously drafted browser-target delegation is REMOVED from P5 v1 — the current
+browser-target portion is execution-hollow, proven against current repository authority:
+
+- delegated children are workflow-mode Tickets (`executeTicketPlan` children carry
+  `executionMode: 'workflow'`);
+- workflow-mode Runs execute the workflow definition and return WITHOUT entering the agent
+  action loop (`server.js` workflow branch executes `executeWorkflowDefinition` and
+  terminalizes);
+- browser operations execute through the agent action loop;
+- browser operations are NOT workflow-usable workflow steps (`isWorkflowUsableAction`
+  excludes them);
+- current repository authority explicitly REJECTS browser targets for workflow Tickets
+  (`server.js`: "Workflow tickets cannot use browser targets");
+- browser workflow steps remain deferred.
+
+Therefore P5 MUST NOT silently supersede that boundary. P5 v1 does NOT authorize:
+
+- browser target binding for delegated children;
+- browser reads by delegated workflow children;
+- browser interactions on delegated children;
+- process-target delegation;
+- target-diverse delegated composition;
+- a new browser-workflow action path;
+- a new target grant model.
+
+No placeholder `targetRef` contract is created now. Any future target-diverse delegated
+composition requires its own explicit semantic extension AFTER the underlying target
+execution path exists (e.g., browser work as governed workflow steps). Existing repository
+browser behavior (operator/direct browser Tickets, browser:read/browser:operate/
+browser:interact authority, phase-gated operations, browser target snapshots) remains
+untouched by P5.
+
+### 17. BOUNDS (existing systems only — no new composition budget dimension in P5 v1)
+
+| Bound | Owner (existing, unchanged) |
+| --- | --- |
+| Distinct logical DELEGATED children | the FINITE authored delegated-unit key cardinality of the applicable workflow definition (CHILD-RERUN-A: parent retries/reruns adopt existing children and do NOT multiply that set) |
+| Child count per plan execution (additional execution bound) | workflow-authored `maxTickets` (validated) |
+| Composition depth | recursive-`executeTicketPlan`-child prohibition — ONE level; delegated children cannot recursively delegate |
+| Workflow invocation self-nesting | `invokeWorkflow` is not workflow-usable — no nesting through workflow steps; same-Run iteration bounded by the Run's counters |
+| Workflow transitions/loops | existing `maxTransitions`/`maxLoopIterations`/`maxExecutionSteps` (immutable runtime-budget snapshot) |
+| Per-child model/action budgets | the child Run's own existing runtime-budget dimensions |
+| Duration | the child's and parent's existing Run duration (DB-stamped epoch) |
+| Economic liability | the existing role-scoped economic authority, charged to the acting agent's single account |
+| Concurrency | existing scheduler admission pressure, `allowParallelRuns`, and capacity domains (`global_run`, `model_provider`, `target`, `process_launcher`) |
+| Attempts | the existing per-Ticket `maxAttempts` ceiling, applied to children independently |
+
+Delegated child count does NOT grow once per parent attempt: re-derivation of the same
+authored unit keys adopts the existing children; the distinct-children bound is the authored
+key cardinality of the workflow definition. `maxTickets`, transitions, attempts, runtime
+budgets, and economic bounds remain ADDITIONAL execution bounds on plan execution and Run
+admission. No new budget system, no new budget dimension, no redundant ceiling.
+
+### 18. RECOVERY / EXACTLY-ONCE MATRIX
+
+| Composition step | Stable identity | Durable evidence | Replay rule | Uncertain state |
+| --- | --- | --- | --- | --- |
+| Child create (first delegation) | `spawnIdempotencyKey` (Ticket-scoped unit identity) | `ticket.created` + `workflow.ticket_plan.executed` + `workflowTicketPlans` | re-derivation adopts the existing child (delegated) / typed rejected-duplicate (non-delegated, unchanged) | duplicate proposal → typed rejection; no duplicate creation |
+| Child adopt (parent rerun) | same logical unit key | adoption/replay evidence | idempotent re-derivation | child with any attempt → never re-admitted |
+| Delegated release | atomic admission under Ticket lock | `delegated_release` admission event + parent adoption evidence | max-one-unsettled-attempt makes re-attempt exactly-once | crash between create and admit → child HELD (never half-admitted); recovery never auto-admits; operator recourse preserved |
+| Same-Run workflow invocation | key-stable `workflow.invoked` / `workflowInvocation` slot | invocation evidence before effects | deterministic re-execution from step 1; committed effects replay | divergence/uncertain → fail closed; existing `RUN_RESUME_UNSAFE` guards |
+| Provider call (in-invocation or child) | economic reservation + claim binding (existing) | providerRequests/modelResponses + reservation/settlement receipts | one-winner start; `request_started` never re-dispatched; durable responses reused | `request_delivery_uncertain` → existing governed-transport reconciliation |
+| Workspace effect | `operation_receipts`/`target_operation_intents` unique keys | operation receipt + event + replay | prepare-before-effect replays committed result (no re-effect) | prepared-intent reconciliation (existing) |
+| Await step | read-only; evidence slot `workflow.await_children` | typed event + replay item | deterministic re-derivation from durable facts | child non-terminal at exhaustion → honest non-success within existing duration bounds |
+
+No new reconciliation framework is invented; every row reuses an already-proven seam.
+
+### 19. EVIDENCE
+
+Minimum typed evidence (existing event/replay/evidence structures only):
+
+- **child creation** — `ticket.created` (complete provenance + delegation block) +
+  `workflow.ticket_plan.executed` + `workflowTicketPlans` replay;
+- **adoption** — parent-side adoption evidence on re-derivation;
+- **delegated admission** — `delegated_release` admission event + parent adoption evidence;
+- **child terminal truth** — existing `run.terminalized` + hash-bound completion decision +
+  attempt settlement (existing owners);
+- **workflow invocation** — `workflow.invoked` + `workflowInvocation` replay (key-stable);
+- **await observation** — `workflow.await_children` typed event + replay item (bounded,
+  truncation-explicit);
+- **parent completion evaluation** — existing completion decision / evaluation / consequence;
+  `childTerminalOutcome` results inside `run.postconditions_checked`.
+
+Raw model prose has ZERO decision weight anywhere in this chain.
+
+### 20. OPERATOR CONTROL (minimum additions only)
+
+- show delegation status/intent (creation-event delegation block surfaced in the children
+  enumeration and run logs);
+- show parent→child lineage (existing children enumeration / child-side parent projection);
+- show child state (existing five-state/Run displays; delegated children are
+  workspace/default target);
+- show await observation (await-step evidence in run detail);
+- show budgets/recovery using EXISTING surfaces (immutable runtime-budget snapshots, recovery/
+  reconciliation displays).
+
+No new dashboard; no orchestration UI framework; no new permission.
+
+### 21. SCHEMA / MIGRATION POLICY
+
+**NO MIGRATION EXPECTED.** All proposed facts fit existing JSONB/event/evidence structures:
+delegation block in the `ticket.created` payload and `tickets.body`; execution-policy fields in
+the normalized policy snapshot (JSONB, contract-versioned); `delegated_release` as an
+admission-intent vocabulary extension (event-payload/contract level); `awaitChildTickets` and
+`childTerminalOutcome` inside existing events/replay/postcondition-evidence structures.
+
+If implementation discovers a genuinely required DB-level fact or constraint (e.g., a
+uniqueness guarantee the event payload cannot provide): **STOP** — require separate migration
+adjudication before any DDL. Operational migration execution authorization remains
+`NOT_AUTHORIZED`; P5 does not apply or operationalize migration 044.
+
+### 22. IMPLEMENTATION SLICES
+
+Three narrow slices, in risk-ascending order:
+
+- **P5-R1 — Executable governed workflow invocation.** `allowWorkflowInvocation` policy field
+  (normalizer + snapshot binding + enforcement); `invokeWorkflow` dispatch in the agent Run
+  loop; catalog/enabled/schema validation; same-Run execution via `executeWorkflowDefinition`;
+  key-stable invocation evidence; recovery semantics per §13.
+- **P5-R2 — Delegated child create/adopt + atomic `delegated_release` admission.** Delegation
+  authorization (definition-validated); `allowChildTickets` implementation; delegation block in
+  the child creation payload; adoption semantics on re-derivation; the atomic
+  delegated-release admission seam with the §10 eight-leg conjunctive authorization; composer
+  UNCHANGED (§11). **This is the canonical-lifecycle-sensitive slice.**
+- **P5-R3 — Deterministic composition consumption.** `awaitChildTickets` step;
+  `childTerminalOutcome` criterion through the single existing evaluator; operator-surface
+  additions (§20) needed for composed child work. Delegated children remain
+  workspace/default; target diversification is NOT part of R3 (§16).
+
+Dependencies: R1 and R2 are independent of each other; R3 depends on R2 (and consumes R1's
+invocation-result conventions where applicable).
+
+### 23. VERIFICATION / CHECKPOINT POLICY
+
+- **Targeted owning verification throughout implementation** (the default inner loop). Expected
+  owners include the existing required suites: `workflow-ticket-plan-test.js`,
+  `workflow-action-plan-test.js`, `t2-tranche5-blocking-authority-test.js`,
+  `t2-tranche5-release-admission-server-test.js`, `t2-tranche5-rerun-lock-order-test.js`,
+  `t2-tranche5-store-postgres-test.js`, `t4-spawn-relation-contract-test.js`,
+  `t4-spawn-relation-postgres-test.js`, `ticket-attempt-authority-postgres-test.js`,
+  `completion-decision-contract-test.js`, `completion-decision-postgres-test.js`,
+  `t2-attempt-completion-contract-test.js`, `t2-v2-completion-authority-contract-test.js`,
+  `postcondition-completion-test.js` — plus new slice owners (e.g. invoke-workflow and
+  delegated-admission suites) registered in `scripts/test-manifest.js` at implementation, and
+  build/syntax green.
+- **One fresh independent implementation barrier after P5-R2** — because R2 touches canonical
+  admission/lifecycle authority (attempt admission seam, blocking-authority interaction,
+  admission-intent vocabulary).
+- **Then P5-R3.**
+- **One fresh combined implementation/closure review** of the exact candidate bytes
+  (established review-identity requirements).
+- **A FULL canonical checkpoint is REQUIRED at combined P5 closure** — P5 changes canonical
+  lifecycle/admission and completion-authority surfaces (an explicit `AGENTS.md` protected
+  trigger category). Run it ONCE at combined closure unless an earlier independent
+  repository-owned protected trigger genuinely requires one earlier (then the existing policy
+  applies at that boundary; no trigger is waived or merged).
+- **Do NOT create per-slice checkpoint ceremony.** The docs-only freeze publication triggers
+  no checkpoint.
+
+### 24. SIMPLIFIED GOVERNANCE LIFECYCLE
+
+1. design freeze candidate (this record);
+2. ONE fresh independent design review of these exact bytes;
+3. publish design freeze (docs-only commit; no checkpoint);
+4. implement R1 → R2 → R3 with targeted owning verification;
+5. ONE narrow independent barrier after R2;
+6. ONE fresh combined implementation/closure review;
+7. ONE full canonical checkpoint at combined closure;
+8. ONE combined P5 publication commit;
+9. minimal publication-status bookkeeping ONLY if repository convention requires it.
+
+No review-of-review loops for documentation-only evidence. Corrections discovered by a gate
+may receive a narrow independent review; nothing else recurses.
+
+### 25. EXPLICIT EXCLUSIONS
+
+P5 does NOT authorize:
+
+- structured parent/planner/leaf revival (FINAL STOP);
+- P6 deployment/operations work;
+- P7 external connectors;
+- Browser Phase 3 (downloads, persistent sessions, credential/session authority);
+- browser target binding for delegated children;
+- browser reads by delegated workflow children;
+- browser interactions on delegated children;
+- process-target delegation;
+- target-diverse delegated composition (DEFERRED — requires its own explicit semantic
+  extension after the underlying target execution path exists);
+- a new browser-workflow action path;
+- a new target grant model;
+- arbitrary model-authored ticket creation (child creation remains the canonical
+  `executeTicketPlan` only);
+- recursive child composition (depth > 1);
+- arbitrary tool routing;
+- a workflow-owned second execution graph;
+- new Ticket states;
+- attempt graph edges / planner roles / sibling dependencies;
+- a new economic authority;
+- operational migration 044 execution (or any migration transition);
+- child transcripts or unbounded descendant history in model context;
+- same-Run operator→agent delivery (T7-extension-gated; T7-I7 remains unassigned);
+- event-driven external triggering (T9 remains EMPTY/DEFERRED);
+- workflow-fixture content enrichment or workflow-draft policy changes beyond the frozen
+  delegation fields.
+
+### 26. STOP CONDITIONS (any one requires design adjudication before further work)
+
+Implementation must STOP for adjudication if it discovers:
+
+- a required migration or DB-level fact/constraint;
+- inability to preserve the Ticket-last lock order;
+- inability to implement `delegated_release` atomically;
+- authority amplification through any composition path;
+- a need to modify frozen Ticket states or projection priority;
+- a need to add attempt topology (edges/roles/dependencies);
+- same-Run workflow invocation cannot fail closed or replay safely;
+- child logical identity cannot remain Ticket-stable;
+- completion requires a second evaluator;
+- satisfying P5 is found to require browser-target delegated workflow execution;
+- satisfying P5 is found to require process-target delegation;
+- satisfying P5 is found to require target-diverse child composition;
+- satisfying P5 is found to require a new target grant model;
+- satisfying P5 is found to require supersession of the existing workflow/browser
+  incompatibility ("Workflow tickets cannot use browser targets");
+- any P6/P7/Browser-Phase-3 dependency;
+- contradiction with P2/P3/P4 frozen semantics or the FINAL STOP constraint.
+
+Target-diverse delegated composition, process-target delegation, and any browser-workflow
+execution path require SEPARATE design adjudication; they are NOT silently absorbed into
+P5 v1.
+
+### 27. CANDIDATE STATUS AND NEXT BOUNDARY
+
+This record is a **P5 SEMANTIC DESIGN-FREEZE CANDIDATE ONLY**: uncommitted, unpublished,
+implementation NOT authorized, no migration expected or created, no checkpoint run, no
+operational migration authorization introduced (`NOT_AUTHORIZED` unchanged), no P4 residual
+resolved, no P6/P7/Browser-Phase-3 scope opened, and no historical record altered. It
+authorizes later implementation work ONLY after independent review, acceptance, commit, and
+publication of these exact bytes.
+
+Minimal correction note: an independent design review accepted the architecture above and
+returned ONE blocking defect (delegated browser targets are execution-hollow for
+workflow-mode children under current repository authority). This candidate was narrowed in
+place accordingly — delegated browser targets removed, target diversity DEFERRED
+(§16), `unitKey` literal-authority enforcement strengthened (§8), invocation identity made
+Run-stable across lease recovery (§13), delegated-child cardinality language corrected (§17),
+and the target-diversity STOP conditions added (§26). No previously accepted semantic was
+changed.
+
+Opening state pinned: branch `master`; HEAD = origin/master =
+`5f8fe4e7167a743bfe738251134af18d51f95e45` ("Record P4 publication status"); clean tree;
+nothing staged; zero untracked; stash empty; `git diff --check` clean; repository migration
+head 044; operational applied head 043; migration authorization `NOT_AUTHORIZED`.
+
+**NEXT BOUNDARY: NARROW INDEPENDENT CORRECTION REVIEW of these exact corrected P5
+design-freeze bytes (docs-only; no checkpoint required) — NOT a repetition of the broad
+design review. The reviewer must verify: (1) browser-target delegation is fully
+removed/deferred; (2) no hidden target-diversity authority remains; (3) `unitKey` authority
+is literal/operator-authored and model-non-mintable; (4) invocation identity is stable
+across lease recovery; (5) delegated-child cardinality language is truthful; (6) all
+previously accepted MODEL-D semantics remain unchanged (single Ticket/Run graph; P5-R1
+same-Run `invokeWorkflow`; DELEGATED-HOLD-A; atomic `delegated_release`; unchanged
+admission-hold composer; immutable admitted-policy doctrine; CHILD-RERUN-A; Ticket-scoped
+logical child identity; `spawnPlanId` as Run-scoped execution reference; explicit authored
+`expectedUnits`; `childTerminalOutcome`; `awaitChildTickets` as non-authoritative
+observation; non-amplification; one-level delegation; no migration expected; FINAL STOP;
+simplified governance sequence); and (7) the exact corrected docs identity reproduces.
+Committing and publishing the reviewed record is a separate, later publication act.**
