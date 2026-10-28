@@ -162,6 +162,15 @@ const {
   TicketBlockingAuthorityError
 } = require('../../runtime/ticket-blocking-authority-composer');
 const {
+  resolveDelegatedSpawnRelation,
+  buildDelegatedSpawnIdempotencyKey,
+  DELEGATED_PLAN_AUTHORIZATION_EVENT_TYPE,
+  buildDelegatedPlanAuthorizationEvidenceKey
+} = require('../../runtime/t4-spawn-relation-contract');
+const {
+  WorkflowCatalogReferenceError
+} = require('../workflow-catalog');
+const {
   evaluateV2CompletionAuthority
 } = require('../../runtime/v2-completion-authority-contract');
 const {
@@ -10707,11 +10716,19 @@ class PostgresRuntimeStore {
   // Frozen blocker-intent matrix (T2 Tranche 5). The intent token selects a
   // row; authority is the composer-derived governing blocker. Auto/scheduler
   // paths never carry an intent and therefore never supersede a blocker.
+  //
+  // P5-R2: `delegated_release` extends the admission-intent vocabulary as the
+  // narrow structural analogue of operator `release_hold` for delegated child
+  // Tickets. The matrix row alone is NOT the authority: the token is minted
+  // ONLY by this store's `delegatedReleaseRuns`, which conjunctively verifies
+  // the durable parent-Run delegation facts before admitting. `rerunAdmitRuns`
+  // deliberately does not accept the token, so the operator/scheduler admission
+  // surfaces cannot smuggle it past the delegated verification.
   assertAdmissionIntentAuthorized(governing, intent, reference) {
     const matrix = {
       ticketTriageUnresolved: [],
       maxAttemptsExhausted: [],
-      admissionHold: ['release_hold'],
+      admissionHold: ['release_hold', 'delegated_release'],
       persistedRefusalEventId: ['retry_structured_refusal'],
       settledBlockedAttempt: ['rerun_terminal'],
       none: ['rerun_terminal', 'retry_auto']
@@ -10982,6 +10999,656 @@ class PostgresRuntimeStore {
         }
       }, { client, authorizedFromStatuses: [ticket.status] });
       return { ...created, supersededBlocker: composed.won ? composed.reference : null };
+    });
+  }
+
+  // ── P5-R2: atomic governed delegated-release admission ─────────────────────
+  //
+  // The canonical atomic admission intent `delegated_release` — the narrow
+  // structural analogue of operator `release_hold` (see rerunAdmitRuns) with
+  // parent-Run delegation authority instead of operator authority. A delegated
+  // child Ticket (created by executeTicketPlan carrying the delegated
+  // creation block, zero attempts, admission hold ACTIVE) becomes admitted for
+  // execution ONLY when this ONE transaction independently authorizes every
+  // durable fact and then creates the child attempt + Run exactly once.
+  //
+  // Conjunctive authorization (docs P5 freeze §10), mapped to owners:
+  //   1. coherent delegated creation relation — this method reads the child's
+  //      COMPLETE ticket.created provenance set and resolves it through the T4
+  //      kernel's resolveDelegatedSpawnRelation (delegation block coherence,
+  //      key re-derivation). No inferred relation, no partial provenance.
+  //   2. the logical spawn key matches the unit the CURRENT parent run
+  //      re-derived — the caller passes the re-derived key from the plan
+  //      execution it is synchronously performing; this method refuses unless
+  //      the child's durable spawn identity equals it exactly. Key knowledge
+  //      alone is NOT authority: leg 5/6 below independently consumes the
+  //      parent Run's durable current-action authorization evidence.
+  //   3. the CURRENT ACTING parent Run's IMMUTABLE admitted
+  //      executionPolicySnapshot has allowChildTickets === true (strict
+  //      default false). The live parent Ticket policy is NEVER consulted —
+  //      the frozen admitted snapshot is controlling (same doctrine as
+  //      browser-interaction / workflow-invocation policy).
+  //   4. the child workflow still exists and is enabled — _assertTicketWorkflow
+  //      under the transaction (typed WORKFLOW_NOT_FOUND / WORKFLOW_DISABLED).
+  //   5+6. the delegated-unit authorization and the plan/input bounds
+  //      (allowedWorkflowIds, maxTickets, schema, recursive prohibition) were
+  //      canonically validated by THIS parent Run's CURRENT executeTicketPlan
+  //      action: the executing action durably records a
+  //      `workflow.delegated_plan_authorized` evidence item on its OWN
+  //      append-only event chain after validation succeeds and BEFORE any
+  //      delegated child is created/adopted or released, and this transaction
+  //      independently reads and consumes that durable fact (see
+  //      _verifyDelegatedReleasePlanAuthorization). Caller knowledge of a
+  //      valid spawn key — or any caller-supplied authorized flag — authorizes
+  //      nothing.
+  //   7. the child is still virgin — the composer-derived governing blocker
+  //      must be `admissionHold` (spawn provenance + zero attempts), and an
+  //      unsettled current attempt refuses outright. Already-attempted
+  //      children are never silently re-admitted.
+  //   8. the canonical atomic admission succeeds — createRunsAndStartTicket
+  //      inside this transaction under the frozen lock protocol (attempt
+  //      members -> attempt -> Ticket LAST; Ticket-for-Update taken after
+  //      every attempt lock). There is no window where the hold is gone but no
+  //      attempt/Run exists: the hold is superseded BY the admission itself.
+  //
+  // Failure: ANY refused predicate rolls the transaction back with ZERO
+  // mutation (no attempt, no Run, hold intact) and a typed refusal code.
+  // Two competing releases serialize on the child Ticket row; the loser
+  // observes the committed winner state (attempts exist) and refuses through
+  // the same matrix. max-one-unsettled-attempt is therefore structural.
+  // ── P5-R2 correction: durable current-action / parent-liveness authority ───
+  //
+  // Consumed INSIDE the atomic delegated-release transaction. This is the
+  // store's independent verification of the facts the caller previously
+  // asserted: that the ACTING parent Run's CURRENT executeTicketPlan action
+  // canonically validated and re-derived exactly this delegated unit, that the
+  // operator-owned parent workflow authority is still valid, and that the
+  // authorization is not stale (the action has not durably completed/failed
+  // and the parent Run has not terminalized).
+  //
+  // Authority chain: operator workflow definition → canonical current-action
+  // validation (validateTicketPlanInput, server-side) → durable immutable
+  // `workflow.delegated_plan_authorized` evidence on the parent Run's own
+  // hash-chained event chain → THIS verification → delegated release.
+  //
+  // Durable facts proven here, each read-only under the transaction (no new
+  // lock class; the parent Run row is taken FOR SHARE so terminalization
+  // serializes against the release instead of racing it):
+  //   parentRun.status === 'running'           — the dispatched acting Run;
+  //                                              terminal (completed/failed/
+  //                                              interrupted) and pending
+  //                                              (never dispatched) refuse;
+  //                                              no Run state is invented.
+  //   parentRun.ticketAttemptId === current    — the Run still belongs to the
+  //     attempt && disposition === null          CURRENT unsettled attempt of
+  //                                              its Ticket (stale membership
+  //                                              refuses).
+  //   evidence event exists on run_id =        — the durable validation fact
+  //     acting run, step_id = the child's        for this exact workflow step
+  //     block's spawnedByStepId, evidence        execution (Run-scoped
+  //     key re-derived from the event's own      spawnPlanId; Ticket-stable
+  //     spawnPlanId and action/step/parent       logical unit identity does
+  //     identity coherent                        not include it).
+  //   planBounds: child workflow ∈             — the validated bounds of the
+  //     allowedWorkflowIds, maxTickets ≥         CURRENT action authorized
+  //     1, units ≤ maxTickets                    this child workflow.
+  //   delegatedUnits contains the child's      — the exact finite unit set
+  //     durable logical spawn key with           authorized by the action;
+  //     coherent unitKey/childWorkflowId         every component re-derives
+  //     and canonical re-derivation              the child's spawn key.
+  //   no completed/failed step boundary        — freshness: the authorization
+  //     for this step/workflow after the          belongs to the still-current
+  //     evidence position                         action, not a completed one.
+  //   parent workflow definition still         — the action's workflow
+  //     exists AND enabled (FOR SHARE)           authority was not revoked.
+  //
+  // The LATEST step-scoped evidence event is the current action's authority
+  // (later executions of the same step supersede earlier ones; a workflow
+  // definition edit therefore cannot resurrect an older unit set). Any
+  // divergence — foreign run/ticket, wrong action, wrong workflow/step,
+  // missing plan bounds, a unit whose components re-derive a different key —
+  // refuses typed with ZERO mutation.
+  async _verifyDelegatedReleasePlanAuthorization(client, {
+    actingParentRun,
+    child,
+    delegation
+  }) {
+    const actingParentRunId = actingParentRun.id;
+    const parentTicketId = actingParentRun.ticketId;
+    const refused = (code, message, details) => {
+      const error = new Error(message);
+      error.code = code;
+      error.statusCode = 409;
+      error.details = details || null;
+      return error;
+    };
+
+    // ── Parent-Run liveness (§9). The immutable admitted snapshot remains
+    // necessary (checked by the caller) but is never sufficient: authority
+    // dies with the Run, and the CURRENT attempt membership — not the
+    // snapshot — decides whether this Run is still the acting authority.
+    if (actingParentRun.status !== 'running') {
+      throw refused(
+        'DELEGATED_RELEASE_PARENT_RUN_INELIGIBLE',
+        `Delegated release refused: acting parent run ${actingParentRunId} is ` +
+        `'${actingParentRun.status}' and cannot act` +
+        (TERMINAL_RUN_STATUSES.has(actingParentRun.status)
+          ? ' (a terminal run does not retain delegation authority)'
+          : ' (only the dispatched running executor may delegated-release)'),
+        { observedStatus: actingParentRun.status });
+    }
+    const parentAttemptResult = await client.query(
+      `SELECT id, disposition FROM ${this.table('ticket_attempts')}
+       WHERE ticket_id = $1 ORDER BY ordinal DESC LIMIT 1`,
+      [parentTicketId]
+    );
+    const currentParentAttempt = parentAttemptResult.rowCount === 0
+      ? null
+      : {
+        id: positiveSafeInteger(parentAttemptResult.rows[0].id, 'attempt.id'),
+        disposition: parentAttemptResult.rows[0].disposition
+      };
+    if (!currentParentAttempt || currentParentAttempt.id !== actingParentRun.ticketAttemptId) {
+      throw refused(
+        'DELEGATED_RELEASE_PARENT_RUN_INELIGIBLE',
+        `Delegated release refused: acting parent run ${actingParentRunId} does not belong to ` +
+        `the current attempt of parent ticket ${parentTicketId}`,
+        { attemptMembership: currentParentAttempt ? 'superseded' : 'missing' });
+    }
+    if (currentParentAttempt.disposition !== null) {
+      throw refused(
+        'DELEGATED_RELEASE_PARENT_RUN_INELIGIBLE',
+        `Delegated release refused: the acting parent run ${actingParentRunId}'s attempt ` +
+        `${currentParentAttempt.id} is already settled (${currentParentAttempt.disposition})`,
+        { attemptDisposition: currentParentAttempt.disposition });
+    }
+
+    // ── Durable current-action authorization evidence. Step-scoped to the
+    // child's block so a wrong-step action cannot be located at all; the
+    // identity/coherence proofs below then fail closed on any divergence.
+    const stepScoped = await client.query(
+      `SELECT * FROM ${this.table('events')}
+       WHERE run_id = $1 AND type = $2 AND step_id = $3
+       ORDER BY position DESC
+       LIMIT $4`,
+      [actingParentRunId, DELEGATED_PLAN_AUTHORIZATION_EVENT_TYPE, delegation.spawnedByStepId,
+        this.maxQueryRows]
+    );
+    if (stepScoped.rowCount === 0) {
+      throw refused(
+        'DELEGATED_RELEASE_PLAN_AUTHORIZATION_MISSING',
+        `Delegated release refused: acting parent run ${actingParentRunId} has no durable ` +
+        `current-action plan authorization for step '${delegation.spawnedByStepId}'`,
+        { parentWorkflowId: delegation.parentWorkflowId, spawnedByStepId: delegation.spawnedByStepId });
+    }
+
+    // The LATEST step-scoped evidence is the current action's authorization.
+    const evidenceRow = stepScoped.rows[0];
+    const evidenceEventPosition = positiveSafeInteger(evidenceRow.position, 'event.position');
+    const evidenceEvent = eventFromRow(evidenceRow);
+    const authorization = evidenceEvent.payload && typeof evidenceEvent.payload === 'object' &&
+      !Array.isArray(evidenceEvent.payload)
+      ? evidenceEvent.payload
+      : null;
+    if (!authorization) {
+      throw refused(
+        'DELEGATED_RELEASE_PLAN_AUTHORIZATION_INVALID',
+        `Delegated release refused: the durable plan authorization for parent run ` +
+        `${actingParentRunId} step '${delegation.spawnedByStepId}' carries no authorization payload`,
+        { evidenceEventId: String(evidenceEvent.id) });
+    }
+
+    // Exact action identity: this is the executeTicketPlan authorization of
+    // THIS parent Ticket/Run/workflow/step — nothing else may locate it.
+    if (authorization.action !== 'executeTicketPlan') {
+      throw refused(
+        'DELEGATED_RELEASE_PLAN_AUTHORIZATION_INVALID',
+        `Delegated release refused: the durable plan authorization does not belong to the ` +
+        `executeTicketPlan action (got '${authorization.action}')`,
+        { evidenceEventId: String(evidenceEvent.id) });
+    }
+    if (authorization.parentTicketId !== parentTicketId ||
+        authorization.parentRunId !== actingParentRunId) {
+      throw refused(
+        'DELEGATED_RELEASE_PLAN_AUTHORIZATION_INVALID',
+        `Delegated release refused: the durable plan authorization binds a different ` +
+        `parent Ticket/Run`,
+        { evidenceEventId: String(evidenceEvent.id) });
+    }
+    if (authorization.parentWorkflowId !== delegation.parentWorkflowId ||
+        authorization.stepId !== delegation.spawnedByStepId ||
+        evidenceEvent.stepId !== delegation.spawnedByStepId) {
+      throw refused(
+        'DELEGATED_RELEASE_PLAN_AUTHORIZATION_INVALID',
+        `Delegated release refused: the durable plan authorization belongs to a different ` +
+        `workflow/step than the child's delegated creation relation`,
+        { evidenceEventId: String(evidenceEvent.id) });
+    }
+    // The execution reference must cohere with its OWN evidence identity
+    // (derived from the acting Run id + the reference inside the payload —
+    // never caller-suppliable). The child's block spawnPlanId is ORIGINAL
+    // creation provenance (CHILD-RERUN-A keeps it across reruns), so the
+    // binding to the CURRENT action is the Ticket-stable logical unit key on
+    // the ACTING Run's own evidence chain, not the historical reference.
+    if (typeof authorization.spawnPlanId !== 'string' || authorization.spawnPlanId.length === 0 ||
+        authorization.evidenceKey !== buildDelegatedPlanAuthorizationEvidenceKey({
+          parentRunId: actingParentRunId,
+          spawnPlanId: authorization.spawnPlanId
+        })) {
+      throw refused(
+        'DELEGATED_RELEASE_PLAN_AUTHORIZATION_INVALID',
+        `Delegated release refused: the durable plan authorization's execution reference ` +
+        `diverges from its own evidence identity`,
+        { evidenceEventId: String(evidenceEvent.id) });
+    }
+
+    // Canonical validated plan bounds of THIS action (leg 6 consume).
+    const planBounds = authorization.planBounds && typeof authorization.planBounds === 'object' &&
+      !Array.isArray(authorization.planBounds)
+      ? authorization.planBounds
+      : null;
+    const allowedWorkflowIds = planBounds && Array.isArray(planBounds.allowedWorkflowIds)
+      ? planBounds.allowedWorkflowIds.filter(value => typeof value === 'string' && value.length > 0)
+      : null;
+    const maxTickets = planBounds && Number.isSafeInteger(planBounds.maxTickets) &&
+      planBounds.maxTickets >= 0
+      ? planBounds.maxTickets
+      : null;
+    if (!planBounds || !allowedWorkflowIds || allowedWorkflowIds.length !== planBounds.allowedWorkflowIds.length ||
+        maxTickets === null || maxTickets < 1) {
+      throw refused(
+        'DELEGATED_RELEASE_PLAN_AUTHORIZATION_INVALID',
+        `Delegated release refused: the durable plan authorization carries no complete ` +
+        `validated plan bounds`,
+        { evidenceEventId: String(evidenceEvent.id) });
+    }
+
+    // The exact finite delegated unit set authorized by this action.
+    const authorizedUnits = Array.isArray(authorization.delegatedUnits)
+      ? authorization.delegatedUnits
+      : null;
+    if (!authorizedUnits || authorizedUnits.length === 0 || authorizedUnits.length > maxTickets) {
+      throw refused(
+        'DELEGATED_RELEASE_PLAN_AUTHORIZATION_INVALID',
+        `Delegated release refused: the durable plan authorization carries no coherent ` +
+        `delegated unit set`,
+        { evidenceEventId: String(evidenceEvent.id) });
+    }
+
+    // The child's DURABLE logical spawn identity (never the caller's string)
+    // must be one of the units THIS action canonically validated, with
+    // coherent unitKey, child workflow id and canonical re-derivation.
+    const authorizedUnit = authorizedUnits.find(unit => unit && typeof unit === 'object' &&
+      !Array.isArray(unit) && unit.spawnIdempotencyKey === delegation.spawnIdempotencyKey) || null;
+    if (!authorizedUnit) {
+      throw refused(
+        'DELEGATED_RELEASE_UNIT_NOT_AUTHORIZED',
+        `Delegated release refused: the current action's validated plan does not authorize ` +
+        `delegated unit ${delegation.spawnIdempotencyKey}`,
+        {
+          evidenceEventId: String(evidenceEvent.id),
+          authorizedUnitCount: authorizedUnits.length
+        });
+    }
+    if (authorizedUnit.unitKey !== delegation.unitKey) {
+      throw refused(
+        'DELEGATED_RELEASE_PLAN_AUTHORIZATION_INVALID',
+        `Delegated release refused: the authorized unit entry's unitKey diverges from the ` +
+        `child's delegated creation block`,
+        { evidenceEventId: String(evidenceEvent.id), field: 'unitKey' });
+    }
+    if (authorizedUnit.childWorkflowId !== child.workflowId) {
+      throw refused(
+        'DELEGATED_RELEASE_PLAN_AUTHORIZATION_INVALID',
+        `Delegated release refused: the authorized unit entry's child workflow diverges from ` +
+        `the child's durable workflow identity`,
+        { evidenceEventId: String(evidenceEvent.id), field: 'childWorkflowId' });
+    }
+    let reDerivedKey = null;
+    try {
+      reDerivedKey = buildDelegatedSpawnIdempotencyKey({
+        parentTicketId: authorization.parentTicketId,
+        parentWorkflowId: authorization.parentWorkflowId,
+        spawnedByStepId: authorization.stepId,
+        childWorkflowId: authorizedUnit.childWorkflowId,
+        unitKey: authorizedUnit.unitKey
+      });
+    } catch (_) {
+      reDerivedKey = null;
+    }
+    if (reDerivedKey !== delegation.spawnIdempotencyKey) {
+      throw refused(
+        'DELEGATED_RELEASE_PLAN_AUTHORIZATION_INVALID',
+        `Delegated release refused: the authorized unit entry's components re-derive a ` +
+        `different delegated spawn identity`,
+        { evidenceEventId: String(evidenceEvent.id), reDerivedKey });
+    }
+    if (!allowedWorkflowIds.includes(child.workflowId)) {
+      throw refused(
+        'DELEGATED_RELEASE_UNIT_NOT_AUTHORIZED',
+        `Delegated release refused: the current action's validated plan bounds do not allow ` +
+        `child workflow '${child.workflowId}'`,
+        { evidenceEventId: String(evidenceEvent.id) });
+    }
+
+    // ── Freshness (§8). The authorization must still belong to the currently
+    // executing action: any durable completed/failed boundary for this exact
+    // workflow step (same step, same workflow, executeTicketPlan) recorded
+    // AFTER the evidence event proves the action finished — its authorization
+    // is stale and the release is refused. Existing durable step-execution
+    // evidence supplies the boundary; no workflow-progress table is created.
+    const staleBoundary = await client.query(
+      `SELECT position FROM ${this.table('events')}
+       WHERE run_id = $1
+         AND step_id = $2
+         AND position > $3
+         AND (
+           (type = 'workflow.step.completed' AND payload->>'workflowId' = $4 AND payload->>'action' = $5)
+           OR (type = 'workflow.step.failed' AND payload->>'workflowId' = $4 AND payload->>'action' = $5)
+           OR (type = 'workflow.step.persisted' AND payload->>'status' = ANY($6::text[]) AND payload->>'action' = $5)
+         )
+       ORDER BY position
+       LIMIT 1`,
+      [actingParentRunId, delegation.spawnedByStepId, evidenceEventPosition,
+        delegation.parentWorkflowId, 'executeTicketPlan', ['completed', 'failed']]
+    );
+    if (staleBoundary.rowCount > 0) {
+      throw refused(
+        'DELEGATED_RELEASE_ACTION_STALE',
+        `Delegated release refused: the acting parent run ${actingParentRunId}'s ` +
+        `'${delegation.spawnedByStepId}' action already reached its durable terminal boundary ` +
+        `after the plan authorization was recorded`,
+        { evidenceEventPosition: evidenceEventPosition, staleBoundaryPosition: Number(staleBoundary.rows[0].position) });
+    }
+
+    // ── Parent workflow authority (§11). The action's workflow identity comes
+    // from the durable evidence; the definition must still exist and be
+    // enabled — the release fails closed when the action's workflow authority
+    // was revoked between authorization and release. FOR SHARE is read-only
+    // and shares the existing catalog lock class (child leg 4); no Ticket or
+    // attempt lock is taken here, so the global Ticket-last order is intact.
+    const parentWorkflowResult = await client.query(
+      `SELECT enabled FROM ${this.table('workflow_definitions')} WHERE id = $1 FOR SHARE`,
+      [delegation.parentWorkflowId]
+    );
+    if (parentWorkflowResult.rowCount === 0) {
+      const error = new WorkflowCatalogReferenceError(
+        `Selected workflow does not exist: ${delegation.parentWorkflowId}`, 'WORKFLOW_NOT_FOUND');
+      error.statusCode = 409;
+      throw error;
+    }
+    if (parentWorkflowResult.rows[0].enabled !== true) {
+      const error = new WorkflowCatalogReferenceError(
+        `Selected workflow is disabled: ${delegation.parentWorkflowId}`, 'WORKFLOW_DISABLED');
+      error.statusCode = 409;
+      throw error;
+    }
+
+    return {
+      evidenceKey: authorization.evidenceKey,
+      evidenceEventPosition: evidenceEventPosition,
+      spawnPlanId: authorization.spawnPlanId,
+      planBounds,
+      authorizedUnit
+    };
+  }
+
+  async delegatedReleaseRuns({
+    childTicketId,
+    parentRunId,
+    spawnIdempotencyKey,
+    runDrafts,
+    runEventPayload = () => ({}),
+    ticketEventPayload = {}
+  }) {
+    const id = positiveSafeInteger(childTicketId, 'childTicketId');
+    const actingParentRunId = positiveSafeInteger(parentRunId, 'parentRunId');
+    const spawnKey = requiredString(spawnIdempotencyKey, 'spawnIdempotencyKey');
+    const intent = 'delegated_release';
+    if (!Array.isArray(runDrafts) || runDrafts.length === 0) {
+      throw new TypeError('runDrafts must be a non-empty array');
+    }
+    for (const draft of runDrafts) {
+      const run = this.assertJsonRecord(draft, 'runDrafts[]');
+      if (positiveSafeInteger(run.ticketId, 'runDrafts[].ticketId') !== id) {
+        throw new TypeError('Every run draft must belong to the delegated child ticketId');
+      }
+    }
+    if (typeof runEventPayload !== 'function') throw new TypeError('runEventPayload must be a function');
+    const callerTicketPayload = this.assertJsonRecord(ticketEventPayload, 'ticketEventPayload');
+
+    return this.withTransaction(async client => {
+      // Frozen protocol routing phase (mirrors rerunAdmitRuns): a current
+      // attempt plus its member Runs are discovered without locks first.
+      const routeAttempt = await client.query(
+        `SELECT id FROM ${this.table('ticket_attempts')}
+         WHERE ticket_id = $1 ORDER BY ordinal DESC LIMIT 1`,
+        [id]
+      );
+      const routedAttemptId = routeAttempt.rowCount === 0
+        ? null
+        : positiveSafeInteger(routeAttempt.rows[0].id, 'attempt.id');
+      let routedPlanId = null;
+      if (routedAttemptId !== null) {
+        const routeRuns = await client.query(
+          `SELECT NULLIF(body->>'allocationPlanId', '') AS allocation_plan_id
+           FROM ${this.table('runs')}
+           WHERE ticket_attempt_id = $1 ORDER BY id`,
+          [routedAttemptId]
+        );
+        const references = [...new Set(routeRuns.rows
+          .map(row => row.allocation_plan_id)
+          .filter(value => value !== null))];
+        if (references.length > 1 ||
+            (references.length === 1 && !/^[1-9]\d*$/.test(references[0]))) {
+          const error = new Error(`ticket ${id} has malformed v2 allocation-plan routing`);
+          error.code = 'TICKET_RERUN_V2_AUTHORITY_INVALID';
+          throw error;
+        }
+        routedPlanId = references.length === 1 ? Number(references[0]) : null;
+      }
+      if (routedPlanId !== null) {
+        await this._findLockedPlannerAdmittedPlan(client, id, {
+          allocationPlanId: routedPlanId
+        });
+      }
+      // Attempt members ORDER BY id, then the attempt, then Ticket LAST.
+      if (routedAttemptId !== null) {
+        await client.query(
+          `SELECT * FROM ${this.table('runs')}
+           WHERE ticket_attempt_id = $1 ORDER BY id FOR UPDATE`,
+          [routedAttemptId]
+        );
+      }
+      const currentAttempt = await this.getCurrentTicketAttempt(id, {
+        client,
+        forUpdate: true
+      });
+      if ((currentAttempt ? currentAttempt.id : null) !== routedAttemptId) {
+        const error = new Error(`ticket ${id} current attempt changed while delegated release was being admitted`);
+        error.code = 'TICKET_RERUN_STALE_ATTEMPT';
+        throw error;
+      }
+      if (currentAttempt && currentAttempt.disposition === null) {
+        const error = new StateTransitionConflictError(
+          'ticket_attempt', currentAttempt.id,
+          ['settled before delegated release'], currentAttempt);
+        error.code = 'TICKET_ATTEMPT_UNSETTLED';
+        throw error;
+      }
+      const childResult = await client.query(
+        `SELECT * FROM ${this.table('tickets')} WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (childResult.rowCount === 0) {
+        const error = new Error(`ticket ${id} was not found`);
+        error.code = 'POSTGRES_RECORD_NOT_FOUND';
+        throw error;
+      }
+      const child = ticketFromRow(childResult.rows[0]);
+      assertTicketCancellationNotCommitted(child, 'Delegated release Ticket');
+
+      // Leg 7 + intent authority: the composer re-derives the CURRENT governing
+      // blocker under the lock. delegated_release supersedes ONLY an
+      // admissionHold; any other governing blocker (attempts present, triage,
+      // refusal, exhaustion) refuses typed with zero mutation.
+      const composed = await this._composeBlockingAuthorityLocked(client, child);
+      this.assertAdmissionIntentAuthorized(composed.won, intent, composed.reference);
+
+      // Legs 3 + 1 prerequisite: the ACTING parent Run and its parent Ticket.
+      // The acting Run row is taken FOR SHARE: terminalization, recovery and
+      // rerun-attempt settlement all take this row FOR UPDATE, so a parent Run
+      // cannot terminalize (or be superseded) while a delegated release it
+      // authorized is being admitted — and a run that already terminalized is
+      // refused below. Read-only with respect to Ticket/attempt locks: no
+      // Ticket FOR UPDATE is taken here, so the global Ticket-last order is
+      // intact.
+      const parentRunResult = await client.query(
+        `SELECT * FROM ${this.table('runs')} WHERE id = $1 FOR SHARE`,
+        [actingParentRunId]
+      );
+      if (parentRunResult.rowCount === 0) {
+        const error = new Error(
+          `Delegated release refused: acting parent run ${actingParentRunId} does not exist`);
+        error.code = 'DELEGATED_RELEASE_PARENT_RUN_UNAUTHORIZED';
+        error.statusCode = 409;
+        throw error;
+      }
+      const parentRun = runFromRow(parentRunResult.rows[0]);
+      const parentTicketResult = await client.query(
+        `SELECT id FROM ${this.table('tickets')} WHERE id = $1`,
+        [parentRun.ticketId]
+      );
+      if (parentTicketResult.rowCount === 0) {
+        const error = new Error(
+          `Delegated release refused: parent ticket ${parentRun.ticketId} does not exist`);
+        error.code = 'DELEGATED_RELEASE_PARENT_RUN_UNAUTHORIZED';
+        error.statusCode = 409;
+        throw error;
+      }
+
+      // Legs 1 + 2: coherent T4-resolved delegated provenance whose logical
+      // spawn identity is exactly the unit the current parent run re-derived.
+      const creationResult = await client.query(
+        `SELECT id, position, payload
+         FROM ${this.table('events')}
+         WHERE ticket_id = $1 AND type = 'ticket.created'
+         ORDER BY position`,
+        [id]
+      );
+      const provenance = resolveDelegatedSpawnRelation({
+        childTicketId: id,
+        records: creationResult.rows.map(row => ({
+          id: String(row.id),
+          position: Number(row.position),
+          payload: row.payload || {}
+        })),
+        existingParentTicketIds: new Set([parentRun.ticketId]),
+        expectedSpawnIdempotencyKey: spawnKey
+      });
+      if (provenance.outcome !== 'FACT') {
+        const error = new Error(
+          `Delegated release refused: child Ticket ${id} has no coherent delegated creation relation ` +
+          `(${provenance.reason})`);
+        error.code = provenance.reason === 'DELEGATED_SPAWN_KEY_MISMATCH'
+          ? 'DELEGATED_RELEASE_SPAWN_KEY_MISMATCH'
+          : 'DELEGATED_RELEASE_PROVENANCE_INVALID';
+        error.statusCode = 409;
+        error.details = provenance.detail || null;
+        throw error;
+      }
+
+      // Leg 3: the ACTING parent Run's immutable admitted snapshot is the ONLY
+      // child-execution authority. Strict default false; the live parent
+      // Ticket policy (possibly edited after this Run was admitted) is never
+      // consulted here.
+      if (!parentRun.executionPolicySnapshot ||
+          parentRun.executionPolicySnapshot.allowChildTickets !== true) {
+        const error = new Error(
+          `Delegated release refused: acting parent run ${actingParentRunId} admitted ` +
+          'execution-policy snapshot does not authorize child tickets ' +
+          '(allowChildTickets is strict default false)');
+        error.code = 'DELEGATED_RELEASE_PARENT_RUN_UNAUTHORIZED';
+        error.statusCode = 409;
+        throw error;
+      }
+
+      // Leg 4: the child workflow must still exist and be enabled.
+      await this._assertTicketWorkflow(client, child);
+
+      // Legs 5/6 + current-action freshness + parent-Run liveness + parent
+      // workflow authority: independently consume the parent Run's OWN durable
+      // validated delegated-plan authorization evidence inside this
+      // transaction. Caller knowledge of a valid spawn key — or of the child's
+      // identity — authorizes nothing here.
+      const authorization = await this._verifyDelegatedReleasePlanAuthorization(client, {
+        actingParentRun: parentRun,
+        child,
+        delegation: provenance.delegation
+      });
+
+      // Durable budget headroom, checked inside this transaction (mirrors the
+      // canonical rerun admission so a concurrent admission cannot slip
+      // between check and admit).
+      const budgetSnapshots = runDrafts.map((draft, index) => {
+        if (!Object.prototype.hasOwnProperty.call(draft, 'runtimeBudgetSnapshot') ||
+            draft.runtimeBudgetSnapshot === null ||
+            draft.runtimeBudgetSnapshot === undefined) {
+          return null;
+        }
+        try {
+          return normalizeRuntimeBudgetSnapshot(draft.runtimeBudgetSnapshot);
+        } catch (error) {
+          error.message = `runDrafts[${index}].runtimeBudgetSnapshot: ${error.message}`;
+          throw error;
+        }
+      }).filter(Boolean);
+      if (budgetSnapshots.length > 0) {
+        const admittedCount = await this.countTicketAttempts(id, { client });
+        const requestedAttempts = 1;
+        const maxAttempts = budgetSnapshots[0].maxAttempts;
+        if (admittedCount + requestedAttempts > maxAttempts) {
+          const error = new Error(
+            `Ticket ${id} cannot admit ${requestedAttempts} attempt(s): ` +
+            `${admittedCount} of ${maxAttempts} attempts already exist`);
+          error.code = 'RUN_BUDGET_EXHAUSTED';
+          error.failureKind = 'runtime_budget_exhausted';
+          throw error;
+        }
+      }
+
+      // Leg 8: the canonical atomic admission. Blocked -> in_progress happens
+      // inside this same transaction; the hold is superseded by the admission
+      // itself, never by a projection rule.
+      const created = await this.createRunsAndStartTicket({
+        ticketId: id,
+        runDrafts,
+        runEventPayload,
+        ticketEventPayload: {
+          ...callerTicketPayload,
+          admissionIntent: intent,
+          supersededBlocker: composed.won ? composed.reference : null,
+          delegatedRelease: {
+            parentRunId: actingParentRunId,
+            parentTicketId: parentRun.ticketId,
+            spawnIdempotencyKey: spawnKey,
+            delegationScheme: provenance.delegation.scheme,
+            unitKey: provenance.delegation.unitKey,
+            // The consumption fact: exactly WHICH durable current-action
+            // authorization evidence this admission consumed (event position
+            // on the parent Run's chain + the Run-stable evidence identity +
+            // the executing action's Run-scoped reference).
+            authorizationEvidenceKey: authorization.evidenceKey,
+            authorizationEventPosition: authorization.evidenceEventPosition,
+            authorizationSpawnPlanId: authorization.spawnPlanId
+          }
+        }
+      }, { client, authorizedFromStatuses: [child.status] });
+      return {
+        ...created,
+        supersededBlocker: composed.won ? composed.reference : null,
+        delegatedProvenance: provenance.delegation
+      };
     });
   }
 

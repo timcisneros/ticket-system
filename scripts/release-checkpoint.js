@@ -43,6 +43,12 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   // seam. Deterministic: contract classification, resolution and enumeration
   // composition only.
   't4-spawn-relation-contract-test.js',
+  // P5-R2 — delegated-unit identity contract: the literal operator-authored
+  // unitKey discipline, the Ticket-stable delegated logical spawn key, and
+  // the coherent delegated creation-relation resolution (fail-closed typed
+  // refusals). Deterministic; the runtime lifecycle is owned by
+  // p5-r2-delegated-admission-postgres-test.js.
+  'p5-r2-delegated-unit-contract-test.js',
   't2-tranche5-release-admission-server-test.js',
   't2-tranche5-rerun-lock-order-test.js',
   't041-semantic-closure-test.js',
@@ -417,6 +423,14 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // (before any effect, after a committed effect, after a governed request,
   // and the divergent-payload failure). PostgreSQL-native.
   'p5-r1-workflow-invocation-postgres-test.js',
+  // P5-R2 — Governed delegated child execution: the canonical
+  // delegated_release admission seam (delegated-unit literal unitKey
+  // discipline, Ticket-stable logical child identity, zero-attempt hold,
+  // eight-leg conjunctive release, atomic one-attempt/one-Run admission,
+  // rerun adoption without multiplication, immutable admitted-policy
+  // doctrine, non-amplification, one-level delegation, operator release_hold
+  // intact, and the competing-release race). PostgreSQL-native.
+  'p5-r2-delegated-admission-postgres-test.js',
   // A20 — replaces the five JSON-era er* recoverable-error orphans. Pins the one
   // discriminator that separates an environmental workspace failure (contained, the
   // model gets one more turn) from a policy refusal (terminal, recorded as blocked).

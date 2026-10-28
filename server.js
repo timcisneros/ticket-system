@@ -113,7 +113,14 @@ const {
 const {
   resolveChildSpawnRelation,
   coherentProvenanceParentIds,
-  combineSpawnEnumeration
+  combineSpawnEnumeration,
+  DELEGATION_SCHEME,
+  buildDelegatedSpawnIdempotencyKey,
+  isLiteralUnitKey,
+  DELEGATED_PLAN_AUTHORIZATION_EVENT_TYPE,
+  DELEGATED_PLAN_AUTHORIZATION_REPLAY_KEY,
+  buildDelegatedPlanAuthorizationEvidence,
+  buildDelegatedPlanAuthorizationEvidenceKey
 } = require('./runtime/t4-spawn-relation-contract');
 // Single production definition of the executeTicketPlan child spawn bytes
 // (draft + ticket.created payload) shared by the producer and T4 owners.
@@ -19913,6 +19920,14 @@ function validateWorkflowDefinition(workflow) {
     }
 
     errors.push(...validateActionInput(step.action, step.input || {}, { allowTemplates: true }));
+
+    // P5-R2 (UNITKEY-A): delegated ticket-plan units must be authored with a
+    // literal operator-owned unitKey for this exact step — model-suppliable,
+    // template-derived, duplicate, or orphaned unit keys are definition
+    // errors and refuse at catalog save and at every execution.
+    if (step.action === 'executeTicketPlan') {
+      errors.push(...validateDelegatedTicketPlanStepInput(step, index));
+    }
   });
 
   (Array.isArray(workflow.postconditions) ? workflow.postconditions : []).forEach((postcondition, index) => {
@@ -22953,6 +22968,100 @@ function buildTicketPlanIdempotencyKey(run, ticket) {
   return [run.ticketId, ticket.workflowId || 'no-workflow', vendorId].join(':');
 }
 
+// ── P5-R2 delegated ticket-plan units (UNITKEY-A / CHILD-RERUN-A) ────────────
+//
+// Delegation authority is WORKFLOW-AUTHORED: an operator-owned workflow
+// definition step may mark a ticket-plan item `delegated: true` and give it a
+// LITERAL `unitKey`. The literal authored keys ARE the authoritative
+// delegated-unit key set, proven against the raw definition BEFORE template
+// resolution — runtime type/schema validation alone cannot prove a key was
+// operator-authored, because whole-object template resolution can carry
+// model-produced objects. The runtime/model may supply dynamic objective and
+// workflowInput within existing bounds; it may never create, replace,
+// template or widen `unitKey`.
+
+// Positional delegated authority: the RESOLVED plan item at index i carries
+// delegation authorization only when the RAW definition item at the SAME
+// index is an object authored `delegated: true` with a literal unit key.
+// resolveWorkflowInputTemplates maps arrays item-by-item, so resolved/raw
+// positions align one-to-one; a whole-array template (`tickets: '{{...}}'`)
+// leaves no raw items at all, which is exactly the "no model-minted
+// delegation authority" outcome.
+function delegatedUnitAuthority(rawItems, index) {
+  const raw = rawItems && rawItems[index];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (raw.delegated !== true) return null;
+  return { authoredUnitKey: typeof raw.unitKey === 'string' ? raw.unitKey : null };
+}
+
+// The delegated logical child identity (CHILD-RERUN-A): Ticket-stable across
+// parent attempts and reruns. spawnPlanId is the Run-scoped execution
+// reference and never participates in this key.
+function buildDelegatedTicketPlanIdempotencyKey(run, workflow, step, proposed) {
+  return buildDelegatedSpawnIdempotencyKey({
+    parentTicketId: run.ticketId,
+    parentWorkflowId: workflow.id,
+    spawnedByStepId: step.id,
+    childWorkflowId: proposed.workflowId || 'no-workflow',
+    unitKey: proposed.unitKey
+  });
+}
+
+// The child creation delegation block (P5 freeze §9): creation-time
+// historical proof riding the same ticket.created payload. Original Run and
+// policy facts are historical provenance only — never later adoption
+// authority.
+function buildDelegatedChildCreationBlock({ run, workflow, step, planTicket, spawnPlanId }) {
+  return {
+    scheme: DELEGATION_SCHEME,
+    version: 1,
+    parentTicketId: run.ticketId,
+    parentRunId: run.id,
+    parentWorkflowId: workflow.id,
+    spawnedByStepId: step.id,
+    spawnPlanId,
+    spawnIdempotencyKey: planTicket.idempotencyKey,
+    unitKey: planTicket.unitKey,
+    parentExecutionPolicyHash: run.runtimeBudgetSnapshot &&
+      run.runtimeBudgetSnapshot.executionPolicyHash
+      ? run.runtimeBudgetSnapshot.executionPolicyHash
+      : null
+  };
+}
+
+// Definition-level delegated-item structure (operator-authoring discipline).
+// Runs at catalog save AND at every execution of the definition, so a
+// malformed delegated unit is refused before any plan derivation.
+function validateDelegatedTicketPlanStepInput(step, stepIndex) {
+  const errors = [];
+  const input = step && typeof step === 'object' ? step.input : null;
+  const tickets = input && Array.isArray(input.tickets) ? input.tickets : null;
+  if (!tickets) return errors; // whole-array templates legitimately carry no literal items
+  const label = `workflow action ${step.id || stepIndex}`;
+  const seenUnitKeys = new Set();
+  tickets.forEach((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return;
+    if (item.delegated === true) {
+      if (!isLiteralUnitKey(item.unitKey)) {
+        errors.push(
+          `${label}: delegated ticket plan item ${index} requires a literal operator-authored ` +
+          'unitKey string (non-blank, no {{...}} templates)');
+        return;
+      }
+      if (seenUnitKeys.has(item.unitKey)) {
+        errors.push(`${label}: duplicate delegated unitKey '${item.unitKey}' in ticket plan item ${index}`);
+        return;
+      }
+      seenUnitKeys.add(item.unitKey);
+    } else if (Object.prototype.hasOwnProperty.call(item, 'unitKey')) {
+      errors.push(
+        `${label}: ticket plan item ${index} carries unitKey without delegated: true — ` +
+        'unitKey is only valid on workflow-authored delegated items');
+    }
+  });
+  return errors;
+}
+
 function normalizeProposedTicketPlanItem(ticket, index) {
   const workflowInput = ticket && ticket.workflowInput && typeof ticket.workflowInput === 'object' && !Array.isArray(ticket.workflowInput)
     ? ticket.workflowInput
@@ -22977,14 +23086,31 @@ function workflowContainsTicketPlanAction(workflow) {
   return Boolean(workflow && Array.isArray(workflow.actions) && workflow.actions.some(step => step && step.action === 'executeTicketPlan'));
 }
 
-async function validateTicketPlanInput(run, input) {
+async function validateTicketPlanInput(run, input, options = {}) {
   const tickets = Array.isArray(input.tickets) ? input.tickets : [];
   const allowedWorkflowIds = Array.isArray(input.allowedWorkflowIds)
     ? input.allowedWorkflowIds.filter(item => typeof item === 'string')
     : [];
   const allowedSet = new Set(allowedWorkflowIds);
   const maxTickets = Number.isInteger(input.maxTickets) && input.maxTickets >= 0 ? input.maxTickets : 0;
-  const proposedTickets = tickets.map((ticket, index) => normalizeProposedTicketPlanItem(ticket, index));
+  // P5-R2: the RAW operator-authored definition items (BEFORE template
+  // resolution) own the delegated-unit key set. Without raw items — e.g. the
+  // whole tickets array arrived through a template — no item carries
+  // delegation authority and every item stays an ordinary non-delegated plan
+  // item with the existing key derivation.
+  const rawTicketItems = Array.isArray(options.rawTicketItems) ? options.rawTicketItems : null;
+  const proposedTickets = tickets.map((ticket, index) => {
+    const normalized = normalizeProposedTicketPlanItem(ticket, index);
+    const authority = rawTicketItems === null ? null : delegatedUnitAuthority(rawTicketItems, index);
+    if (authority === null) return normalized;
+    return {
+      ...normalized,
+      // Positional workflow-authored delegation authorization. The flag is
+      // authority PROVENANCE; the literal-key proof below must still hold.
+      delegated: true,
+      authoredUnitKey: authority.authoredUnitKey
+    };
+  });
   const acceptedTickets = [];
   const rejectedTickets = [];
 
@@ -23007,7 +23133,17 @@ async function validateTicketPlanInput(run, input) {
     };
   }
 
-  const proposedIdempotencyKeys = proposedTickets.map(ticket => buildTicketPlanIdempotencyKey(run, ticket));
+  // Idempotency keys are derived per class: delegated items use the
+  // Ticket-stable logical child identity (CHILD-RERUN-A); non-delegated items
+  // keep the existing derivation byte-for-byte.
+  const parentWorkflow = options.workflow && typeof options.workflow.id === 'string'
+    ? options.workflow
+    : null;
+  const parentStep = options.step && typeof options.step.id === 'string' ? options.step : null;
+  const proposedIdempotencyKeys = proposedTickets.map(ticket =>
+    ticket.delegated === true && parentWorkflow && parentStep && isLiteralUnitKey(ticket.authoredUnitKey)
+      ? buildDelegatedTicketPlanIdempotencyKey(run, parentWorkflow, parentStep, { ...ticket, unitKey: ticket.authoredUnitKey })
+      : buildTicketPlanIdempotencyKey(run, ticket));
   const requestedWorkflowIds = [...new Set(proposedTickets.map(item => item.workflowId).filter(Boolean))];
   const [existingTickets, workflows] = await Promise.all([
     proposedIdempotencyKeys.length > 0
@@ -23017,13 +23153,15 @@ async function validateTicketPlanInput(run, input) {
       ? getWorkflowCatalogRepository().getWorkflowsByIds({ workflowIds: requestedWorkflowIds })
       : []
   ]);
-  const existingIdempotencyKeys = new Set(existingTickets.map(ticket => ticket.spawnIdempotencyKey));
+  const existingTicketsByKey = new Map(existingTickets.map(ticket => [ticket.spawnIdempotencyKey, ticket]));
   const workflowsById = new Map(workflows.map(workflow => [workflow.id, workflow]));
   const seenKeys = new Set();
+  const seenUnitKeys = new Set();
 
   tickets.forEach((ticket, index) => {
     const reasons = [];
-    const proposed = normalizeProposedTicketPlanItem(ticket, index);
+    const proposed = proposedTickets[index];
+    const delegated = proposed.delegated === true;
     const workflowId = proposed.workflowId;
     const workflow = workflowId ? workflowsById.get(workflowId) || null : null;
     const objective = typeof proposed.objective === 'string' ? proposed.objective.trim() : '';
@@ -23041,9 +23179,64 @@ async function validateTicketPlanInput(run, input) {
     if (!objective) reasons.push('objective is required');
     if (objective.length > 240) reasons.push('objective exceeds 240 characters');
 
-    const idempotencyKey = buildTicketPlanIdempotencyKey(run, proposed);
+    // ── P5-R2 delegated-unit proof (fail closed on every unproven identity) ─
+    let unitKey = null;
+    if (delegated) {
+      const rawKey = proposed.authoredUnitKey;
+      if (!parentWorkflow || !parentStep) {
+        reasons.push('delegated ticket plan items require the parent workflow context');
+      } else if (!isLiteralUnitKey(rawKey)) {
+        reasons.push(
+          'delegated unitKey must be a literal operator-authored workflow definition string ' +
+          '(missing, blank, or template-authored keys are refused)');
+      } else {
+        const resolvedKey = ticket && typeof ticket === 'object' ? ticket.unitKey : undefined;
+        if (resolvedKey !== rawKey) {
+          reasons.push(
+            'delegated unitKey must equal the literal workflow-authored unit key ' +
+            '(template-derived, conflicting, or model-minted keys are refused)');
+        } else if (seenUnitKeys.has(rawKey)) {
+          reasons.push('duplicate delegated unitKey: ' + rawKey);
+        } else {
+          seenUnitKeys.add(rawKey);
+          unitKey = rawKey;
+        }
+      }
+    } else if (ticket && typeof ticket === 'object' &&
+        Object.prototype.hasOwnProperty.call(ticket, 'unitKey') &&
+        ticket.unitKey !== undefined && ticket.unitKey !== null) {
+      // No positional delegated authority behind it: a resolved item claiming
+      // a unit identity without the literal definition proof is refused.
+      reasons.push(
+        'unitKey is only valid on workflow-authored delegated (delegated: true) ticket plan items');
+    }
+
+    const idempotencyKey = delegated && unitKey !== null
+      ? buildDelegatedTicketPlanIdempotencyKey(run, parentWorkflow, parentStep, { ...proposed, unitKey })
+      : buildTicketPlanIdempotencyKey(run, proposed);
     if (seenKeys.has(idempotencyKey)) reasons.push('duplicate ticket plan item: ' + idempotencyKey);
-    if (existingIdempotencyKeys.has(idempotencyKey)) reasons.push('duplicate child ticket already exists: ' + idempotencyKey);
+
+    let adoptedExistingTicketId = null;
+    if (reasons.length === 0) {
+      const existing = existingTicketsByKey.get(idempotencyKey);
+      if (existing) {
+        if (delegated) {
+          // CHILD-RERUN-A adoption: a parent rerun re-derives the SAME logical
+          // unit and adopts the existing child instead of the non-delegated
+          // rejected-duplicate outcome. A delegated unit key embeds the parent
+          // Ticket id, so a foreign parent binding is corruption, not adoption.
+          if (existing.parentTicketId !== run.ticketId) {
+            reasons.push('existing delegated child binds a different parent ticket: ' + idempotencyKey);
+          } else {
+            adoptedExistingTicketId = existing.id;
+          }
+        } else {
+          // Non-delegated duplicates keep the existing rejected-duplicate
+          // evidence semantics byte-for-byte.
+          reasons.push('duplicate child ticket already exists: ' + idempotencyKey);
+        }
+      }
+    }
 
     if (reasons.length > 0) {
       rejectedTickets.push({ ...proposed, idempotencyKey, validationReasons: reasons });
@@ -23051,15 +23244,25 @@ async function validateTicketPlanInput(run, input) {
     }
 
     seenKeys.add(idempotencyKey);
-    acceptedTickets.push({ ...proposed, objective, workflowInput, idempotencyKey });
+    acceptedTickets.push({
+      ...proposed,
+      objective,
+      workflowInput,
+      idempotencyKey,
+      ...(delegated ? { delegated: true, unitKey } : {}),
+      ...(adoptedExistingTicketId !== null ? { adoptedExistingTicketId } : {})
+    });
   });
 
-  return { proposedTickets, acceptedTickets, rejectedTickets };
+  // P5-R2: the canonical validated plan bounds of THIS action, returned so the
+  // durable delegated-plan authorization evidence records exactly what was
+  // validated (the store re-consumes them inside its release transaction).
+  return { proposedTickets, acceptedTickets, rejectedTickets, allowedWorkflowIds, maxTickets };
 }
 
-async function createChildWorkflowTicketFromPlan(run, workflow, step, planTicket, spawnPlanId) {
+async function createChildWorkflowTicketFromPlan(run, workflow, step, planTicket, spawnPlanId, options = {}) {
   const existing = await getRuntimeStateReadRepository().getTicketBySpawnIdempotencyKey(planTicket.idempotencyKey);
-  if (existing) return existing;
+  if (existing) return { ticket: existing, created: false };
 
   // Single production definition of the child draft / ticket.created bytes
   // lives in the extracted constructor; this caller and tests share it. The
@@ -23072,7 +23275,11 @@ async function createChildWorkflowTicketFromPlan(run, workflow, step, planTicket
     step,
     planTicket,
     spawnPlanId,
-    executionPolicy: normalizeExecutionPolicy(null, 'shared')
+    executionPolicy: normalizeExecutionPolicy(null, 'shared'),
+    // P5-R2: delegated children additionally carry the creation-time
+    // delegation block (historical provenance riding the same ticket.created
+    // payload). It never suppresses the admission hold and never admits.
+    delegation: options.delegation === undefined ? null : options.delegation
   });
 
   const created = await getTicketRunLifecycleRepository().createTicketWithEvent({
@@ -23080,25 +23287,211 @@ async function createChildWorkflowTicketFromPlan(run, workflow, step, planTicket
     eventPayload
   });
   broadcastTicketChange();
-  return created.ticket;
+  return { ticket: created.ticket, created: created.created === true };
+}
+
+// ── P5-R2: governed delegated child release request (parent-Run side) ───────
+//
+// The current parent Run requests admission for ONE delegated child through
+// the store's atomic `delegated_release` intent. Every durable conjunct is
+// re-verified inside the admission transaction; this caller supplies only the
+// facts of the plan execution it is synchronously performing (the re-derived
+// logical spawn key) and records the typed outcome as plan evidence. Raw
+// model prose carries zero authority anywhere in this flow.
+//
+// Outcomes (all recorded; never silently swallowed):
+//   skipped  — the child already has attempts: existing lifecycle authority
+//              governs; no automatic re-admission (CHILD-RERUN-A).
+//   refused  — a typed refusal (parent-run policy gate, draft preparation, or
+//              the store's conjunctive verification); the child REMAINS held.
+//   admitted — exactly one child attempt + Run, created atomically.
+async function ensureDelegatedChildExecution(run, childTicket, planTicket) {
+  const attempts = await getRuntimeStateReadRepository().countTicketAttempts(childTicket.id);
+  if (Number.isSafeInteger(attempts) && attempts > 0) {
+    return {
+      outcome: 'skipped',
+      code: 'DELEGATED_CHILD_ALREADY_ATTEMPTED',
+      reason: 'the delegated child already has an attempt; existing lifecycle authority governs',
+      attemptCount: attempts
+    };
+  }
+
+  // Leg 3 caller-side gate on the ACTING Run's immutable admitted snapshot.
+  // The store re-verifies the same snapshot durably before admitting.
+  if (!run.executionPolicySnapshot || run.executionPolicySnapshot.allowChildTickets !== true) {
+    return {
+      outcome: 'refused',
+      code: 'DELEGATED_RELEASE_NOT_AUTHORIZED',
+      reason: 'the acting run admitted execution-policy snapshot does not authorize child tickets ' +
+        '(allowChildTickets is strict default false)'
+    };
+  }
+
+  // The child Run draft is prepared through the existing canonical draft
+  // constructor: the child's own policy, budgets and routing snapshots are
+  // resolved from standing repositories at ITS admission (no parent policy is
+  // copied — non-amplification).
+  const agent = await getConfiguredAgentRepository()
+    .getConfiguredAgentById(childTicket.assignmentTargetId);
+  if (!agent) {
+    return {
+      outcome: 'refused',
+      code: 'DELEGATED_RELEASE_TARGET_MISSING',
+      reason: 'the delegated child assignment agent no longer exists'
+    };
+  }
+  const prepared = await prepareAgentRunDraft(
+    childTicket, agent, null, null,
+    { userId: null, username: null, source: 'delegated_release' },
+    {}
+  );
+  if (!prepared || !prepared.run) {
+    return {
+      outcome: 'refused',
+      code: 'DELEGATED_RELEASE_RUN_DRAFT_UNAVAILABLE',
+      reason: 'the delegated child run draft could not be prepared'
+    };
+  }
+
+  try {
+    const created = await getTicketRunLifecycleRepository().delegatedReleaseRuns({
+      childTicketId: childTicket.id,
+      parentRunId: run.id,
+      spawnIdempotencyKey: planTicket.idempotencyKey,
+      runDrafts: [prepared.run],
+      runEventPayload: buildRunCreatedEventPayload,
+      // The canonical delegated_release evidence block (acting parent Run,
+      // logical spawn identity, scheme, unit key) is stamped by the store's
+      // admission transaction onto the child's transition event; the caller
+      // contributes only the source marker.
+      ticketEventPayload: { source: 'delegated_release' }
+    });
+    return {
+      outcome: 'admitted',
+      code: null,
+      reason: null,
+      attemptId: created.attempt ? created.attempt.id : null,
+      runId: created.runs && created.runs[0] ? created.runs[0].id : null
+    };
+  } catch (error) {
+    return {
+      outcome: 'refused',
+      code: error && error.code ? error.code : 'DELEGATED_RELEASE_FAILED',
+      reason: error && error.message ? error.message : 'delegated release refused'
+    };
+  }
+}
+
+// ── P5-R2 correction: durable current-action delegated-plan authorization ────
+//
+// Execution order for the parent action (frozen): resolve step input →
+// canonical plan validation → derive the exact accepted delegated-unit set →
+// DURABLY RECORD this action's validated delegated-plan authorization →
+// create/adopt child Tickets → request delegated_release → record the normal
+// terminal plan/action evidence.
+//
+// The evidence is recorded ONLY after every canonical validateTicketPlanInput
+// acceptance requirement has passed, and it is recorded on the ACTING parent
+// Run's own append-only evidence chain under a Run-stable identity
+// (buildDelegatedPlanAuthorizationEvidenceKey). The store's atomic
+// delegated_release transaction then INDEPENDENTLY consumes this durable fact
+// — the caller's knowledge of a valid spawn key authorizes nothing.
+//
+// Safe replay: the identity is Run-stable across safe resume, so a recovered
+// execution re-records the SAME durable authorization fact. The existing
+// item's capturedAt is reused so the re-recorded item is byte-identical; a
+// divergent re-derivation fails closed through the existing
+// idempotency-conflict semantics before any child effect.
+async function recordDelegatedPlanAuthorizationEvidence({ run, workflow, step, spawnPlanId, validation }) {
+  const delegatedUnits = validation.acceptedTickets
+    .filter(ticket => ticket.delegated === true)
+    .map(ticket => ({
+      unitKey: ticket.unitKey,
+      childWorkflowId: ticket.workflowId,
+      spawnIdempotencyKey: ticket.idempotencyKey
+    }));
+  if (delegatedUnits.length === 0) return null;
+  const item = buildDelegatedPlanAuthorizationEvidence({
+    run,
+    workflow,
+    step,
+    spawnPlanId,
+    planBounds: {
+      allowedWorkflowIds: validation.allowedWorkflowIds,
+      maxTickets: validation.maxTickets
+    },
+    delegatedUnits,
+    workflowContract: buildWorkflowContractEvidence(workflow)
+  });
+  const replaySnapshot = await readRunReplaySnapshot(run);
+  const existing = ((replaySnapshot &&
+      Array.isArray(replaySnapshot[DELEGATED_PLAN_AUTHORIZATION_REPLAY_KEY]))
+    ? replaySnapshot[DELEGATED_PLAN_AUTHORIZATION_REPLAY_KEY]
+    : []).find(candidate => candidate && candidate.evidenceKey === item.evidenceKey) || null;
+  const capturedAt = existing && existing.capturedAt ? existing.capturedAt : new Date().toISOString();
+  await recordNonTerminalRunEvidence(run, {
+    category: 'delegated-plan-authorization',
+    slot: item.spawnPlanId,
+    evidenceKey: item.evidenceKey,
+    replayKey: DELEGATED_PLAN_AUTHORIZATION_REPLAY_KEY,
+    replayItem: { ...item, capturedAt },
+    eventType: DELEGATED_PLAN_AUTHORIZATION_EVENT_TYPE,
+    stepId: step.id,
+    eventPayload: { ...item, capturedAt },
+    capturedAt
+  });
+  return item;
 }
 
 async function executeTicketPlanWorkflowAction(run, workflow, step, input, transitionIndex) {
   const startedAt = Date.now();
   const spawnPlanId = [run.id, workflow.id, step.id, 'transition', transitionIndex].join(':');
-  const validation = await validateTicketPlanInput(run, input);
+  // P5-R2: the raw operator-authored step input (BEFORE template resolution)
+  // is the literal delegated-unit authority; the resolved input carries the
+  // dynamic objective/workflowInput within the existing bounds.
+  const rawTicketItems = step && step.input && Array.isArray(step.input.tickets)
+    ? step.input.tickets
+    : null;
+  const validation = await validateTicketPlanInput(run, input, {
+    rawTicketItems,
+    workflow,
+    step
+  });
+  // P5-R2 correction (order 4): the durable validated delegated-plan
+  // authorization for THIS action is recorded BEFORE any child is created or
+  // adopted and before any delegated_release request — the pre-release
+  // evidence the store's admission transaction independently consumes.
+  await recordDelegatedPlanAuthorizationEvidence({
+    run,
+    workflow,
+    step,
+    spawnPlanId,
+    validation
+  });
   const createdTickets = [];
 
   for (const ticket of validation.acceptedTickets) {
-    const childTicket = await createChildWorkflowTicketFromPlan(run, workflow, step, ticket, spawnPlanId);
-    createdTickets.push({
+    const delegation = ticket.delegated === true
+      ? buildDelegatedChildCreationBlock({ run, workflow, step, planTicket: ticket, spawnPlanId })
+      : null;
+    const spawn = await createChildWorkflowTicketFromPlan(run, workflow, step, ticket, spawnPlanId, { delegation });
+    const childTicket = spawn.ticket;
+    const createdEntry = {
       index: ticket.index,
       ticketId: childTicket.id,
       workflowId: childTicket.workflowId,
       objective: childTicket.objective,
       workflowInput: childTicket.workflowInput,
-      idempotencyKey: childTicket.spawnIdempotencyKey
-    });
+      idempotencyKey: childTicket.spawnIdempotencyKey,
+      created: spawn.created,
+      adopted: !spawn.created || ticket.adoptedExistingTicketId != null
+    };
+    if (delegation !== null) {
+      createdEntry.delegated = true;
+      createdEntry.unitKey = ticket.unitKey;
+      createdEntry.delegatedRelease = await ensureDelegatedChildExecution(run, childTicket, ticket);
+    }
+    createdTickets.push(createdEntry);
   }
 
   const result = {
@@ -23136,7 +23529,9 @@ async function executeTicketPlanWorkflowAction(run, workflow, step, input, trans
       proposedCount: validation.proposedTickets.length,
       acceptedCount: validation.acceptedTickets.length,
       rejectedCount: validation.rejectedTickets.length,
-      createdTicketIds: createdTickets.map(ticket => ticket.ticketId)
+      createdTicketIds: createdTickets.map(ticket => ticket.ticketId),
+      delegatedUnitCount: createdTickets.filter(ticket => ticket.delegated === true).length,
+      adoptedUnitCount: createdTickets.filter(ticket => ticket.adopted === true).length
     },
     capturedAt: planEvidence.startedAt
   });

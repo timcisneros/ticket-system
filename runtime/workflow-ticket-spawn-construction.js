@@ -52,7 +52,8 @@ function requiredId(value, label) {
 
 // Pure derivation of one production spawn's durable bytes.
 //
-//   run        — { id, ticketId, agentId }      (the admitted parent Run)
+//   run        — { id, ticketId, agentId, runtimeBudgetSnapshot? }
+//                                   (the admitted parent Run)
 //   workflow   — { id }                         (the parent workflow catalog row)
 //   step       — { id }                         (the spawning workflow step)
 //   planTicket — { objective, workflowId, workflowInput, reason, idempotencyKey }
@@ -61,18 +62,30 @@ function requiredId(value, label) {
 //   executionPolicy — the ALREADY-RESOLVED Ticket execution policy, resolved by
 //                the caller through the canonical normalizer. This builder is
 //                not a policy owner and stamps the supplied value verbatim.
+//   delegation — OPTIONAL P5-R2 delegated creation block (caller-built from
+//                validated facts). When present it is stamped VERBATIM into
+//                both the Ticket draft body and the ticket.created event
+//                payload: the event payload is the immutable relationship
+//                authority the delegated-release verification later re-derives
+//                from. It is historical provenance ONLY — it never suppresses
+//                the admission hold (the composer predicate is untouched) and
+//                never acts as admission authority by itself.
 function buildChildWorkflowTicketCreation({
   run,
   workflow,
   step,
   planTicket,
   spawnPlanId,
-  executionPolicy
+  executionPolicy,
+  delegation = null
 }) {
   if (!run || typeof run !== 'object') throw new TypeError('run is required');
   if (!workflow || typeof workflow !== 'object') throw new TypeError('workflow is required');
   if (!step || typeof step !== 'object') throw new TypeError('step is required');
   if (!planTicket || typeof planTicket !== 'object') throw new TypeError('planTicket is required');
+  if (delegation !== null && (typeof delegation !== 'object' || Array.isArray(delegation))) {
+    throw new TypeError('delegation must be an object or null');
+  }
 
   const parentRunId = requiredId(run.id, 'run.id');
   const parentTicketId = requiredId(run.ticketId, 'run.ticketId');
@@ -109,7 +122,8 @@ function buildChildWorkflowTicketCreation({
     spawnReason: planTicket.reason || null,
     createdBy: 'workflow:' + parentWorkflowId,
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    ...(delegation !== null ? { delegation } : {})
   };
 
   const eventPayload = {
@@ -126,7 +140,8 @@ function buildChildWorkflowTicketCreation({
     spawnedByStepId: ticketDraft.spawnedByStepId,
     spawnPlanId: ticketDraft.spawnPlanId,
     spawnIdempotencyKey: ticketDraft.spawnIdempotencyKey,
-    createdBy: ticketDraft.createdBy
+    createdBy: ticketDraft.createdBy,
+    ...(delegation !== null ? { delegation } : {})
   };
 
   return { ticketDraft, eventPayload };
