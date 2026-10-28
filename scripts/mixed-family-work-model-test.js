@@ -398,8 +398,16 @@ assert.equal(workflowUsability[1].includes('runProcess'), false,
 assert.match(serverSource,
   /capabilityEnabled: PROCESS_EXECUTION_CONTRACT_ENABLED && ticket\.executionMode !== 'workflow'/);
 assert.match(serverSource,
-  /const AGENT_DIRECT_OPERATIONS = \[\.\.\.AGENT_ALLOWED_OPERATIONS, \.\.\.AGENT_WORKFLOW_DRAFT_OPERATIONS, \.\.\.AGENT_HANDOFF_OPERATIONS, \.\.\.AGENT_PROCESS_OPERATIONS\]/,
-  'non-browser direct runs retain separate workspace and process operation families');
+  /const AGENT_DIRECT_OPERATIONS = \[\.\.\.AGENT_ALLOWED_OPERATIONS, \.\.\.AGENT_WORKFLOW_DRAFT_OPERATIONS, \.\.\.AGENT_HANDOFF_OPERATIONS, \.\.\.AGENT_PROCESS_OPERATIONS, \.\.\.AGENT_WORKFLOW_INVOCATION_OPERATIONS\]/,
+  'non-browser direct runs retain separate workspace, process, and workflow-invocation operation families');
+// P5-R1: the workflow-invocation family is agent-proposed ONLY. It must never
+// enter the workflow-step allowlist — an invoked workflow definition cannot
+// itself contain an invokeWorkflow step (recursion/fan-out boundary).
+assert.match(serverSource,
+  /const AGENT_WORKFLOW_INVOCATION_OPERATIONS = \['invokeWorkflow'\]/,
+  'the workflow invocation family stays a named single-operation family');
+assert.equal(workflowUsability[1].includes('invokeWorkflow'), false,
+  'invokeWorkflow remains excluded from the workflow-step allowlist');
 assert.match(serverSource,
   /operation = isBrowserRun\(run\) \? parseBrowserDirectAction\(run, action\) : parseAgentDirectAction\(action\)/);
 // P4-R2: the canonical browser operation family is the Phase-1 read family

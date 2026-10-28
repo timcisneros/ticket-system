@@ -487,7 +487,11 @@ const AGENT_WORKFLOW_DRAFT_OPERATIONS = [
   'createWorkflowDraftIntent'
 ];
 const AGENT_HANDOFF_OPERATIONS = ['createHandoffTask'];
-const AGENT_DIRECT_OPERATIONS = [...AGENT_ALLOWED_OPERATIONS, ...AGENT_WORKFLOW_DRAFT_OPERATIONS, ...AGENT_HANDOFF_OPERATIONS, ...AGENT_PROCESS_OPERATIONS];
+// P5-R1: the same-Run governed workflow invocation family. Agent-proposed only;
+// never a workflow step (isWorkflowUsableAction keeps excluding it), so an
+// invoked workflow definition can never itself contain an invokeWorkflow step.
+const AGENT_WORKFLOW_INVOCATION_OPERATIONS = ['invokeWorkflow'];
+const AGENT_DIRECT_OPERATIONS = [...AGENT_ALLOWED_OPERATIONS, ...AGENT_WORKFLOW_DRAFT_OPERATIONS, ...AGENT_HANDOFF_OPERATIONS, ...AGENT_PROCESS_OPERATIONS, ...AGENT_WORKFLOW_INVOCATION_OPERATIONS];
 const AGENT_MUTATING_OPERATIONS = ['createFolder', 'writeFile', 'renamePath', 'deletePath'];
 const AGENT_OPERATION_ARGS = {
   listDirectory: ['path'],
@@ -930,9 +934,15 @@ function buildNonTerminalRunEvidenceInput(run, {
   eventType,
   eventPayload = {},
   stepId = null,
-  capturedAt = null
+  capturedAt = null,
+  evidenceKey = null
 }) {
-  const evidenceKey = buildRunEvidenceKey(run, category, slot);
+  // P5-R1: an explicit evidence key overrides the attempt-derived key. The
+  // ordinary helper hashes the lease-recovery execution-attempt counter
+  // (buildRunEvidenceKey), which changes after safe Run recovery; the governed
+  // workflow-invocation identity must be Run-stable across safe resume and
+  // therefore never takes part in that counter.
+  const resolvedEvidenceKey = evidenceKey !== null ? evidenceKey : buildRunEvidenceKey(run, category, slot);
   const timestamp = capturedAt || new Date().toISOString();
   const item = {
     ...sanitizeSnapshotValue(replayItem || {}),
@@ -941,7 +951,7 @@ function buildNonTerminalRunEvidenceInput(run, {
   return {
     runId: run.id,
     ticketId: run.ticketId,
-    evidenceKey,
+    evidenceKey: resolvedEvidenceKey,
     replayKey,
     replayItem: item,
     event: {
@@ -1345,6 +1355,15 @@ function inferPhaseFromActions(run, actions) {
     // reaches snapshot authorization, which makes wrong-phase requests produce
     // PROCESS_PHASE_DENIED instead of a contradictory global phase result.
     if (op === PROCESS_OPERATION) {
+      phases.add(run.currentPhase || 'planning');
+      continue;
+    }
+    // P5-R1: the workflow-invocation request belongs to the run's current
+    // response phase, the same classification pattern as the process
+    // operation, so an unauthorized proposal reaches the invocation
+    // authority gate (typed WORKFLOW_INVOCATION_NOT_AUTHORIZED evidence)
+    // instead of a contradictory mixed-phase rejection.
+    if (op === 'invokeWorkflow') {
       phases.add(run.currentPhase || 'planning');
       continue;
     }
@@ -3811,6 +3830,15 @@ function normalizeExecutionPolicy(policy, workspaceScope = 'shared') {
     // reads only this snapshot — later ticket/config edits cannot retroactively
     // expand an admitted Run's interaction authority.
     allowBrowserInteractions: source.allowBrowserInteractions === true,
+    // P5-R1: same-Run workflow invocation (invokeWorkflow) is separately
+    // authorized at ticket/Run authority level and DEFAULTS FALSE. Strict
+    // boolean opt-in; absent/invalid means false, never a permissive fallback
+    // (same pattern as allowBrowserInteractions). The admitted Run reads only
+    // this frozen snapshot — later ticket/config edits cannot retroactively
+    // expand an admitted Run's invocation authority, and the value is bound
+    // into runtimeBudgetSnapshot.executionPolicyHash with the rest of the
+    // normalized policy.
+    allowWorkflowInvocation: source.allowWorkflowInvocation === true,
     allowParallelRuns: source.allowParallelRuns === true,
     allowChildTickets: source.allowChildTickets === true,
     workspaceScope: workspaceScope === 'owned_paths' ? 'owned_paths' : 'shared'
@@ -19531,6 +19559,17 @@ async function beginWorkspaceMutation(run, step, operation, args, authorityDecis
           }
         }
       : {}),
+    // P5-R1 (INVOKE-RECOVERY-B): workflow-engine preparations carry their
+    // deterministic workflow identity so the agent-turn ledger can scope them
+    // out positively instead of denying resume on their absent turn identity.
+    ...(replayIdentity.workflowId && replayIdentity.workflowStepId
+      ? {
+          workflowEngine: {
+            workflowId: replayIdentity.workflowId,
+            workflowStepId: replayIdentity.workflowStepId
+          }
+        }
+      : {}),
     intent: {
       operation,
       args: sanitizeSnapshotValue(args),
@@ -19658,6 +19697,26 @@ function parseAgentDirectAction(action) {
 
   if (operation === 'createHandoffTask') {
     assertOnlyKeys(action.args, ['executor', 'operation', 'args'], 'createHandoffTask args');
+  }
+
+  // P5-R1: parsing stays catalog-scoped only. Shape validation here never
+  // decides authority — the proposal reaches the canonical invocation gate in
+  // invokeWorkflowForAgentRun, which records the typed authority denial
+  // evidence before any workflow effect exists.
+  if (operation === 'invokeWorkflow') {
+    assertOnlyKeys(action.args, ['workflowId', 'input'], 'invokeWorkflow args');
+    if (typeof action.args.workflowId !== 'string' || !action.args.workflowId.trim()) {
+      const error = new Error('invokeWorkflow args.workflowId must be a non-empty string');
+      error.code = 'WORKFLOW_INVOCATION_INVALID';
+      error.failureKind = 'invalid_action';
+      throw error;
+    }
+    if (!action.args.input || typeof action.args.input !== 'object' || Array.isArray(action.args.input)) {
+      const error = new Error('invokeWorkflow args.input must be an object');
+      error.code = 'WORKFLOW_INVOCATION_INVALID';
+      error.failureKind = 'invalid_action';
+      throw error;
+    }
   }
 
   return { operation, args: action.args };
@@ -20165,6 +20224,173 @@ async function createWorkflowDraftFromAgent(run, workflowInput, step = 0, option
   });
 
   return { workflowId: draft.id, enabled: false, status: 'draft_created' };
+}
+
+// ── P5-R1 — EXECUTABLE GOVERNED WORKFLOW INVOCATION ─────────────────────────
+//
+// An admitted agent Run may propose `invokeWorkflow { workflowId, input }` and
+// the runtime executes that approved workflow inside the SAME Run when and only
+// when the Run's immutable admitted execution-policy snapshot explicitly
+// authorizes it (`allowWorkflowInvocation === true`).
+//
+// There is NO new lifecycle object here: no child Ticket, no attempt, no child
+// Run, no second execution graph, and no workflow-owned lifecycle. The
+// invocation executes through the existing `executeWorkflowDefinition` engine,
+// consuming the SAME Run's execution-policy snapshot, runtime budgets,
+// duration authority (the DB-stamped epoch via the runtime budget controller),
+// workspace provider, configured agent identity, provider/model routing, and
+// economic/capacity authority. The invoked workflow is bounded by the parent
+// Run because it IS part of the parent Run.
+//
+// The invocation identity is Run-stable across safe resume, and the STABLE
+// ACTION SLOT owns the logical invocation: ONE persisted Run + ONE proposing
+// agent action slot = ONE logical workflow invocation identity. It is derived
+// only from the persisted Run id, the deterministic agent action slot
+// (`agent:{executionTurn}:{actionIndex}`), and a fixed invocation namespace —
+// NEVER from the workflowId, the invocation input, the workflow version or
+// contract hash (payload facts recorded UNDER the identity), the lease-recovery
+// execution-attempt counter (buildRunEvidenceKey hashes that counter into
+// ordinary evidence keys, which change after safe recovery), wall-clock time,
+// random UUIDs, or transient process identity. The first recording fixes the
+// durable identity; a re-entered invocation with the same canonical payload
+// reuses it, and a differing payload — a different input OR a different
+// workflow proposed at the same slot — fails closed through the existing
+// idempotency-conflict semantics (Cases E/F): a recovered logical action may
+// not change which workflow it means.
+
+function buildWorkflowInvocationEvidenceKey(run, slot) {
+  const runId = run && Number.isSafeInteger(run.id) ? run.id : null;
+  if (!runId) throw new TypeError('A persisted run is required for a workflow invocation identity');
+  const normalizedSlot = String(slot || '').trim();
+  if (!normalizedSlot) throw new TypeError('A stable action slot is required for a workflow invocation identity');
+  const slotHash = crypto.createHash('sha256').update(normalizedSlot).digest('hex');
+  return `workflow-invocation:run:${runId}:slot:${slotHash}`;
+}
+
+async function invokeWorkflowForAgentRun(run, args, agent, step, options = {}) {
+  const startedAt = Date.now();
+
+  // ── 1. Authority gate: the ONLY invocation authority is the admitted Run's
+  // immutable execution-policy snapshot. Default deny, recorded as typed
+  // authority-denial evidence before any workflow lookup, session, or effect
+  // exists (the P4-R2 canonical refusal pattern).
+  if (!run.executionPolicySnapshot || run.executionPolicySnapshot.allowWorkflowInvocation !== true) {
+    const evidence = {
+      ...buildAuthorityEvidence(
+        run,
+        'invokeWorkflow',
+        null,
+        'denied',
+        'workflow_invocation',
+        'Run execution policy does not authorize workflow invocation ' +
+        '(allowWorkflowInvocation is default-off for this admitted run)'
+      ),
+      requestedWorkflowId: args && args.workflowId ? args.workflowId : null
+    };
+    await recordAuthorityEvidence(run, evidence);
+    const error = new Error('Workflow invocation is not authorized for this run');
+    error.code = 'WORKFLOW_INVOCATION_NOT_AUTHORIZED';
+    error.failureKind = 'authority_denied';
+    error.details = { requestedWorkflowId: args && args.workflowId ? args.workflowId : null };
+    throw error;
+  }
+
+  const workflowId = args.workflowId;
+
+  // ── 2. Approved workflow only: catalog authority. Missing and disabled
+  // workflows refuse typed with zero workflow effect (the run-execution
+  // workflow availability conventions).
+  const workflow = await getWorkflowById(workflowId);
+  if (!workflow) {
+    const error = new Error(`Workflow not found: ${workflowId}`);
+    error.code = 'WORKFLOW_NOT_FOUND';
+    error.failureKind = 'invalid_action';
+    error.details = { requestedWorkflowId: workflowId };
+    throw error;
+  }
+  if (workflow.enabled === false) {
+    const error = new Error(`Selected workflow is disabled: ${workflowId}`);
+    error.code = 'WORKFLOW_DISABLED';
+    error.failureKind = 'invalid_action';
+    error.details = { requestedWorkflowId: workflowId };
+    throw error;
+  }
+
+  // ── 3. Run-stable invocation identity + replay recognition. The identity is
+  // fixed by the FIRST recording and is owned by the proposing action slot
+  // alone (Run + slot + fixed namespace — the workflowId is a payload fact);
+  // a re-entered invocation (safe resume) must resolve the SAME durable
+  // evidence identity, and a differing canonical payload — different input OR
+  // a DIFFERENT workflow at the same slot — fails closed BEFORE any effect.
+  const invocationSlot = `${options.slot || `agent:${step}`}:workflow-invocation`;
+  const invocationEvidenceKey = buildWorkflowInvocationEvidenceKey(run, invocationSlot);
+  const persistedReplay = await readRunReplaySnapshot(run);
+  const existingInvocation = ((persistedReplay && Array.isArray(persistedReplay.workflowInvocation))
+    ? persistedReplay.workflowInvocation
+    : []).find(item => item && item.evidenceKey === invocationEvidenceKey) || null;
+  const invokingAction = options.replayMetadata ? sanitizeSnapshotValue(options.replayMetadata) : {
+    executionTurn: step,
+    actionIndex: null,
+    planKey: null
+  };
+
+  // ── 4. Execute the invoked workflow definition INSIDE the current Run
+  // through the existing engine. Definition validation and input-schema
+  // validation are owned by the engine itself; the invocation evidence is
+  // recorded there before any workflow effect begins, under the Run-stable
+  // identity.
+  let workflowResult;
+  try {
+    workflowResult = await executeWorkflowDefinition(run, workflow, args.input, agent, {
+      runtimeLimits: options.runtimeLimits || null,
+      workflowLimits: options.workflowLimits || null,
+      invocationIdentity: {
+        evidenceKey: invocationEvidenceKey,
+        slot: invocationSlot,
+        capturedAt: existingInvocation ? existingInvocation.capturedAt : null,
+        invokingAction
+      }
+    });
+  } catch (error) {
+    // Cases E/F: the SAME slot-owned Run-stable invocation identity was already
+    // recorded with a DIFFERENT canonical payload — a divergent input, or a
+    // DIFFERENT workflow proposed at the same recovered action slot. The
+    // existing idempotency-conflict semantics refuse it; the conflict is typed
+    // for triage only when the conflicting identity is the invocation identity
+    // itself — an inner-step conflict keeps its own raw idempotency semantics.
+    if (error && error.code === 'IDEMPOTENCY_CONFLICT' && error.idempotencyKey === invocationEvidenceKey) {
+      const conflict = new Error(
+        `Workflow invocation identity conflicts with its durable evidence: ${invocationEvidenceKey}`
+      );
+      conflict.code = 'WORKFLOW_INVOCATION_CONFLICT';
+      conflict.failureKind = 'resume_rejected';
+      conflict.details = {
+        invocationEvidenceKey,
+        workflowId: workflow.id,
+        requestedWorkflowId: workflowId
+      };
+      throw conflict;
+    }
+    throw error;
+  }
+
+  appendRunLog(run, 'workflow:invocation_completed', `Workflow invocation completed: ${workflow.name}`, null, {
+    workflowId: workflow.id,
+    invokedByActionSlot: options.slot || `agent:${step}`,
+    status: workflowResult.status || 'completed',
+    counters: workflowResult.counters || null,
+    durationMs: Date.now() - startedAt
+  });
+
+  // Bounded model-observable result (the catalog's response intent: workflow
+  // identity, status, result). This is action output, never completion
+  // authority: ticket completion stays governed by the existing completion
+  // authority alone.
+  return {
+    workflowId: workflow.id,
+    status: workflowResult.status || 'completed',
+    result: sanitizeSnapshotValue(workflowResult.result || {})
+  };
 }
 
 async function createWorkflowDraftFromIntent(run, intentInput, step = 0, options = {}) {
@@ -23186,23 +23412,39 @@ async function executeWorkflowDefinition(run, workflow, workflowInput, agent, op
   let currentStep = workflow.actions[0];
   const startedAtMs = Date.now();
 
+  // P5-R1: options.invocationIdentity is present ONLY for a same-Run agent
+  // invocation (invokeWorkflow dispatch). It carries the Run-stable evidence
+  // identity owned by the proposing action slot — persisted Run + action slot
+  // + a fixed invocation namespace, never the lease-recovery execution-attempt
+  // counter, wall-clock time, random ids, or transient process identity — and
+  // the workflowId/version/contract/input remain payload facts recorded UNDER
+  // that identity. The workflow-mode run path passes no identity and keeps the
+  // existing attempt-derived invocation evidence.
+  const invocationIdentity = options.invocationIdentity || null;
   const workflowInvocationEvidence = {
     workflowId: workflow.id,
     workflowName: workflow.name,
     ...buildWorkflowContractEvidence(workflow),
-    input: sanitizeSnapshotValue(workflowInput || {})
+    input: sanitizeSnapshotValue(workflowInput || {}),
+    ...(invocationIdentity ? {
+      invokingAction: invocationIdentity.invokingAction,
+      invocationStatus: 'authorized'
+    } : {})
   };
   await recordNonTerminalRunEvidence(run, {
     category: 'workflow-invocation',
-    slot: `workflow:${workflow.id}:invocation`,
+    slot: invocationIdentity ? invocationIdentity.slot : `workflow:${workflow.id}:invocation`,
     replayKey: 'workflowInvocation',
-    replayItem: workflowInvocationEvidence,
+    replayItem: invocationIdentity && invocationIdentity.capturedAt
+      ? { ...workflowInvocationEvidence, capturedAt: invocationIdentity.capturedAt }
+      : workflowInvocationEvidence,
     eventType: 'workflow.invoked',
     eventPayload: {
       workflowId: workflow.id,
       workflowName: workflow.name,
       version: workflowInvocationEvidence.version || null
-    }
+    },
+    ...(invocationIdentity ? { evidenceKey: invocationIdentity.evidenceKey } : {})
   });
 
   while (currentStep) {
@@ -25078,7 +25320,19 @@ async function runAgentTicket(runId) {
       const listPathsThisStep = new Set();
 
       if (!getRunRuntimeBudgetSnapshot(run)) {
-        await assertRunWorkspaceOperationAllowed(run, workspaceOperationCount, actions.length, limits);
+        // P5-R1: an invokeWorkflow action is not itself a workspace operation;
+        // the workspace effects of the invoked workflow are counted by the
+        // workflow engine inside the same run envelope (and are refused there
+        // once the ceiling is reached). Counting the proposal here would
+        // double-charge it before any effect exists.
+        const proposedWorkflowInvocations = actions.filter(action =>
+          action && typeof action === 'object' && action.operation === 'invokeWorkflow').length;
+        await assertRunWorkspaceOperationAllowed(
+          run,
+          workspaceOperationCount,
+          actions.length - proposedWorkflowInvocations,
+          limits
+        );
       }
 
       for (const [actionIndex, action] of actions.entries()) {
@@ -25243,6 +25497,23 @@ async function runAgentTicket(runId) {
           } else if (operation.operation === 'createWorkflowDraftIntent') {
             result = await createWorkflowDraftFromIntent(run, operation.args, step, {
               slot: `agent:${step}:${actionIndex}`
+            });
+          } else if (operation.operation === 'invokeWorkflow') {
+            // P5-R1: the governed same-Run workflow invocation. The engine
+            // executes inside this Run's existing authority envelope and
+            // budgets; the invocation evidence is recorded Run-stably before
+            // any workflow effect.
+            result = await invokeWorkflowForAgentRun(run, operation.args, agent, step, {
+              slot: `agent:${step}:${actionIndex}`,
+              runtimeLimits: limits,
+              workflowLimits: runtimeLimitsSnapshot.source && runtimeLimitsSnapshot.source.workflowLimits
+                ? runtimeLimitsSnapshot.source.workflowLimits
+                : getWorkflowSpecificLimits(),
+              replayMetadata: {
+                executionTurn: providerCall.executionTurn,
+                planKey: `${providerCall.modelCallKey}:plan`,
+                actionIndex
+              }
             });
           } else if (operation.operation === 'createHandoffTask') {
             result = await executeHandoffTask(run, operation.args, step, {
@@ -27103,6 +27374,18 @@ fastify.post('/tickets', {
       ...(parsedExecutionPolicy || {}),
       allowBrowserInteractions: request.body.allowBrowserInteractions === 'on' ||
         request.body.allowBrowserInteractions === 'true'
+    };
+  }
+
+  // P5-R1: the ticket form carries same-Run workflow-invocation authority as an
+  // explicit opt-in checkbox on the same terms: the field is operator-authored
+  // at ticket authority, and an unchecked submission leaves the policy JSON
+  // (default false) unchanged.
+  if (request.body && Object.prototype.hasOwnProperty.call(request.body, 'allowWorkflowInvocation')) {
+    parsedExecutionPolicy = {
+      ...(parsedExecutionPolicy || {}),
+      allowWorkflowInvocation: request.body.allowWorkflowInvocation === 'on' ||
+        request.body.allowWorkflowInvocation === 'true'
     };
   }
 

@@ -409,6 +409,14 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // Phase-1 regression, Phase-3 exclusion, and admitted-Run authority immutability.
   // PostgreSQL-native (needs the real permission catalog and run evidence).
   'browser-interaction-authority-postgres-test.js',
+  // P5-R1 — Executable governed same-Run workflow invocation:
+  // the allowWorkflowInvocation policy seam (default false, snapshot binding),
+  // workflow availability/definition/schema enforcement, same-Run execution
+  // with no child lifecycle object, budget ledger subordination, Run-stable
+  // invocation evidence, and the deterministic recovery/interruption pattern
+  // (before any effect, after a committed effect, after a governed request,
+  // and the divergent-payload failure). PostgreSQL-native.
+  'p5-r1-workflow-invocation-postgres-test.js',
   // A20 — replaces the five JSON-era er* recoverable-error orphans. Pins the one
   // discriminator that separates an environmental workspace failure (contained, the
   // model gets one more turn) from a policy refusal (terminal, recorded as blocked).

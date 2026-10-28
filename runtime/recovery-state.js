@@ -268,6 +268,19 @@ function reconstructAgentRecoveryState({
   const workspaceOps = snapshot && Array.isArray(snapshot.workspaceOperations)
     ? snapshot.workspaceOperations : [];
 
+  // P5-R1 (INVOKE-RECOVERY-B): workflow-engine operations are not agent-loop
+  // turn actions. A same-Run governed workflow invocation commits its internal
+  // step effects under deterministic workflow identities (`workflowId` +
+  // `workflowStepId`), and multiple internal steps share the ONE proposing
+  // agent action slot — so they can neither key the per-turn agent ledger nor
+  // collide with it. Their replay is owned by the existing exactly-once
+  // operation-receipt machinery and by the full-scope event guards below
+  // (hash chain, duplicate mutation detection), which remain untouched.
+  const isWorkflowEngineOperation = op => Boolean(op &&
+    typeof op.workflowId === 'string' && op.workflowId &&
+    typeof op.workflowStepId === 'string' && op.workflowStepId);
+  const agentTurnWorkspaceOps = workspaceOps.filter(op => !isWorkflowEngineOperation(op));
+
   // ── 6. Identity type validation (issue #8) ──────────────────────────
   for (const r of modelResponses) {
     if (!isNonNegInt(r.executionTurn)) return unsafe('response_non_integer_turn', safeReplayRefs(r), identityDetail(r, 'executionTurn', 'model response'));
@@ -283,7 +296,7 @@ function reconstructAgentRecoveryState({
     if (!isNonEmptyStr(p.evidenceKey)) return unsafe('plan_missing_evidence_key', safeReplayRefs(p), identityDetail(p, 'evidenceKey', 'parsed plan'));
     if (!Array.isArray(p.actions)) return unsafe('plan_actions_not_array', safeReplayRefs(p), identityDetail(p, 'actions', 'parsed plan'));
   }
-  for (const op of workspaceOps) {
+  for (const op of agentTurnWorkspaceOps) {
     if (!isNonNegInt(op.executionTurn)) return unsafe('operation_non_integer_turn', safeReplayRefs(op), identityDetail(op, 'executionTurn', operationSubject(op)));
     if (!isNonEmptyStr(op.planKey)) return unsafe('operation_missing_plan_key', safeReplayRefs(op), identityDetail(op, 'planKey', operationSubject(op)));
     if (!isNonNegIntOrZero(op.actionIndex)) return unsafe('operation_missing_action_index', safeReplayRefs(op), identityDetail(op, 'actionIndex', operationSubject(op)));
@@ -322,7 +335,7 @@ function reconstructAgentRecoveryState({
     entry.plan = plan;
   }
 
-  for (const op of workspaceOps) {
+  for (const op of agentTurnWorkspaceOps) {
     const entry = ensureTurn(op.executionTurn);
     const existing = entry.operationsByActionIndex.get(op.actionIndex);
     if (existing) return unsafe('duplicate_action_index', [operationRef(existing.operationKey), operationRef(op.operationKey)]);
@@ -334,6 +347,15 @@ function reconstructAgentRecoveryState({
   for (const ev of executionEvents) {
     if (ev.type !== 'workspace.operation_prepared') continue;
     const payload = ev.payload || {};
+
+    // P5-R1 (INVOKE-RECOVERY-B): a prepared workflow-engine mutation is not an
+    // agent-loop turn action. It is positively identified by its deterministic
+    // workflow identity and is scoped out of the turn ledger; its replay stays
+    // owned by the receipt machinery and the full-scope event guards.
+    if (payload.workflowEngine && payload.workflowEngine.workflowId && payload.workflowEngine.workflowStepId) {
+      continue;
+    }
+
     const turn = typeof payload.executionTurn === 'number' ? payload.executionTurn : null;
     const planKey = payload.planKey || null;
     const actionIndex = typeof payload.actionIndex === 'number' ? payload.actionIndex : null;

@@ -300,6 +300,7 @@ const TESTS = Object.freeze([
   { file: "oquery-cli-parity-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "oquery-parity-test.js", status: "required" },
   { file: "organization-guidance-test.js", status: "required" },
+  { file: "p5-r1-workflow-invocation-postgres-test.js", status: "required" },
   { file: "page-render-regression-test.js", status: "required" },
   { file: "phase-contract-alignment-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "permission-escalation-boundary-test.js", status: "required" },

@@ -385,6 +385,127 @@ test('NEEDS_ACTION_EXECUTION when prepared mutation has full identity but no ops
   assert.ok(hasRef(r.evidenceRefs, 'event', ev.id));
 });
 
+// ── 9b. P5-R1 workflow-engine evidence scoping (INVOKE-RECOVERY-B) ─────
+
+// A same-Run governed workflow invocation commits its internal step effects
+// under the ENGINE's deterministic identity (`workflowId` + `workflowStepId`),
+// not the proposing agent action's turn/plan/action-index identity. Those items
+// are scoped OUT of the per-turn agent ledger (they are not agent-loop turn
+// actions; several internal steps share the ONE proposing slot), while every
+// full-scope guard — hash chain, duplicate mutation detection, terminal
+// ordering — keeps seeing them.
+
+test('workflow-engine workspace items are scoped out of the agent-turn ledger', () => {
+  const engineItem = {
+    operation: { operation: 'writeFile', args: { path: 'invoked-note.txt' } },
+    capturedAt: new Date().toISOString(),
+    evidenceKey: 'op:engine:1',
+    operationKey: 'ok:engine:1',
+    workflowId: 'wf-invoked',
+    workflowStepId: 'write-note'
+  };
+  const secondEngineItem = {
+    ...engineItem,
+    evidenceKey: 'op:engine:2',
+    operationKey: 'ok:engine:2',
+    workflowStepId: 'finish'
+  };
+  const r = reconstructAgentRecoveryState(opts({
+    run: mockRun(),
+    replaySnapshot: mockSnapshot({
+      providerRequests: [mockReq(1)],
+      parsedModelPlans: [mockPlan(1, { actions: [{ operation: 'invokeWorkflow' }] })],
+      modelResponses: [mockResp(1)],
+      workspaceOperations: [engineItem, secondEngineItem]
+    }),
+    events: []
+  }));
+  // The engine items demand no plan entry, no action-index slot, and cannot
+  // collide with each other; the agent action (invokeWorkflow) itself records
+  // no agent-ledger workspace op, so the turn resolves to "action 0 pending" —
+  // the deterministic same-Run re-entry, where receipts replay instead of
+  // re-effecting.
+  assertState(r, 'NEEDS_ACTION_EXECUTION', '9b-a');
+  assert.strictEqual(r.nextActionIndex, 0, '9b-a: re-entry starts at the proposing action slot');
+  assert.ok(!r.inconsistencies.includes('operation_missing_plan_key'), '9b-a: no ledger rejection');
+  assert.ok(!r.inconsistencies.includes('workspace_ops_without_plan'), '9b-a: engine items stay out of the ledger');
+});
+
+test('workflow-engine prepared event is scoped out of the prepared ledger', () => {
+  resetEvents();
+  const ev = mockEvent('workspace.operation_prepared', {
+    payload: {
+      operationKey: 'ok:engine:1',
+      workflowEngine: { workflowId: 'wf-invoked', workflowStepId: 'write-note' },
+      intent: { operation: 'writeFile', args: { path: 'invoked-note.txt' } }
+    }
+  });
+  const r = reconstructAgentRecoveryState(opts({
+    run: mockRun(),
+    events: [ev],
+    replaySnapshot: mockSnapshot({
+      providerRequests: [mockReq(1)],
+      parsedModelPlans: [mockPlan(1, { actions: [{ operation: 'invokeWorkflow' }] })],
+      modelResponses: [mockResp(1)]
+    })
+  }));
+  // Without the marker this exact event is UNSAFE (prepared_mutation_missing_identity);
+  // with it, the state resolves from the agent plan alone.
+  assertState(r, 'NEEDS_ACTION_EXECUTION', '9b-b');
+  assert.ok(!r.inconsistencies.includes('prepared_mutation_missing_identity'), '9b-b: the engine preparation is not an agent-turn action');
+});
+
+test('agent-turn workspace items keep their full identity requirement', () => {
+  const r = reconstructAgentRecoveryState(opts({
+    run: mockRun(),
+    replaySnapshot: mockSnapshot({
+      providerRequests: [mockReq(1)],
+      parsedModelPlans: [mockPlan(1)],
+      modelResponses: [mockResp(1)],
+      workspaceOperations: [{
+        operation: { operation: 'writeFile', args: { path: 'A' } },
+        capturedAt: new Date().toISOString(),
+        evidenceKey: 'op:agent:0',
+        operationKey: 'ok:agent:0',
+        planKey: 'pk:1',
+        actionIndex: 0
+        // executionTurn deliberately absent — an AGENT item, not an engine item.
+      }]
+    }),
+    events: []
+  }));
+  assertState(r, 'UNSAFE_TO_CONTINUE', '9b-c');
+  assert.ok(r.inconsistencies.includes('operation_non_integer_turn'), '9b-c: the agent identity contract is not weakened by the engine scoping');
+});
+
+test('duplicate mutation detection stays full-scope across engine scoping', () => {
+  resetEvents();
+  // Two COMMITTED engine mutations with the SAME stable operation key are still
+  // a duplicate-mutation refusal, even though the items are out of the ledger.
+  const engineOpKey = 'run:1:slot:aa:input:bb';
+  const engineItem = overrides => ({
+    operation: { operation: 'writeFile', args: { path: 'invoked-note.txt' } },
+    capturedAt: new Date().toISOString(),
+    workflowId: 'wf-invoked',
+    workflowStepId: 'write-note',
+    ...overrides
+  });
+  const ev1 = mockEvent('workspace.operation', { payload: { operation: 'writeFile', operationKey: engineOpKey } });
+  const ev2 = mockEvent('workspace.operation', { payload: { operation: 'writeFile', operationKey: engineOpKey } });
+  const r = reconstructAgentRecoveryState(opts({
+    run: mockRun(),
+    events: [ev1, ev2],
+    replaySnapshot: mockSnapshot({
+      workspaceOperations: [
+        engineItem({ evidenceKey: 'op:engine:1', operationKey: engineOpKey }),
+        engineItem({ evidenceKey: 'op:engine:2', operationKey: engineOpKey })
+      ]
+    })
+  }));
+  assertState(r, 'UNSAFE_TO_CONTINUE', '9b-d');
+  assert.ok(r.inconsistencies.includes('duplicate_mutations'), '9b-d: the receipt machinery guard is not scoped out with the ledger');
+});
+
 // ── 10. Operation-key verification required ────────────────────────────
 
 test('UNSAFE when ops exist but no verifyOperationKey provided', () => {

@@ -84,6 +84,14 @@
     </div>
   </div>
 
+  <div class="checkbox-group">
+    <label for="allowWorkflowInvocation">
+      <input type="checkbox" id="allowWorkflowInvocation" name="allowWorkflowInvocation">
+      Allow the assigned agent to invoke approved workflows during a run (invokeWorkflow) — default-off, operator-authored, frozen into the admitted run's execution policy snapshot
+    </label>
+    <p class="form-hint">The agent may run one approved and enabled workflow with schema-valid input inside the same run. It grants no new authority: the invoked workflow is bounded by the run's existing budgets, workspace, provider, and duration authority, and creates no child tickets.</p>
+  </div>
+
   <div class="form-group" id="workflowInputGroup" hidden>
     <label for="workflowInput">Input JSON</label>
     <textarea id="workflowInput" name="workflowInput" rows="7" spellcheck="false" placeholder="{&quot;path&quot;:&quot;notes/demo.txt&quot;,&quot;instruction&quot;:&quot;Write a short note.&quot;}"></textarea>

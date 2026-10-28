@@ -930,6 +930,7 @@
       <div><dt>Mode</dt><dd><code><%= run.executionPolicySnapshot.mode %></code> · recorded intent, not enforced</dd></div>
       <div><dt>Workspace writes</dt><dd><%= run.executionPolicySnapshot.allowWorkspaceWrites ? 'requested' : 'not requested' %> · recorded intent, not enforced</dd></div>
       <div><dt>Browser interactions</dt><dd><%= run.executionPolicySnapshot.allowBrowserInteractions ? 'authorized' : 'not authorized (default)' %> · enforced from this immutable snapshot for click/fill/press on browser runs</dd></div>
+      <div><dt>Workflow invocation</dt><dd><%= run.executionPolicySnapshot.allowWorkflowInvocation ? 'authorized' : 'not authorized (default)' %> · enforced from this immutable snapshot for same-Run invokeWorkflow proposals</dd></div>
       <div><dt>Parallel runs</dt><dd><%= run.executionPolicySnapshot.allowParallelRuns ? 'allowed' : 'not allowed' %> · <%= run.runtimeBudgetSnapshot ? 'enforced by scheduler admission' : 'historical run has no effective scheduler budget snapshot' %></dd></div>
       <div><dt>Child tickets</dt><dd><%= run.executionPolicySnapshot.allowChildTickets ? 'requested' : 'not requested' %> · recorded intent · not implemented</dd></div>
       <div><dt>Max attempts override</dt><dd><%= runPolicyBudgetOrigin(run.executionPolicySnapshot.maxAttempts) %></dd></div>

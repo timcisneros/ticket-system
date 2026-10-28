@@ -12867,7 +12867,16 @@ class PostgresRuntimeStore {
     // Optional execution-turn identity (executionTurn / planKey / actionIndex),
     // projected into the workspace.operation_prepared event payload — the
     // agent resume safety contract requires prepared mutations to carry it.
-    identity = null
+    identity = null,
+    // P5-R1 (INVOKE-RECOVERY-B): optional deterministic workflow-engine identity
+    // (workflowId / workflowStepId), projected into the same event payload. A
+    // same-Run governed workflow invocation prepares its internal step effects
+    // OUTSIDE the agent turn/action ledger, so its preparations carry their own
+    // stable identity instead of an agent-turn one; the recovery ledger uses
+    // this marker to scope them out positively. A malformed marker is refused
+    // rather than silently dropped, so an unmarked event always means what it
+    // meant before this field existed.
+    workflowEngine = null
   }, { client = null } = {}) {
     const id = positiveSafeInteger(runId, 'runId');
     const ownerTicketId = positiveSafeInteger(ticketId, 'ticketId');
@@ -12876,6 +12885,17 @@ class PostgresRuntimeStore {
     const eventIdentity = identity === null || identity === undefined
       ? null
       : this.assertJsonRecord(identity, 'identity');
+    const eventWorkflowEngine = workflowEngine === null || workflowEngine === undefined
+      ? null
+      : (() => {
+        const marker = this.assertJsonRecord(workflowEngine, 'workflowEngine');
+        const workflowId = optionalString(marker.workflowId);
+        const workflowStepId = optionalString(marker.workflowStepId);
+        if (!workflowId || !workflowStepId) {
+          throw new TypeError('workflowEngine requires non-empty string workflowId and workflowStepId');
+        }
+        return { workflowId, workflowStepId };
+      })();
     const operation = requiredString(document.operation, 'intent.operation');
     const target = document.target && typeof document.target === 'object' && !Array.isArray(document.target)
       ? document.target
@@ -12936,7 +12956,12 @@ class PostgresRuntimeStore {
         ticketId: ownerTicketId,
         runId: id,
         ...(normalizedStepId === null ? {} : { stepId: normalizedStepId }),
-        payload: { operationKey: key, ...(eventIdentity || {}), intent: document }
+        payload: {
+          operationKey: key,
+          ...(eventIdentity || {}),
+          ...(eventWorkflowEngine ? { workflowEngine: eventWorkflowEngine } : {}),
+          intent: document
+        }
       });
       return { intent: record, receipt: null, event, inserted: true };
     };
