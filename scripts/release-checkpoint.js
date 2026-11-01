@@ -49,6 +49,15 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   // refusals). Deterministic; the runtime lifecycle is owned by
   // p5-r2-delegated-admission-postgres-test.js.
   'p5-r2-delegated-unit-contract-test.js',
+  // P5-R3 — deterministic composition consumption criterion contract: the
+  // childTerminalOutcome branch inside the SINGLE canonical workflow
+  // postcondition evaluator (extracted production bytes against the real
+  // kernel helpers), the exact literal completion-authority form, per-unit
+  // resolution/ambiguity/provenance refusals, current durable attempt truth,
+  // aggregation/ordering invariance and rerun identity stability.
+  // Deterministic; the cross-Ticket runtime lifecycle is owned by
+  // p5-r3-composition-consumption-postgres-test.js.
+  'p5-r3-composition-consumption-contract-test.js',
   't2-tranche5-release-admission-server-test.js',
   't2-tranche5-rerun-lock-order-test.js',
   't041-semantic-closure-test.js',
@@ -431,6 +440,15 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // doctrine, non-amplification, one-level delegation, operator release_hold
   // intact, and the competing-release race). PostgreSQL-native.
   'p5-r2-delegated-admission-postgres-test.js',
+  // P5-R3 — deterministic composition consumption: the cross-Ticket runtime
+  // lifecycle. awaitChildTickets (read-only bounded observation, zero
+  // completion authority, no passive admission) and the childTerminalOutcome
+  // criterion consumed through the SINGLE existing postcondition evaluator
+  // (end-to-end completion, held/failed/missing/ambiguous/incoherent
+  // fail-closed truth, forged-observation refusal, parent-rerun identity
+  // determinism, bounded await evidence, and no-migration/authorization
+  // posture). PostgreSQL-native.
+  'p5-r3-composition-consumption-postgres-test.js',
   // A20 — replaces the five JSON-era er* recoverable-error orphans. Pins the one
   // discriminator that separates an environmental workspace failure (contained, the
   // model gets one more turn) from a policy refusal (terminal, recorded as blocked).

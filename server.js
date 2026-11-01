@@ -117,6 +117,7 @@ const {
   DELEGATION_SCHEME,
   buildDelegatedSpawnIdempotencyKey,
   isLiteralUnitKey,
+  resolveDelegatedSpawnRelation,
   DELEGATED_PLAN_AUTHORIZATION_EVENT_TYPE,
   DELEGATED_PLAN_AUTHORIZATION_REPLAY_KEY,
   buildDelegatedPlanAuthorizationEvidence,
@@ -190,6 +191,16 @@ const {
   extractObjectivePathTokens: contractExtractObjectivePathTokens,
   normalizeObjectivePathToken: contractNormalizeObjectivePathToken
 } = require('./runtime/completion-decision-contract');
+// P5-R3: the shared Ticket-attempt completion kernel — the ONE canonical
+// attempt-disposition evaluator the T2/P2 settlement path already uses. The
+// childTerminalOutcome criterion consumes it verbatim; no second evaluator is
+// created.
+const {
+  evaluateAttemptCompletionAuthority
+} = require('./runtime/ticket-attempt-completion-contract');
+const {
+  TICKET_ATTEMPT_DISPOSITIONS
+} = require('./runtime/ticket-attempt-contract');
 const {
   buildOllamaChatBody,
   buildOpenAiResponsesBody
@@ -824,6 +835,80 @@ async function maybeTestInterrupt(run, point) {
 
   // Kill the server process to simulate a crash
   process.kill(process.pid, 'SIGKILL');
+}
+
+// ── P5-R3 test-only deterministic composition-read interposition ────────────
+// TEST_COMPOSITION_READ_ADVENT mirrors the TEST_INTERRUPTION_POINT doctrine:
+// activated ONLY by an explicit env var while NODE_ENV === 'test', a no-op in
+// every other configuration. The composition-consumption race regression must
+// coordinate a canonical newer child attempt admission BETWEEN the composition
+// loader's initial current-attempt reads and its final consistency re-read —
+// the exact during-read interleaving the current-attempt invariant must
+// survive — instead of relying on scheduler timing luck.
+//
+// The env value is JSON {"targets":[{parentTicketId}]} (its whole surface is
+// one atomic admission decision; the registry keys on the parent Ticket id of
+// the composition read and fires at most ONCE per parent per server process).
+// The coordinated lifecycle event IS the production child-rerun admission —
+// the hook calls the canonical operator rerun entry (rerunTicketFromBeginning)
+// — so the newer attempt is exactly a canonical rerun attempt, "reviewer/test
+// seam coordinating the lifecycle transition", not a store-level corruption.
+// There is no retry: a target that does not find a settled captured attempt
+// simply declines, the evaluation in progress is unaffected, and any later
+// coordinated window belongs to the same single fire budget.
+const TEST_COMPOSITION_READ_ADVENT_ENABLED = process.env.NODE_ENV === 'test';
+const TEST_COMPOSITION_READ_ADVENT = process.env.TEST_COMPOSITION_READ_ADVENT || '';
+const testCompositionReadAdventFired = new Set();
+let testCompositionReadAdventTargets = null;
+
+function testCompositionReadAdventTargetsMap() {
+  if (testCompositionReadAdventTargets !== null) return testCompositionReadAdventTargets;
+  let decoded = null;
+  try {
+    decoded = JSON.parse(TEST_COMPOSITION_READ_ADVENT);
+  } catch (_) {
+    decoded = null;
+  }
+  const targets = decoded && decoded.targets && Array.isArray(decoded.targets)
+    ? decoded.targets
+    : [];
+  testCompositionReadAdventTargets = new Map();
+  for (const target of targets) {
+    if (!target || !Number.isSafeInteger(target.parentTicketId) || target.parentTicketId <= 0) continue;
+    testCompositionReadAdventTargets.set(target.parentTicketId, target);
+  }
+  return testCompositionReadAdventTargets;
+}
+
+async function maybeTestCompositionReadAdmission(parentTicketId, currentAttemptByChildId) {
+  const targets = TEST_COMPOSITION_READ_ADVENT_ENABLED && TEST_COMPOSITION_READ_ADVENT
+    ? testCompositionReadAdventTargetsMap()
+    : null;
+  if (!targets || targets.size === 0) return null;
+  if (!targets.has(parentTicketId) || testCompositionReadAdventFired.has(parentTicketId)) return null;
+  if (!currentAttemptByChildId || typeof currentAttemptByChildId.entries !== 'function') return null;
+  // Consistent deterministic choice: the smallest fact-child id whose
+  // captured current attempt is settled. On the single-delegated-unit race
+  // parents this is the race child itself.
+  const candidates = [...currentAttemptByChildId.entries()]
+    .filter(([, capturedAttempt]) => capturedAttempt && capturedAttempt.disposition !== null)
+    .sort((left, right) => left[0] - right[0]);
+  if (candidates.length === 0) return null;
+  const [childTicketId, capturedAttempt] = candidates[0];
+  // Mark fired BEFORE awaiting so two overlapping composition reads for the
+  // same parent can never coordinate two admissions.
+  testCompositionReadAdventFired.add(parentTicketId);
+  try {
+    await rerunTicketFromBeginning(childTicketId, 'p5-r3-composition-read-race', 'retry', null);
+  } catch (error) {
+    // NOT swallowed: the coordination refused, the test's later assertions
+    // will fail on the missing second attempt. The loader's own consistency
+    // boundary still governs the read — no retry, no partial state retreat.
+    fs.writeSync(process.stderr.fd,
+      `p5-r3 composition-read race coordination refused: ${(error && error.message) || error}\n`);
+    return null;
+  }
+  return { parentTicketId, childTicketId, capturedAttemptId: capturedAttempt.id };
 }
 
 function maybeInterruptAfterOperatorRecoveryEffect() {
@@ -1869,6 +1954,35 @@ const ACTIONS_CATALOG = [
     provenanceSurface: 'Run replay snapshot workflowInvocation and workflowActions'
   },
   {
+    // P5-R3 (§15): bounded READ-ONLY observation of the parent's own delegated
+    // child units. Zero completion authority: the step never completes the
+    // parent, never admits, releases, or mutates a child, and its output is
+    // prompt/workflow context only. The childTerminalOutcome CRITERION is the
+    // sole completion consumer of durable child facts, evaluated independently
+    // by the canonical postcondition evaluator.
+    name: 'awaitChildTickets', displayName: 'Await Child Tickets', category: 'workflow', type: 'workflowAction', invoker: 'workflow', mutating: false,
+    requestShape: { parentBinding: 'string', parentWorkflowId: 'string', spawnedByStepId: 'string', childWorkflowId: 'string', expectedUnits: ['string'] },
+    inputSchema: { parentBinding: 'string', parentWorkflowId: 'string', spawnedByStepId: 'string', childWorkflowId: 'string', expectedUnits: ['string'] },
+    optionalShape: null,
+    responseShape: {
+      status: 'string',
+      parentTicketId: 'number',
+      parentWorkflowId: 'string',
+      spawnedByStepId: 'string',
+      childWorkflowId: 'string',
+      expectedUnits: ['string'],
+      observedUnits: [{}],
+      missingUnits: ['string'],
+      allExpectedUnitsSettled: 'boolean',
+      unexpectedDelegatedChildCount: 'number',
+      truncated: 'boolean',
+      observedAt: 'string'
+    },
+    errorShape: { error: 'string' },
+    authorityConstraints: 'Read-only durable child lifecycle observation of the Run\'s own authored delegated units under existing Run bounds; ZERO completion authority; never admits, releases, retries, or mutates a child',
+    provenanceSurface: 'Run replay snapshot workflowAwaitChildren; workflow.await_children event'
+  },
+  {
     name: 'createWorkflowDraft', displayName: 'Create Workflow Draft', category: 'workflow', type: 'workflowAction', invoker: 'agent', mutating: false,
     requestShape: { workflow: {} },
     inputSchema: { workflow: {} },
@@ -2130,6 +2244,7 @@ function isWorkflowUsableAction(action) {
   return action.type === 'workspaceAction' ||
     action.name === 'executeActionPlan' ||
     action.name === 'executeTicketPlan' ||
+    action.name === 'awaitChildTickets' ||
     action.name === 'agentStructuredOutput' ||
     action.name === 'condition' ||
     action.name === 'stop';
@@ -6711,6 +6826,486 @@ async function projectParentSpawnChildren(parentTicketId) {
   };
 }
 
+// ── P5-R3 — deterministic composition consumption ────────────────────────────
+//
+// The parent workflow consumes the durable outcomes of its explicitly authored
+// delegated child units (P5 freeze §14/§15). Two strict consumers, ONE loader:
+//
+//   - `awaitChildTickets` — the READ-ONLY observation step (§15): a bounded
+//     deterministic per-unit observation of CURRENT durable child facts,
+//     returned to workflow context only. ZERO completion authority; performs
+//     no admission, no release, no mutation.
+//   - the `childTerminalOutcome` postcondition criterion (§14/CRITERION-A) —
+//     evaluated through the SINGLE existing workflow postcondition evaluator
+//     (evaluateWorkflowPostcondition gains one type branch). No second
+//     evaluator, no direct child-status-to-completion shortcut.
+//
+// The loader resolves the COMPLETE T4 parent child relation (no filtered
+// subset may establish truth — T4-I3), each fact child's coherent delegated
+// relation, and each child's CURRENT attempt/member-Run/completion-decision
+// truth from the same canonical owners the T2/P2 settlement path consumes.
+// READ-ONLY: no attempt, no Run, no Ticket, no hold release.
+//
+// P5-R3 current-attempt consistency (§3): the loader also carries each fact
+// child's CURRENT-ATTEMPT STABILITY. Reading the canonical current attempt,
+// then the member Runs and completion decisions of that captured attempt,
+// and then re-reading the canonical current attempt once more forms the
+// consistency boundary: a canonical child rerun admitted WHILE the member
+// facts were loading supersedes the captured attempt (CHILD-RERUN-A), and
+// the captured attempt's internally complete immutable history must never
+// then present as the child's current terminal truth. The final re-read is
+// the linearization point: it yields a per-child typed stability fact that
+// BOTH consumers (awaitChildTickets observation and the childTerminalOutcome
+// criterion) consume through the shared per-unit truth evaluation — a child
+// whose attempt generation changed during the read can never satisfy.
+async function loadDelegatedChildCompositionFacts(parentTicketId) {
+  const parentId = typeof parentTicketId === 'string' && /^[1-9]\d*$/.test(parentTicketId)
+    ? Number(parentTicketId)
+    : parentTicketId;
+  if (!Number.isSafeInteger(parentId) || parentId <= 0) {
+    throw new TypeError('parentTicketId must be a positive safe integer');
+  }
+  const candidateIds = await postgresRuntimeStore.findSpawnCandidateChildTickets({ parentTicketId: parentId });
+  const provenanceByChild = [];
+  for (const childTicketId of candidateIds) {
+    provenanceByChild.push({
+      childTicketId,
+      records: await postgresRuntimeStore.listChildCreationProvenance(childTicketId)
+    });
+  }
+  // Batched parent-existence evidence BEFORE resolution — identical pipeline
+  // to the T4 parent projection, so composition truth cannot diverge from the
+  // displayed relationship truth.
+  const referencedParentIds = new Set([parentId]);
+  for (const { records } of provenanceByChild) {
+    for (const id of coherentProvenanceParentIds(records)) referencedParentIds.add(id);
+  }
+  const existingParents = new Set((await postgresRuntimeStore.listTicketsByIds({
+    ticketIds: [...referencedParentIds]
+  })).map(row => row.id));
+  const resolutions = provenanceByChild.map(({ childTicketId, records }) =>
+    resolveChildSpawnRelation({
+      childTicketId,
+      records,
+      existingParentTicketIds: existingParents
+    })
+  );
+  const enumeration = combineSpawnEnumeration({ parentTicketId: parentId, resolutions });
+
+  // Per fact child: the coherent delegated creation relation (or its typed
+  // refusal) plus the durable claimed spawn key of the winning record.
+  // The claimed key is what an expected unit matches against, so a child
+  // whose delegation block is INCOHERENT still counts as that unit's
+  // candidate and fails the unit closed instead of disappearing.
+  const delegatedByChildId = new Map();
+  const childWorkflowIdByChildId = new Map();
+  for (const fact of enumeration.facts) {
+    const entry = provenanceByChild.find(item => item.childTicketId === fact.childTicketId) || null;
+    const records = entry ? entry.records : [];
+    const delegated = resolveDelegatedSpawnRelation({
+      childTicketId: fact.childTicketId,
+      records,
+      existingParentTicketIds: existingParents
+    });
+    const originPosition = fact.originEvent && fact.originEvent.position;
+    const originRecord = typeof originPosition === 'number'
+      ? records.find(record => record.position === originPosition) || null
+      : null;
+    const originPayload = originRecord && typeof originRecord.payload === 'object' && originRecord.payload !== null
+      ? originRecord.payload
+      : {};
+    childWorkflowIdByChildId.set(fact.childTicketId,
+      typeof originPayload.workflowId === 'string' ? originPayload.workflowId : null);
+    delegatedByChildId.set(fact.childTicketId, {
+      resolution: delegated,
+      claimedSpawnKey: typeof originPayload.spawnIdempotencyKey === 'string'
+        ? originPayload.spawnIdempotencyKey
+        : null
+    });
+  }
+
+  // CURRENT attempt truth per fact child: the max-ordinal attempt. Older
+  // attempts are superseded lifecycle history — never current truth
+  // (CHILD-RERUN-A); a newer unsettled attempt overrides an older terminal
+  // one.
+  const factChildIds = enumeration.facts.map(fact => fact.childTicketId);
+  const childRows = factChildIds.length
+    ? await postgresRuntimeStore.listTicketsByIds({ ticketIds: factChildIds })
+    : [];
+  const childStatusByChildId = new Map(childRows.map(row => [row.id, row.status]));
+  const currentAttemptByChildId = new Map();
+  for (const childTicketId of factChildIds) {
+    // The canonical current-attempt reader (`ORDER BY ordinal DESC LIMIT 1` —
+    // the same reader the T2 settlement/cancellation authority reads through).
+    // An oldest-first page-bounded listing can omit the actual current attempt
+    // once a child's attempt history outgrows the page (maxAttempts is
+    // ticket-owned policy with no repository ceiling), and a superseded older
+    // attempt must never present as current truth (§8/CHILD-RERUN-A).
+    currentAttemptByChildId.set(
+      childTicketId,
+      await getRuntimeStateReadRepository().getCurrentTicketAttempt(childTicketId));
+  }
+  // Test-only deterministic interposition (the composition-read race
+  // regression). Mirrors TEST_INTERRUPTION_POINT: no-op unless the explicit
+  // test env var is present while NODE_ENV === 'test'. It coordinates the
+  // canonical newer-child-attempt admission precisely BETWEEN the initial
+  // current-attempt reads above and the final consistency re-read below —
+  // the during-read window the invariant must survive — without depending on
+  // scheduler timing luck.
+  await maybeTestCompositionReadAdmission(parentId, currentAttemptByChildId);
+  const childRuns = factChildIds.length
+    ? await readRunsForFactChildTickets(factChildIds)
+    : [];
+  const memberRunsByChildId = new Map(factChildIds.map(childTicketId => [childTicketId, []]));
+  for (const childRun of childRuns) {
+    const currentAttempt = currentAttemptByChildId.get(childRun.ticketId);
+    if (!currentAttempt || childRun.ticketAttemptId !== currentAttempt.id) continue;
+    memberRunsByChildId.get(childRun.ticketId).push(childRun);
+  }
+  const decisionByRunId = new Map();
+  const memberRunIds = [...new Set(childRuns
+    .filter(run => {
+      const currentAttempt = currentAttemptByChildId.get(run.ticketId);
+      return currentAttempt && run.ticketAttemptId === currentAttempt.id;
+    })
+    .map(run => run.id))];
+  for (const runId of memberRunIds) {
+    const recorded = await getRuntimeStateReadRepository().getRunConsequence(runId);
+    // getRunConsequence returns the immutable-evidence wrapper; the decision
+    // document rides on `.consequence` (the same hydration the settlement
+    // reader performs at store.js:10244).
+    const document = recorded && recorded.consequence ? recorded.consequence : null;
+    decisionByRunId.set(runId, document && document.completionDecision
+      ? normalizeCompletionDecision(document.completionDecision)
+      : null);
+  }
+  // Final canonical current-attempt re-read — the consistency point. The
+  // captured attempt from before the member facts were read is compared
+  // against the child's CURRENT attempt AFTER those facts were assembled:
+  // still the same attempt generation ⇒ the composition facts for that child
+  // stand as loaded; otherwise the child concurrently evolved (a rerun was
+  // admitted, or the captured row was otherwise mutated) and the facts are
+  // marked typed-unstable instead of being evaluated. One bounded re-read,
+  // no retry loop, no lock: a newer attempt admitted after this instant
+  // belongs to a later evaluation (the evaluation was valid at the final
+  // re-read instant).
+  const currentAttemptStabilityByChildId = new Map();
+  for (const childTicketId of factChildIds) {
+    const revalidatedAttempt = await getRuntimeStateReadRepository().getCurrentTicketAttempt(childTicketId);
+    currentAttemptStabilityByChildId.set(
+      childTicketId,
+      sameCapturedCurrentAttemptGeneration(
+        currentAttemptByChildId.get(childTicketId) || null,
+        revalidatedAttempt)
+        ? 'STABLE'
+        : 'CHILD_ATTEMPT_CHANGED_DURING_READ');
+  }
+  return {
+    parentTicketId: parentId,
+    enumeration,
+    delegatedByChildId,
+    childWorkflowIdByChildId,
+    childStatusByChildId,
+    currentAttemptByChildId,
+    currentAttemptStabilityByChildId,
+    memberRunsByChildId,
+    decisionByRunId
+  };
+}
+
+// Deterministic attempt-generation identity for the composition loader's
+// consistency boundary. The captured attempt is still the child's current
+// attempt exactly when the effective generation facts all match: id and
+// ordinal prove the same attempt row; disposition and revision prove the
+// captured snapshot still matches the row's mutation state (the row revision
+// is the store's optimistic-concurrency guard and bumps on any attempt
+// mutation, such as settlement). A read that saw no attempt at one endpoint
+// and an attempt at the other also fails the identity — absent-then-appearing
+// must never be reinterpreted as stable held truth.
+function sameCapturedCurrentAttemptGeneration(initialAttempt, revalidatedAttempt) {
+  const hasInitial = initialAttempt !== null && initialAttempt !== undefined;
+  const hasRevalidated = revalidatedAttempt !== null && revalidatedAttempt !== undefined;
+  if (!hasInitial || !hasRevalidated) return !hasInitial && !hasRevalidated;
+  return initialAttempt.id === revalidatedAttempt.id &&
+    initialAttempt.ordinal === revalidatedAttempt.ordinal &&
+    initialAttempt.disposition === revalidatedAttempt.disposition &&
+    initialAttempt.revision === revalidatedAttempt.revision;
+}
+
+// Bounded batched Run read for fact children. Backed by the EXISTING canonical
+// cursor-paged reader (`collectRuntimeStatePages` — the same seam every other
+// Run enumeration uses): the leading id-window of an unpaged read can omit the
+// CURRENT attempt's member Runs once a child's Run history outgrows one page,
+// and the attempt-completion kernel requires the COMPLETE member set.
+async function readRunsForFactChildTickets(ticketIds) {
+  const ids = [...new Set((ticketIds || []).filter(id => Number.isSafeInteger(id) && id > 0))];
+  if (ids.length === 0) return [];
+  return collectRuntimeStatePages('listRunsForTickets', 'runs', { ticketIds: ids });
+}
+
+// Pure normalization of ONE authored `childTerminalOutcome` postcondition
+// (P5 freeze §14/CRITERION-A). The completion-authority form is exact: every
+// authority-bearing fact is an explicit literal authored by the operator-owned
+// workflow definition — never model-suppliable and never template-derived
+// (UNITKEY-A). The parent binding is `self`: the criterion consumes only
+// children of the Run's OWN Ticket spawned by the Run's OWN workflow.
+// Returns { criterion, error: null } or { criterion: null, error } — fail
+// closed, typed, deterministic.
+function normalizeChildTerminalOutcomeCriterion(postcondition, run) {
+  const invalid = error => ({ criterion: null, error });
+  if (!postcondition || typeof postcondition !== 'object' || Array.isArray(postcondition)) {
+    return invalid('childTerminalOutcome criterion must be an object');
+  }
+  const extras = Object.keys(postcondition).filter(key => ![
+    'id', 'type', 'parentBinding', 'parentWorkflowId', 'spawnedByStepId',
+    'childWorkflowId', 'expectedUnits', 'expect'
+  ].includes(key));
+  if (extras.length > 0) {
+    return invalid(`childTerminalOutcome criterion carries unsupported fields: ${extras.sort().join(', ')}`);
+  }
+  if (postcondition.parentBinding !== 'self') {
+    return invalid('childTerminalOutcome criterion requires parentBinding "self"');
+  }
+  if (typeof postcondition.id !== 'undefined' &&
+      (typeof postcondition.id !== 'string' || postcondition.id.trim().length === 0 || postcondition.id.length > 128)) {
+    return invalid('childTerminalOutcome criterion id must be a non-blank string of at most 128 characters');
+  }
+  for (const field of ['parentWorkflowId', 'spawnedByStepId', 'childWorkflowId']) {
+    if (!isLiteralUnitKey(postcondition[field])) {
+      return invalid(`childTerminalOutcome criterion ${field} must be a non-blank literal string (no template expression)`);
+    }
+  }
+  const runWorkflowId = run && typeof run.workflowId === 'string' ? run.workflowId : null;
+  if (!runWorkflowId) {
+    return invalid('the Run carries no workflow identity to bind (parentBinding "self")');
+  }
+  if (postcondition.parentWorkflowId !== runWorkflowId) {
+    return invalid('childTerminalOutcome criterion parentWorkflowId must bind the Run\'s own workflow (parentBinding "self")');
+  }
+  if (!Array.isArray(postcondition.expectedUnits)) {
+    return invalid('childTerminalOutcome criterion expectedUnits must be an array');
+  }
+  if (postcondition.expectedUnits.length === 0) {
+    return invalid('childTerminalOutcome criterion expectedUnits must be a non-empty array');
+  }
+  for (const unitKey of postcondition.expectedUnits) {
+    if (!isLiteralUnitKey(unitKey)) {
+      return invalid('childTerminalOutcome criterion expectedUnits entries must be literal authored unitKey strings (non-blank, no template expression)');
+    }
+  }
+  const seenUnits = new Set();
+  for (const unitKey of postcondition.expectedUnits) {
+    if (seenUnits.has(unitKey)) {
+      return invalid(`childTerminalOutcome criterion expectedUnits contains duplicate authored units: ${unitKey}`);
+    }
+    seenUnits.add(unitKey);
+  }
+  if (!postcondition.expect || typeof postcondition.expect !== 'object' || Array.isArray(postcondition.expect)) {
+    return invalid('childTerminalOutcome criterion expect must be an object with an authored disposition');
+  }
+  const expectExtras = Object.keys(postcondition.expect).filter(key => key !== 'disposition');
+  if (expectExtras.length > 0) {
+    return invalid(`childTerminalOutcome criterion expect carries unsupported fields: ${expectExtras.sort().join(', ')}`);
+  }
+  const rawDisposition = postcondition.expect.disposition;
+  const authored = Array.isArray(rawDisposition) ? rawDisposition : [rawDisposition];
+  if (authored.length === 0 || authored.some(value => !TICKET_ATTEMPT_DISPOSITIONS.includes(value))) {
+    return invalid(`childTerminalOutcome criterion expect.disposition must be authored as a settled attempt disposition: ${TICKET_ATTEMPT_DISPOSITIONS.join(', ')}`);
+  }
+  const seenDispositions = new Set();
+  for (const value of authored) {
+    if (seenDispositions.has(value)) {
+      return invalid(`childTerminalOutcome criterion expect.disposition contains duplicate acceptable outcomes: ${value}`);
+    }
+    seenDispositions.add(value);
+  }
+  return {
+    criterion: {
+      id: typeof postcondition.id === 'string' ? postcondition.id : null,
+      parentWorkflowId: postcondition.parentWorkflowId,
+      spawnedByStepId: postcondition.spawnedByStepId,
+      childWorkflowId: postcondition.childWorkflowId,
+      expectedUnits: [...postcondition.expectedUnits],
+      acceptableDispositions: [...authored]
+    },
+    error: null
+  };
+}
+
+// Pure per-unit resolution over the loaded durable facts. Shared by the
+// observation step and the criterion so composition truth has exactly one
+// resolution path. For every expected unit the resolver derives the canonical
+// delegated logical identity (never a second identity) and matches the child
+// that durably claims that identity; ambiguity and incoherence are typed, and
+// a missing expected unit is reported, never ignored.
+function resolveDelegatedCompositionUnits({ selector, expectedUnits, facts }) {
+  const entries = [];
+  const derivedKeys = new Set();
+  for (const unitKey of expectedUnits) {
+    const spawnIdempotencyKey = buildDelegatedSpawnIdempotencyKey({
+      parentTicketId: facts.parentTicketId,
+      parentWorkflowId: selector.parentWorkflowId,
+      spawnedByStepId: selector.spawnedByStepId,
+      childWorkflowId: selector.childWorkflowId,
+      unitKey
+    });
+    const candidates = facts.enumeration.facts.filter(fact => {
+      const delegated = facts.delegatedByChildId.get(fact.childTicketId);
+      return delegated && delegated.claimedSpawnKey === spawnIdempotencyKey;
+    });
+    let entry;
+    if (candidates.length === 0) {
+      entry = { unitKey, spawnIdempotencyKey, resolution: 'missing', childTicketId: null, delegatedRefusalReason: null };
+    } else if (candidates.length > 1) {
+      entry = {
+        unitKey,
+        spawnIdempotencyKey,
+        resolution: 'ambiguous',
+        childTicketIds: candidates.map(fact => fact.childTicketId),
+        childTicketId: null,
+        delegatedRefusalReason: null
+      };
+    } else {
+      const fact = candidates[0];
+      const delegated = facts.delegatedByChildId.get(fact.childTicketId);
+      if (delegated.resolution.outcome !== 'FACT') {
+        entry = {
+          unitKey,
+          spawnIdempotencyKey,
+          resolution: 'uncoherent',
+          childTicketId: fact.childTicketId,
+          delegatedRefusalReason: delegated.resolution.reason || null,
+          delegatedRefusalDetail: delegated.resolution.detail || null
+        };
+      } else {
+        const delegation = delegated.resolution.delegation;
+        entry = {
+          unitKey,
+          spawnIdempotencyKey,
+          resolution: 'resolved',
+          childTicketId: fact.childTicketId,
+          delegatedRefusalReason: null,
+          // Provenance coherence facts (deterministic, bounded): the resolved
+          // block must agree with the authored selector — the derived key
+          // embeds every selector component, so key equality implies it; the
+          // child's durable workflow identity is re-proved against the
+          // authored childWorkflowId explicitly.
+          childWorkflowIdMatches: delegation
+            ? childWorkflowIdMatchesSelector(delegation, facts, fact.childTicketId, selector)
+            : null
+        };
+      }
+    }
+    derivedKeys.add(spawnIdempotencyKey);
+    entries.push(entry);
+  }
+  // Observation-only context fact (never a completion input): fact children
+  // matching the authored selector but outside the authored expected set.
+  let unexpectedDelegatedChildCount = 0;
+  for (const fact of facts.enumeration.facts) {
+    const delegated = facts.delegatedByChildId.get(fact.childTicketId);
+    if (!delegated || delegated.resolution.outcome !== 'FACT') continue;
+    const delegation = delegated.resolution.delegation;
+    if (!delegation) continue;
+    if (delegation.parentWorkflowId !== selector.parentWorkflowId ||
+        delegation.spawnedByStepId !== selector.spawnedByStepId ||
+        (facts.childWorkflowIdByChildId && facts.childWorkflowIdByChildId.get(fact.childTicketId)) !== selector.childWorkflowId) continue;
+    if (!derivedKeys.has(delegation.spawnIdempotencyKey)) unexpectedDelegatedChildCount += 1;
+  }
+  return { units: entries, unexpectedDelegatedChildCount };
+}
+
+// The child's durable workflow identity (the ticket.created payload's
+// workflowId) re-proved against the authored childWorkflowId. The payload's
+// workflowId is itself already bound into the resolved delegated spawn key
+// (the derivation input), so a mismatch here can only mean incoherent
+// provenance; read from the child's resolved creation payload, never from a
+// body-only claim.
+function childWorkflowIdMatchesSelector(delegation, facts, childTicketId, selector) {
+  const childWorkflowId = facts.childWorkflowIdByChildId && facts.childWorkflowIdByChildId.get(childTicketId);
+  return childWorkflowId === selector.childWorkflowId;
+}
+
+// Pure. Evaluates the CURRENT durable terminal truth of ONE expected
+// delegated unit against the authored acceptable disposition set, using the
+// canonical attempt-completion kernel (the same owner the T2/P2 settlement
+// path uses) — never cached await output, never parent/child model prose, and
+// never a superseded older attempt.
+//
+// P5-R3 current-attempt consistency (§3): `currentAttemptStability` carries
+// the loader's typed per-child read stability. Per-unit completion truth may
+// only be assembled while the captured attempt is still the child's canonical
+// current attempt at the composition loader's consistency point. A child
+// rerun admitted while the member facts were loading supersedes the captured
+// attempt (CHILD-RERUN-A); the captured attempt's internally complete
+// immutable history then belongs to superseded lifecycle history and must
+// never establish completion authority or satisfy the criterion. Missing
+// stability fact means the stable contract (`STABLE`) — facts assembled
+// without a recorded concurrent change keep today's semantics.
+function evaluateChildTerminalOutcomeUnit({
+  acceptableDispositions,
+  currentAttempt,
+  memberRuns,
+  decisionByRunId,
+  currentAttemptStability
+}) {
+  const attemptStability = currentAttemptStability === undefined || currentAttemptStability === null
+    ? 'STABLE'
+    : currentAttemptStability;
+  const attemptState = currentAttempt === null || currentAttempt === undefined
+    ? 'none'
+    : (currentAttempt.disposition === null ? 'unsettled' : 'settled');
+  const unitState = {
+    attemptState,
+    attemptDisposition: attemptState === 'settled' ? currentAttempt.disposition : null,
+    runTerminal: null,
+    truthDisposition: null,
+    memberDispositions: null,
+    evidenceError: null,
+    attemptStability
+  };
+  if (attemptStability !== 'STABLE') {
+    // Fail closed typed, before ANY member history is evaluated: the captured
+    // attempt may hold a settled member-complete history, but it is no longer
+    // provably the child's canonical current attempt, so it can never be
+    // reported as current terminal truth. `attemptState` echoes only the
+    // CAPTURED attempt's state; the member facts stay unevaluated.
+    return { satisfied: false, reason: 'CHILD_ATTEMPT_CHANGED_DURING_READ', unitState };
+  }
+  if (attemptState === 'none') {
+    return { satisfied: false, reason: 'CHILD_HAS_NO_ATTEMPT', unitState };
+  }
+  if (attemptState === 'unsettled') {
+    return { satisfied: false, reason: 'CHILD_ATTEMPT_UNSETTLED', unitState };
+  }
+  const runs = Array.isArray(memberRuns) ? memberRuns : [];
+  const decisions = decisionByRunId instanceof Map ? decisionByRunId : new Map();
+  let authority = null;
+  try {
+    authority = evaluateAttemptCompletionAuthority(runs, decisions);
+  } catch (error) {
+    unitState.evidenceError = error && error.code ? error.code : 'CHILD_COMPLETION_EVIDENCE_UNAVAILABLE';
+    return { satisfied: false, reason: 'CHILD_COMPLETION_EVIDENCE_UNAVAILABLE', unitState };
+  }
+  if (authority === null) {
+    // A settled attempt whose member Runs are not all terminal is torn state:
+    // report the durable member truth, never satisfaction.
+    unitState.runTerminal = false;
+    return { satisfied: false, reason: 'CHILD_RUN_MEMBERS_NOT_TERMINAL', unitState };
+  }
+  unitState.runTerminal = true;
+  unitState.truthDisposition = authority.candidateDisposition;
+  unitState.memberDispositions = [...authority.memberDispositions];
+  if (unitState.truthDisposition !== currentAttempt.disposition) {
+    unitState.evidenceError = 'CHILD_ATTEMPT_TRUTH_CONFLICT';
+    return { satisfied: false, reason: 'CHILD_ATTEMPT_TRUTH_CONFLICT', unitState };
+  }
+  if (acceptableDispositions.includes(unitState.truthDisposition)) {
+    return { satisfied: true, reason: 'CHILD_TERMINAL_OUTCOME_MATCHED', unitState };
+  }
+  return { satisfied: false, reason: 'CHILD_TERMINAL_OUTCOME_UNACCEPTABLE', unitState };
+}
+
 async function projectChildSpawnParent(ticket) {
   const records = await postgresRuntimeStore.listChildCreationProvenance(ticket.id);
   const referencedParentIds = coherentProvenanceParentIds(records);
@@ -7776,7 +8371,7 @@ function resolveWorkflowPostconditionTemplates(postcondition, run, output) {
   });
 }
 
-function evaluateWorkflowPostcondition(run, workflow, postcondition, output, processOperations = []) {
+function evaluateWorkflowPostcondition(run, workflow, postcondition, output, processOperations = [], childTerminalFacts = null) {
   const resolved = resolveWorkflowPostconditionTemplates(postcondition, run, output);
   const id = resolved.id || postcondition.id || null;
 
@@ -7890,6 +8485,144 @@ function evaluateWorkflowPostcondition(run, workflow, postcondition, output, pro
     };
   }
 
+  // ── P5-R3 — childTerminalOutcome (CRITERION-A) ──────────────────────────────
+  //
+  // ONE additional criterion type inside the SINGLE existing workflow
+  // postcondition evaluator (P5 freeze §14). No second evaluator, no R3
+  // completion engine, no direct "children terminal ⇒ parent complete"
+  // shortcut: the criterion is satisfied/unsatisfied exactly like every other
+  // workflow postcondition, and the completion decision keeps consuming it
+  // through the existing run.postconditions_checked evidence.
+  //
+  // Authority discipline:
+  //   - the criterion is normalized from the RAW authored postcondition
+  //     (operator-owned definition, literal UNITKEY-A identity — templates are
+  //     never applied to authority-bearing fields);
+  //   - expectedUnits must be explicit, finite, non-empty, duplicate-free;
+  //   - every expected unit must resolve EXACTLY ONE coherent delegated child
+  //     of the Run's own Ticket (parentBinding "self"); missing, ambiguous and
+  //     incoherent provenance fail closed — an authored unit is never waived
+  //     by "all currently matched children";
+  //   - truth is the CURRENT durable child attempt/Run/completion-decision
+  //     state via the canonical attempt-completion kernel — never the cached
+  //     awaitChildTickets observation, never model prose, never a superseded
+  //     attempt. Per-unit truth is additionally evaluable only while the
+  //     captured attempt is STILL the child's canonical current attempt at the
+  //     composition loader's consistency point (the final canonical re-read
+  //     after the member facts were assembled, CHILD-RERUN-A): a child rerun
+  //     admitted during fact loading fails that unit closed typed
+  //     (CHILD_ATTEMPT_CHANGED_DURING_READ) instead of satisfying the
+  //     criterion from superseded terminal history;
+  //   - unresolvable durable facts are represented as ordinary deterministic
+  //     unsatisfied outcomes with typed reasons, never as success.
+  if (postcondition && postcondition.type === 'childTerminalOutcome') {
+    const { criterion, error } = normalizeChildTerminalOutcomeCriterion(postcondition, run);
+    if (error) {
+      return {
+        id: postcondition.id || null,
+        type: 'childTerminalOutcome',
+        passed: false,
+        expected: sanitizeSnapshotValue(postcondition),
+        actual: { error }
+      };
+    }
+    if (!childTerminalFacts || childTerminalFacts.parentTicketId !== run.ticketId) {
+      return {
+        id: criterion.id,
+        type: 'childTerminalOutcome',
+        passed: false,
+        expected: childTerminalOutcomeExpectedShape(criterion),
+        actual: { error: 'childTerminalOutcome durable child facts were not supplied' }
+      };
+    }
+    // The COMPLETE T4 parent relation is load-bearing: a lineage that cannot
+    // be fully resolved can never establish delegated-unit truth (T4-I3).
+    if (childTerminalFacts.enumeration.state !== 'COMPLETE') {
+      return {
+        id: criterion.id,
+        type: 'childTerminalOutcome',
+        passed: false,
+        expected: childTerminalOutcomeExpectedShape(criterion),
+        actual: {
+          error: 'the parent Ticket spawn lineage could not be completely resolved',
+          refusedChildren: sanitizeSnapshotValue(childTerminalFacts.enumeration.refused)
+        }
+      };
+    }
+    const resolvedUnits = resolveDelegatedCompositionUnits({
+      selector: criterion,
+      expectedUnits: criterion.expectedUnits,
+      facts: childTerminalFacts
+    });
+    const perUnit = [];
+    const unsatisfiedReasons = [];
+    for (const unit of resolvedUnits.units) {
+      const unitResult = {
+        unitKey: unit.unitKey,
+        spawnIdempotencyKey: unit.spawnIdempotencyKey,
+        resolution: unit.resolution,
+        childTicketId: unit.childTicketId || null,
+        ...(unit.childTicketIds ? { childTicketIds: unit.childTicketIds } : {}),
+        ...(unit.delegatedRefusalReason ? { delegatedRefusalReason: unit.delegatedRefusalReason } : {})
+      };
+      if (unit.resolution !== 'resolved') {
+        unsatisfiedReasons.push({
+          unitKey: unit.unitKey,
+          reason: unit.resolution === 'missing' ? 'CHILD_MISSING'
+            : unit.resolution === 'ambiguous' ? 'CHILD_AMBIGUOUS'
+              : 'CHILD_PROVENANCE_UNCOHERENT',
+          ...(unit.resolution === 'ambiguous' ? { childTicketIds: unit.childTicketIds } : {}),
+          ...(unit.resolution === 'uncoherent' ? { provenanceRefusal: unit.delegatedRefusalReason } : {})
+        });
+        perUnit.push(unitResult);
+        continue;
+      }
+      if (unit.childWorkflowIdMatches !== true) {
+        unsatisfiedReasons.push({
+          unitKey: unit.unitKey,
+          reason: 'CHILD_PROVENANCE_UNCOHERENT',
+          provenanceRefusal: 'DELEGATED_CHILD_WORKFLOW_MISMATCH'
+        });
+        perUnit.push(unitResult);
+        continue;
+      }
+      // Per-unit truth is evaluable only while the captured attempt is still
+      // the child's canonical current attempt at the loader's consistency
+      // point (CHILD-RERUN-A) — a child rerun admitted during fact loading
+      // fails this unit closed typed instead of satisfying it from superseded
+      // terminal history.
+      const truth = evaluateChildTerminalOutcomeUnit({
+        acceptableDispositions: criterion.acceptableDispositions,
+        currentAttempt: childTerminalFacts.currentAttemptByChildId.get(unit.childTicketId) || null,
+        memberRuns: childTerminalFacts.memberRunsByChildId.get(unit.childTicketId) || [],
+        decisionByRunId: childTerminalFacts.decisionByRunId,
+        currentAttemptStability: childTerminalFacts.currentAttemptStabilityByChildId
+          ? childTerminalFacts.currentAttemptStabilityByChildId.get(unit.childTicketId)
+          : undefined
+      });
+      if (!truth.satisfied) {
+        unsatisfiedReasons.push({ unitKey: unit.unitKey, reason: truth.reason });
+      }
+      perUnit.push({
+        ...unitResult,
+        ticketState: childTerminalFacts.childStatusByChildId.get(unit.childTicketId) || null,
+        ...truth.unitState
+      });
+    }
+    const passed = unsatisfiedReasons.length === 0 && criterion.expectedUnits.length > 0;
+    return {
+      id: criterion.id,
+      type: 'childTerminalOutcome',
+      passed,
+      expected: childTerminalOutcomeExpectedShape(criterion),
+      actual: {
+        perUnit: sanitizeSnapshotValue(perUnit),
+        unsatisfiedReasons: sanitizeSnapshotValue(unsatisfiedReasons),
+        unexpectedDelegatedChildCount: resolvedUnits.unexpectedDelegatedChildCount
+      }
+    };
+  }
+
   return {
     id,
     type: resolved.type || null,
@@ -7899,7 +8632,29 @@ function evaluateWorkflowPostcondition(run, workflow, postcondition, output, pro
   };
 }
 
-function buildRunPostconditionEvidence(run, existingEvents = [], suppliedOperations = []) {
+// Deterministic echo of the normalized completion-authority criterion shape.
+function childTerminalOutcomeExpectedShape(criterion) {
+  return {
+    parentBinding: 'self',
+    parentWorkflowId: criterion.parentWorkflowId,
+    spawnedByStepId: criterion.spawnedByStepId,
+    childWorkflowId: criterion.childWorkflowId,
+    expectedUnits: [...criterion.expectedUnits],
+    expect: {
+      disposition: criterion.acceptableDispositions.length === 1
+        ? criterion.acceptableDispositions[0]
+        : [...criterion.acceptableDispositions]
+    }
+  };
+}
+
+// P5-R3: the builder is now the SINGLE evaluation seam for the new
+// childTerminalOutcome criterion as well. When the captured contract declares
+// it, the caller-supplied loader resolves the COMPLETE durable child facts
+// ONCE (current attempt/Run/completion-decision truth) and the canonical
+// evaluator consumes them — the evaluation is idempotent per Run through the
+// existing run.postconditions_checked guard.
+async function buildRunPostconditionEvidence(run, existingEvents = [], suppliedOperations = [], loadChildTerminalFacts = null) {
   if (!run || run.executionMode !== 'workflow' || !run.workflowId) return null;
 
   if (existingEvents.some(event => event.type === 'run.postconditions_checked')) {
@@ -7933,8 +8688,17 @@ function buildRunPostconditionEvidence(run, existingEvents = [], suppliedOperati
   const processOperations = (Array.isArray(suppliedOperations) ? suppliedOperations : [])
     .map(buildProcessConsequenceFromHistory)
     .filter(Boolean);
-  const results = postconditions.map(postcondition =>
-    evaluateWorkflowPostcondition(run, workflow, postcondition, output, processOperations));
+  // P5-R3: durable child facts are loaded exactly when the authored contract
+  // declares the childTerminalOutcome criterion — one bounded, READ-ONLY
+  // current-state read per evaluation, never a cached observation.
+  const childTerminalFacts = postconditions.some(item => item && item.type === 'childTerminalOutcome') &&
+    typeof loadChildTerminalFacts === 'function'
+    ? await loadChildTerminalFacts(run.ticketId)
+    : null;
+  const results = [];
+  for (const postcondition of postconditions) {
+    results.push(evaluateWorkflowPostcondition(run, workflow, postcondition, output, processOperations, childTerminalFacts));
+  }
   const failedResults = results.filter(result => !result.passed);
 
   return {
@@ -7972,7 +8736,7 @@ async function completeRunPostconditionCheck(runId) {
     getRunEvents(run.id),
     readAllRunOperations(run.id)
   ]);
-  const plan = buildRunPostconditionEvidence(run, events, operations);
+  const plan = await buildRunPostconditionEvidence(run, events, operations, loadDelegatedChildCompositionFacts);
   if (!plan) return null;
   for (const event of plan.events) {
     await appendEvent({
@@ -15753,7 +16517,7 @@ async function reconcileTerminalRunUnlocked(run) {
   });
 
   if (targetStatus === 'completed' && run.executionMode === 'workflow' && run.workflowId) {
-    const postconditionPlan = buildRunPostconditionEvidence(run, events, operations);
+    const postconditionPlan = await buildRunPostconditionEvidence(run, events, operations, loadDelegatedChildCompositionFacts);
     const failedPostconditions = postconditionPlan ? postconditionPlan.failedResults : null;
     if (postconditionPlan) beforeReplayEvents.push(...postconditionPlan.events);
     if (Array.isArray(failedPostconditions) && failedPostconditions.length > 0) {
@@ -19928,6 +20692,13 @@ function validateWorkflowDefinition(workflow) {
     if (step.action === 'executeTicketPlan') {
       errors.push(...validateDelegatedTicketPlanStepInput(step, index));
     }
+    // P5-R3 (§15 + UNITKEY-A): the awaitChildTickets observation's authority-
+    // bearing selector/expectedUnits are definition-authored literals — the
+    // runtime check alone sees only the RESOLVED input, so the definition seam
+    // is where non-literal authority refuses.
+    if (step.action === 'awaitChildTickets') {
+      errors.push(...validateAwaitChildTicketsStepInput(step, index, workflow));
+    }
   });
 
   (Array.isArray(workflow.postconditions) ? workflow.postconditions : []).forEach((postcondition, index) => {
@@ -19944,7 +20715,8 @@ function validateWorkflowDefinition(workflow) {
       'outputFieldEquals',
       'processOperationExists',
       'processTerminalOutcomeEquals',
-      'processArtifactEquals'
+      'processArtifactEquals',
+      'childTerminalOutcome'
     ].includes(type)) {
       errors.push(`workflow.postconditions[${index}].type is unsupported: ${type}`);
       return;
@@ -19984,6 +20756,71 @@ function validateWorkflowDefinition(workflow) {
       }
       if (typeof postcondition.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(postcondition.sha256)) {
         errors.push(`workflow.postconditions[${index}].sha256 must be a lowercase SHA-256`);
+      }
+    }
+
+    // P5-R3 (CRITERION-A, §14): the childTerminalOutcome completion-authority
+    // form is exact and literal at the operator-owned definition seam —
+    // parentBinding "self", an authored workflow/step/unit selector, an
+    // explicit finite non-empty literal expectedUnits set (UNITKEY-A: never
+    // template-derived or model-suppliable), and an authored terminal
+    // disposition expectation. Duplicates and template expressions fail
+    // closed here, at catalog save and at every execution.
+    if (type === 'childTerminalOutcome') {
+      const label = `workflow.postconditions[${index}]`;
+      const extras = Object.keys(postcondition).filter(key => ![
+        'id', 'type', 'parentBinding', 'parentWorkflowId', 'spawnedByStepId',
+        'childWorkflowId', 'expectedUnits', 'expect'
+      ].includes(key));
+      if (extras.length > 0) {
+        errors.push(`${label} carries unsupported fields: ${extras.sort().join(', ')}`);
+      }
+      if (postcondition.parentBinding !== 'self') {
+        errors.push(`${label}.parentBinding must be "self"`);
+      }
+      for (const field of ['parentWorkflowId', 'spawnedByStepId', 'childWorkflowId']) {
+        if (!isLiteralUnitKey(postcondition[field])) {
+          errors.push(`${label}.${field} must be a non-blank literal string (no template expression)`);
+        }
+      }
+      if (!Array.isArray(postcondition.expectedUnits)) {
+        errors.push(`${label}.expectedUnits must be an array`);
+      } else if (postcondition.expectedUnits.length === 0) {
+        errors.push(`${label}.expectedUnits must be a non-empty array`);
+      } else {
+        for (const unitKey of postcondition.expectedUnits) {
+          if (!isLiteralUnitKey(unitKey)) {
+            errors.push(`${label}.expectedUnits entries must be literal authored unitKey strings (non-blank, no template expression)`);
+          }
+        }
+        const seenUnits = new Set();
+        for (const unitKey of postcondition.expectedUnits) {
+          if (seenUnits.has(unitKey)) {
+            errors.push(`${label}.expectedUnits contains duplicate authored units: ${unitKey}`);
+          }
+          seenUnits.add(unitKey);
+        }
+      }
+      if (!postcondition.expect || typeof postcondition.expect !== 'object' || Array.isArray(postcondition.expect)) {
+        errors.push(`${label}.expect must be an object with an authored disposition`);
+      } else {
+        const expectExtras = Object.keys(postcondition.expect).filter(key => key !== 'disposition');
+        if (expectExtras.length > 0) {
+          errors.push(`${label}.expect carries unsupported fields: ${expectExtras.sort().join(', ')}`);
+        }
+        const rawDisposition = postcondition.expect.disposition;
+        const authored = Array.isArray(rawDisposition) ? rawDisposition : [rawDisposition];
+        if (authored.length === 0 || authored.some(value => !TICKET_ATTEMPT_DISPOSITIONS.includes(value))) {
+          errors.push(`${label}.expect.disposition must be authored as a settled attempt disposition: ${TICKET_ATTEMPT_DISPOSITIONS.join(', ')}`);
+        } else {
+          const seenDispositions = new Set();
+          for (const value of authored) {
+            if (seenDispositions.has(value)) {
+              errors.push(`${label}.expect.disposition contains duplicate acceptable outcomes: ${value}`);
+            }
+            seenDispositions.add(value);
+          }
+        }
       }
     }
   });
@@ -23443,6 +24280,324 @@ async function recordDelegatedPlanAuthorizationEvidence({ run, workflow, step, s
   return item;
 }
 
+// ── P5-R3 — awaitChildTickets: bounded READ-ONLY observation step (§15) ──────
+//
+// A workflow-usable, non-mutating step that observes the CURRENT durable
+// lifecycle state of the Run's own explicitly authored delegated child units
+// and returns a bounded deterministic per-unit observation to workflow
+// context. It has ZERO completion authority:
+//
+//   - it never marks the parent complete, never satisfies any criterion, and
+//     its returned observation is never consumed as completion authority (the
+//     childTerminalOutcome evaluator independently re-reads current durable
+//     facts);
+//   - it never admits, releases, retries or mutates a child (no
+//     delegated_release, no release_hold, no attempt/Run creation);
+//   - it performs ONE bounded durable read per execution and re-derives its
+//     observation deterministically from canonical facts; bounded re-polling
+//     is authored by the workflow definition itself through the EXISTING
+//     condition/branching semantics — no new watcher, no scheduler wait
+//     graph, no background task, no unbounded loop. Non-terminal children at
+//     budget/duration exhaustion produce an honest non-success result within
+//     the parent Run's existing duration/transition bounds.
+//
+// Evidence (§18/§19): a bounded, truncation-explicit `workflow.await_children`
+// typed event + `workflowAwaitChildren` replay item per step execution, keyed
+// by the Run-stable step slot.
+const AWAIT_CHILDREN_EVIDENCE_EVENT_TYPE = Object.freeze('workflow.await_children');
+const AWAIT_CHILDREN_REPLAY_KEY = Object.freeze('workflowAwaitChildren');
+
+// Definition-level awaitChildTickets authority discipline (UNITKEY-A, mirrored
+// from the criterion). The observation's selector and expected-unit set are
+// authority-bearing identities authored by the operator-owned workflow
+// definition; they are validated HERE at the definition seam — at catalog save
+// AND at every execution — as literals, never template-derived, exactly like
+// the delegated plan unitKeys. Runtime re-validation of the RESOLVED input in
+// `awaitChildTicketsWorkflowAction` cannot prove authorship: template
+// resolution has already replaced any `{{...}}` expression with its resolved
+// value by the time the action sees it. The two optional wait controls are
+// bounded integers (execution cadence only — the Run's admitted duration
+// ceiling remains the binding wait bound).
+function validateAwaitChildTicketsStepInput(step, stepIndex, workflow) {
+  const errors = [];
+  const label = `workflow action ${step.id || stepIndex}`;
+  const input = step && typeof step === 'object' ? step.input : null;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    errors.push(`${label}: awaitChildTickets input must be an object`);
+    return errors;
+  }
+  const extras = Object.keys(input).filter(key => ![
+    'parentBinding', 'parentWorkflowId', 'spawnedByStepId', 'childWorkflowId',
+    'expectedUnits', 'pollIntervalMs', 'maxPollMs'
+  ].includes(key));
+  if (extras.length > 0) {
+    errors.push(`${label}: awaitChildTickets input carries unsupported fields: ${extras.sort().join(', ')}`);
+  }
+  if (input.parentBinding !== 'self') {
+    errors.push(`${label}: awaitChildTickets input.parentBinding must be "self"`);
+  }
+  for (const field of ['parentWorkflowId', 'spawnedByStepId', 'childWorkflowId']) {
+    if (!isLiteralUnitKey(input[field])) {
+      errors.push(`${label}: awaitChildTickets input.${field} must be a non-blank literal string (no template expression)`);
+    }
+  }
+  if (isLiteralUnitKey(input.parentWorkflowId) && workflow && input.parentWorkflowId !== workflow.id) {
+    errors.push(`${label}: awaitChildTickets input.parentWorkflowId must bind the definition's own workflow (parentBinding "self")`);
+  }
+  if (!Array.isArray(input.expectedUnits) || input.expectedUnits.length === 0) {
+    errors.push(`${label}: awaitChildTickets input.expectedUnits must be a non-empty array`);
+  } else {
+    const seenUnits = new Set();
+    for (const unitKey of input.expectedUnits) {
+      if (!isLiteralUnitKey(unitKey)) {
+        errors.push(`${label}: awaitChildTickets input.expectedUnits entries must be literal authored unitKey strings (non-blank, no template expression)`);
+        continue;
+      }
+      if (seenUnits.has(unitKey)) {
+        errors.push(`${label}: awaitChildTickets input.expectedUnits contains duplicate authored units: ${unitKey}`);
+        continue;
+      }
+      seenUnits.add(unitKey);
+    }
+  }
+  const bounded = (value, minimum, maximum, name) => {
+    if (value === undefined || value === null) return;
+    if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+      errors.push(`${label}: awaitChildTickets input.${name} must be a safe integer between ${minimum} and ${maximum}`);
+    }
+  };
+  bounded(input.pollIntervalMs, 50, 5000, 'pollIntervalMs');
+  bounded(input.maxPollMs, 1000, 300000, 'maxPollMs');
+  return errors;
+}
+
+async function awaitChildTicketsWorkflowAction(run, workflow, step, input, transitionIndex, bounds = null) {
+  const startedAt = Date.now();
+  const invalid = code => {
+    const error = new Error(`awaitChildTickets input invalid: ${code}`);
+    error.code = 'WORKFLOW_ACTION_INPUT_INVALID';
+    error.failureKind = 'invalid_action';
+    error.details = { workflowId: workflow.id, stepId: step.id, reason: code };
+    throw error;
+  };
+
+  // The same literal-authority discipline as the criterion: the observation's
+  // expected-unit set and selector come from the operator-owned definition
+  // (never template-derived), bound to the Run's own workflow (parentBinding
+  // "self"). Input validation re-runs here on the RESOLVED input; the
+  // definition seam (validateWorkflowDefinition) already refused non-literal
+  // authority at catalog save and at every execution. The two optional wait
+  // controls are strictly bounded integers — execution cadence only, never a
+  // new budget dimension (the Run's admitted duration ceiling remains the
+  // binding wait bound).
+  const extras = Object.keys(input || {}).filter(key => ![
+    'parentBinding', 'parentWorkflowId', 'spawnedByStepId', 'childWorkflowId',
+    'expectedUnits', 'pollIntervalMs', 'maxPollMs'
+  ].includes(key));
+  if (extras.length > 0) invalid(`unsupported fields: ${extras.sort().join(', ')}`);
+  const boundedInt = (value, fallback, minimum, maximum, label) => {
+    if (value === undefined || value === null) return fallback;
+    if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+      invalid(`${label} must be a safe integer between ${minimum} and ${maximum}`);
+    }
+    return value;
+  };
+  const pollIntervalMs = boundedInt(input.pollIntervalMs, 250, 50, 5000, 'pollIntervalMs');
+  const maxPollMs = boundedInt(input.maxPollMs, 60000, 1000, 300000, 'maxPollMs');
+  if ((input || {}).parentBinding !== 'self') invalid('parentBinding must be "self"');
+  for (const field of ['parentWorkflowId', 'spawnedByStepId', 'childWorkflowId']) {
+    if (!isLiteralUnitKey(input[field])) invalid(`${field} must be a non-blank literal string`);
+  }
+  if (!isLiteralUnitKey(workflow.id) || input.parentWorkflowId !== workflow.id) {
+    invalid('parentWorkflowId must bind the Run\'s own workflow (parentBinding "self")');
+  }
+  if (!Array.isArray(input.expectedUnits) || input.expectedUnits.length === 0) {
+    invalid('expectedUnits must be a non-empty array');
+  }
+  for (const unitKey of input.expectedUnits) {
+    if (!isLiteralUnitKey(unitKey)) {
+      invalid('expectedUnits entries must be literal authored unitKey strings (non-blank, no template expression)');
+    }
+  }
+  const seenUnits = new Set();
+  for (const unitKey of input.expectedUnits) {
+    if (seenUnits.has(unitKey)) invalid(`expectedUnits contains duplicate authored units: ${unitKey}`);
+    seenUnits.add(unitKey);
+  }
+
+  // The observation re-reads CURRENT durable facts on every poll iteration —
+  // never a cached earlier observation (§7/§14). Every entry is a bounded
+  // deterministic per-unit fact set keyed by the authored unitKey;
+  // omitted/unavailable facts are null, never fabricated. Multi-member
+  // attempts are reported as memberCount with the aggregate truth.
+  const observeOnce = async () => {
+    const facts = await loadDelegatedChildCompositionFacts(run.ticketId);
+    const resolvedUnits = resolveDelegatedCompositionUnits({
+      selector: {
+        parentWorkflowId: input.parentWorkflowId,
+        spawnedByStepId: input.spawnedByStepId,
+        childWorkflowId: input.childWorkflowId
+      },
+      expectedUnits: input.expectedUnits,
+      facts
+    });
+    const capturedAt = new Date().toISOString();
+    const observedUnits = [];
+    for (const unit of resolvedUnits.units) {
+      const entry = {
+        unitKey: unit.unitKey,
+        spawnIdempotencyKey: unit.spawnIdempotencyKey,
+        resolution: unit.resolution,
+        childTicketId: unit.childTicketId || null,
+        ticketState: null,
+        attemptState: null,
+        attemptDisposition: null,
+        attemptStability: null,
+        runTerminal: null,
+        completionDisposition: null,
+        completionReasonCode: null,
+        memberCount: null
+      };
+      if (unit.resolution === 'resolved') {
+        entry.ticketState = facts.childStatusByChildId.get(unit.childTicketId) || null;
+        // The observation shares ONE per-unit truth evaluation with the
+        // childTerminalOutcome criterion, and the loader's typed
+        // current-attempt stability fact feeds it identically: a child whose
+        // attempt generation changed during the durable fact read is
+        // observed as not-yet-evalifiable (not as settled truth from the
+        // superseded attempt).
+        const truth = evaluateChildTerminalOutcomeUnit({
+          acceptableDispositions: [...TICKET_ATTEMPT_DISPOSITIONS],
+          currentAttempt: facts.currentAttemptByChildId.get(unit.childTicketId) || null,
+          memberRuns: facts.memberRunsByChildId.get(unit.childTicketId) || [],
+          decisionByRunId: facts.decisionByRunId,
+          currentAttemptStability: facts.currentAttemptStabilityByChildId
+            ? facts.currentAttemptStabilityByChildId.get(unit.childTicketId)
+            : undefined
+        });
+        entry.attemptState = truth.unitState.attemptState;
+        entry.attemptDisposition = truth.unitState.attemptDisposition;
+        entry.attemptStability = truth.unitState.attemptStability;
+        entry.runTerminal = truth.unitState.runTerminal;
+        entry.completionDisposition = truth.unitState.truthDisposition;
+        // For an unstable read the member facts stay unevaluated (the
+        // captured attempt was superseded during the read): no member
+        // decision reason is surfaced as if it were current truth.
+        entry.completionReasonCode = truth.unitState.attemptStability === 'STABLE'
+          ? childTerminalOutcomeMemberReasonCode(
+            facts.memberRunsByChildId.get(unit.childTicketId) || [],
+            facts.decisionByRunId,
+            truth.unitState.truthDisposition)
+          : null;
+        const runs = facts.memberRunsByChildId.get(unit.childTicketId) || [];
+        entry.memberCount = runs.length;
+      } else if (unit.resolution === 'ambiguous') {
+        entry.childTicketIds = unit.childTicketIds;
+      } else if (unit.resolution === 'uncoherent') {
+        entry.delegatedRefusalReason = unit.delegatedRefusalReason || null;
+      }
+      observedUnits.push(entry);
+    }
+    return {
+      status: 'observed',
+      parentTicketId: run.ticketId,
+      parentWorkflowId: input.parentWorkflowId,
+      spawnedByStepId: input.spawnedByStepId,
+      childWorkflowId: input.childWorkflowId,
+      expectedUnits: [...input.expectedUnits],
+      observedUnits,
+      missingUnits: observedUnits
+        .filter(entry => entry.resolution !== 'resolved')
+        .map(entry => entry.unitKey),
+      allExpectedUnitsSettled: observedUnits.length > 0 && observedUnits.every(entry =>
+        entry.resolution === 'resolved' &&
+        entry.attemptState === 'settled' &&
+        entry.attemptStability === 'STABLE' &&
+        entry.runTerminal === true),
+      unexpectedDelegatedChildCount: resolvedUnits.unexpectedDelegatedChildCount,
+      truncated: false,
+      observedAt: capturedAt
+    };
+  };
+
+  // The in-step wait is subordinate to the Run's admitted duration ceiling
+  // (§13: workflow-internal timers reset only inside the Run's
+  // already-admitted duration ceiling) and to the existing cancellation
+  // authority. The loop only waits while a unit's CURRENT truth can still
+  // evolve: an unsettled attempt, or an UNSTABLE read (the captured attempt
+  // was superseded during the durable fact read — the child is actively
+  // evolving, so the honest observation re-reads within the bounded window
+  // until it either stabilizes or the deadline is reached). Missing,
+  // ambiguous, uncoherent units and stable settled units are stable within
+  // this step, so waiting for them is dishonest. At deadline exhaustion the
+  // step returns the honest unresolved observation and the workflow
+  // definition decides the continuation through the existing condition
+  // semantics — no indefinite hidden wait, no background poller, no scheduler
+  // surface. The observation carries ZERO completion authority: the
+  // childTerminalOutcome criterion independently re-reads current durable
+  // facts later.
+  const AWAIT_POLL_TIME_FLOOR_MS = 1000;
+  const remainingAdmittedTimeMs = bounds && bounds.limits &&
+    Number.isSafeInteger(bounds.limits.maxRuntimeDurationMs)
+    ? Math.max(0, bounds.limits.maxRuntimeDurationMs -
+        (Date.now() - (typeof bounds.startedAtMs === 'number' ? bounds.startedAtMs : startedAt)))
+    : 0;
+  const deadlineMs = startedAt + Math.min(maxPollMs, Math.max(0, remainingAdmittedTimeMs - AWAIT_POLL_TIME_FLOOR_MS));
+  let observation = await observeOnce();
+  while (!observation.allExpectedUnitsSettled &&
+      observation.observedUnits.some(entry =>
+        entry.resolution === 'resolved' && (
+          entry.attemptState === 'unsettled' ||
+          entry.attemptStability === 'CHILD_ATTEMPT_CHANGED_DURING_READ')) &&
+      Date.now() < deadlineMs) {
+    await new Promise(resolve => setTimeout(resolve, Math.min(pollIntervalMs, Math.max(0, deadlineMs - Date.now()))));
+    if (Date.now() >= deadlineMs) break;
+    if (bounds && typeof bounds.startedAtMs === 'number' && bounds.limits) {
+      assertRunNotTimedOut(run, bounds.startedAtMs, bounds.limits);
+      runtimeBudgetController.assertDuration(run);
+      if (await isRunInterrupted(run.id)) break;
+    }
+    observation = await observeOnce();
+  }
+
+  // Bounded, truncation-explicit observation evidence (§18: evidence slot
+  // `workflow.await_children`; §19: typed event + replay item). Each step
+  // execution records its own bounded item under the Run-stable step slot —
+  // no unbounded transcript is accumulated anywhere.
+  await recordNonTerminalRunEvidence(run, {
+    category: 'workflow-await-children',
+    slot: `workflow:${workflow.id}:${step.id}:transition:${transitionIndex}`,
+    replayKey: AWAIT_CHILDREN_REPLAY_KEY,
+    replayItem: { ...observation },
+    eventType: AWAIT_CHILDREN_EVIDENCE_EVENT_TYPE,
+    stepId: step.id,
+    eventPayload: { ...observation },
+    capturedAt: observation.observedAt
+  });
+
+  return observation;
+}
+
+// The deterministic completion-decision reason surfaced for one observed
+// unit: the lowest-id member Run whose canonical decision matches the unit's
+// aggregate truth disposition; the lowest-id existing decision otherwise;
+// null when no decision exists. Generic member Runs (no completion authority
+// snapshot) legitimately carry no decision — the disposition then comes from
+// the Run's own materialized status.
+function childTerminalOutcomeMemberReasonCode(memberRuns, decisionByRunId, truthDisposition) {
+  const runs = [...(Array.isArray(memberRuns) ? memberRuns : [])].sort((a, b) => a.id - b.id);
+  const decisions = runs.map(run => {
+    const decision = decisionByRunId && decisionByRunId instanceof Map
+      ? decisionByRunId.get(run.id)
+      : null;
+    return { runId: run.id, decision };
+  }).filter(item => item.decision);
+  const matching = decisions.find(item => item.decision.completionDisposition === truthDisposition);
+  return (matching || decisions[0] || { decision: null }).decision
+    ? (matching || decisions[0]).decision.reasonCode
+    : null;
+}
+
 async function executeTicketPlanWorkflowAction(run, workflow, step, input, transitionIndex) {
   const startedAt = Date.now();
   const spawnPlanId = [run.id, workflow.id, step.id, 'transition', transitionIndex].join(':');
@@ -23639,6 +24794,15 @@ async function executeWorkflowActionWithinAdmission(run, workflow, step, input, 
       result = await executeActionPlanWorkflowAction(run, workflow, step, input, counters, limits, transitionIndex);
     } else if (step.action === 'executeTicketPlan') {
       result = await executeTicketPlanWorkflowAction(run, workflow, step, input, transitionIndex);
+    } else if (step.action === 'awaitChildTickets') {
+      // P5-R3: read-only delegated-child observation. ZERO completion
+      // authority; no mutation admission required. The step's bounded wait
+      // stays subordinate to the Run's admitted duration ceiling and the
+      // existing cancellation authority.
+      result = await awaitChildTicketsWorkflowAction(run, workflow, step, input, transitionIndex, {
+        startedAtMs,
+        limits
+      });
     } else if (step.action === 'agentStructuredOutput') {
       result = await executeAgentStructuredOutputAction(
         run,

@@ -64,6 +64,22 @@ const SUPPORTED_POSTCONDITION_FIELDS = Object.freeze({
     'stream',
     'byteCount',
     'sha256'
+  ],
+  // P5-R3 (§14/CRITERION-A): the childTerminalOutcome completion-authority
+  // form. Declared-criteria grammar only — the ONE evaluator for this type
+  // remains the canonical workflow postcondition evaluator, and the strict
+  // value discipline (literal UNITKEY-A identity, parentBinding "self",
+  // settled-disposition expectation) is owned by the definition seam and the
+  // evaluator branch.
+  childTerminalOutcome: [
+    'id',
+    'type',
+    'parentBinding',
+    'parentWorkflowId',
+    'spawnedByStepId',
+    'childWorkflowId',
+    'expectedUnits',
+    'expect'
   ]
 });
 const MAX_OBJECTIVE_LENGTH = 20_000;

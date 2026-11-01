@@ -1570,7 +1570,17 @@ async function main() {
         `race: exactly one operator-vs-delegated release wins ` +
         `(fulfilled ${fulfilled.length}, rejected ${rejected.length})`);
       const loserCode = rejected[0].reason && rejected[0].reason.code;
-      assert(['TICKET_BLOCKER_INTENT_MISMATCH', 'TICKET_ATTEMPT_UNSETTLED', 'TICKET_RERUN_STALE_ATTEMPT']
+      // The loser's typed refusal depends on which release wins the child
+      // Ticket row and on the loser's routing-read interleaving:
+      //   - delegated_release committed first → the operator loser re-locks
+      //     the child and refuses at the existing in_progress-Ticket guard
+      //     (canonical StateTransitionConflictError, STATE_TRANSITION_CONFLICT);
+      //   - release_hold committed first → the delegated loser refuses at the
+      //     unsettled-current-attempt leg (TICKET_ATTEMPT_UNSETTLED), the
+      //     stale routing boundary (TICKET_RERUN_STALE_ATTEMPT), or the
+      //     re-derived blocker matrix (TICKET_BLOCKER_INTENT_MISMATCH).
+      assert(['TICKET_BLOCKER_INTENT_MISMATCH', 'TICKET_ATTEMPT_UNSETTLED', 'TICKET_RERUN_STALE_ATTEMPT',
+        'STATE_TRANSITION_CONFLICT']
         .includes(loserCode),
         `race: the loser refuses typed against the committed winner state (got ${loserCode})`);
       const raceAttempts = (await store.listTicketAttempts({ ticketId: child.id, limit: 10 })).attempts;
