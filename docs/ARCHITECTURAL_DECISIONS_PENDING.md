@@ -1958,7 +1958,8 @@ later registered roadmap decision for phases without a dependency edge):
 
 **P2 → P3 → P4 → P5 → P6 → P7.**
 
-- **P2 is the current next phase.**
+- **P6 is the current next phase** (P2, P3, P4, and P5 are closed and published; see the P5
+  record header below and the P6 design-freeze record at the end of this register).
 - P3 → P4 → P5 ordering is priority policy among mutually independent phases, not a frozen
   dependency. Rationale: risk-ascending order (read-only/low authority → enablement of proven
   substrate → canonical-lifecycle change), usefulness breadth per the frontier criterion
@@ -1970,7 +1971,7 @@ later registered roadmap decision for phases without a dependency edge):
 
 A fresh model must answer two different questions from this section alone: what MUST precede
 what (the dependency list above) and what is currently done next (the policy sequence, whose
-head is P2).
+head is P6).
 
 ### 9. Gates register (single list)
 
@@ -16994,20 +16995,25 @@ docs record is a separate, later publication act.
 
 ---
 
-## P5 — GOVERNED BOUNDED COMPOSITION — semantic design-freeze candidate
+## P5 — GOVERNED BOUNDED COMPOSITION — CLOSED AND PUBLISHED
 
-**STATUS:** P5 SEMANTIC DESIGN-FREEZE CANDIDATE — NOT AUTHORITY UNTIL INDEPENDENT REVIEW,
-ACCEPTANCE, COMMIT, AND PUBLICATION — UNCOMMITTED AND UNPUBLISHED — IMPLEMENTATION NOT
-AUTHORIZED BY THIS RECORD. This candidate was narrowed in place after an independent design
-review (see §27); its next boundary is a NARROW independent CORRECTION review of these exact
-docs bytes. **NO MIGRATION IS EXPECTED AND NO MIGRATION AUTHORITY
-IS CREATED.** Canonical migration execution authorization remains `NOT_AUTHORIZED`; P5 does not
-apply or operationalize migration 044. P4 residuals (`R2-RESIDUAL-TRIAGE`,
-`R2-RESIDUAL-ORIGIN-RECOVERY`, `R2-RESIDUAL-CANDIDATE-FINGERPRINT-RECIPE`, `RECOVERY-A`,
-`P3 F2`) remain separate open work. P6/P7 and Browser Phase 3 remain unopened. This is ONE
-coherent section in this register; it does not duplicate and does not alter the published
-roadmap reconciliation, the P1/P2/P3/P4 records, any T0–T10 closure, or the FINAL STOP
-constraint.
+**STATUS:** P5 GOVERNED BOUNDED COMPOSITION — CLOSED AND PUBLISHED. The semantic design
+freeze was registered at `491198f4fc212395a4b761cb4d2d0b834c525a72` ("Register P5 governed
+bounded composition design freeze"); P5-R1 executable governed workflow invocation was
+published at `cf579fe94353f112b4b965663298ebad60f52e8c`; P5-R2 governed delegated child
+execution was published at `50725f08532de9b4db866782696c38216462598a`; P5-R3 deterministic
+composition consumption was published at `8425dd7d6a5198d82ac26e1fd7eac5c9619e6acf`. The
+design-freeze record below (§1–§27) remains the historical registered design authority; its
+"candidate / UNCOMMITTED AND UNPUBLISHED / IMPLEMENTATION NOT AUTHORIZED" language dates from
+the pre-registration review state and is retained unaltered as historical evidence. **NO
+MIGRATION WAS CREATED AND NO MIGRATION AUTHORITY IS CREATED.** Canonical migration execution
+authorization remains `NOT_AUTHORIZED`; P5 did not apply or operationalize migration 044. P4
+residuals (`R2-RESIDUAL-TRIAGE`, `R2-RESIDUAL-ORIGIN-RECOVERY`,
+`R2-RESIDUAL-CANDIDATE-FINGERPRINT-RECIPE`, `RECOVERY-A`, `P3 F2`) remain separate open work.
+P7 and Browser Phase 3 remain unopened; P6 is the current roadmap sequence head (register §8
+and the P6 design-freeze record below). This is ONE coherent section in this register; it
+does not duplicate and does not alter the published roadmap reconciliation, the P1/P2/P3/P4
+records, any T0–T10 closure, or the FINAL STOP constraint.
 
 ### 1. CANDIDATE BASELINE (opening repository gate)
 
@@ -17656,3 +17662,419 @@ logical child identity; `spawnPlanId` as Run-scoped execution reference; explici
 observation; non-amplification; one-level delegation; no migration expected; FINAL STOP;
 simplified governance sequence); and (7) the exact corrected docs identity reproduces.
 Committing and publishing the reviewed record is a separate, later publication act.**
+
+---
+
+## P6 — DEPLOYMENT / OPERATIONS — semantic design-freeze candidate
+
+**STATUS:** P6 DEPLOYMENT/OPERATIONS SEMANTIC DESIGN-FREEZE CANDIDATE — NOT AUTHORITY UNTIL
+INDEPENDENT REVIEW, ACCEPTANCE, COMMIT, AND PUBLICATION — UNCOMMITTED AND UNPUBLISHED.
+**THIS RECORD GRANTS DESIGN AUTHORITY ONLY. IT DOES NOT AUTHORIZE P6-S2 OR P6-S3
+IMPLEMENTATION UNTIL THE DESIGN-FREEZE BYTES THEMSELVES ARE INDEPENDENTLY REVIEWED AND
+PUBLISHED.** This candidate is docs-only: it changes no runtime/source behavior, creates or
+authorizes NO migration, and neither executes nor operationalizes migration 044 — canonical
+migration execution authorization remains `NOT_AUTHORIZED`. P7 and Browser Phase 3 remain
+unopened. P2/P3/P4/P5 remain closed and are not reopened. Roadmap registration never grants
+implementation authority; this record is the design authority from which later slice
+implementation authority may separately derive only after freeze publication.
+
+### 1. CANDIDATE BASELINE (OPENING REPOSITORY GATE)
+
+Candidate baseline: branch `master`; local HEAD = origin/master =
+`8425dd7d6a5198d82ac26e1fd7eac5c9619e6acf` ("Publish P5-R3 deterministic composition
+consumption"); worktree clean; nothing staged; stash empty; `git diff --check` clean; zero
+untracked. `config/migration-execution-authorization.json` remains in the exact deterministic
+`NOT_AUTHORIZED` shape. Repository migration source head is
+`044_browser_interaction_authority.sql`; the observed operational applied head remains
+`043_api_token_authority.sql` with migration 044 applied count 0. No P6 implementation exists
+anywhere in tracked source; no earlier P6 design-freeze record exists in this register.
+
+### 2. P6 PURPOSE AND AUTHORITY ANCHORS
+
+P6 = Deployment / Operations. Published roadmap outcome (register §6): make the governed
+product operationally deployable through separately designed deployment authorities. P6 is an
+operational prerequisite — not a capability stage (it advances no CAP stage), not a
+product-semantics redesign, not a bundle of every production-infrastructure feature, not P7,
+not Browser Phase 3. P6 is the current roadmap sequence head (register §8; P2–P5 closed and
+published). The roadmap's demand-gating rule remains controlling: the `SYSTEM_STATUS.md`
+"not yet claimed" list is a menu of separately scoped future designs, NOT one pre-approved
+implementation bundle; each item requires its own registered design.
+
+### 3. ACCEPTED INDEPENDENT REVIEW STATE
+
+A fresh independent P6 authority-recovery session concluded P6-DESIGN-B (the repository
+defined the P6 goal but contained no frozen P6 semantics). A fresh independent P6 semantic
+design review then concluded **P6-REVIEW-A**: the proposed P6 deployment/operations semantic
+design is sound and ready to be written as the canonical P6 design freeze, with the review's
+adjudications incorporated into this record. Encoded adjudications: DIRECTION-A (P6 is
+primarily deployment-doctrine + operational-verification, not a runtime rebuild); SLICES-A
+(three-slice structure is the smallest coherent structure); TOPOLOGY-A (single-host
+multi-process baseline); SCHEDULER-A (topology sound, full-process evidence belongs to
+P6-S3); BOOTSTRAP-A (procedure freezable with T10 intact, no current migration authorized);
+ROLLBACK-A (strict-parity rollback doctrine); HEALTH-A (liveness/readiness/capacity freezable
+with existing surfaces); CONFIG-A (single executable parity-tested owner warranted); OPS-A
+(canonical authority preservable); STORAGE-A (host-local baseline, honest deferral);
+RECOVERY-TEST-A (process-level tests are the correct missing evidence); REGISTER-A (narrow
+hermeticity correction belongs in P6-S1); HERMETIC-A (ownership model cognitively efficient);
+CLOSURE-A (baseline closure definition correct).
+
+### 4. SUPPORTED DEPLOYMENT TOPOLOGY
+
+**Single-host, multi-process hosted deployment.**
+
+- Structured authority is process-independent and PostgreSQL-owned (tickets, runs, attempts,
+  leases, lifecycle, events, replay, receipts, sessions, catalogs, runtime policy).
+- Sessions are PostgreSQL-backed and shareable across application processes.
+- Run admission is deployment-wide and PostgreSQL-owned; multiple application processes may
+  contend for work through the existing claim/lease mechanisms.
+- Effect storage may remain host-local: `WORKSPACE_ROOT`, `ARTIFACT_ROOT`, browser artifacts,
+  and process artifacts are effect boundaries, not structured product authority.
+- Application processes are NOT called "stateless": they hold host-local effect state and
+  in-process advisory execution state. Authority is process-independent; effects are
+  host-bound.
+
+### 5. UNSUPPORTED TOPOLOGY
+
+Multi-host horizontally distributed execution is NOT claimed by baseline P6. Host-local
+effect storage remains part of the execution boundary; two hosts cannot share
+workspace/artifact/browser/process effects through the current design. A future shared
+workspace/blob/artifact design is separately demand-gated and must preserve
+Ticket/Run/PostgreSQL authority without becoming alternate structured authority. P6 preserves
+architecture that does not foreclose later multi-host execution but claims no such capability
+now. P6 MUST NOT silently claim horizontal execution support.
+
+### 6. OPERATIONAL-AUTHORITY DOCTRINE
+
+**Operational convenience does not create product authority.** Every operational mechanism is
+exactly one of: (1) read-only; (2) routed through an existing canonical product seam;
+(3) governed by an existing explicit authority system such as the migration-execution
+authorization record.
+
+Operational tooling MUST NOT: write Ticket state directly; write Run lifecycle state
+directly; manufacture attempts; bypass admission; bypass completion authority; alter
+immutable admitted snapshots; resurrect stale Runs manually; rewrite durable evidence; widen
+capability; bypass migration authorization.
+
+Restart, drain, recovery, backup, restore, diagnostics, and deployment procedures derive
+their authority from existing canonical systems.
+
+### 7. SCHEDULER / RECOVERY DOCTRINE AND PROOF LEVEL
+
+- No leader election is required by the intended architecture.
+- Each application process may run its normal runtime scheduler.
+- PostgreSQL is the deployment coordination boundary: claims use the existing database
+  fencing; leases define temporary execution ownership; expired leases permit canonical
+  recovery; recovery continues/reconciles the SAME Run and attempt; deterministic identities
+  prevent duplicate logical effects.
+- Process-local caches/sets/cursors are advisory only — never authority.
+- No operational leader-election authority is introduced.
+
+**Proof level, stated exactly:** store-level contention, admission, and recovery semantics
+have existing deterministic evidence. Full-process multi-scheduler competition, crash, and
+takeover are the **intended supported topology conditional on P6-S3 process-level
+verification** — NOT "already proven safe." No P6 document may overstate this proof level.
+
+### 8. HEALTH SEMANTICS: LIVENESS / READINESS / CAPACITY
+
+Three distinct concepts. Current endpoint behavior that conflates them is a P6-S2 correction
+target, not doctrine.
+
+**Liveness** — the process exists and can answer. No PostgreSQL probe, no migration probe, no
+downstream dependency requirement. Liveness must not kill/restart an otherwise functioning
+process merely because an external dependency is unavailable.
+
+**Readiness** — this process may safely receive normal application traffic. Baseline
+readiness requires: PostgreSQL reachable; canonical migration ledger compatible (no
+missing/pending, no unknown future migrations); canonical migration checksum identities
+valid; no evidence-persistence fail-closed latch; required startup configuration valid;
+required local effect roots usable for work the process may receive. Exact implementation
+belongs to P6-S2.
+
+**Capacity / backpressure** — capacity is NOT readiness. Mutation-admission pressure,
+deployment-wide `maxActiveRuns`, provider concurrency pressure, and similar work-capacity
+conditions are surfaced as operational/application capacity status, NEVER as a reason for a
+load balancer to mark an otherwise healthy process unready. The current
+503-backpressure-as-readiness endpoint behavior is expressly NOT preserved as doctrine; it is
+a P6-S2 correction target.
+
+### 9. POSTGRESQL READINESS PROBE SEMANTICS
+
+Baseline P6-S2 implementation design:
+
+- Reuse the canonical persistence owner: `PostgresRuntimeStore.getMigrationStatus()` (or its
+  current canonical equivalent) supplies reachability, pending/missing migrations, unknown
+  future migrations, checksum identity, and partial/incompatible migration state. Do NOT
+  duplicate migration enumeration/checksum logic.
+- Cadence: one read-only probe per readiness request, unless implementation evidence
+  demonstrates a material performance problem; a future optimization may serve a periodically
+  refreshed value only with explicitly bounded staleness.
+- Forbidden: mutation; indefinite cached success; startup-only health truth after startup;
+  an unhandled 500 response on ordinary dependency outage.
+- Failure shape: designed, sanitized, bounded, `ready: false`, HTTP 503 readiness response.
+- Liveness remains dependency-free.
+
+### 10. CONFIGURATION OWNERSHIP
+
+One executable canonical configuration registry is the machine-readable owner of supported
+environment variables and drives or validates `.env.example`, `dev:doctor`, setup guidance,
+and documentation parity. For each supported setting it defines at least: variable name;
+required vs optional; validation; development default; production behavior/default; secret
+classification. It MUST NOT expose secret values. The registry replaces scattered
+hand-maintained ownership; NO second prose master list is created. Detailed implementation
+belongs to P6-S2.
+
+### 11. MIGRATION / BOOTSTRAP DOCTRINE (T10 PRESERVED EXACTLY)
+
+Five states:
+
+- **A. Fresh non-disposable bootstrap** (empty production schema): requires an exact
+  transition-specific `AUTHORIZED` record — exact observed pre-state, exact ordered pending
+  migration set with source hashes, exact target identity, and the repository/publication
+  authority T10 requires — then execution through the existing canonical migration command,
+  verification of the resulting state, and retirement of the authorization back to
+  `NOT_AUTHORIZED`.
+- **B. Ordinary upgrade** (pending migrations): same model — exact pre-state, exact pending
+  set, exact source hashes, exact target, exact published authority, transition-specific
+  authorization, execute, verify, retire.
+- **C. Fully current schema**: no authorization required; migration execution is a
+  mutation-free no-op after canonical identity validation.
+- **D. Unauthorized pending transition**: refused BEFORE any mutation. Operator intent alone
+  is insufficient.
+- **E. Explicit disposable test schema**: may use the repository's existing code-declared
+  disposable-migration contract. Disposability is NEVER inferred from database name, schema
+  prefix, `TEST_DATABASE_URL`, environment kind, localhost identity, or a missing schema.
+
+Prohibited: permanent bootstrap authorization; wildcard authorization; environment bypass;
+CLI force flag; "first startup automatically migrates"; authorization by convention.
+
+**Migration 044 remains `NOT_AUTHORIZED`. This freeze does NOT authorize migration 044.**
+
+### 12. DEVELOPMENT DIAGNOSTICS DOCTRINE (dev:doctor / dev:setup)
+
+The existing diagnostic inconsistency is recorded as a P6-S2 correction target: current
+`dev:doctor` guidance may report the database behind and advise `pnpm dev:setup` while
+migration authority correctly refuses the `NOT_AUTHORIZED` transition. This is a diagnostic
+defect, NOT a migration-authority defect. The intended correction: `dev:doctor` must
+distinguish at minimum (a) fully current; (b) behind with an authorized transition; (c)
+behind with NO authorized transition; (d) incompatible/unknown/drifted state. For the
+unauthorized pending state, guidance must point to the governed migration/bootstrap
+procedure (§11) and must NOT imply `dev:setup` can bypass it.
+
+### 13. ROLLBACK DOCTRINE
+
+The binary accepts only a schema exactly compatible with its repository migration identity;
+baseline P6 therefore does NOT support mixed-version deployment across a migration boundary.
+
+- Never assume an older binary can run against a newly migrated schema.
+- Never assume a newer binary can run against an older schema.
+- Rollback to a pre-migration binary requires the matching pre-migration database state.
+- Otherwise prefer roll-forward to software matching the current schema.
+- If restoration is required, restore the paired durable state needed to preserve
+  authority/evidence.
+- Do not invent reverse SQL/down migrations; do not auto-revert migrations.
+
+Zero-downtime migration orchestration remains demand-gated and is NOT required for P6
+baseline closure.
+
+### 14. STORAGE BOUNDARY
+
+- Structured authority: PostgreSQL.
+- Effect storage: host-local filesystem boundaries — workspace, artifacts, browser artifacts,
+  process artifacts. These MUST NOT become alternate structured authority.
+- Baseline closure: single-host multi-process deployment may close P6 without implementing
+  shared storage.
+- Deferred: multi-host execution requires a separately designed shared target/blob/storage
+  boundary that preserves Ticket/Run/PostgreSQL authority. That design is demand-gated.
+
+### 15. OBSERVABILITY / OPERATOR RECOURSE
+
+Minimal doctrine, not a dashboard project. Reuse existing surfaces: run logs,
+system/diagnostic logs, the event journal, `/ops` and the operational summary,
+health/readiness endpoints, release/checkpoint evidence, and the existing telemetry
+contracts. P6 baseline requires: honest readiness; an app-level deployment/recovery runbook;
+operator procedures for the failure matrix (§16); references to existing diagnosis surfaces.
+No external observability service, dashboard stack, metrics platform, or logging vendor is a
+P6 closure requirement.
+
+### 16. FAILURE / RECOVERY MATRIX PROOF STATE
+
+Current proof state, stated honestly — nothing here upgrades architectural inference to
+"proven safe":
+
+- **Application process crash:** architecture says recoverable; needs P6-S3 full-process
+  proof.
+- **Scheduler crash:** same class as application-process crash (the scheduler is
+  in-process); needs P6-S3 proof.
+- **Worker crash:** no separate worker tier in the baseline; in-process task
+  failure/recovery uses Run lease/recovery authority; needs process proof where appropriate.
+- **PostgreSQL outage:** fail-closed mutation posture already exists; health/readiness
+  signaling correction belongs to P6-S2; full-process outage behavior belongs to P6-S3.
+- **PostgreSQL restart:** architecture expects recovery; P6-S3 proves process behavior.
+- **Lease expiration:** store-level semantics proven; full-process takeover belongs to P6-S3.
+- **Duplicate schedulers:** store-level contention proven; full-process topology conditional
+  on P6-S3.
+- **Deployment restart:** startup recovery and bounded drain mechanisms exist; P6-S3 proves
+  deployment behavior.
+- **Configuration failure:** fail-closed startup.
+- **Missing required secret:** fail-closed startup.
+- **Migration mismatch:** fail-closed startup; already canonical.
+- **Workspace/artifact failure:** effect failure must remain truthful; shared multi-host
+  backend remains deferred.
+
+### 17. DEMAND-GATED EXCLUSIONS
+
+P6 baseline does NOT implement or pre-authorize: multi-tenancy; row-level tenant isolation;
+managed secret service; backup automation; point-in-time recovery; event
+partitioning/retention architecture; read replicas; zero-downtime migration orchestration;
+shared workspace/blob service; arbitrary multi-host execution; cloud-provider selection;
+Kubernetes; Terraform; P7 integrations; Browser Phase 3; Ticket/Run/attempt semantic changes;
+P2/P3/P4/P5 reopening. Each remains a separate registered design if demand materializes.
+
+### 18. SLICE STRUCTURE
+
+Exactly three baseline slices:
+
+- **P6-S1 — Deployment Doctrine Freeze.** Docs/authority-only. Freezes every semantic in
+  this record and the canonical deployment contract: supported topology; unsupported
+  topology; authority boundaries; scheduler/recovery doctrine; liveness/readiness/capacity
+  semantics; configuration ownership; bootstrap/upgrade/no-op/refusal/disposable migration
+  doctrine; rollback doctrine; storage boundary; P6 closure definition; explicit demand-gated
+  exclusions. No runtime implementation. The §21 narrow hermeticity corrections are folded
+  into this same candidate. Publication boundary: independent review of the exact freeze
+  bytes; docs-only commit; no full checkpoint unless repository policy independently requires
+  one.
+- **P6-S2 — Honest Readiness and Canonical Configuration.** Implements only:
+  liveness/readiness/capacity semantics; the PostgreSQL readiness probe using canonical
+  persistence owners; the canonical executable environment registry; `.env.example` /
+  doctor / docs parity; honest migration/bootstrap diagnostics. Explicit exclusions:
+  dashboarding; monitoring vendor; new product authority; migration execution; shared
+  storage; P7. Verification: focused deterministic and PostgreSQL tests; no automatic full
+  checkpoint unless a protected repository trigger is hit.
+- **P6-S3 — Hosted Recovery Evidence and Operator Recourse.** Deterministic process-level
+  proof for the deployment topology plus one narrow operator runbook. Minimum process-level
+  evidence: (1) two full application processes competing for work against one database;
+  (2) no duplicate Run/effect authority; (3) one process dies while holding a live Run
+  lease; (4) a peer/restarted process takes over only after canonical lease/recovery
+  authority permits; (5) the same logical Run/attempt is preserved; (6) restart with active
+  Runs; (7) PostgreSQL outage/restart fail-closed/recovery behavior; (8) migration mismatch
+  startup refusal; (9) evidence-persistence latch behavior; (10) bounded shutdown/drain
+  behavior. Kubernetes/cloud infrastructure is NOT used merely to prove these application
+  invariants. Verification: new focused process-level suites; existing predecessor owners;
+  manifest/checkpoint registration if required. Closure: ONE independent combined P6 closure
+  review and ONE full canonical checkpoint at combined P6 closure; publication only after
+  both pass.
+
+### 19. P6 CLOSURE DEFINITION
+
+P6 closes only when repository bytes and deterministic verification establish:
+
+1. supported hosted topology is explicit;
+2. unsupported topology is explicit;
+3. operational authority cannot bypass product authority;
+4. liveness/readiness/capacity semantics are honest;
+5. canonical configuration ownership is recoverable and parity-tested;
+6. bootstrap/upgrade/rollback procedures preserve T10 migration authority;
+7. process-level scheduler/crash/restart behavior is deterministically verified;
+8. operator deployment/recovery recourse exists;
+9. unsupported multi-host/shared-storage and advanced database features remain explicit
+   demand-gated limitations;
+10. one independent combined P6 closure review passes;
+11. one full canonical checkpoint passes at P6 closure.
+
+(Items 1–2 are the two halves of one topology distinction; the prior review's "ten-point"
+wording and this eleven-item list carry the same semantics.)
+
+### 20. STOP CONDITIONS
+
+P6 implementation must STOP rather than expand architecture if it appears to require:
+
+- Ticket lifecycle changes;
+- Run lifecycle changes;
+- attempt semantic changes;
+- completion-authority changes;
+- admission-authority bypass;
+- migration-authority weakening;
+- operational direct state mutation;
+- hidden authority in process memory;
+- permanent single-process assumption;
+- claiming multi-host support without shared effect-storage authority;
+- cloud-provider lock-in;
+- P7 work;
+- Browser Phase 3;
+- migration 044 execution merely to progress P6.
+
+### 21. HERMETICITY CORRECTIONS FOLDED INTO THIS CANDIDATE
+
+Two narrow corrections ship in THIS SAME docs-only candidate — no separate status/cleanup
+commits, no new P5 review, no audit diary:
+
+- **(a) P5 / sequence-head register truth.** The P5 record header and the roadmap §8
+  policy-sequence head are corrected so a fresh reader recovers from authoritative bytes: the
+  P5 design freeze was registered at `491198f4fc212395a4b761cb4d2d0b834c525a72`; P5-R1 was
+  published at `cf579fe94353f112b4b965663298ebad60f52e8c`; P5-R2 was published at
+  `50725f08532de9b4db866782696c38216462598a`; P5-R3 was published at
+  `8425dd7d6a5198d82ac26e1fd7eac5c9619e6acf`; P5 governed bounded composition is CLOSED AND
+  PUBLISHED; P6 is the current roadmap sequence head. Historical P5 semantics are not
+  rewritten; the freeze record body is retained unaltered as historical evidence.
+- **(b) `docs/POSTGRES_CUTOVER.md` migration-head statement.** The stale "current head `042`"
+  claim is corrected to the repository migration source head `044`, with the explicit
+  distinction that the observed operational applied head may remain `043` and that migration
+  execution authorization is a separate governed act remaining `NOT_AUTHORIZED`.
+
+### 22. CANONICAL LIVING-DOCUMENT OWNERSHIP
+
+`docs/DEPLOYMENT_CONTRACT.md` is created by this same candidate as the ONE narrow canonical
+living deployment-semantics owner: supported/unsupported topology, operational-authority
+boundary, scheduler/recovery model, health definitions, configuration-ownership doctrine,
+migration/bootstrap/deploy/rollback doctrine, storage boundary, and closure/deferral
+boundary. It POINTS to the specialized existing owners (`POSTGRES_CUTOVER.md`,
+`PROCESS_EXECUTION_GA_RUNBOOK.md`, `OPERATIONAL_TRANSPARENCY.md`, `OPERATIONAL_TELEMETRY.md`,
+`SETUP_AND_FIRST_RUN.md`, `KNOWN_LIMITATIONS.md`, this register) rather than copying them;
+`docs/INDEX.md` gains exactly one entry. This register record is the design-freeze authority;
+the contract restates the same frozen semantics as the operated living document. Any later
+contract change that alters these frozen semantics requires its own registered decision.
+Executable owners (the P6-S2 configuration registry and parity tests, the health handlers,
+the P6-S3 process-level suites and their `scripts/test-manifest.js` registrations) will own
+the machine-checkable semantics at implementation.
+
+### 23. PUBLICATION / IMPLEMENTATION BOUNDARIES
+
+1. design-freeze candidate (this record + `docs/DEPLOYMENT_CONTRACT.md` + the §21
+   corrections + the `docs/INDEX.md` entry);
+2. ONE fresh independent review of these exact candidate bytes;
+3. docs-only publication commit (no full checkpoint unless repository policy independently
+   requires one);
+4. P6-S2 implementation only after freeze publication, with focused deterministic and
+   PostgreSQL verification;
+5. P6-S3 process-level evidence plus the operator runbook;
+6. ONE independent combined P6 closure review;
+7. ONE full canonical checkpoint at combined P6 closure;
+8. ONE combined P6 publication commit.
+
+### 24. CANDIDATE STATUS AND NEXT BOUNDARY
+
+This record is a **P6 SEMANTIC DESIGN-FREEZE CANDIDATE ONLY**: uncommitted, unpublished, no
+implementation authorized, no migration created/authorized/executed, migration 044
+`NOT_AUTHORIZED` unchanged, no P2/P3/P4/P5 reopening, no P7/Browser-Phase-3 scope opened, no
+demand-gated feature pre-authorized, and no historical record altered beyond the explicit §21
+truth corrections.
+
+**NEXT BOUNDARY: FRESH INDEPENDENT REVIEW OF THE EXACT P6 DESIGN-FREEZE CANDIDATE BYTES —
+NO PUBLICATION OR IMPLEMENTATION YET.** The reviewer must verify: (1) the opening baseline
+identity; (2) the supported/unsupported topology wording (single-host multi-process;
+structured authority PostgreSQL-owned and process-independent; host-local effect state never
+hidden behind "stateless"); (3) the scheduler proof level ("intended supported topology
+conditional on P6-S3 process-level verification", never "already proven safe"); (4) the
+liveness/readiness/capacity separation, including capacity-never-readiness-failure and the
+503-backpressure correction target; (5) the PostgreSQL readiness probe semantics (canonical
+owner reuse, per-request read-only cadence, designed bounded 503 failure shape); (6) the
+single executable configuration registry doctrine; (7) the five-state T10 migration/bootstrap
+doctrine with 044 remaining `NOT_AUTHORIZED` and every prohibited bypass named; (8) the
+dev:doctor/dev:setup diagnostic correction doctrine; (9) the strict-parity rollback doctrine;
+(10) the storage boundary and deferred multi-host doctrine; (11) the operational-authority
+doctrine (no product-authority side channel); (12) the failure/recovery matrix proof states;
+(13) the demand-gated exclusions; (14) the exact three-slice structure and S3 minimum
+process-level evidence list; (15) the closure definition and stop conditions; (16) the §21
+hermeticity corrections are narrow, truthful, and create no P5 reopening, no separate status
+workflow, and no audit diary; (17) the candidate grants design authority only; and (18) the
+exact candidate byte identity reproduces.**

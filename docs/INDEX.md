@@ -22,6 +22,10 @@
 - [`TERMINAL_PROJECTION_READER_CONTRACTS.md`](TERMINAL_PROJECTION_READER_CONTRACTS.md) — which
   terminal authority each operator reader owns, and the five-row reader-parity matrix.
 - [`POSTGRES_CUTOVER.md`](POSTGRES_CUTOVER.md) — current PostgreSQL authority/coordination contract.
+- [`DEPLOYMENT_CONTRACT.md`](DEPLOYMENT_CONTRACT.md) — canonical deployment/operations contract:
+  supported/unsupported topology, operational-authority boundary, scheduler/recovery model,
+  health semantics, configuration ownership, migration/bootstrap/rollback doctrine, storage
+  boundary, and P6 closure/deferral boundary.
 - [`PROCESS_EXECUTION_CONTRACT.md`](PROCESS_EXECUTION_CONTRACT.md) — default-off, executor-free
   bounded process-operation authority, request, outcome, evidence, and snapshot contract.
 - [`PROCESS_INPUT_MATERIALIZER.md`](PROCESS_INPUT_MATERIALIZER.md) — trusted immutable
