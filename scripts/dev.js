@@ -6,8 +6,12 @@ const { runDoctor } = require('./dev-doctor');
 
 async function main() {
   process.env.NODE_ENV = 'development';
-  process.env.WORKSPACE_ROOT ||= '.local-workspace';
-  process.env.ARTIFACT_ROOT ||= '.local-artifacts';
+  // P6-S2: the runner no longer injects its own WORKSPACE_ROOT/ARTIFACT_ROOT
+  // defaults. The one canonical default for each effect root is owned by the
+  // registry (runtime/environment-config-registry.js) and resolved
+  // identically by the server boot surface and the development tooling, so a
+  // `pnpm dev` session and an ordinary server cannot disagree about an effect
+  // boundary. An explicit WORKSPACE_ROOT/ARTIFACT_ROOT keeps its precedence.
   applyLocalEnv();
 
   const ready = await runDoctor();

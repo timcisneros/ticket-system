@@ -427,10 +427,23 @@ async function observeAppliedMigrationState(client, { schema, schemaSql }) {
   return { databaseName, schemaExists, ledgerExists, appliedVersions };
 }
 
-// Store-facing gate. Throws before any migration mutation when any authority
-// predicate fails. Read-only database observation must already have happened;
-// the caller passes its results in.
-async function enforceMigrationExecutionAuthority({
+// Read-only inspection of ONE transition's migration-execution authority.
+//
+// This is the exact record/target/repository-gather/evaluation path the
+// enforcing gate below performs, composed ONCE here so the mutation gate and
+// read-only diagnostics (dev:doctor) can never decide authority differently.
+// It performs no database mutation and no filesystem/git mutation.
+// Outcomes (frozen):
+//   { ok: true, migrationTransitionId, authorizedPendingMigrations, reasons: [] }
+//   { ok: false, unverifiable: false, reasons: [...] }   — decision refusal
+//   { ok: false, unverifiable: true,  reasons: [...] }   — the authority facts
+//     themselves could not be established (git/publication transport); the
+//     record may or may not be authorized, so diagnostics must classify
+//     conservatively and the gate still refuses.
+// Non-MigrationExecutionAuthorityError inputs are converted into single reason
+// refusals so the gate's thrown MigrationExecutionAuthorityError stays the
+// canonical refusal surface.
+function inspectTransitionAuthority({
   repoRoot,
   connectionString,
   schema,
@@ -442,6 +455,13 @@ async function enforceMigrationExecutionAuthority({
   readFile,
   loadRecordRaw
 }) {
+  const failed = (reasons, unverifiable) => Object.freeze({
+    ok: false,
+    unverifiable: unverifiable === true,
+    reasons: Object.freeze([...reasons]),
+    migrationTransitionId: null,
+    authorizedPendingMigrations: null
+  });
   const readRecord = loadRecordRaw || (() => {
     const fs = require('fs');
     const path = require('path');
@@ -449,20 +469,26 @@ async function enforceMigrationExecutionAuthority({
     if (!fs.existsSync(recordPath)) return null;
     return fs.readFileSync(recordPath, 'utf8');
   });
-  const checksum = migrationChecksum;
-  const raw = readRecord();
-  const record = validateRecordShape(raw);
+  let record;
+  try {
+    record = validateRecordShape(readRecord());
+  } catch (error) {
+    const reasons = error instanceof MigrationExecutionAuthorityError
+      ? error.reasons
+      : [String((error && error.message) || error)];
+    return failed(reasons, false);
+  }
 
   let configuredTarget;
   try {
     configuredTarget = parseTargetIdentity(connectionString);
   } catch (error) {
-    throw new MigrationExecutionAuthorityError([error.message]);
+    return failed([error.message], false);
   }
   if (configuredTarget.database !== currentDatabaseName) {
-    throw new MigrationExecutionAuthorityError([
+    return failed([
       `on-contact database "${currentDatabaseName}" != configured target database "${configuredTarget.database}"`
-    ]);
+    ], false);
   }
   const observedTarget = Object.freeze({
     host: configuredTarget.host,
@@ -471,26 +497,38 @@ async function enforceMigrationExecutionAuthority({
     schema
   });
 
-  const head = runGit(repoRoot, ['rev-parse', 'HEAD']).trim();
-  if (!COMMIT_HEX.test(head)) {
-    throw new MigrationExecutionAuthorityError(['repository HEAD is not a 40-hex commit id']);
-  }
-  const freshRemoteMaster = freshRemoteMasterSha(repoRoot);
-  const status = runGit(repoRoot, ['status', '--porcelain']);
-  const clean = status.trim().length === 0;
-  let recordTracked = true;
+  let clean;
+  let recordTracked;
+  let head;
+  let freshRemoteMaster;
+  let baselineIsAncestor;
   try {
-    runGit(repoRoot, ['ls-files', '--error-unmatch', '--', RECORD_RELATIVE_PATH]);
+    head = runGit(repoRoot, ['rev-parse', 'HEAD']).trim();
+    if (!COMMIT_HEX.test(head)) {
+      return failed(['repository HEAD is not a 40-hex commit id'], false);
+    }
+    freshRemoteMaster = freshRemoteMasterSha(repoRoot);
+    const status = runGit(repoRoot, ['status', '--porcelain']);
+    clean = status.trim().length === 0;
+    recordTracked = true;
+    try {
+      runGit(repoRoot, ['ls-files', '--error-unmatch', '--', RECORD_RELATIVE_PATH]);
+    } catch (error) {
+      if (error instanceof MigrationExecutionAuthorityError) recordTracked = false;
+      else throw error;
+    }
+    baselineIsAncestor = true;
+    try {
+      runGit(repoRoot, ['merge-base', '--is-ancestor', record.authorizedBaselineHead, head]);
+    } catch (error) {
+      if (error instanceof MigrationExecutionAuthorityError) baselineIsAncestor = false;
+      else throw error;
+    }
   } catch (error) {
-    if (error instanceof MigrationExecutionAuthorityError) recordTracked = false;
-    else throw error;
-  }
-  let baselineIsAncestor = true;
-  try {
-    runGit(repoRoot, ['merge-base', '--is-ancestor', record.authorizedBaselineHead, head]);
-  } catch (error) {
-    if (error instanceof MigrationExecutionAuthorityError) baselineIsAncestor = false;
-    else throw error;
+    if (error instanceof MigrationExecutionAuthorityError) {
+      return failed(error.reasons, true);
+    }
+    throw error;
   }
 
   const evaluation = evaluateTransition({
@@ -507,12 +545,30 @@ async function enforceMigrationExecutionAuthority({
     }
   });
   if (!evaluation.ok) {
-    throw new MigrationExecutionAuthorityError(evaluation.reasons);
+    return failed(evaluation.reasons, false);
   }
   return Object.freeze({
+    ok: true,
+    unverifiable: false,
+    reasons: Object.freeze([]),
     migrationTransitionId: record.migrationTransitionId,
     authorizedPendingMigrations: Object.freeze(pendingMigrations.map(entry => Object.freeze({ ...entry })))
   });
+}
+
+// Store-facing gate. Throws before any migration mutation when any authority
+// predicate fails. Read-only database observation must already have happened;
+// the caller passes its results in. Composed from the ONE canonical read-only
+// inspection above — the gate and diagnostics cannot drift.
+function enforceMigrationExecutionAuthority(options) {
+  const inspection = inspectTransitionAuthority(options);
+  if (inspection.ok) {
+    return Object.freeze({
+      migrationTransitionId: inspection.migrationTransitionId,
+      authorizedPendingMigrations: inspection.authorizedPendingMigrations
+    });
+  }
+  throw new MigrationExecutionAuthorityError([...inspection.reasons]);
 }
 
 // Pure: predecessor-equivalent READ-ONLY validation of already-applied
@@ -584,5 +640,6 @@ module.exports = {
   parseFreshRemoteOutput,
   freshRemoteMasterSha,
   observeAppliedMigrationState,
+  inspectTransitionAuthority,
   enforceMigrationExecutionAuthority
 };

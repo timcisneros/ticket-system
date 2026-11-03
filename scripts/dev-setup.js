@@ -23,6 +23,21 @@ const {
 const { ensureInitialAgent } = require('./dev-agent-config');
 const { postgresHelp } = require('./dev-doctor');
 
+const { MigrationExecutionAuthorityError } = require('../persistence/postgres/migration-authority');
+
+// The migration execution authority gate (T10) refuses unauthorized
+// transitions BEFORE any mutation. Setup never weakens that gate; the only
+// honest guidance is the governed authorization procedure itself.
+function migrationAuthorityHelp() {
+  return (
+    'the schema is behind and this pending migration transition is NOT authorized: ' +
+    '`pnpm dev:setup` cannot bypass migration execution authority. ' +
+    'Authorize the transition only through the governed bootstrap/upgrade procedure ' +
+    '(config/migration-execution-authorization.json; docs/DEPLOYMENT_CONTRACT.md §9), ' +
+    'then apply it with the canonical migration command (`npm run db:migrate`).'
+  );
+}
+
 async function createInitialAdmin({ store, password, hashPassword = argon2.hash }) {
   const existing = await store.getUserByUsername('admin');
   if (existing) return { created: false, user: existing };
@@ -130,12 +145,14 @@ async function main() {
   await runSetup();
 }
 
-module.exports = { DEFAULT_DATABASE_URL, createInitialAdmin, prepareLocalEnv, runSetup };
+module.exports = { DEFAULT_DATABASE_URL, createInitialAdmin, migrationAuthorityHelp, prepareLocalEnv, runSetup };
 
 if (require.main === module) {
   main().catch(error => {
     console.error(`Development setup failed: ${safeErrorMessage(error)}`);
-    if (/connect|database|ECONNREFUSED|PostgreSQL/i.test(String(error.message || error))) {
+    if (error instanceof MigrationExecutionAuthorityError) {
+      console.error(migrationAuthorityHelp());
+    } else if (/connect|database|ECONNREFUSED|PostgreSQL/i.test(String(error.message || error))) {
       console.error(postgresHelp());
     }
     process.exit(1);

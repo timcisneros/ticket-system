@@ -58,6 +58,10 @@ const CHECKPOINT_TEST_SCRIPTS = Object.freeze([
   // Deterministic; the cross-Ticket runtime lifecycle is owned by
   // p5-r3-composition-consumption-postgres-test.js.
   'p5-r3-composition-consumption-contract-test.js',
+  // P6-S2 — honest readiness and canonical configuration (deterministic
+  // owner): the health payload contract, the single executable environment
+  // registry, .env.example parity, and the doctor's migration-ledger states.
+  'p6-s2-health-readiness-contract-test.js',
   't2-tranche5-release-admission-server-test.js',
   't2-tranche5-rerun-lock-order-test.js',
   't041-semantic-closure-test.js',
@@ -440,6 +444,12 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // doctrine, non-amplification, one-level delegation, operator release_hold
   // intact, and the competing-release race). PostgreSQL-native.
   'p5-r2-delegated-admission-postgres-test.js',
+  // P6-S2 — honest readiness and canonical configuration (PostgreSQL-native
+  // owner): the canonical migration-status probe, live health routes under a
+  // real server, designed readiness 503s from real ledger changes,
+  // saturated-capacity-never-readiness, doctor ledger states, and the
+  // unauthorized-migration setup refusal.
+  'p6-s2-readiness-postgres-test.js',
   // P5-R3 — deterministic composition consumption: the cross-Ticket runtime
   // lifecycle. awaitChildTickets (read-only bounded observation, zero
   // completion authority, no passive admission) and the childTerminalOutcome

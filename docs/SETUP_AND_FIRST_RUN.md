@@ -48,10 +48,16 @@ external provider accounts or download model weights implicitly.
 
 All development commands load `.env.local`; explicit environment variables take precedence.
 `ADMIN_BOOTSTRAP_PASSWORD` is creation-only, must contain at least 12 characters, and is ignored
-after the admin exists. Optional environment variables are:
+after the admin exists. `SESSION_SECRET` follows the one canonical supported rule consumed by the
+server boot, `dev:doctor`, and the canonical configuration registry
+(`runtime/environment-config-registry.js`): at least 32 characters and never the placeholder. The
+server refuses to start on any required startup configuration the registry calls invalid
+(fail-closed startup). Optional environment variables are:
 
 - `POSTGRES_SCHEMA` (default `ticket_system`)
-- `WORKSPACE_ROOT` (development default `.local-workspace`)
+- `WORKSPACE_ROOT` (development default `workspace-root` — one canonical default shared with the
+  server boot surface; the canonical registry is
+  `runtime/environment-config-registry.js`)
 - `ARTIFACT_ROOT` (development default `.local-artifacts`)
 - `PORT` (default `3099`)
 - `SESSION_PURGE_INTERVAL_MS` (default `60000`)
@@ -60,6 +66,24 @@ after the admin exists. Optional environment variables are:
 - `OPENAI_API_KEY`, `OPENAI_MODEL`, `OLLAMA_MODEL`, `OLLAMA_BASE_URL`
 
 The migration CLI and server use the same `POSTGRES_SCHEMA` setting.
+
+### Migration ledger state before first run
+
+`dev:doctor` reports migration-ledger state honestly under the migration-execution authority gate
+(`docs/DEPLOYMENT_CONTRACT.md`, migration and bootstrap doctrine):
+
+- **current** — the canonical ledger is current and migration identities are valid;
+- **behind + authorized** — an exact pending transition is currently authorized; apply it with the
+  canonical migration command (`npm run db:migrate`; setup uses the same authority gate);
+- **behind + NOT authorized** — pending migrations exist but the authorization record does not
+  authorize that transition; `pnpm dev:setup` cannot bypass the gate, so authorization must be
+  established through the governed migration/bootstrap procedure first;
+- **behind + NOT verified** — read-only inspection could not establish the canonical
+  repository/publication authority (for example a git/publication transport failure), so the
+  pending transition is never reported as authorized; the canonical migration command remains the
+  final authority,
+- **incompatible / drifted / uninitialized** — unknown future migrations, identity/checksum drift,
+  or an uninitialized schema; these fail closed and remediation is not guessed.
 
 ## Start and verify the first ticket
 

@@ -23,6 +23,7 @@ const {
   writeLocalEnv
 } = require('./dev-environment');
 const { inspectDevelopmentEnvironment, packageManagerCheck, printChecks } = require('./dev-doctor');
+const { validateEnvironment } = require('../runtime/environment-config-registry');
 const {
   DEFAULT_OPENAI_MODEL,
   agentReadiness,
@@ -99,6 +100,107 @@ async function main() {
     /cannot be combined/
   );
 
+  // TICKET_SYSTEM_POSTGRES_PORT — STRICT owner parity (configures the BUNDLED
+  // development database). The real owner seam (resolveDevelopmentDatabaseTarget)
+  // reads `String(env.TICKET_SYSTEM_POSTGRES_PORT || '').trim()` and requires
+  // the WHOLE trimmed value to be decimal digits forming a safe integer within
+  // [1, 65535]; it throws the canonical message otherwise. Surrounding
+  // whitespace is consumed by the owner before the rule (' 5432 ' configures
+  // port 5432) and a whitespace-only value is unset (the bundled default),
+  // exactly like absence. The canonical registry (doctor context validates the
+  // development settings) must agree with the owner on every value class — a
+  // partial numeric prefix ('5432junk', '12abc') is never an accepted port for
+  // either, and the suite fails if registry and owner drift.
+  const TSPP_EXPECTED_MESSAGE = 'TICKET_SYSTEM_POSTGRES_PORT must be an integer from 1 through 65535';
+  const TSPP_CLASS_EXPECTATIONS = Object.freeze([
+    // [configured value, accepted, expected owner composePort when accepted]
+    ['5432', true, 5432],
+    [' 5432 ', true, 5432],               // the owner trims before the digits rule
+    ['05432', true, 5432],                // leading zero digits: same integer value
+    ['65535', true, 65535],               // range boundary
+    ['1', true, 1],                       // range boundary
+    ['5432junk', false, null],            // trailing junk is never a partial prefix
+    ['12abc', false, null],
+    ['5432.5', false, null],              // non-integer decimal text
+    ['+5432', false, null],               // sign notation the owner refuses
+    ['-5432', false, null],
+    ['0', false, null],                   // bundled ports start at 1
+    ['65536', false, null],               // above the range
+    ['9999999999999999999', false, null], // digits-only but not a safe integer
+    ['junk', false, null],
+    ['   ', true, null]                   // whitespace-only is UNSET: bundled default
+  ]);
+  for (const [value, shouldAccept, expectedPort] of TSPP_CLASS_EXPECTATIONS) {
+    const configured = { TICKET_SYSTEM_POSTGRES_PORT: value };
+    let ownerPort = null;
+    try {
+      ownerPort = resolveDevelopmentDatabaseTarget(configured).composePort;
+    } catch (_) {
+      ownerPort = null; // the owner throws → the value is refused
+    }
+    assert.equal(
+      ownerPort !== null,
+      shouldAccept,
+      `the bundled owner accepts TICKET_SYSTEM_POSTGRES_PORT=${JSON.stringify(value)} exactly when declared`
+    );
+    const registryFailures = validateEnvironment(configured, { context: 'doctor' }).failures
+      .filter((failure) => failure.name === 'TICKET_SYSTEM_POSTGRES_PORT');
+    assert.equal(
+      registryFailures.length === 0,
+      shouldAccept,
+      `the canonical registry and the bundled owner agree for TICKET_SYSTEM_POSTGRES_PORT=${JSON.stringify(value)}`
+    );
+    if (!shouldAccept) {
+      assert.equal(registryFailures[0].code, 'invalid_port_range');
+      assert.equal(
+        registryFailures[0].message,
+        TSPP_EXPECTED_MESSAGE,
+        'the registry failure names the setting and renders no value'
+      );
+    } else if (expectedPort !== null) {
+      assert.equal(
+        ownerPort,
+        expectedPort,
+        `the bundled owner binds TICKET_SYSTEM_POSTGRES_PORT=${JSON.stringify(value)} as port ${expectedPort}`
+      );
+    }
+  }
+  // The owner throw and the registry failure are ONE canonical sentence; this
+  // must fail if registry and owner drift.
+  try {
+    resolveDevelopmentDatabaseTarget({ TICKET_SYSTEM_POSTGRES_PORT: '5432junk' });
+    assert.ok(false, 'the bundled owner must throw for a partial-prefix port value');
+  } catch (error) {
+    const registryFailure = validateEnvironment(
+      {
+        DATABASE_URL: 'postgresql://u:p@127.0.0.1:5432/db',
+        SESSION_SECRET: 'x'.repeat(64),
+        TICKET_SYSTEM_POSTGRES_PORT: '5432junk'
+      },
+      { context: 'doctor' }
+    ).failures.filter((failure) => failure.name === 'TICKET_SYSTEM_POSTGRES_PORT')[0];
+    assert.ok(registryFailure, 'the canonical registry refuses the same partial-prefix port value');
+    assert.equal(
+      registryFailure.message,
+      error.message,
+      'registry failure text and owner throw text are one canonical sentence'
+    );
+  }
+  // bundledDatabaseUrl — the owner's URL builder — holds the exact boundaries.
+  assert.equal(bundledDatabaseUrl(1), 'postgresql://ticket_system:ticket_system@127.0.0.1:1/ticket_system');
+  assert.equal(bundledDatabaseUrl(65535), 'postgresql://ticket_system:ticket_system@127.0.0.1:65535/ticket_system');
+  assert.equal(
+    bundledDatabaseUrl('05432'),
+    'postgresql://ticket_system:ticket_system@127.0.0.1:5432/ticket_system'
+  );
+  for (const refused of [0, '0', -1, '-5432', 65536, '65536', '5432junk', '12abc', '5432.5', '9999999999999999999']) {
+    assert.throws(
+      () => bundledDatabaseUrl(refused),
+      (error) => error.message === TSPP_EXPECTED_MESSAGE,
+      `bundledDatabaseUrl(${JSON.stringify(refused)}) is refused with the canonical owner message`
+    );
+  }
+
   assert.equal(packageManagerCheck('pnpm/10.0.0 npm/? node/v24').status, 'fail');
   assert.deepEqual(packageManagerCheck('npm/11.0.0 node/v24'), { status: 'pass', label: 'npm', message: '11; supported script runner' });
 
@@ -143,6 +245,46 @@ async function main() {
     ARTIFACT_ROOT: os.tmpdir(),
     npm_config_user_agent: 'pnpm/11.8.0 npm/? node/v24'
   };
+  // P6-S2: the doctor reads the canonical migration facts
+  // (`getMigrationStatus` plus the read-only observation) instead of the old
+  // prepareRuntimePersistence() latch. This stub answers those calls with a
+  // fully-current ledger derived from the canonical enumeration.
+  function fullyCurrentStoreStub({ adminUser, agents, onClose }) {
+    const { migrationFiles, migrationChecksum } = require('../persistence/postgres/store');
+    const versions = migrationFiles();
+    return {
+      async getMigrationStatus() {
+        return {
+          fullyApplied: true,
+          checksumsValid: true,
+          partial: false,
+          currentVersion: Number(versions[versions.length - 1].slice(0, 3)),
+          headVersion: Number(versions[versions.length - 1].slice(0, 3)),
+          pendingMigrations: 0,
+          unknownMigrations: 0
+        };
+      },
+      async withTransaction(operation) {
+        return operation({
+          async query(sql) {
+            if (sql.includes('current_database()')) return { rows: [{ name: 'stubdb' }] };
+            if (sql.includes('pg_namespace')) return { rowCount: 1, rows: [] };
+            if (sql.includes('to_regclass')) return { rows: [{ name: 'stub' }] };
+            if (sql.includes('schema_migration_identities')) {
+              return { rows: versions.map(version => ({ version, sha256: migrationChecksum(version) })) };
+            }
+            if (sql.includes('schema_migrations')) {
+              return { rows: versions.map(version => ({ version })) };
+            }
+            return { rows: [], rowCount: 0 };
+          }
+        });
+      },
+      async getUserByUsername() { return adminUser; },
+      async listConfiguredAgents() { return { agents, nextAfterId: null }; },
+      async close() { if (onClose) onClose(); }
+    };
+  }
   let closed = false;
   const existingAdmin = {
     id: 7,
@@ -154,11 +296,10 @@ async function main() {
   };
   const healthy = await inspectDevelopmentEnvironment({
     env: { ...baseEnv, ADMIN_BOOTSTRAP_PASSWORD: 'stale' },
-    storeFactory: () => ({
-      async prepareRuntimePersistence() {},
-      async getUserByUsername() { return existingAdmin; },
-      async listConfiguredAgents() { return { agents: [{ provider: 'openai', model: 'test-model', apiKey: 'stored' }], nextAfterId: null }; },
-      async close() { closed = true; }
+    storeFactory: () => fullyCurrentStoreStub({
+      adminUser: existingAdmin,
+      agents: [{ provider: 'openai', model: 'test-model', apiKey: 'stored' }],
+      onClose: () => { closed = true; }
     }),
     verifyPassword: async (_hash, candidate) => candidate === 'admin123'
   });
@@ -172,29 +313,56 @@ async function main() {
   assert.match(passwordWarning.message, /predictable default/);
   assert.doesNotMatch(passwordWarning.message, /legacy|initial/i);
   const rendered = [];
-  printChecks(healthy, { write(value) { rendered.push(value); } });
+  printChecks(healthy, { write(value) { rendered.push(value) } });
   assert.equal(rendered.join('').includes('stale'), false, 'doctor output must not expose secret values');
+  const doctorMigrationRow = healthy.checks.find(check => check.label === 'PostgreSQL migrations');
+  assert.ok(doctorMigrationRow, 'doctor renders one canonical migration-ledger row');
+  assert.equal(doctorMigrationRow.status, 'pass', 'a fully-current ledger is reported CURRENT');
+  assert.match(doctorMigrationRow.message, /current/, 'the CURRENT guidance states the ledger truth');
+  assert.equal(
+    developmentConfig({}).workspaceRoot,
+    path.resolve(path.join(__dirname, '..'), 'workspace-root'),
+    'the development workspace default is the one canonical default the server also uses'
+  );
+
+  // P6-S2 defect-B effect-root semantics inside the doctor: a path that exists
+  // but is not a directory, and a missing path under an unusable parent, fail
+  // the check with the honest corrected messages (never "usable").
+  const { writablePathStatus } = require('./dev-environment');
+  const pathCheckTemporary = fs.mkdtempSync(path.join(os.tmpdir(), 'dev-env-path-'));
+  try {
+    const fileRoot = path.join(pathCheckTemporary, 'root-as-file');
+    fs.writeFileSync(fileRoot, 'regular file');
+    const fileStatus = writablePathStatus(fileRoot);
+    assert.equal(fileStatus.ok, false, 'a regular file is not a usable effect root');
+    assert.match(fileStatus.message, /not a directory/);
+
+    const usableDir = path.join(pathCheckTemporary, 'usable-root');
+    fs.mkdirSync(usableDir);
+    assert.equal(writablePathStatus(usableDir).ok, true);
+    assert.equal(writablePathStatus(path.join(usableDir, 'missing-root')).ok, true, 'creatable under a usable parent');
+    assert.match(writablePathStatus(path.join(usableDir, 'missing-root')).message, /will be created/);
+
+    const parentFile = path.join(pathCheckTemporary, 'parent-file');
+    fs.writeFileSync(parentFile, 'regular file');
+    const underFile = writablePathStatus(path.join(parentFile, 'child'));
+    assert.equal(underFile.ok, false, 'a missing root under a file parent is unusable');
+    assert.match(underFile.message, /not a directory/);
+  } finally {
+    fs.rmSync(pathCheckTemporary, { recursive: true, force: true });
+  }
+  console.log('  ok the doctor effect-root check uses the corrected directory-boundary semantics');
 
   const missingAdmin = await inspectDevelopmentEnvironment({
     env: { ...baseEnv, ADMIN_BOOTSTRAP_PASSWORD: 'long-enough-bootstrap-password' },
-    storeFactory: () => ({
-      async prepareRuntimePersistence() {},
-      async getUserByUsername() { return null; },
-      async listConfiguredAgents() { return { agents: [{ provider: 'ollama', model: 'test-model' }], nextAfterId: null }; },
-      async close() {}
-    })
+    storeFactory: () => fullyCurrentStoreStub({ adminUser: null, agents: [{ provider: 'ollama', model: 'test-model' }] })
   });
   assert.equal(missingAdmin.ok, false);
   assert.ok(missingAdmin.checks.some(check => check.status === 'fail' && check.label === 'admin account'));
 
   const missingAgents = await inspectDevelopmentEnvironment({
     env: baseEnv,
-    storeFactory: () => ({
-      async prepareRuntimePersistence() {},
-      async getUserByUsername() { return existingAdmin; },
-      async listConfiguredAgents() { return { agents: [], nextAfterId: null }; },
-      async close() {}
-    }),
+    storeFactory: () => fullyCurrentStoreStub({ adminUser: existingAdmin, agents: [] }),
     verifyPassword: async () => false
   });
   assert.equal(missingAgents.ok, false);

@@ -32,15 +32,21 @@ class ProcessExecutionReleaseReadiness {
     this.deploymentValidated = deploymentValidated === true;
   }
 
-  async evaluate() {
+  // `migrationStatus` may be injected by a caller that has already observed
+  // the canonical migration state on this request (P6-S2: one read-only
+  // probe per readiness request). When absent the class probes the canonical
+  // persistence owner itself, exactly as before.
+  async evaluate({ migrationStatus: injectedMigrationStatus } = {}) {
     const releaseState = this.repository &&
       typeof this.repository.getProcessExecutionReleaseState === 'function'
       ? await this.repository.getProcessExecutionReleaseState()
       : null;
-    const migrationStatus = this.repository &&
-      typeof this.repository.getMigrationStatus === 'function'
-      ? await this.repository.getMigrationStatus()
-      : null;
+    const migrationStatus = injectedMigrationStatus !== undefined
+      ? injectedMigrationStatus
+      : this.repository &&
+        typeof this.repository.getMigrationStatus === 'function'
+        ? await this.repository.getMigrationStatus()
+        : null;
     let launcher = null;
     let materializer = null;
     let artifactStorage = null;

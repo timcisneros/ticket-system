@@ -255,6 +255,17 @@ const {
   normalizeGovernedPostconditionEvidence
 } = require('./runtime/governed-postcondition-evidence-contract');
 const { createMutationAdmissionController, resolveMutationAdmissionOptions } = require('./runtime/mutation-admission');
+// P6-S2: honest health semantics projection and the canonical executable
+// environment registry (docs/DEPLOYMENT_CONTRACT.md §6–§8).
+const {
+  buildHealthProjection,
+  probePostgresReadiness
+} = require('./runtime/health-readiness');
+const {
+  validateEnvironment,
+  validateHttpOrigin,
+  validateSessionSecret
+} = require('./runtime/environment-config-registry');
 const { RUN_EVENT_SCHEMA_VERSION, computeRunEventHash, verifyCurrentRunEventChain, validateCurrentEventEnvelope } = require('./runtime/event-integrity');
 const { createBrowserSession, getEngineStatus } = require('./runtime/browser-engine');
 const { resolveRuntimePersistenceBackend } = require('./persistence/runtime-backend');
@@ -349,6 +360,20 @@ const RUNTIME_PERSISTENCE_BACKEND = resolveRuntimePersistenceBackend(process.env
 const DATABASE_URL = String(process.env.DATABASE_URL || '').trim();
 if (!DATABASE_URL) throw new Error('DATABASE_URL is required for the PostgreSQL runtime');
 const POSTGRES_SCHEMA = String(process.env.POSTGRES_SCHEMA || 'ticket_system').trim();
+// P6-S2 (§6/§8 boot parity): the server consumes the ONE canonical supported
+// configuration rule at boot — the same registry validation the doctor, the
+// development tooling, and the health/readiness diagnosis apply. A server
+// must never start successfully while canonical registry says required
+// startup configuration is invalid (the corruption that would leave the
+// process permanently readiness-false). Failures are named, never valued.
+const BOOT_CONFIGURATION = validateEnvironment(process.env);
+if (!BOOT_CONFIGURATION.ok) {
+  throw new Error(
+    'Refusing startup: required startup configuration is invalid (' +
+    BOOT_CONFIGURATION.failures.map(failure => failure.name).sort().join(', ') +
+    ')'
+  );
+}
 
 // PostgreSQL owns all structured runtime state. The filesystem remains only
 // the execution workspace and a replaceable browser-artifact blob target.
@@ -365,9 +390,14 @@ const PROCESS_TARGET_CATALOG_FILE = path.resolve(
   process.env.PROCESS_TARGET_CATALOG_FILE || path.join(__dirname, 'config', 'process-targets.json')
 );
 function resolveSessionSecret() {
-  const configured = String(process.env.SESSION_SECRET || '').trim();
-  if (!configured) throw new Error('SESSION_SECRET is required so sessions remain valid across server processes');
-  return configured;
+  // P6-S2: one canonical supported rule — the registry validator. Its
+  // 32-character minimum and placeholder refusal apply to the server boot
+  // surface exactly as they do to the development tooling and the health
+  // readiness diagnosis, so the surfaces cannot disagree about a secret.
+  // A refusal names the rule, never the value.
+  const secretProblem = validateSessionSecret(String(process.env.SESSION_SECRET || '').trim());
+  if (secretProblem !== null) throw new Error(secretProblem);
+  return String(process.env.SESSION_SECRET || '').trim();
 }
 
 const SESSION_SECRET = resolveSessionSecret();
@@ -2354,18 +2384,14 @@ const PAGE_RENDER_CACHE_MAX_ENTRIES = 100;
 const UNSAFE_HTTP_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 function resolvePublicOrigin() {
+  // P6-S2: the exact origin rule is owned by the canonical environment
+  // registry so the server boot check and the tooling/parity checks cannot
+  // drift. The rule bytes are unchanged.
   const configured = String(process.env.PUBLIC_BASE_URL || '').trim();
   if (!configured) return null;
-  let parsed;
-  try {
-    parsed = new URL(configured);
-  } catch (_) {
-    throw new Error('PUBLIC_BASE_URL must be a valid absolute HTTP(S) origin');
-  }
-  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.origin !== configured.replace(/\/$/, '')) {
-    throw new Error('PUBLIC_BASE_URL must be an exact HTTP(S) origin without a path, credentials, query, or fragment');
-  }
-  return parsed.origin;
+  const problem = validateHttpOrigin(configured);
+  if (problem) throw new Error(problem);
+  return new URL(configured).origin;
 }
 
 const PUBLIC_ORIGIN = resolvePublicOrigin();
@@ -2469,10 +2495,12 @@ fastify.addHook('onRequestAbort', async request => {
   releaseRequestMutationAdmission(request);
 });
 
-async function refreshProcessExecutionReleaseReadiness() {
+async function refreshProcessExecutionReleaseReadiness(observedMigrationStatus) {
   try {
     processExecutionReleaseReadinessSnapshot =
-      await processExecutionReleaseReadiness.evaluate();
+      await processExecutionReleaseReadiness.evaluate(
+        observedMigrationStatus === undefined ? undefined : { migrationStatus: observedMigrationStatus }
+      );
   } catch (error) {
     processExecutionReleaseReadinessSnapshot = Object.freeze({
       version: 1,
@@ -2498,30 +2526,52 @@ fastify.get('/styles.css', async (request, reply) => {
   return fs.readFileSync(path.join(__dirname, 'src', 'styles.css'), 'utf8');
 });
 
-fastify.get('/health', async (request, reply) => {
-  if (!serverReady || evidencePersistenceFailure) {
-    reply.code(503);
-    return { status: evidencePersistenceFailure ? 'degraded' : 'starting', ready: false };
-  }
-  if (isMutationAdmissionBackpressured()) {
-    reply.code(503);
-    return { status: 'backpressured', ready: false, reason: 'mutation_admission_capacity' };
-  }
-  const processRelease = await refreshProcessExecutionReleaseReadiness();
-  return {
-    status: 'ok',
-    ready: true,
-    processExecutionRelease: {
-      state: processRelease.state,
-      admissionEnabled: processRelease.admissionEnabled,
-      recoveryAvailable: processRelease.recoveryAvailable,
-      releaseContractHash: processRelease.releaseContractHash,
-      issues: processRelease.issues.map(issue => ({
+// P6-S2 shared health semantics: liveness (the process exists and can
+// answer), readiness (the process may safely receive normal application
+// traffic), and capacity (work-admission load state — observable but NEVER a
+// readiness failure). See docs/DEPLOYMENT_CONTRACT.md §6/§7 and
+// runtime/health-readiness.js. Both public health routes project the same
+// contract; /api/health additionally carries uptime (pre-existing shape).
+async function buildLiveHealthProjection({ includeUptime }) {
+  // ONE read-only PostgreSQL probe per readiness request, through the
+  // canonical persistence owner (getMigrationStatus). Reachability,
+  // pending/unknown migrations, checksum identity and partial-ledger facts all
+  // come from that canonical call; failures are sanitized deterministically.
+  const postgresProbe = await probePostgresReadiness(postgresRuntimeStore);
+  let processRelease = null;
+  if (postgresProbe.reachable && serverReady && !evidencePersistenceFailure) {
+    // Reuse this request's observed migration facts (no second probe).
+    const snapshot = await refreshProcessExecutionReleaseReadiness(postgresProbe.migrationStatus);
+    processRelease = {
+      state: snapshot.state,
+      admissionEnabled: snapshot.admissionEnabled,
+      recoveryAvailable: snapshot.recoveryAvailable,
+      releaseContractHash: snapshot.releaseContractHash,
+      issues: snapshot.issues.map(issue => ({
         code: issue.code,
         category: issue.category
       }))
-    }
-  };
+    };
+  }
+  return buildHealthProjection({
+    serverReady,
+    evidencePersistenceLatched: Boolean(evidencePersistenceFailure),
+    postgresProbe,
+    effectRoots: [
+      { id: 'workspace', root: WORKSPACE_ROOT },
+      { id: 'artifacts', root: ARTIFACT_ROOT }
+    ],
+    admissionMetrics: mutationAdmission.getMetrics(),
+    processRelease,
+    includeUptime,
+    configurationFailures: validateEnvironment(process.env)
+  });
+}
+
+fastify.get('/health', async (request, reply) => {
+  const projection = await buildLiveHealthProjection({ includeUptime: false });
+  reply.code(projection.statusCode);
+  return projection.payload;
 });
 
 fastify.register(require('@fastify/view'), {
@@ -30452,35 +30502,9 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
 });
 
 fastify.get('/api/health', async (request, reply) => {
-  if (!serverReady || evidencePersistenceFailure) {
-    reply.code(503);
-    return { status: evidencePersistenceFailure ? 'degraded' : 'starting', ready: false };
-  }
-  if (isMutationAdmissionBackpressured()) {
-    reply.code(503);
-    return {
-      status: 'backpressured',
-      ready: false,
-      reason: 'mutation_admission_capacity',
-      uptime: Math.floor(process.uptime())
-    };
-  }
-  const processRelease = await refreshProcessExecutionReleaseReadiness();
-  return {
-    status: 'ok',
-    ready: true,
-    uptime: Math.floor(process.uptime()),
-    processExecutionRelease: {
-      state: processRelease.state,
-      admissionEnabled: processRelease.admissionEnabled,
-      recoveryAvailable: processRelease.recoveryAvailable,
-      releaseContractHash: processRelease.releaseContractHash,
-      issues: processRelease.issues.map(issue => ({
-        code: issue.code,
-        category: issue.category
-      }))
-    }
-  };
+  const projection = await buildLiveHealthProjection({ includeUptime: true });
+  reply.code(projection.statusCode);
+  return projection.payload;
 });
 
 fastify.get('/api/runtime/identity', { preHandler: fastify.requireAuth }, async (request, reply) => {

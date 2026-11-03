@@ -5,6 +5,18 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline/promises');
 const dotenv = require('dotenv');
+// P6-S2: the development tooling surface consumes the canonical executable
+// environment registry (docs/DEPLOYMENT_CONTRACT.md §8) so validation
+// semantics, defaults, and secret handling cannot drift between the server's
+// boot surface and the doctor/setup/docs surface.
+const {
+  validateAdminPassword: registryValidateAdminPassword,
+  validatePostgresUrl: registryValidatePostgresUrl,
+  validateSessionSecret: registryValidateSessionSecret
+} = require('../runtime/environment-config-registry');
+// Effect-root usability walk (non-mutating) is owned by ONE helper consumed
+// by both the health routes and the doctor.
+const { effectRootReadiness } = require('../runtime/health-readiness');
 
 const ROOT = path.resolve(__dirname, '..');
 const LOCAL_ENV_PATH = path.join(ROOT, '.env.local');
@@ -25,10 +37,6 @@ const DEVELOPMENT_KEYS = Object.freeze([
   'OLLAMA_BASE_URL',
   'WORKSPACE_ROOT',
   'ARTIFACT_ROOT'
-]);
-const PLACEHOLDERS = new Set([
-  'replace-with-at-least-32-random-characters',
-  'replace-with-a-local-development-password'
 ]);
 
 function loadLocalEnvFile(filePath = LOCAL_ENV_PATH) {
@@ -52,18 +60,7 @@ function applyLocalEnv(env = process.env, filePath = LOCAL_ENV_PATH) {
 }
 
 function validateDatabaseUrl(value) {
-  const text = String(value || '').trim();
-  if (!text) return 'DATABASE_URL is required';
-  try {
-    const parsed = new URL(text);
-    if (!['postgres:', 'postgresql:'].includes(parsed.protocol)) {
-      return 'DATABASE_URL must use postgres:// or postgresql://';
-    }
-    if (!parsed.pathname || parsed.pathname === '/') return 'DATABASE_URL must name a database';
-  } catch (_) {
-    return 'DATABASE_URL must be a valid PostgreSQL URL';
-  }
-  return null;
+  return registryValidatePostgresUrl(value);
 }
 
 function bundledDatabaseUrl(port = DEFAULT_BUNDLED_POSTGRES_PORT) {
@@ -137,23 +134,11 @@ function resolveDevelopmentDatabaseTarget(env = process.env) {
 }
 
 function validateSessionSecret(value) {
-  const text = String(value || '');
-  if (!text) return 'SESSION_SECRET is required';
-  if (PLACEHOLDERS.has(text)) return 'SESSION_SECRET is still the example placeholder';
-  if (text.length < MIN_SESSION_SECRET_LENGTH) {
-    return `SESSION_SECRET must contain at least ${MIN_SESSION_SECRET_LENGTH} characters`;
-  }
-  return null;
+  return registryValidateSessionSecret(value);
 }
 
 function validateAdminPassword(value, { required = false } = {}) {
-  const text = String(value || '');
-  if (!text) return required ? 'ADMIN_BOOTSTRAP_PASSWORD is required to create the first admin' : null;
-  if (PLACEHOLDERS.has(text)) return 'ADMIN_BOOTSTRAP_PASSWORD is still the example placeholder';
-  if (text.length < MIN_ADMIN_PASSWORD_LENGTH) {
-    return `ADMIN_BOOTSTRAP_PASSWORD must contain at least ${MIN_ADMIN_PASSWORD_LENGTH} characters`;
-  }
-  return null;
+  return registryValidateAdminPassword(value, { required });
 }
 
 function developmentConfig(env = process.env) {
@@ -164,7 +149,10 @@ function developmentConfig(env = process.env) {
     postgresSchema: String(env.POSTGRES_SCHEMA || 'ticket_system').trim(),
     sessionSecret: String(env.SESSION_SECRET || ''),
     adminBootstrapPassword: String(env.ADMIN_BOOTSTRAP_PASSWORD || ''),
-    workspaceRoot: path.resolve(ROOT, env.WORKSPACE_ROOT || '.local-workspace'),
+    // One canonical default with the server boot surface (server.js resolves
+    // the same relative default under the repository root when
+    // WORKSPACE_ROOT is unset); the registry owns the declared default.
+    workspaceRoot: path.resolve(ROOT, env.WORKSPACE_ROOT || 'workspace-root'),
     artifactRoot: path.resolve(ROOT, env.ARTIFACT_ROOT || '.local-artifacts')
   };
 }
@@ -197,18 +185,28 @@ function generateSessionSecret() {
   return crypto.randomBytes(32).toString('hex');
 }
 
+// Non-mutating usability walkthrough (effect-root directory-boundary
+// semantics). The exact walk semantics are owned by runtime/health-readiness.js
+// so the doctor, the health routes, and the readiness contract never disagree.
+// Only the human-facing message rendering stays here.
 function writablePathStatus(targetPath) {
-  let candidate = targetPath;
-  while (!fs.existsSync(candidate)) {
-    const parent = path.dirname(candidate);
-    if (parent === candidate) return { ok: false, message: `no existing parent for ${targetPath}` };
-    candidate = parent;
+  const [entry] = effectRootReadiness([{ id: 'path', root: path.resolve(targetPath) }]);
+  if (entry.usable) {
+    return { ok: true, message: fs.existsSync(path.resolve(targetPath)) ? String(targetPath) : `${targetPath} (will be created)` };
   }
-  try {
-    fs.accessSync(candidate, fs.constants.W_OK);
-    return { ok: true, message: fs.existsSync(targetPath) ? targetPath : `${targetPath} (will be created)` };
-  } catch (error) {
-    return { ok: false, message: `${targetPath}: ${error.code || error.message}` };
+  switch (entry.reason) {
+    case 'no_existing_parent':
+      return { ok: false, message: `no existing parent for ${targetPath}` };
+    case 'not_a_directory':
+      return { ok: false, message: `${targetPath}: exists but is not a directory` };
+    case 'insufficient_permissions':
+      return { ok: false, message: `${targetPath}: the runtime cannot read, write into, and traverse this directory` };
+    case 'parent_not_a_directory':
+      return { ok: false, message: `${targetPath}: cannot be created — the nearest existing parent is not a directory` };
+    case 'parent_insufficient_permissions':
+      return { ok: false, message: `${targetPath}: cannot be created — the parent directory does not support creation and traversal` };
+    default:
+      return { ok: false, message: `${targetPath}: not usable as an effect root (${entry.reason})` };
   }
 }
 

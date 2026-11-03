@@ -78,8 +78,17 @@ assert.match(append, /evidencePersistenceFailure = error[\s\S]*serverReady = fal
   'actual event persistence failure must fail closed for the current process');
 assert.doesNotMatch(append, /events\.jsonl|FileHandle|fsync|sync\(/);
 
-assert.match(server, /reason: 'mutation_admission_capacity'/,
-  'recoverable admission pressure must have a distinct health reason');
+// P6-S2: recoverable admission pressure is CAPACITY, not readiness. The old
+// 503-backpressure-as-readiness health reason is expressly removed (the P6
+// correction target); health carries `capacity.mutationAdmission` from the
+// canonical admission metrics, saturation stays observable, and the
+// recoverable refusal code is unchanged on the admission authority itself.
+assert.doesNotMatch(server, /reason: 'mutation_admission_capacity'/,
+  'backpressure must no longer exist as a readiness-failure health reason');
+assert.match(server, /admissionMetrics: mutationAdmission\.getMetrics\(\)/,
+  'health capacity is sourced from the canonical admission metrics');
+assert.match(server, /require\('\.\/runtime\/health-readiness'\)/,
+  'health routes project the frozen readiness semantics through the single owner');
 assert.match(server, /isMutationAdmissionBackpressured\(\)/);
 assert.match(server, /concurrencyLimits:\s*\{\s*scope: 'deployment'/);
 assert.doesNotMatch(server, /process_concurrency_limit|getRunStartBlockReason|activeProcessRuns/,

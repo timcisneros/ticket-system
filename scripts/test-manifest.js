@@ -305,6 +305,14 @@ const TESTS = Object.freeze([
   { file: "p5-r2-delegated-unit-contract-test.js", status: "required" },
   { file: "p5-r3-composition-consumption-contract-test.js", status: "required" },
   { file: "p5-r3-composition-consumption-postgres-test.js", status: "required" },
+  // P6-S2 — honest readiness and canonical configuration. The deterministic
+  // owner freezes the health payload semantics, the single executable
+  // environment registry, .env.example parity, and the doctor's
+  // migration-ledger states without PostgreSQL; the PostgreSQL-native owner
+  // proves the same seams against real persistence (probe cadence, designed
+  // 503s, saturated-capacity-not-readiness, doctor states, setup refusal).
+  { file: "p6-s2-health-readiness-contract-test.js", status: "required" },
+  { file: "p6-s2-readiness-postgres-test.js", status: "required" },
   { file: "page-render-regression-test.js", status: "required" },
   { file: "phase-contract-alignment-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "permission-escalation-boundary-test.js", status: "required" },
