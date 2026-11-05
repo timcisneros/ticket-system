@@ -18441,3 +18441,206 @@ database is required or contacted.
 
 **NEXT BOUNDARY: FRESH KIMI K3 MAX-REASONING INDEPENDENT REVIEW OF THE FINAL P6 DEVEX
 CANDIDATE — NO PUBLICATION OR P6-S3 YET.**
+
+---
+
+## P6-S3 — process-level hosted recovery evidence + operator runbook (IMPLEMENTED CANDIDATE)
+
+**STATUS:** P6-S3 IMPLEMENTATION CANDIDATE — built on the PUBLISHED P6 design freeze and
+P4/P6-S2 authority; NOT YET INDEPENDENTLY REVIEWED, NOT STAGED, NOT COMMITTED, NOT
+PUBLISHED. No P6-S3 section of this register previously existed (S3 was NOT STARTED when
+this entry was written). This record sums what the slice CREATED, and what its evidence
+PROVED; every procedure remains derived from existing canonical authority. P7 and
+Browser Phase 3 remain unopened; P2–P5, P6-S1, P6-S2, and the P6-DEVEX-A correction are
+untouched and stay CLOSED/PUBLISHED; migration 044 remains `NOT_AUTHORIZED` and
+operationally unapplied; the brainstormed DevEx LOW advisory items (bundled topology
+shape wording; README Podman/`dev:setup` text) were NOT touched by this slice.
+
+### 1. Opening gate
+
+Branch `master`, HEAD exactly `f91cacaaa1852eb75a9ee3b55e0bb27e9887be96`
+("Publish P6 DevEx disposable development target"), cached `origin/master` = fresh
+`git ls-remote` = HEAD, clean tree, nothing staged, zero untracked, stash empty,
+`git diff --check` clean. Operational posture unchanged throughout the slice: canonical
+migration-execution authorization exactly the deterministic `NOT_AUTHORIZED` shape
+(`config/migration-execution-authorization.json`); operational applied head observed at
+`043` (`getMigrationStatus` through a read-only store seam: `currentVersion: 43`,
+`headVersion: 44`, `044_browser_interaction_authority.sql` pending count 1, ledger rows
+43, identities 43); migration source head `044`;
+`P6-RESIDUAL-CHECKPOINT-REPEATABILITY` remains OPEN and is not fixed by P6-S3.
+
+### 2. S3 purpose restated (from the published freeze)
+
+P6-S3 is not new capability: it proves — at REAL process level — the already-frozen
+single-host multi-process deployment/recovery model, and hands the operator one
+deterministic procedure for it (`docs/DEPLOYMENT_RUNBOOK.md`). The register's minimum
+process-level evidence list (two processes competing, no duplicate authority, crash
+while holding a live lease, peer takeover only under canonical lease authority, same
+Run/attempt, restart with active runs, PostgreSQL outage/restart fail-closed/recovery,
+migration-mismatch startup refusal, evidence latch, bounded drain) is covered below on
+REAL processes; Kubernetes/cloud infrastructure is NOT used.
+
+### 3. Process-level evidence owner (REQUIRED, one suite)
+
+ONE new registered owner:
+`scripts/p6-s3-hosted-recovery-postgres-test.js` (PostgreSQL-native; REAL independent
+server child processes against one real disposable schema; registered as `required` in
+`scripts/test-manifest.js` and in `scripts/release-checkpoint.js`
+`POSTGRES_INTEGRATION_SCRIPTS`; `scripts/release-checkpoint-coverage-test.js` passes).
+It owns, with its named in-file scenario labels:
+
+- MULTIPROCESS-A / no leader: `2a` two live processes race for one pending run (exactly
+  one authoritative `run.lease_acquired`, owner is one of the two child pids); `2b` the
+  deployment-wide `maxActiveRuns` seat excludes the peer while the holder is
+  process-frozen (`SIGSTOP`), with canonical `capacity.waiting` evidence and the healthy
+  peer staying `200/ready` (capacity never readiness); `2c` deterministic
+  single-live-claimer claim (the frozen process cannot claim; claims come from
+  PostgreSQL rows, not process memory); `2d` chain validity after competition.
+- CRASH-A / LEASE-A: `3a` SIGKILL of the holder — the row stays honestly stale
+  (`running`, dead owner, unexpired lease, no forged evidence); `3b` no takeover while
+  the dead lease is still valid; `3c` takeover at/after canonical expiry
+  (`run.recovery_claimed`, mode `lease_expiry`, `recoveredAt ≥
+  previousLease.leaseExpiresAt`) performed by the real surviving peer; `3d` same Run +
+  same Ticket attempt, exactly one truthful terminal settlement, no duplicate attempt.
+- RESTART-A: total process death with a live claim, then cold restart — startup
+  recovery mode `process_restart` reconstructs from PostgreSQL, settles truthfully
+  ONCE, is idempotent across a second restart, and never mints a new attempt (recovery
+  is not retry/rerun).
+- PG-OUTAGE-A: a full real connection-plane outage behind a suite-owned accept proxy in
+  front of the real PostgreSQL port (idle AND in-flight connections severed; the
+  suite's own observation store bypasses the proxy) — designed readiness projection
+  (`unready`/`postgres_unreachable`, sanitized, `alive: true`, capacity observable, no
+  evidence latch from unreachability alone) on BOTH processes; refused mutations leave
+  no durable state; restoration restores readiness per request with no restart.
+- EVIDENCE-LATCH-A (process-level): a REAL evidence-write failure (a PostgreSQL
+  boundary the suite injects around the `events` table) latches ONE process — degraded
+  health, designed `EVENT_PERSISTENCE_UNAVAILABLE` refusal, claimer stop (a fresh
+  pending run stays pending while the latched process is the only live claimer), no
+  self-heal after the boundary is repaired, the healthy process unaffected — and the
+  documented operator RESTART restores a ready claimer (claims resume through normal
+  authority).
+- MIGRATION-MISMATCH-A (startup-level, the half `p6-s2` does not own): positive control
+  (fully-current ledger boots ready; boot is a ledger no-op); unknown-future;
+  missing/behind; identity-drift — each refuses THE PROCESS (non-zero exit, honest
+  message, no bootstrap-from-mismatched-state), applies nothing, and restoration
+  restores boot readiness. The live readiness refusals, the doctor's ledger states,
+  and T10's guarded refusal of the unauthorized pending transition remain owned by
+  `p6-s2-readiness-postgres-test.js` (referenced, not duplicated).
+- DRAIN-A: SIGTERM mid-flight — bounded drain, exit code 143 (the declared code); the
+  post-shutdown surface accepts no HTTP work; whichever truth holds (settled terminal
+  state with exactly one settlement, or timed-out forced-stop with the run still
+  honestly stale under its valid lease for a peer) is asserted truthfully; the sharp
+  SIGKILL variant keeps the run stale too.
+- HOST-LOCAL-A: multiple processes wrote into ONE host-local workspace root (single
+  host doctrine asserted; no shared-storage artifact claim).
+- EVIDENCE anchors are the suite scenario labels quoted in section 3. Other subsections
+  deliberately REUSE existing owners: provider-request uncertainty and conservative
+  settlement via
+  `governed-post-transport-restart-postgres-test.js` (+ siblings); the live readiness
+  contract via `p6-s2-readiness-postgres-test.js`; backpressure vs latched wording via
+  `mutation-admission-backpressure-test.js`; drain mechanics via
+  `run-evidence-drain-test.js`; store-level claim mutual exclusion via
+  `concurrency-conflict-test.js`; the app-level deployment doctrine stays in
+  `DEPLOYMENT_CONTRACT.md`; the runbook references — never restates — those semantics.
+
+### 4. Two narrow deployment-behavior corrections forced by the S3 evidence
+
+The new process-level evidence exposed two REAL contradictions against the frozen
+health/outage contract, fixed minimally in their canonical owners and pinned by the
+S3 suite:
+
+1. `persistence/postgres/store.js` — pg-pool re-emits an IDLE severed client's error on
+   the pool; with no listener, a real PostgreSQL outage (terminator, network loss)
+   CRASHED every application process with `Unhandled 'error' event`, converting the
+   designed fail-closed outage posture into process death. The store constructor now
+   owns ONE bounded observation (`lastPoolFailure`: timestamp/code/message) so the
+   process SURVIVES, readiness is re-probed per request, and real recovery applies. No
+   authority is faked: the next read/write still fails through its usual seam, and no
+   backward reconnect probe runs.
+2. `server.js` (`@fastify/session` registration) — the session middleware
+   materialized a session ROW for EVERY request, including cookie-less `/health`
+   observation traffic, so a severed connection failed the readiness surface at the
+   session-store WRITE layer (observed: fastify default `503 {"message":
+   "Connection terminated unexpectedly"}` instead of the designed
+   `postgres_unreachable` readiness payload). `saveUninitialized: false` stops
+   materializing anonymous sessions; authenticated flows (`/login`, `regenerate()`,
+   `userId`) persist exactly as before. Read-only observation routes now observe
+   without mutating (`P6 observation: routes must NOT write`).
+
+Both are P6 contract semantics (`DEPLOYMENT_CONTRACT.md` §6/§7: designed bounded 503,
+liveness independent, no unhandled dependency-outage response) proven behavior-level by
+the S3 suite's `5a` scenario; neither changes product semantics, adds authority, or
+alters the five-state T10 doctrine.
+
+### 5. Operator runbook (ONE)
+
+`docs/DEPLOYMENT_RUNBOOK.md` — prerequisites/preflight/migration posture, starting
+multiple processes safely, liveness/readiness/capacity observation (read-only
+surfaces), crash (NOTHING to replay manually; wait for canonical lease recovery),
+whole-service restart, PostgreSQL outage, migration mismatch states (no T10
+shortcut; 044 unapplied), evidence-latch procedure (diagnose → operator restart),
+bounded drain/stop sequence, strict-parity rollback (no down migration; paired
+restore), and the post-incident recovery verification list. `docs/INDEX.md` gained
+exactly one entry; `DEPLOYMENT_CONTRACT.md`'s owner list gained one pointer. The
+runbook states only existing authority; it invents no mutating surface (no
+force-release, no manual completion, no latch clearing, no authorization mutation).
+
+### 6. Test ownership decision
+
+ONE new required checkpoint owner was necessary (there was no existing suite that
+truthfully drives REAL independent processes through hosted recovery: store-level
+claim/concurrency and seeded-state startup suites cover narrower kernels without
+process isolation). All other S3 subjects keep their existing owners and are
+referenced from the new suite and the runbook. Registration:
+`scripts/test-manifest.js` (required) + `scripts/release-checkpoint.js`
+(POSTGRES_INTEGRATION_SCRIPTS). The port rule (`release-checkpoint-coverage-test.js`)
+is satisfied through the OS allocator (`freePort`/listen-0).
+
+### 7. Verification performed on the candidate bytes (before the independent review)
+
+- Syntax: `node scripts/check-js-syntax.js` (PASS).
+- S3 suite: `p6-s3-hosted-recovery-postgres-test.js` — PASS twice in a row on the
+  disposable `ticket_system_test` schemas (21 scenarios, 119–120 assertions).
+- Affected existing owners re-run PASS: `p6-s2-readiness-postgres-test.js`
+  (16 scenarios), `p6-s2-health-readiness-contract-test.js` (48 scenarios),
+  `mutation-admission-backpressure-test.js`, `rotate-session-secret-test.js`,
+  `api-token-authority-postgres-test.js` (21 scenarios),
+  `startup-data-integrity-test.js`, `postgres-startup-recovery-test.js`,
+  `migration-execution-authority-test.js` (143 assertions),
+  `run-evidence-drain-test.js`, `process-supervision-postgres-test.js`,
+  `operational-summary-readonly-test.js`,
+  `event-record-limit-containment-test.js`, `lease-renewal-resume-safety-test.js`,
+  `concurrency-conflict-test.js`, `release-checkpoint-coverage-test.js`
+  (manifest/checkpoint registration guard), and the full canonical checkpoint on
+  FINAL candidate bytes (see §8).
+- The migration-execution authorization record, the operational ledger posture, and
+  the operational database CONTENT are unchanged by every run above (read-only
+  posture reads; disposable schemas only).
+
+### 8. Protected full checkpoint (P6-S3 is a protected trigger)
+
+S3 changes across deployment/recovery authority and adds a required owner — the
+protected-trigger case. The canonical gate for this slice is
+`TEST_DATABASE_URL=<disposable> node scripts/release-checkpoint.js` run on the EXACT
+final candidate bytes; its durable result record (`.local-artifacts/release-checkpoint-results/…`,
+`checkpoint-terminal.json`) is the verification evidence that travels with the candidate
+to the independent review, together with the per-file SHA-256 candidate identity. The
+candidate bytes deliberately embed no checkpoint result — the result is a separate
+verification artifact, never repository content, so candidate identity and checkpoint
+evidence stay byte-stable in both directions. The known residual
+`P6-RESIDUAL-CHECKPOINT-REPEATABILITY` remains OPEN: any recurrence observed during this
+checkpoint must be preserved as evidence and dispositioned at combined P6 closure, never
+fixed opportunistically inside S3.
+
+### 9. Stop conditions honored
+
+No Ticket/Run lifecycle change, no attempt semantics change, no completion-authority
+change, no admission bypass, no migration-authority weakening, no operational direct
+state mutation, no hidden in-process authority, no leader election, no multi-host
+claim, no new demand-gated features, no 044 execution, no P7/Browser-Phase-3, no
+P2-P5/S1/S2 reopening, no opportunistic DevEx-LOW fixes, and no opportunistic residual
+fixes. Nothing in this slice introduces writable operator capability.
+
+**NEXT BOUNDARY: FRESH KIMI K3 MAX-REASONING INDEPENDENT REVIEW OF THE EXACT P6-S3
+CANDIDATE — NO PUBLICATION, NO STAGING/COMMIT/PUSH, NO P7, AND NO OPERATIONAL
+MIGRATION.**

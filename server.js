@@ -2424,6 +2424,15 @@ fastify.register(require('@fastify/cookie'));
 fastify.register(require('@fastify/session'), {
   secret: SESSION_SECRET,
   store: new PostgresSessionStore(postgresRuntimeStore),
+  // P6-S3 deployment correction: an anonymous (cookie-less) request must not
+  // materialize a PostgreSQL session row. Materializing one on EVERY request
+  // (including the public /health observation routes) made the readiness
+  // surface depend on a session-store WRITE — a severed connection would fail
+  // /health through the session layer instead of the designed readiness probe
+  // (docs/DEPLOYMENT_CONTRACT.md §6/§7: read-only observation routes must
+  // observe, not mutate). Authenticated flows are unaffected: /login mutates
+  // the session (regenerate + userId) and is persisted exactly as before.
+  saveUninitialized: false,
   cookie: {
     secure: SESSION_COOKIE_SECURE,
     httpOnly: true,

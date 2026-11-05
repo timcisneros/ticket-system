@@ -11,6 +11,8 @@ Specialized owners remain canonical for their subsystems and are referenced, not
 - PostgreSQL runtime authority, concurrency, and durability → `POSTGRES_CUTOVER.md`
 - Process-execution release installation, enablement, backup, and incidents →
   `PROCESS_EXECUTION_GA_RUNBOOK.md`
+- Operator runbook (start/status/crash/restart/outage/migration/latch/drain/rollback
+  procedures; P6-S3) → `DEPLOYMENT_RUNBOOK.md`
 - Read-only operational surfaces → `OPERATIONAL_TRANSPARENCY.md`
 - Telemetry semantic definitions → `OPERATIONAL_TELEMETRY.md`
 - Local environment setup and first run → `SETUP_AND_FIRST_RUN.md`

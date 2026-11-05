@@ -38,6 +38,10 @@
   schema, native protocol, and historical-read compatibility matrix.
 - [`PROCESS_EXECUTION_GA_RUNBOOK.md`](PROCESS_EXECUTION_GA_RUNBOOK.md) — installation,
   readiness, staged enablement, disablement, backup, rollback, and incident procedures.
+- [`DEPLOYMENT_RUNBOOK.md`](DEPLOYMENT_RUNBOOK.md) — the P6-S3 single-host multi-process
+  operator runbook: starting/status/crash/restart/outage/migration/latch/drain/rollback
+  procedures derived from the frozen P6 deployment contract and the process-level
+  recovery evidence (`scripts/p6-s3-hosted-recovery-postgres-test.js`).
 - [`WORK_DEFINITION_AND_TYPED_EVIDENCE_ROADMAP.md`](WORK_DEFINITION_AND_TYPED_EVIDENCE_ROADMAP.md)
   — authoritative four-tranche roadmap for typed projection parity and later structured
   work-definition authority.

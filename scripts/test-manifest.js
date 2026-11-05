@@ -313,6 +313,17 @@ const TESTS = Object.freeze([
   // 503s, saturated-capacity-not-readiness, doctor states, setup refusal).
   { file: "p6-s2-health-readiness-contract-test.js", status: "required" },
   { file: "p6-s2-readiness-postgres-test.js", status: "required" },
+  // P6-S3 — process-level hosted recovery evidence: REAL independent server
+  // processes against one real PostgreSQL authority. Owns the cross-process
+  // seams no store-level or in-process owner covers: multi-process claim
+  // competition/no-leader + deployment-wide seat, SIGKILL crash with
+  // lease-rule takeover timing, cold-restart recovery idempotence, a full
+  // connection-plane outage with designed readiness shape, the
+  // process-level evidence latch lifecycle (mutation refusal, claimer stop,
+  // operator restart), startup migration refusals, bounded graceful drain,
+  // and honest host-local effect-root sharing. Companion narrower owners
+  // listed in the suite header are not duplicated.
+  { file: "p6-s3-hosted-recovery-postgres-test.js", status: "required" },
   { file: "page-render-regression-test.js", status: "required" },
   { file: "phase-contract-alignment-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "permission-escalation-boundary-test.js", status: "required" },

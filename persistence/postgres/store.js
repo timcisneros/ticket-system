@@ -1271,6 +1271,28 @@ class PostgresRuntimeStore {
       connectionTimeoutMillis: positiveSafeInteger(connectionTimeoutMs, 'connectionTimeoutMs'),
       statement_timeout: positiveSafeInteger(statementTimeoutMs, 'statementTimeoutMs')
     });
+    // An IDLE pool client severed by a real PostgreSQL outage (terminator, network
+    // loss, server restart) makes pg-pool emit `pool.on('error')`. Without a
+    // listener the Node process CRASHES on that event, which would convert the
+    // designed fail-closed outage semantics (readiness probe failure, in-flight
+    // write latch, mutation refusal) into unobserved process death. The store
+    // owns ONE bounded observation of the last pool-level error — process
+    // existence is preserved, no authority is faked, and the next read/write
+    // still fails through its usual seam. (P6-S3: full-process outage semantics
+    // vs docs/DEPLOYMENT_CONTRACT.md §6/§7.) No automatic reconnect probe runs
+    // here: the per-request readiness probe and per-call seam errors remain the
+    // only truth about reachability. Caller-supplied pool substitutes (test
+    // fakes) may not be EventEmitters, so the listener is conditional.
+    this.lastPoolFailure = null;
+    if (typeof this.pool.on === 'function') {
+      this.pool.on('error', error => {
+        this.lastPoolFailure = Object.freeze({
+          at: new Date().toISOString(),
+          code: error && error.code ? String(error.code) : null,
+          message: error && error.message ? String(error.message).slice(0, 160) : null
+        });
+      });
+    }
   }
 
   table(name) {

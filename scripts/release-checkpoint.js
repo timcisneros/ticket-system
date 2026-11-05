@@ -450,6 +450,18 @@ const POSTGRES_INTEGRATION_SCRIPTS = Object.freeze([
   // saturated-capacity-never-readiness, doctor ledger states, and the
   // unauthorized-migration setup refusal.
   'p6-s2-readiness-postgres-test.js',
+  // P6-S3 — process-level hosted recovery evidence (PostgreSQL-native owner):
+  // REAL independent server processes prove the frozen single-host
+  // multi-process deployment contract end-to-end — claim competition with no
+  // leader, deployment-wide seat, SIGKILL crash + canonical lease-expiry
+  // takeover on the SAME Run/attempt, cold-restart recovery idempotence, a
+  // full connection-plane outage with designed readiness/liveness behavior,
+  // the process-level evidence latch lifecycle and operator restart, startup
+  // migration refusals, bounded graceful drain, and host-local effect-root
+  // sharing. Provider-uncertainty settlement and the narrower backpressure /
+  // readiness / drain-mechanics seams remain owned by their existing suites
+  // (see the suite header) and are not duplicated here.
+  'p6-s3-hosted-recovery-postgres-test.js',
   // P5-R3 — deterministic composition consumption: the cross-Ticket runtime
   // lifecycle. awaitChildTickets (read-only bounded observation, zero
   // completion authority, no passive admission) and the childTerminalOutcome
