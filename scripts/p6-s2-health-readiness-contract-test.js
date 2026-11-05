@@ -17,10 +17,14 @@
 //   CONFIG-A/B — one executable registry owns supported configuration;
 //   SECRET-A/B — registry validation and health projections identify setting
 //                 NAMES, never secret values;
-//   MIGRATION DIAGNOSTICS — the doctor's ledger classifier distinguishes
-//                 current / behind+authorized / behind+unauthorized /
-//                 incompatible+drifted, and the unauthorized guidance never
-//         claims `dev:setup` can bypass the migration authority.
+//   MIGRATION DIAGNOSTICS — the doctor's disposable-development ledger
+//                 classifier distinguishes current / behind / uninitialized /
+//                 incompatible+drifted; the behind guidance states the
+//                 code-declared disposable development authority (auto-migrate
+//                 on `npm run dev`) and NEVER claims operational migration
+//                 authorization. The dev:setup refusal-guidance export keeps
+//                 pointing at the governed authorization procedure only, and
+//                 never claims `dev:setup` can bypass the migration authority.
 //
 // The PostgreSQL-native counterpart (p6-s2-readiness-postgres-test.js) proves
 // the same seams against real persistence; registration policy keeps both
@@ -1133,347 +1137,149 @@ sourceNamed(serverSource, /validateHttpOrigin\(configured\)/, 'validateHttpOrigi
 sourceNamed(serverSource, /validateSessionSecret\(String\(process\.env\.SESSION_SECRET \|\| ''\)\.trim\(\)\)/, 'SESSION_SECRET canonical rule consumption');
 scenario('CONFIG-C: server boot consumes the canonical registry rules (DRIVER seams)');
 
-// ── MIGRATION DIAGNOSTICS (doctor ledger classifier) ────────────────────────
+// ── MIGRATION DIAGNOSTICS (disposable development ledger classifier) ────────
 //
-// Defect-A correction proof. The doctor's positive `behind_authorized`
-// classification may ONLY come from the canonical migration-execution
-// authority decision — never from a re-implemented evaluator. Each regression
-// below runs the REAL canonical inspection
-// (`migrationAuthority.inspectTransitionAuthority`, the exact shared
-// implementation the enforcing gate performs) against a REAL offline fixture
-// repository (local bare origin; no network) and must NOT classify
-// `behind_authorized`.
+// P6-DEVEX-A correction. The doctor diagnoses the FIXED repository-owned
+// disposable development target; its ledger row makes NO migration-authorization
+// claim, because the code-declared disposable development authority is bound
+// ONLY to the verified bundled-compose development lifecycle (the
+// module-internal site in scripts/dev-database.js) that auto-migrates that
+// target on `npm run dev`.
+// The OPERATIONAL migration-execution authority (T10) is a separate, unchanged
+// owner: its refusal/classification behavior is pinned by
+// scripts/migration-execution-authority-test.js, and this doctor never
+// consulted, weakened, or bypassed it. The classifier consumes canonical
+// persistence facts only (exact `getMigrationStatus()` shape, read-only
+// observation, canonical pending/identity evaluation); the fixed dev-target
+// identity/state combinations are pinned deterministically here and the real
+// store-backed doctor rows in the PostgreSQL-native counterpart suite.
+const { classifyDisposableDevelopmentLedgerState, ledgerCheckRow, postgresHelp } = require('./dev-doctor');
 
-const { classifyMigrationLedgerState, ledgerCheckRow, postgresHelp } = require('./dev-doctor');
-const migrationAuthority = require('../persistence/postgres/migration-authority');
-const { execFileSync } = require('child_process');
-
-function fixtureGit(cwd, args) {
-  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
+const DEV_MIGRATIONS = ['040_ticket_cancellation_authority.sql', '041_ticket_five_state_cutover.sql'];
+function devChecksum(version) {
+  return require('node:crypto').createHash('sha256').update(`dev-fixture:${version}`).digest('hex');
 }
+const APPLIED_040 = DEV_MIGRATIONS.slice(0, 1);
+const PENDING_041 = DEV_MIGRATIONS.slice(1).map(version => ({ version, sha256: devChecksum(version) }));
+const FULL_STATUS = Object.freeze({ fullyApplied: true, checksumsValid: true, partial: false, currentVersion: 41, headVersion: 41, pendingMigrations: 0, unknownMigrations: 0 });
 
-function fixtureAuthorizedRecord(overrides = {}) {
-  return migrationAuthority.validateRecordShape(JSON.stringify({
-    recordKind: 'migration-execution-authorization',
-    recordVersion: 1,
-    migrationTransitionId: 'fixture-transition-1',
-    authorizationState: 'AUTHORIZED',
-    expectedTarget: { host: '127.0.0.1', port: 5432, database: 'fixturedb', schema: 'fixture_schema' },
-    requiredAppliedVersions: ['040_ticket_cancellation_authority.sql'],
-    authorizedPendingMigrations: [{ version: '041_ticket_five_state_cutover.sql', sha256: fakeChecksum('041_ticket_five_state_cutover.sql') }],
-    authorizedBaselineHead: 'a'.repeat(40),
-    authorizedBy: 'p6s2 fixture authorizing review',
-    authorizedAtUtc: '2026-01-01T00:00:00Z',
-    ...overrides
-  }));
-}
-
-// Builds a REAL git repository with a local bare `origin` (refs/heads/master),
-// a tracked authorization record, a clean worktree, HEAD == origin/master, and
-// BOTH an ancestor baseline and (for the stale-baseline regression) a real
-// non-ancestor baseline from a side branch. Everything stays local:
-// `buildRecord({ ancestorBaseline, nonAncestorBaseline })` supplies the exact
-// record bytes that are tracked and committed.
-function createFixtureRepository(buildRecord) {
-  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'p6s2-authrepo-'));
-  const repo = path.join(parent, 'repo');
-  const origin = path.join(parent, 'origin.git');
-  fs.mkdirSync(repo);
-  fixtureGit(repo, ['init']);
-  fixtureGit(repo, ['config', 'user.email', 'p6s2-fixture@example.invalid']);
-  fixtureGit(repo, ['config', 'user.name', 'p6s2-fixture']);
-  fixtureGit(repo, ['branch', '-M', 'master']);
-  fs.writeFileSync(path.join(repo, 'baseline.txt'), 'fixture baseline\n');
-  fixtureGit(repo, ['add', 'baseline.txt']);
-  fixtureGit(repo, ['commit', '-m', 'fixture baseline']);
-  const ancestorBaseline = fixtureGit(repo, ['rev-parse', 'HEAD']);
-  // A real SIDE commit that is NOT an ancestor of master (stale-baseline leg).
-  fixtureGit(repo, ['checkout', '-b', 'side-branch']);
-  fs.writeFileSync(path.join(repo, 'side.txt'), 'side commit\n');
-  fixtureGit(repo, ['add', 'side.txt']);
-  fixtureGit(repo, ['commit', '-m', 'side commit']);
-  const nonAncestorBaseline = fixtureGit(repo, ['rev-parse', 'HEAD']);
-  fixtureGit(repo, ['checkout', 'master']);
-  fixtureGit(repo, ['clone', '--bare', repo, origin]);
-  fixtureGit(repo, ['remote', 'add', 'origin', origin]);
-  // The tracked canonical record home (the same relative path the authority owns).
-  fs.mkdirSync(path.join(repo, 'config'));
-  fs.writeFileSync(
-    path.join(repo, 'config', 'migration-execution-authorization.json'),
-    buildRecord({ ancestorBaseline, nonAncestorBaseline })
-  );
-  fixtureGit(repo, ['add', 'config/migration-execution-authorization.json']);
-  fixtureGit(repo, ['commit', '-m', 'fixture authorization record']);
-  fixtureGit(repo, ['push', 'origin', 'master']);
-  return {
-    parent,
-    repoRoot: repo,
-    ancestorBaseline,
-    nonAncestorBaseline
-  };
-}
-
-// Runs the REAL doctor pipeline shape: canonical pending computation → REAL
-// canonical authority inspection → the doctor's pure classifier.
-function classifyFixtureLedger(fixture, {
-  appliedVersions = ['040_ticket_cancellation_authority.sql'],
+function devLedgerState({
+  schemaExists = true,
+  ledgerExists = true,
+  appliedVersions = APPLIED_040,
   status = { fullyApplied: false, currentVersion: 40, headVersion: 41, pendingMigrations: 1, unknownMigrations: 0, checksumsValid: false, partial: false },
-  identityRows = [{ version: '040_ticket_cancellation_authority.sql', sha256: fakeChecksum('040_ticket_cancellation_authority.sql') }],
-  migrations = MIGRATIONS_A,
-  connectionString = 'postgresql://fixture-user:fixture-password@127.0.0.1:5432/fixturedb',
-  currentDatabaseName = 'fixturedb',
-  schema = 'fixture_schema',
-  recordRaw = fs.readFileSync(path.join(fixture.repoRoot, 'config', 'migration-execution-authorization.json'), 'utf8')
+  migrations = DEV_MIGRATIONS,
+  identityRows = null,
+  pendingMigrations = null
 } = {}) {
-  const pending = migrationAuthority.computePendingMigrations(
-    migrationAuthority.canonicalizeAppliedVersions(appliedVersions, migrations),
-    migrations,
-    fakeChecksum
-  );
-  const inspection = migrationAuthority.inspectTransitionAuthority({
-    repoRoot: fixture.repoRoot,
-    connectionString,
-    schema,
-    currentDatabaseName,
-    migrations,
-    migrationChecksum: fakeChecksum,
-    appliedVersions,
-    pendingMigrations: pending,
-    loadRecordRaw: () => recordRaw
-  });
-  const classification = classifyMigrationLedgerState({
-    schemaExists: true,
-    ledgerExists: true,
+  return classifyDisposableDevelopmentLedgerState({
+    schemaExists,
+    ledgerExists,
     appliedVersions,
     status,
     migrations,
-    migrationChecksum: fakeChecksum,
+    migrationChecksum: devChecksum,
     identityRows,
-    pendingMigrations: pending,
-    authorizationInspection: inspection
+    pendingMigrations
   });
-  return { inspection, classification };
 }
 
-function withFixture(buildClassifications) {
-  const fixture = createFixtureRepository(
-    ({ ancestorBaseline }) => JSON.stringify(fixtureAuthorizedRecord({ authorizedBaselineHead: ancestorBaseline }), null, 2) + '\n'
-  );
-  try {
-    return buildClassifications(fixture);
-  } finally {
-    fs.rmSync(fixture.parent, { recursive: true, force: true });
-  }
-}
-
-withFixture(built => {
-  // POSITIVE: only the genuinely canonical-authorized exact transition.
-  const positive = classifyFixtureLedger(built, {});
-  assert.equal(positive.inspection.ok, true, 'positive: the canonical inspection authorizes the exact fixture transition');
-  assert.equal(positive.classification.state, 'behind_authorized', 'positive: doctor reports behind + authorized FROM the canonical inspection alone');
-  assert.match(positive.classification.message, /IS authorized/, 'positive message claims authorization for the exact transition');
-  assert.deepEqual(positive.classification.pending, ['041_ticket_five_state_cutover.sql']);
-  scenario('MIGRATION-A: behind_authorized is reachable ONLY through the real canonical authority decision');
-
-  // Leg 1–3: exact target identity (database / schema / host / port).
-  for (const [label, overrides] of [
-    ['wrong target database', { expectedTarget: { host: '127.0.0.1', port: 5432, database: 'other_database', schema: 'fixture_schema' } }],
-    ['wrong target schema', { expectedTarget: { host: '127.0.0.1', port: 5432, database: 'fixturedb', schema: 'other_schema' } }],
-    ['wrong target host', { expectedTarget: { host: '127.0.0.2', port: 5432, database: 'fixturedb', schema: 'fixture_schema' } }],
-    ['wrong target port', { expectedTarget: { host: '127.0.0.1', port: 5555, database: 'fixturedb', schema: 'fixture_schema' } }]
-  ]) {
-    const outcome = classifyFixtureLedger(built, {
-      recordRaw: JSON.stringify(fixtureAuthorizedRecord({
-        authorizedBaselineHead: built.ancestorBaseline,
-        ...overrides
-      }))
-    });
-    assert.equal(outcome.inspection.ok, false, `${label}: canonical inspection refuses`);
-    assert.equal(outcome.classification.state, 'behind_unauthorized', `${label}: doctor must NOT report behind_authorized`);
-    assert.match(outcome.classification.message, /NOT authorized/, `${label}: message refuses authorization`);
-    assert.match(outcome.classification.message, /target (database|schema|host|port)/, `${label}: refusal names the exact target leg`);
-  }
-  // On-contact database mismatch (URL database vs observed contact database).
-  const contactMismatch = classifyFixtureLedger(built, {
-    connectionString: 'postgresql://fixture-user:fixture-password@127.0.0.1:5432/fixturedb',
-    currentDatabaseName: 'otherdb'
+{
+  // CURRENT (complete canonical ledger).
+  const current = devLedgerState({
+    appliedVersions: DEV_MIGRATIONS,
+    status: FULL_STATUS,
+    statusNote: undefined,
+    identityRows: DEV_MIGRATIONS.map(version => ({ version, sha256: devChecksum(version) }))
   });
-  assert.equal(contactMismatch.classification.state, 'behind_unauthorized');
-  assert.match(contactMismatch.classification.message, /on-contact database/, 'on-contact database mismatch refuses');
-  scenario('MIGRATION-A regression: wrong target database/schema/host/port never classify authorized');
+  assert.equal(current.state, 'current');
+  assert.deepEqual(current.pending, []);
+  assert.equal(current.remediation, null, 'a current development ledger needs no remediation');
+  assert.equal(ledgerCheckRow(current, 'ticket_system').status, 'pass');
+  scenario('MIGRATION-dev: current disposable development ledger renders PASS');
 
-  // Leg 4: stale/wrong authorized baseline HEAD (real non-ancestor lineage).
-  const stale = classifyFixtureLedger(built, {
-    recordRaw: JSON.stringify(fixtureAuthorizedRecord({ authorizedBaselineHead: 'f'.repeat(40) }))
+  // BEHIND with valid applied identities: informational auto-migrate row with
+  // NO authorization claim (the disposable authority is a code declaration).
+  const behind = devLedgerState({
+    appliedVersions: APPLIED_040,
+    identityRows: APPLIED_040.map(version => ({ version, sha256: devChecksum(version) }))
   });
-  assert.equal(stale.classification.state, 'behind_unauthorized', 'stale (unknown) baseline must not authorize');
-  const realNonAncestor = classifyFixtureLedger(built, {
-    recordRaw: JSON.stringify(fixtureAuthorizedRecord({ authorizedBaselineHead: built.nonAncestorBaseline }))
-  });
-  assert.equal(realNonAncestor.classification.state, 'behind_unauthorized', 'a real non-ancestor baseline must not authorize');
-  assert.match(realNonAncestor.classification.message, /NOT authorized/);
-  scenario('MIGRATION-A regression: stale/wrong authorized baseline HEAD never classifies authorized');
+  assert.equal(behind.state, 'behind_disposable');
+  assert.deepEqual(behind.pending, ['041_ticket_five_state_cutover.sql']);
+  assert.equal(behind.remediation, null);
+  assert.match(behind.message, /behind the canonical migration source by 1/);
+  assert.match(behind.message, /auto-migrate/);
+  assert.match(behind.message, /no migration-execution authorization is involved/,
+    'the dev ledger row states disposability explicitly, never authorization');
+  assert.doesNotMatch(behind.message, /IS authorized|authorized for this exact/,
+    'the dev ledger row does NOT record authorization state');
+  const behindRow = ledgerCheckRow(behind, 'ticket_system');
+  assert.equal(behindRow.status, 'info');
+  assert.equal(behindRow.message.includes('IS authorized'), false);
+  scenario('MIGRATION-dev: behind disposable development ledger is informational (auto-migrate, no authorization claim)');
 
-  // Leg 5: repository/publication authority no longer satisfied.
-  fs.writeFileSync(path.join(built.repoRoot, 'untracked.txt'), 'dirty fixture\n');
-  const dirty = classifyFixtureLedger(built, {});
-  assert.equal(dirty.inspection.ok, false, 'dirty worktree refuses');
-  assert.equal(dirty.classification.state, 'behind_unauthorized', 'unmet publication authority never classifies authorized');
-  assert.match(dirty.classification.message, /worktree is not clean/, 'the refusal names the repository authority leg');
-  scenario('MIGRATION-A regression: unsatisfied repository/publication authority never classifies authorized');
-
-  // Leg 6 + 7: mismatched required applied set / mismatched pending set.
-  const appliedMismatch = classifyFixtureLedger(built, {
-    recordRaw: JSON.stringify(fixtureAuthorizedRecord({
-      authorizedBaselineHead: built.ancestorBaseline,
-      requiredAppliedVersions: ['041_ticket_five_state_cutover.sql']
-    }))
-  });
-  assert.equal(appliedMismatch.classification.state, 'behind_unauthorized');
-  assert.match(appliedMismatch.classification.message, /requiredAppliedVersions/, 'applied pre-state mismatch refuses');
-  const pendingShaMismatch = classifyFixtureLedger(built, {
-    recordRaw: JSON.stringify(fixtureAuthorizedRecord({
-      authorizedBaselineHead: built.ancestorBaseline,
-      authorizedPendingMigrations: [{ version: '041_ticket_five_state_cutover.sql', sha256: fakeChecksum('wrong-source-bytes') }]
-    }))
-  });
-  assert.equal(pendingShaMismatch.classification.state, 'behind_unauthorized');
-  assert.match(pendingShaMismatch.classification.message, /pending migration set/, 'pending-set sha mismatch refuses');
-  scenario('MIGRATION-A regression: mismatched required applied set / pending set never classify authorized');
-
-  // Leg 8: malformed record.
-  const malformed = classifyFixtureLedger(built, { recordRaw: '{"recordKind": "garbage"}' });
-  assert.equal(malformed.classification.state, 'behind_unauthorized', 'a malformed record must not authorize');
-  assert.match(malformed.classification.message, /NOT authorized/);
-  scenario('MIGRATION-A regression: malformed authorization record classifies fail-closed');
-
-  // BEHIND + NOT_AUTHORIZED record state through the REAL record shape.
-  const NOT_AUTHORIZED_RECORD_RAW = JSON.stringify({
-    recordKind: 'migration-execution-authorization',
-    recordVersion: 1,
-    migrationTransitionId: null,
-    authorizationState: 'NOT_AUTHORIZED',
-    expectedTarget: { host: null, port: null, database: null, schema: null },
-    requiredAppliedVersions: [],
-    authorizedPendingMigrations: [],
-    authorizedBaselineHead: null,
-    authorizedBy: null,
-    authorizedAtUtc: null
-  });
-  const notAuthorized = classifyFixtureLedger(built, { recordRaw: NOT_AUTHORIZED_RECORD_RAW });
-  assert.equal(notAuthorized.classification.state, 'behind_unauthorized');
-  assert.match(notAuthorized.classification.message, /NOT_AUTHORIZED/);
-  assert.match(notAuthorized.classification.message, /NOT authorized/);
-  assert.match(notAuthorized.classification.guidance, /pnpm dev:setup cannot bypass the migration execution authority/);
-  assert.match(notAuthorized.classification.guidance, /canonical migration command/);
-  assert.doesNotMatch(notAuthorized.classification.guidance, /run pnpm dev:setup\.$|then run pnpm dev:setup/);
-  scenario('MIGRATION-B: behind + NOT_AUTHORIZED record state refuses with governed guidance only');
-
-  // CURRENT / UNKNOWN / DRIFTED / UNINITIALIZED (authorization not consulted).
-  const current = classifyFixtureLedger(built, {
-    appliedVersions: MIGRATIONS_A,
-    status: { fullyApplied: true, currentVersion: 41, headVersion: 41, pendingMigrations: 0, unknownMigrations: 0, checksumsValid: true, partial: false },
-    identityRows: MIGRATIONS_A.map(version => ({ version, sha256: fakeChecksum(version) })),
-    recordRaw: NOT_AUTHORIZED_RECORD_RAW
-  });
-  assert.equal(current.classification.state, 'current');
-  assert.deepEqual(current.classification.pending, []);
-  assert.equal(current.classification.guidance, null, 'a current ledger needs no authorization guidance');
-  scenario('MIGRATION-A: doctor distinguishes CURRENT (no authorization consultation needed)');
-
-  const unknownState = classifyFixtureLedger(built, {
-    appliedVersions: MIGRATIONS_A,
-    status: { fullyApplied: false, currentVersion: 41, headVersion: 41, pendingMigrations: 0, unknownMigrations: 1, checksumsValid: false, partial: true },
-    recordRaw: NOT_AUTHORIZED_RECORD_RAW
-  });
-  assert.equal(unknownState.classification.state, 'incompatible_unknown');
-  assert.match(unknownState.classification.message, /unknown future migrations/);
-  const driftedState = classifyFixtureLedger(built, {
-    identityRows: [{ version: '040_ticket_cancellation_authority.sql', sha256: 'tampered' }],
-    recordRaw: NOT_AUTHORIZED_RECORD_RAW
-  });
-  assert.equal(driftedState.classification.state, 'drifted');
-  assert.match(driftedState.classification.message, /checksum\/history drift/);
-  assert.equal(classifyMigrationLedgerState({ schemaExists: false, ledgerExists: false }).state, 'uninitialized');
-  scenario('MIGRATION-A: doctor distinguishes INCOMPATIBLE / DRIFTED / uninitialized (fail-closed)');
-
-  // A simply-behind ledger with valid applied identities is NOT mis-read as drift.
-  const behindClean = classifyFixtureLedger(built, { recordRaw: NOT_AUTHORIZED_RECORD_RAW });
-  assert.equal(behindClean.classification.state, 'behind_unauthorized', 'clean applied identities + pending → behind, not drift');
+  // Applied-identity evaluation covers the applied subset so a simply-behind
+  // ledger with valid applied identity bytes is never mis-read as drift.
+  assert.equal(behind.state, 'behind_disposable', 'clean applied identities + pending stay behind, not drift');
   scenario('applied-identity evaluation covers the applied subset so "behind" is not drift');
-});
 
-// Conservative unverifiable state: when the canonical authority facts cannot
-// be established at all (non-git inspection root), the doctor must NEVER claim
-// authorized.
-{
-  const baseline = JSON.stringify(fixtureAuthorizedRecord({ authorizedBaselineHead: 'a'.repeat(40) }));
-  const pending = migrationAuthority.computePendingMigrations(
-    migrationAuthority.canonicalizeAppliedVersions(['040_ticket_cancellation_authority.sql'], MIGRATIONS_A),
-    MIGRATIONS_A,
-    fakeChecksum
-  );
-  const inspection = migrationAuthority.inspectTransitionAuthority({
-    repoRoot: os.tmpdir(),
-    connectionString: 'postgresql://fixture-user:fixture-password@127.0.0.1:5432/fixturedb',
-    schema: 'fixture_schema',
-    currentDatabaseName: 'fixturedb',
-    migrations: MIGRATIONS_A,
-    migrationChecksum: fakeChecksum,
-    appliedVersions: ['040_ticket_cancellation_authority.sql'],
-    pendingMigrations: pending,
-    loadRecordRaw: () => baseline
-  });
-  assert.equal(inspection.ok, false, 'unverifiable: the canonical inspection cannot authorize without the repository authority');
-  assert.equal(inspection.unverifiable, true, 'unverifiable: transport-level refusal is marked unverifiable');
-  const classification = classifyMigrationLedgerState({
-    schemaExists: true,
-    ledgerExists: true,
-    appliedVersions: ['040_ticket_cancellation_authority.sql'],
-    status: { fullyApplied: false, currentVersion: 40, headVersion: 41, pendingMigrations: 1, unknownMigrations: 0, checksumsValid: false, partial: false },
-    migrations: MIGRATIONS_A,
-    migrationChecksum: fakeChecksum,
-    identityRows: [{ version: '040_ticket_cancellation_authority.sql', sha256: fakeChecksum('040_ticket_cancellation_authority.sql') }],
-    pendingMigrations: pending,
-    authorizationInspection: inspection
-  });
-  assert.equal(classification.state, 'behind_authorization_record_present_but_not_verified');
-  assert.equal(classification.message.includes('IS authorized'), false, 'the unverifiable state never claims authorization');
-  assert.match(classification.message, /NOT authorized until verified/);
-  const withoutInspection = classifyMigrationLedgerState({
-    schemaExists: true, ledgerExists: true, appliedVersions: ['040_ticket_cancellation_authority.sql'],
-    status: { fullyApplied: false, currentVersion: 40, headVersion: 41, pendingMigrations: 1, unknownMigrations: 0, checksumsValid: false, partial: false },
-    migrations: MIGRATIONS_A, migrationChecksum: fakeChecksum,
-    identityRows: [{ version: '040_ticket_cancellation_authority.sql', sha256: fakeChecksum('040_ticket_cancellation_authority.sql') }],
-    pendingMigrations: pending, authorizationInspection: null
-  });
-  assert.equal(withoutInspection.state, 'behind_authorization_record_present_but_not_verified');
-  assert.equal(withoutInspection.message.includes('IS authorized'), false);
-  scenario('unverifiable canonical authority facts classify conservatively (never authorized)');
-}
+  // UNINITIALIZED: informational provisioning guidance (`npm run dev` /
+  // `npm run dev:setup` provisions the disposable target).
+  const uninitialized = devLedgerState({ schemaExists: false, ledgerExists: false });
+  assert.equal(uninitialized.state, 'uninitialized');
+  assert.match(uninitialized.message, /provisions and auto-migrates/);
+  assert.match(uninitialized.message, /development authority/);
+  assert.equal(ledgerCheckRow(uninitialized, 'ticket_system').status, 'info');
+  scenario('MIGRATION-dev: uninitialized development ledger is informational (dev provisions it)');
 
-// Doctor row rendering: refusal rows fail with authority-honest guidance; the
-// unverifiable row fails closed too.
-{
-  const rowRecord = JSON.stringify(fixtureAuthorizedRecord({ authorizedBaselineHead: 'a'.repeat(40) }));
-  const pending = migrationAuthority.computePendingMigrations(
-    migrationAuthority.canonicalizeAppliedVersions(['040_ticket_cancellation_authority.sql'], MIGRATIONS_A), MIGRATIONS_A, fakeChecksum);
-  const inspection = migrationAuthority.inspectTransitionAuthority({
-    repoRoot: os.tmpdir(), connectionString: 'postgresql://f:f@127.0.0.1:5432/fixturedb', schema: 'fixture_schema',
-    currentDatabaseName: 'fixturedb', migrations: MIGRATIONS_A, migrationChecksum: fakeChecksum,
-    appliedVersions: ['040_ticket_cancellation_authority.sql'], pendingMigrations: pending, loadRecordRaw: () => rowRecord
+  // UNKNOWN FUTURE migration: incompatible disposable state → dev:reset.
+  const unknown = devLedgerState({
+    appliedVersions: DEV_MIGRATIONS,
+    status: { fullyApplied: false, currentVersion: 41, headVersion: 41, pendingMigrations: 0, unknownMigrations: 1, checksumsValid: false, partial: true }
   });
-  const classification = classifyMigrationLedgerState({
-    schemaExists: true, ledgerExists: true, appliedVersions: ['040_ticket_cancellation_authority.sql'],
-    status: { fullyApplied: false, currentVersion: 40, headVersion: 41, pendingMigrations: 1, unknownMigrations: 0, checksumsValid: false, partial: false },
-    migrations: MIGRATIONS_A, migrationChecksum: fakeChecksum,
-    identityRows: [{ version: '040_ticket_cancellation_authority.sql', sha256: fakeChecksum('040_ticket_cancellation_authority.sql') }],
-    pendingMigrations: pending, authorizationInspection: inspection
+  assert.equal(unknown.state, 'incompatible_unknown');
+  assert.match(unknown.message, /unknown future migrations/);
+  assert.match(unknown.remediation, /dev:reset/);
+  assert.equal(ledgerCheckRow(unknown, 'ticket_system').status, 'fail');
+  scenario('MIGRATION-dev: unknown future migrations fail with exactly the dev:reset remediation');
+
+  // APPLIED-IDENTITY DRIFT → dev:reset.
+  const drifted = devLedgerState({
+    appliedVersions: APPLIED_040,
+    identityRows: [{ version: '040_ticket_cancellation_authority.sql', sha256: '0'.repeat(64) }],
+    pendingMigrations: PENDING_041
   });
-  assert.equal(ledgerCheckRow(classification, 'fixture_schema').status, 'fail');
-  assert.match(ledgerCheckRow(classification, 'fixture_schema').message, /pnpm dev:setup cannot bypass/);
+  assert.equal(drifted.state, 'drifted');
+  assert.match(drifted.message, /checksum\/history drift/);
+  assert.match(drifted.remediation, /dev:reset/);
+  scenario('MIGRATION-dev: identity drift fails with the dev:reset remediation');
+
+  // PARTIAL canonical facts → dev:reset.
+  const partial = devLedgerState({
+    appliedVersions: DEV_MIGRATIONS,
+    status: { ...FULL_STATUS, fullyApplied: false, partial: true, checksumsValid: false },
+    identityRows: DEV_MIGRATIONS.map(version => ({ version, sha256: devChecksum(version) })),
+    pendingMigrations: []
+  });
+  assert.equal(partial.state, 'drifted');
+  assert.match(partial.remediation, /dev:reset/);
+  scenario('MIGRATION-dev: partial canonical facts fail with the dev:reset remediation');
+
+  // Inconsistent no-pending ledger (not fullyApplied, nothing pending) → fail.
+  const inconsistent = devLedgerState({
+    appliedVersions: APPLIED_040,
+    status: { ...FULL_STATUS, fullyApplied: false },
+    pendingMigrations: []
+  });
+  assert.equal(inconsistent.state, 'drifted');
+  assert.match(inconsistent.remediation, /dev:reset/);
+  scenario('MIGRATION-dev: unexplained inconsistent ledger fails closed with dev:reset');
+
+  // The fail rows carry the bounded remediation; connectivity help stays.
+  const unknownRow = ledgerCheckRow(unknown, 'ticket_system');
+  assert.match(unknownRow.message, /dev:reset/, 'corrupt development state names ONLY the disposable reset remediation');
   assert.ok(postgresHelp().includes('dev:setup'), 'connectivity help retained');
-  scenario('MIGRATION-B: doctor renders refusal rows with authority-honest guidance');
+  scenario('MIGRATION-dev: ledger rows render honestly; connectivity help is unchanged');
 }
 
 // dev:setup's refusal guidance (bytes-level): the export exists and points at

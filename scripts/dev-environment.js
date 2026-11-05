@@ -63,12 +63,17 @@ function validateDatabaseUrl(value) {
   return registryValidatePostgresUrl(value);
 }
 
+// Bundled compose development credentials (compose.dev.yml owns them). Code
+// constants — never configuration, never a caller input.
+const BUNDLED_CREDENTIALS = Object.freeze({ user: 'ticket_system', password: 'ticket_system' });
+
+function bundledCredentialUrl(database, port) {
+  return `postgresql://${BUNDLED_CREDENTIALS.user}:${BUNDLED_CREDENTIALS.password}@127.0.0.1:${port}/${database}`;
+}
+
 function bundledDatabaseUrl(port = DEFAULT_BUNDLED_POSTGRES_PORT) {
-  const normalizedPort = Number(port);
-  if (!Number.isSafeInteger(normalizedPort) || normalizedPort < 1 || normalizedPort > 65535) {
-    throw new Error('TICKET_SYSTEM_POSTGRES_PORT must be an integer from 1 through 65535');
-  }
-  return `postgresql://ticket_system:ticket_system@127.0.0.1:${normalizedPort}/ticket_system`;
+  const normalizedPort = resolveBundledComposePort({ TICKET_SYSTEM_POSTGRES_PORT: port });
+  return bundledCredentialUrl('ticket_system', normalizedPort);
 }
 
 const DEFAULT_DATABASE_URL = bundledDatabaseUrl();
@@ -85,16 +90,19 @@ function isBundledDatabaseUrl(value) {
     parsed.hash === '';
 }
 
+// ONE bundled-port owner: the compose development infrastructure owns this
+// mapping; the rule and message are exactly the shared owner's. The resolved
+// port belongs to the DEVELOPMENT channel only and is resolved in every
+// configuration because the development target exists independently of the
+// operational one. It NEVER rewrites an explicitly supplied operational
+// DATABASE_URL: the explicit URL owns the operational identity exactly,
+// regardless of its shape (see the exact-identity branch below) — no
+// localhost, bundled-credentials, database-name, or URL-shape heuristic
+// reconnects the two channels.
 function resolveDevelopmentDatabaseTarget(env = process.env) {
   const configuredUrl = String(env.DATABASE_URL || '').trim();
   const configuredPort = String(env.TICKET_SYSTEM_POSTGRES_PORT || '').trim();
-  const composePort = configuredPort
-    ? Number(configuredPort)
-    : DEFAULT_BUNDLED_POSTGRES_PORT;
-  if (configuredPort &&
-      (!/^\d+$/.test(configuredPort) || !Number.isSafeInteger(composePort) || composePort < 1 || composePort > 65535)) {
-    throw new Error('TICKET_SYSTEM_POSTGRES_PORT must be an integer from 1 through 65535');
-  }
+  const composePort = resolveBundledComposePort(env);
 
   if (!configuredUrl) {
     return Object.freeze({
@@ -107,29 +115,283 @@ function resolveDevelopmentDatabaseTarget(env = process.env) {
 
   const databaseError = validateDatabaseUrl(configuredUrl);
   if (databaseError) throw new Error(databaseError);
-  if (!isBundledDatabaseUrl(configuredUrl)) {
-    if (configuredPort) {
-      throw new Error(
-        'TICKET_SYSTEM_POSTGRES_PORT configures the bundled database and cannot be combined ' +
-        'with an external DATABASE_URL'
-      );
-    }
-    return Object.freeze({
-      kind: 'external',
-      databaseUrl: configuredUrl,
-      composePort: null,
-      source: 'database-url'
-    });
-  }
-
-  const parsed = new URL(configuredUrl);
-  const databasePort = parsed.port ? Number(parsed.port) : DEFAULT_BUNDLED_POSTGRES_PORT;
-  const effectivePort = configuredPort ? composePort : databasePort;
+  // CHANNEL-SPLIT-A (exact): an EXPLICITLY supplied DATABASE_URL owns the
+  // operational target EXACTLY — byte-exact URL, port, database, schema
+  // (through POSTGRES_SCHEMA), always, with no exception for localhost,
+  // bundled credentials, the bundled database name, or any resemblance to the
+  // bundled default. TICKET_SYSTEM_POSTGRES_PORT MUST NOT rewrite the
+  // explicit operational URL; it only ever selects the fixed disposable
+  // development target, and no URL-shape heuristic reconnects the channels.
   return Object.freeze({
-    kind: 'bundled',
-    databaseUrl: bundledDatabaseUrl(effectivePort),
-    composePort: effectivePort,
-    source: configuredPort ? 'bundled-port' : 'database-url'
+    kind: isBundledDatabaseUrl(configuredUrl) ? 'bundled' : 'external',
+    databaseUrl: configuredUrl,
+    composePort,
+    source: 'database-url'
+  });
+}
+
+// ── Fixed repository-owned disposable development target ───────────────────
+//
+// P6-DEVEX-A correction: the daily dev command needs ONE fixed, code-owned,
+// disposable development identity that DATABASE_URL can never redirect. Every
+// value below is a code constant. No environment variable, CLI flag, or caller
+// argument may select the development database, schema, or host (the ONLY
+// environmental input is TICKET_SYSTEM_POSTGRES_PORT because the bundled
+// compose file already owns that host-port mapping; see
+// resolveBundledComposePort). Disposability is an explicit code declaration —
+// the module-internal verified-development lifecycle owner
+// (scripts/dev-database.js) is the only place that grants it — never an
+// environment kind, never a name inference, never a human bypass.
+const DEVELOPMENT_TARGET_HOST = '127.0.0.1';
+const DEVELOPMENT_TARGET_DATABASE = 'ticket_system_dev';
+// The development schema is deliberately FIXED to the same code-owned schema
+// name the operational default uses; the DATABASE name differs, so the
+// collision guard below (host/port/database/schema) still separates the two
+// identities. POSTGRES_SCHEMA is operational-only and cannot alter this.
+const DEVELOPMENT_TARGET_SCHEMA = 'ticket_system';
+
+// Extracted so the bundled port has exactly one owner (the existing
+// bundled-compose rental already declared by compose.dev.yml and
+// startDevelopmentDatabase). Same exact rule and message as before.
+const BUNDLED_PORT_INVALID_MESSAGE =
+  'TICKET_SYSTEM_POSTGRES_PORT must be an integer from 1 through 65535';
+
+function resolveBundledComposePort(env = process.env) {
+  const raw = env.TICKET_SYSTEM_POSTGRES_PORT;
+  const configuredPort = raw === undefined || raw === null ? '' : String(raw).trim();
+  if (!configuredPort) return DEFAULT_BUNDLED_POSTGRES_PORT;
+  if (!/^\d+$/.test(configuredPort)) throw new Error(BUNDLED_PORT_INVALID_MESSAGE);
+  const port = Number(configuredPort);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new Error(BUNDLED_PORT_INVALID_MESSAGE);
+  }
+  return port;
+}
+
+function disposableDevelopmentTarget(env = process.env) {
+  const port = resolveBundledComposePort(env);
+  return Object.freeze({
+    kind: 'disposable-development',
+    host: DEVELOPMENT_TARGET_HOST,
+    port,
+    database: DEVELOPMENT_TARGET_DATABASE,
+    schema: DEVELOPMENT_TARGET_SCHEMA,
+    // Bundled development credentials already owned by compose.dev.yml —
+    // never configuration. Identity rows must render host/port/database/
+    // schema only; this URL never appears in printed output or errors.
+    databaseUrl: bundledCredentialUrl(DEVELOPMENT_TARGET_DATABASE, port)
+  });
+}
+
+// ── Collision guard (before ANY development database contact) ──────────────
+//
+// Deterministic host normalization: `localhost` → `127.0.0.1` only. No DNS,
+// no port scanning, no "is something listening on this port" inference — the
+// guard compares identities only.
+function normalizeTargetHost(host) {
+  return host === 'localhost' ? '127.0.0.1' : host;
+}
+
+function targetIdentity({ host, port, database, schema }) {
+  return Object.freeze({
+    host: normalizeTargetHost(String(host)),
+    port: Number(port),
+    database: String(database),
+    schema: String(schema)
+  });
+}
+
+function formatTargetIdentity(identity) {
+  return `host ${identity.host}, port ${identity.port}, database ${identity.database}, schema ${identity.schema}`;
+}
+
+// Recovers the OPERATIONAL target identity through the canonical operational
+// resolver's URL and schema (no credentials are ever kept in the identity).
+function operationalIdentityFrom(config) {
+  let parsed;
+  try {
+    parsed = new URL(config.databaseUrl);
+  } catch (_) {
+    throw new TypeError('DATABASE_URL did not resolve to a connection URL identity');
+  }
+  if (!parsed.hostname || !parsed.pathname || parsed.pathname === '/') {
+    throw new TypeError('DATABASE_URL did not resolve to a host and database identity');
+  }
+  return {
+    host: parsed.hostname,
+    port: parsed.port ? Number(parsed.port) : 5432,
+    database: decodeURIComponent(parsed.pathname.slice(1)),
+    schema: config.postgresSchema
+  };
+}
+
+// Pure, credential-free collision assessment. The operational side is
+// recovered through the existing canonical operational resolver
+// (developmentConfig → resolveDevelopmentDatabaseTarget), never re-derived.
+// Refusal happens BEFORE any development database contact or mutation.
+function assessDevelopmentTargetCollision(env = process.env) {
+  const devTarget = disposableDevelopmentTarget(env);
+  const development = targetIdentity(devTarget);
+  let operational;
+  try {
+    operational = targetIdentity(operationalIdentityFrom(developmentConfig(env)));
+  } catch (error) {
+    return {
+      ok: false,
+      devTarget,
+      development,
+      operational: null,
+      reason:
+        'the configured operational target identity could not be established (' +
+        safeErrorMessage(error) +
+        '); refusing development database contact because identity equality cannot be disproven'
+    };
+  }
+  const equal = development.host === operational.host &&
+    development.port === operational.port &&
+    development.database === operational.database &&
+    development.schema === operational.schema;
+  if (!equal) {
+    return { ok: true, devTarget, development, operational, reason: null };
+  }
+  return {
+    ok: false,
+    devTarget,
+    development,
+    operational,
+    reason:
+      'the configured operational target (' + formatTargetIdentity(operational) + ') is identical to the ' +
+      'fixed disposable development target (' + formatTargetIdentity(development) + '); no operational state ' +
+      'may be touched with disposable migration authority. Note: localhost is deterministically read as ' +
+      '127.0.0.1. The disposable development identity is code-owned and cannot be redirected by DATABASE_URL, ' +
+      'POSTGRES_SCHEMA, or CLI input; reconfigure the operational DATABASE_URL (or run dev commands) instead'
+  };
+}
+
+class DevelopmentTargetCollisionError extends Error {
+  constructor(reason) {
+    super('Development target refused before any database contact: ' + reason);
+    this.name = 'DevelopmentTargetCollisionError';
+    this.code = 'DEVELOPMENT_TARGET_REFUSED';
+    this.reason = String(reason);
+  }
+}
+
+// ── BUNDLED-TOPOLOGY-A: shared bundled PostgreSQL service port guard ───────
+//
+// The repository's bundled local PostgreSQL Compose SERVICE may be the same
+// physical service that hosts the configured OPERATIONAL database (the
+// sanctioned local topology: one bundled service, one operational database
+// `ticket_system`, one disposable `ticket_system_dev` distinguished by
+// database name). In that topology the development Compose host port and the
+// exact operational DATABASE_URL address the SAME service, so they MUST be
+// equal; remapping the service with a different TICKET_SYSTEM_POSTGRES_PORT
+// would make the exact operational DATABASE_URL unreachable. This is a
+// PHYSICAL-TOPOLOGY guard, deliberately separate from COLLISION-A (the two
+// databases have different names, so no identity collision exists while the
+// physical service is still shared). Refusal happens BEFORE any Compose,
+// runtime, or database contact, and the explicit operational URL is never
+// rewritten: the caller must use the operational port or leave
+// TICKET_SYSTEM_POSTGRES_PORT unset (the bundled default expresses the same
+// service the operational URL already names).
+
+class DevelopmentServiceTopologyError extends Error {
+  constructor(reason) {
+    super('Development service port cannot be remapped before any database contact: ' + reason);
+    this.name = 'DevelopmentServiceTopologyError';
+    this.code = 'DEVELOPMENT_SERVICE_TOPOLOGY_REFUSED';
+    this.reason = String(reason);
+  }
+}
+
+// BUNDLED-TOPOLOGY-A shape detection: the configured operational target
+// addresses the REPOSITORY's bundled local PostgreSQL service when it is a
+// PostgreSQL URL for the bundled role/database on the local loopback (any
+// password is accepted for shape purposes — the password never leaks). The
+// password byte-shape must NOT participate so a local deployment with a
+// custom password still shares the physical topology.
+function isBundledServiceShape(value) {
+  let parsed;
+  try { parsed = new URL(value); } catch (_) { return false; }
+  return (parsed.protocol === 'postgresql:' || parsed.protocol === 'postgres:') &&
+    parsed.username === 'ticket_system' &&
+    (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost') &&
+    parsed.pathname === '/ticket_system' &&
+    parsed.search === '' &&
+    parsed.hash === '';
+}
+
+function assessBundledServiceTopologyGuard(env = process.env) {
+  const databaseTarget = resolveDevelopmentDatabaseTarget(env);
+  if (!databaseTarget || !isBundledServiceShape(databaseTarget.databaseUrl)) {
+    // The operational target is not the bundled local service (no explicit
+    // URL at all, or an explicit external/non-bundled one): the development
+    // Compose host port may independently select the local disposable
+    // development service port.
+    return { ok: true, databaseTarget, operationalPort: null, composePort: null, reason: null };
+  }
+  let operationalPort;
+  try {
+    const parsed = new URL(databaseTarget.databaseUrl);
+    operationalPort = parsed.port ? Number(parsed.port) : DEFAULT_BUNDLED_POSTGRES_PORT;
+  } catch (error) {
+    // The bundled-shaped URL was already validated; refuse fail-closed with
+    // the honest reason if its port cannot be established.
+    return {
+      ok: false,
+      databaseTarget,
+      operationalPort: null,
+      composePort: null,
+      reason: 'the bundled operational target port could not be established (' + safeErrorMessage(error) + ')'
+    };
+  }
+  const composePort = resolveBundledComposePort(env);
+  if (operationalPort === composePort) {
+    return { ok: true, databaseTarget, operationalPort, composePort, reason: null };
+  }
+  return {
+    ok: false,
+    databaseTarget,
+    operationalPort,
+    composePort,
+    reason:
+      'the configured operational target is bound to the same bundled local PostgreSQL service ' +
+      '(the explicitly supplied bundled-shaped DATABASE_URL resolves to the repository compose service), ' +
+      'whose exact address must stay reachable at port ' + operationalPort + '; remapping that service to the ' +
+      'requested Compose host port ' + composePort + ' would make the exact operational DATABASE_URL unavailable. ' +
+      'Use TICKET_SYSTEM_POSTGRES_PORT=' + operationalPort + ' or leave TICKET_SYSTEM_POSTGRES_PORT unset.'
+  };
+}
+
+// Throwing wrapper for mutating dev entry points. THE refusal always happens
+// before any bundled infra start, database existence probe, or mutation.
+// Two DISTINCT guards compose here: COLLISION-A (identity equality) and
+// BUNDLED-TOPOLOGY-A (shared bundled-service port remapping).
+function assertDevelopmentTargetUsable(env = process.env) {
+  const assessment = assessDevelopmentTargetCollision(env);
+  if (!assessment.ok) throw new DevelopmentTargetCollisionError(assessment.reason);
+  const topology = assessBundledServiceTopologyGuard(env);
+  if (!topology.ok) throw new DevelopmentServiceTopologyError(topology.reason);
+  return assessment.devTarget;
+}
+
+// NO disposable authority lives here: the single authority-bearing
+// construction site is the module-internal factory in scripts/dev-database.js
+// (createDisposableDevelopmentStore), reachable ONLY through the verified
+// bundled-compose development lifecycle (collision guard → compose
+// start/verification → fixed database ensure → migrate), never from env
+// alone. The exported factory in this file is the ordinary GUARDED seam for
+// the doctor's read-only diagnosis and the post-migration dev provisioning:
+// its disposable flag stays false, so it cannot migrate anything. It is bound
+// to the fixed development identity derived internally from the code
+// constants and the bounded bundled compose port; callers cannot redirect its
+// identity, and it grants NO migration authority.
+function createGuardedDevelopmentStore(env = process.env) {
+  const target = disposableDevelopmentTarget(env);
+  const { PostgresRuntimeStore } = require('../persistence/postgres/store');
+  return new PostgresRuntimeStore({
+    connectionString: target.databaseUrl,
+    schema: DEVELOPMENT_TARGET_SCHEMA
   });
 }
 
@@ -269,19 +531,33 @@ function safeErrorMessage(error) {
 module.exports = {
   DEFAULT_BUNDLED_POSTGRES_PORT,
   DEFAULT_DATABASE_URL,
+  DEVELOPMENT_TARGET_DATABASE,
+  DEVELOPMENT_TARGET_HOST,
+  DEVELOPMENT_TARGET_SCHEMA,
+  DevelopmentTargetCollisionError,
+  DevelopmentServiceTopologyError,
   LOCAL_ENV_PATH,
   MIN_ADMIN_PASSWORD_LENGTH,
   MIN_SESSION_SECRET_LENGTH,
   applyLocalEnv,
+  assertDevelopmentTargetUsable,
+  assessBundledServiceTopologyGuard,
+  assessDevelopmentTargetCollision,
   bundledDatabaseUrl,
+  createGuardedDevelopmentStore,
   developmentConfig,
+  disposableDevelopmentTarget,
+  formatTargetIdentity,
   generateSessionSecret,
   loadLocalEnvFile,
+  normalizeTargetHost,
   promptHidden,
   promptVisible,
   renderLocalEnv,
+  resolveBundledComposePort,
   resolveDevelopmentDatabaseTarget,
   safeErrorMessage,
+  targetIdentity,
   validateAdminPassword,
   validateDatabaseUrl,
   validateSessionSecret,

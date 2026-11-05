@@ -190,8 +190,61 @@ is insufficient.
 disposable-migration contract. Disposability is never inferred from database name, schema
 prefix, `TEST_DATABASE_URL`, environment kind, localhost identity, or a missing schema.
 
+**E-dev. Explicit repository-owned disposable development target.** The daily development
+command (`npm run dev` and the `dev:*` setup/doctor/reset commands) operates on ONE fixed,
+code-owned disposable development identity — host `127.0.0.1`, database `ticket_system_dev`,
+schema `ticket_system`, bundled development credentials (owner:
+`scripts/dev-environment.js`; the only environmental input is `TICKET_SYSTEM_POSTGRES_PORT`
+through the bundled compose owner). The dev lifecycle ensures that database, auto-migrates it
+to the canonical source head under the same explicit code declaration, and diagnoses it in
+`dev:doctor`; `npm run dev:reset` destroys and recreates only that identity. The disposable
+authority exists at exactly one production construction site and is reachable ONLY through
+the verified development infrastructure lifecycle: `scripts/dev-database.js` owns the
+module-internal store constructor whose single `disposableMigrations: true` declaration, and
+every reachable flow runs the collision guard, bundled compose start, bundled service
+verification, and fixed database ensure BEFORE construction; no exported function may build
+that store from env, a port, a target object, or a database URL alone, no create/drop/reset
+helper accepts caller-selected identity, and `dev:doctor` inspects the fixed target only
+through an ordinary guarded, non-migrating read seam. This category is
+narrow and does not weaken any of the five states above: the configured `DATABASE_URL`
+remains the operational/persistent target protected by T10, is never migrated by dev
+commands, and any configured operational target whose identity equals the fixed development
+identity (host/port/database/schema, with `localhost` deterministically read as
+`127.0.0.1`) refuses all development contact before mutation. The configuration channels
+are independent on EXACT terms: `DATABASE_URL` owns the operational/persistent target
+exactly (an explicitly supplied `DATABASE_URL`, external or bundled-named, owns the
+operational identity byte for byte, with no URL-shape exception and no bundled-port
+rewrite), while `TICKET_SYSTEM_POSTGRES_PORT` selects the host port of the repository's
+bundled PostgreSQL Compose SERVICE — the service inside which the disposable development
+database lives. When the configured operational database is THE BUNDLED SERVICE'S OWN
+`ticket_system` database (a `ticket_system@loopback/ticket_system` URL), that one physical
+service also carries the operational state, so the Compose host port MUST equal the
+exact operational URL port and an incompatible `TICKET_SYSTEM_POSTGRES_PORT` refuses
+BEFORE any Compose/database contact (BUNDLED-TOPOLOGY-A; distinct from the identity
+collision rule). When the operational target is external/non-bundled, TSPP may
+independently choose the local development-service port. No URL-shape heuristic
+reconnects the channels. The bundled infrastructure lifecycle is deterministic
+repository/application defense in depth (NOT an adversarial security boundary): it
+launches the repository-owned `compose.dev.yml` through an explicitly resolved trusted
+absolute system Docker Compose — the Docker CLI from the validated system prefix and the
+Compose CLI plugin pinned to a root-owned accepted system plugin site (the plugin path
+recovered from the supported docker info ClientInfo surface under a sterile per-invocation
+Docker CLI configuration), never the ambient PATH and never the user's personal Docker
+configuration, with the runtime/context redirection environment (`DOCKER_HOST`,
+`DOCKER_CONTEXT`, `COMPOSE_FILE`, `COMPOSE_PROJECT_NAME`) scrubbed from the Compose
+child process and the local default engine selected explicitly (`--context default`).
+Podman is not supported by this automatic path (its local/remote endpoint selection is
+not repository-owned). This hardening protects the ordinary DevEx path from ACCIDENTAL
+environment/runtime redirection; it does not constrain arbitrary code executing under
+the same unrestricted Unix principal (see the P6-DEVEX-A decision record's adversarial
+developer-agent boundary). Disposability stays an explicit
+code declaration only; no environment variable, CLI flag, or caller argument may select the
+development database, schema, or host, and `server.js` keeps its guarded construction.
+
 Prohibited: permanent bootstrap authorization; wildcard authorization; environment bypass;
-CLI force flag; "first startup automatically migrates"; authorization by convention.
+CLI force flag; "first startup automatically migrates" (the operational channel; the fixed
+disposable development target's auto-migration is the explicit **E-dev** category and is
+never an operational bypass); authorization by convention.
 
 Migration 044 remains `NOT_AUTHORIZED`. Nothing in P6 authorizes or executes it.
 

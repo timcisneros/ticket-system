@@ -18078,3 +18078,366 @@ process-level evidence list; (15) the closure definition and stop conditions; (1
 hermeticity corrections are narrow, truthful, and create no P5 reopening, no separate status
 workflow, and no audit diary; (17) the candidate grants design authority only; and (18) the
 exact candidate byte identity reproduces.**
+
+## P6-DEVEX-A — narrow pre-P6-S3 DevEx correction: one fixed repository-owned disposable development target (candidate)
+
+**STATUS: P6 DEVEX CORRECTION CANDIDATE — IMPLEMENTED, INDEPENDENTLY ADJUDICATED THREE
+TIMES, ALL THREE ADJUDICATION ROUNDS' DEFECTS CLOSED IN THE SAME CANDIDATE, RE-VERIFIED
+(FULL CANONICAL RELEASE CHECKPOINT ON THE FINAL BYTES), NOT PUBLISHED, NOT COMMITTED, NOT
+SELF-ACCEPTED. The candidate additionally carries an explicit TRUST-BOUNDARY honesty
+clarification: its application-level guarantees are repository/application invariants, and
+adversarial developer-agent isolation from operational state is NOT claimed by (or
+achievable in) this application layer — it requires a separate OS/capability boundary
+(section below). A fresh independent review of these exact candidate bytes is the next
+boundary; no publication, no P6-S3, and no operational migration follows from this record.** This candidate adds a narrow development-target category to the published P6
+deployment contract without weakening any of its five migration states or the T10
+prohibitions. It implements the accepted direction of a fresh independent architecture
+review (`P6-DEVEX-A`: a narrow repository-owned disposable development target can make
+`npm run dev` frictionless without weakening T10; implement the minimum design before
+P6-S3). P6-S2 remains CLOSED/PUBLISHED. P6-S3 remains NOT STARTED. P6 overall remains open.
+P7 and Browser Phase 3 remain unopened. No migration authorization changes: migration 044
+remains unapplied and the canonical authorization record remains exactly `NOT_AUTHORIZED`.
+
+### Observed defect
+
+There was exactly ONE database channel. `DATABASE_URL` meant simultaneously the daily
+`npm run dev` target and the persistent operational target protected by the migration
+execution authority. With current source (migration source head
+`044_browser_interaction_authority.sql`) and the operational database applied through 043
+while the transition is `NOT_AUTHORIZED`, a normal `npm run dev` could not be run against
+current source without either migrating the operational database (forbidden) or pinning
+stale source. T10 behaved exactly correctly; the defect was purely the absence of a separate
+repository-owned non-authoritative development target, not any authority defect. The
+conflation also made every dev surface (setup, doctor, smoke, server) share the operational
+identity by construction.
+
+### Correction (minimum design)
+
+- **Fixed identity:** ONE code-owned disposable development identity in
+  `scripts/dev-environment.js`: host `127.0.0.1`, database `ticket_system_dev`, schema
+  `ticket_system`, the bundled development credentials already owned by `compose.dev.yml`.
+  The database name and schema are NOT caller configurable. `DATABASE_URL`,
+  `POSTGRES_SCHEMA`, and the whole `PG*` family cannot alter the target, and no new
+  environment variable selects the development database, schema, or host. The only
+  permitted environmental input is the pre-existing `TICKET_SYSTEM_POSTGRES_PORT`, and it is
+  permitted ONLY through the bundled-compose development owner: the repository's bundled
+  PostgreSQL service is started/verified first; if that owner cannot own the port, the
+  command refuses; an arbitrary PostgreSQL process found on the loopback port is never
+  granted disposable authority. No silent fallback exists.
+
+- **One construction site:** exactly ONE non-test production site constructs a store with
+  `disposableMigrations: true` — module-internal in `scripts/dev-database.js`, reachable
+  ONLY through the verified development lifecycle (collision guard → bundled compose start →
+  bundled service verification → fixed database ensure, all in the same flow, with the store
+  constructed and closed inside that flow and never returned). No exported function creates a
+  disposable store from env, a port, a target object, or a database URL alone. The fixed
+  identity is constructed internally from the fixed constants; no create/drop/reset helper
+  accepts a connection string, database, schema, host, port, or target object from its
+  caller (the create/drop helpers are module-internal and validate the full four-field
+  identity, including the compose-owned port, against an internally derived expectation).
+  Existing test/harness disposable sites remain unchanged. `persistence/postgres/store.js`
+  keeps its guarded default (`disposableMigrations: false`), `server.js` keeps its guarded
+  construction, `dev:doctor` diagnoses only through an ordinary guarded, non-migrating read
+  seam, and `persistence/postgres/migration-authority.js` is byte-unchanged by this
+  correction.
+
+- **Collision guard:** before ANY development database mutation, the fixed development
+  target and the configured OPERATIONAL target are normalized (host `localhost` is
+  deterministically read as `127.0.0.1`; no DNS) and compared on host/port/database/schema.
+  The operational identity is recovered through the existing canonical operational resolver
+  (`developmentConfig`), never re-derived. Equal identities refuse BEFORE any development
+  database contact with an explicit credential-free error. Because the correspondence is
+  exact four-tuple equality, `POSTGRES_SCHEMA` remains operational-only and cannot redirect
+  the disposable target.
+
+- **Provisioning:** the dev lifecycle reuses the existing bundled PostgreSQL infrastructure
+  (no second compose service, no second cluster): collision guard → start/verify bundled
+  compose PostgreSQL (proving the compose service owns the mapped port through its bundled
+  maintenance database) → create `ticket_system_dev` idempotently through the bundled
+  maintenance connection with the canonical duplicate-database race resolved → migrate the
+  development database to the canonical source head under the explicit code-declared
+  disposable authority. The database persists across `npm run dev` restarts and is reset
+  ONLY explicitly (`npm run dev:reset`).
+
+- **Lifecycle:** `npm run dev` → apply `.env.local` → construct fixed target → collision
+  guard → bundled PostgreSQL → ensure `ticket_system_dev` → construct the disposable store
+  inside the verified lifecycle (`disposableMigrations: true`, only after compose
+  ownership is proven) → auto-migrate to the current source head → readiness
+  diagnosis against the development target → the server process environment is pointed at
+  the FIXED development identity inside `scripts/dev.js` (no caller-visible authority) →
+  normal guarded server startup. `server.js` itself does not migrate.
+
+- **Command surfaces:** `dev:db` prepares the bundled infrastructure and the fixed
+  development database; `dev:setup` keeps `.env.local`/secrets/initial admin/agent ownership
+  but its database mutations now target ONLY the fixed development database (it no longer
+  attempts to migrate the operational `DATABASE_URL` target, and operational `db:migrate`
+  is unchanged and unchanged in authority); `dev:doctor` diagnoses the development target
+  (current → PASS; behind → INFORMATIONAL that `npm run dev` auto-migrates the disposable
+  target with no authorization claim; missing → INFORMATIONAL that dev/dev:setup can
+  provision; corrupt/unknown/incompatible → FAIL with exact `npm run dev:reset` remediation;
+  collision → FAIL before contact) and renders ONE non-mutating informational operational
+  identity row (derived without contact); `admin:password` is intentionally unchanged
+  (operational channel, same authority).
+
+- **What did NOT change:** T10 (`persistence/postgres/migration-authority.js`
+  byte-unchanged), the tracked authorization record, the operational migration command,
+  release preflight/migrate, direct operational server startup, the readiness semantics of
+  P6-S2, and the P6-S2 slice status. The correction adds documentation-recognized
+  disposable-development behavior; it does not imply, permit, or hint at ANY operational
+  migration.
+
+**No human bypass exists.** The convenient path is not a TTY check, an OS-username check, an
+interactive confirmation, a secret flag, `NODE_ENV=development`, a localhost inference, a
+`_dev` name inference, or an arbitrary environment URL. The dev path is safe under an agent
+sharing the same shell account because its entire authority is one duplicated-by-code
+constant identity plus the collision guard.
+
+### Independent adjudication and second correction (same candidate bytes)
+
+The first implementation achieved the intended developer workflow (deterministic targeted
+suites plus a final full `checkpoint:release` PASS), but the independent adjudication
+review of the candidate found exactly two concrete defects, both closed inside this same
+unpublished candidate before re-verification:
+
+1. **Disposable authority was not actually bound to the Compose proof.** An exported helper
+   (`createDevelopmentStore(env)` in `scripts/dev-environment.js`) returned a store with
+   `disposableMigrations: true` directly from the environment, so `TICKET_SYSTEM_POSTGRES_PORT`
+   could be pointed at an arbitrary loopback port and grant disposable migration authority
+   without the bundled Compose ownership proof ever running; additionally, the create/drop
+   helpers validated only database/schema, accepting a caller-supplied host/port identity.
+   Correction (minimum design, accepted): the authority-bearing constructor moved
+   module-internal into `scripts/dev-database.js` (the verified development lifecycle
+   owner); every construction happens only AFTER collision guard → compose start → bundled
+   service verification → fixed database ensure in the same flow, and no store object ever
+   escapes; the create/destroy helpers became module-internal and validate the FULL derived
+   identity (host, compose-verified port, database, schema) with `localhost` aliased to
+   `127.0.0.1`; the exposed surface is exactly two high-level lifecycle operations
+   (`prepareAndMigrateDisposableDevelopmentDatabase`, `resetDisposableDevelopmentDatabase`)
+   that accept only non-identity mechanics (env, spawn, compose file, verification and
+   client seams); `dev:doctor` now diagnoses through an ordinary guarded, non-migrating
+   read seam (no disposable authority); the doctor/reset/setup/dev command surfaces
+   compose their steps only from lifecycle-owned facts.
+
+2. **Stale cross-channel configuration coupling.** `resolveDevelopmentDatabaseTarget` and
+   the registry prose still refused `TICKET_SYSTEM_POSTGRES_PORT` when an external
+   `DATABASE_URL` was supplied (`"...cannot be combined with an external DATABASE_URL"`),
+   although `DATABASE_URL` (operational channel) and `TICKET_SYSTEM_POSTGRES_PORT`
+   (bundled disposable-development compose port) now govern different channels. Correction:
+   the executable cross-field refusal was removed from `resolveDevelopmentDatabaseTarget`
+   and the registry text was truth-corrected: an explicit operational `DATABASE_URL` owns
+   the operational target exactly; the bundled port coexists, never alters or invalidates
+    the operational URL, and never becomes part of operational identity (the disposable
+   development target consumes the port only through the compose owner). No new
+    environment variable was introduced. (A LATER adjudication round additionally
+    removed the residual bundled-shaped-URL port rewrite that had followed the bundled
+    mapping; see the third adjudication below — the earlier sentence "its effective port
+    follows that mapping" was itself adjudicated as a defect and no longer holds.)
+
+No further scope followed either finding: fixed host/database/schema, collision semantics,
+localhost alias, dev persistence, `dev:reset`, operational T10 behavior, the operational
+043 head with 044 `NOT_AUTHORIZED`, `server.js` guarded construction, and P6-S2 closure are
+unchanged; P6-S3 and P7 remain unopened.
+
+### Third adjudication (final correction, same unpublished candidate)
+
+A fresh independent adjudication of the corrected candidate bytes found two further
+defects, closed in this same unpublished candidate as the FINAL correction:
+
+1. **Caller-injectable Compose-proof mechanics on the authority path.** The second-round
+   lifecycle operations still forwarded caller options — a process-launch implementation,
+   a runtime descriptor, a compose file pointer, a readiness verifier, and a client
+   factory — into the authority-bearing flow, so a repository caller could present
+   successful-looking substitutes and reach the one `disposableMigrations: true`
+   construction site without any real Compose ownership proof. Correction (application
+   contract, retained): `prepareAndMigrateDisposableDevelopmentDatabase` and
+   `resetDisposableDevelopmentDatabase` are ZERO-ARGUMENT production operations that
+   refuse ANY argument before any contact; every proof mechanism (process launch,
+   runtime selection, compose file, readiness verification, PostgreSQL client) is
+   module-owned; the disposable store constructor and all create/drop helpers are
+   module-internal; no exported function accepts any target, URL, host, port, database,
+   or schema identity; the create/drop/reset CLI surfaces (`dev`, `dev:setup`,
+   `dev:db`, `dev:reset`) call the lifecycle with no arguments.
+
+2. **Explicit bundled-looking `DATABASE_URL` was still rewritten.** The resolver still
+   produced an effective port (`configuredPort ? composePort : databasePort`) for an
+   explicitly supplied URL that resembled the bundled default, so
+   `DATABASE_URL=postgresql://ticket_system:...@127.0.0.1:5432/ticket_system` with
+   `TICKET_SYSTEM_POSTGRES_PORT=55432` could move the OPERATIONAL target to port 55432.
+   Correction (CHANNEL-SPLIT-A exact, retained): every explicitly supplied
+   `DATABASE_URL` owns the operational identity EXACTLY — byte-exact URL, port,
+   database, schema — always, with no exception for localhost, bundled credentials, the
+   bundled database name, or resemblance to the bundled default; no URL-shape heuristic
+   reconnects the channels. The collision guard compares the exact explicit operational
+   identity (an explicit bundled-default-shaped URL at port 5432 with the bundled
+   compose port coexisting does NOT collide; an explicit URL naming the fixed
+   development identity with the development port and schema DOES collide, refused
+   before contact).
+
+Also adjudicated in the same round (accepted, recorded): the application layer cannot be
+an adversarial authority boundary against an unrestricted same-account shell principal.
+See the trust-boundary clarification below; this is not attempted by script code, and no
+further proof ceremony was added.
+
+### Trust-boundary clarification (repository/application vs adversarial isolation)
+
+The DevEx guarantees ARE repository/application invariants: a fixed disposable
+development target that supported configuration cannot redirect onto the operational
+target; exact explicit-`DATABASE_URL` channel ownership; collision refusal before
+development mutation; zero-argument application lifecycles with no caller-selectable
+migration target; deterministic repository-owned local Compose topology; T10 untouched.
+
+Adversarial developer-agent isolation from operational state is a DIFFERENT requirement
+and is NOT provided by this code: application JavaScript cannot make itself an
+authority boundary against arbitrary code running as the same unrestricted Unix
+principal (that principal owns its own process environment, can rewrite executable
+resolution, consume any operational credentials visible to the account, execute
+arbitrary Node, and use any Docker/Podman socket available to the account). A
+developer-agent environment may claim adversarial isolation from operational state only
+when it provides a separate OS/capability boundary with at least: a separate Unix UID,
+container, sandbox, or equivalent; source/repository access as required for
+development; access to the disposable development database only; no operational
+`DATABASE_URL` credential; no readable human operational `.env.local` or equivalent
+secrets; no host Docker/Podman socket or equivalent privileged container-control
+capability unless deliberately granted; no network path to operational PostgreSQL where
+practical; provider/network capabilities explicitly granted rather than inherited; and
+the host/human DevEx remaining separate. This isolation architecture is a separate
+future requirement and is deliberately NOT implemented in this correction; no new
+roadmap tranche is opened by this record.
+
+### Local Compose determinism (defense in depth, not a security claim)
+
+Because ordinary deterministic DevEx still deserves more than ambient-PATH reliance, the
+lifecycle gains minimal defense in depth over ACCIDENTAL redirection (explicitly NOT
+protection from arbitrary same-account code execution): the bundled development
+infrastructure lifecycle resolves ONLY a trusted absolute system Docker Compose
+executable — candidates enumerated from code-owned directories (`/usr/bin`, `/bin`,
+`/usr/local/bin`), each validated as a real regular executable whose file and every
+containing directory are NOT writable by the invoking user (world-, group-, or
+user-owned-writable locations refuse); the ambient PATH is never consulted; the
+repository-owned `compose.dev.yml` is always passed explicitly; the Docker/Podman
+runtime and project redirection environment (`DOCKER_HOST`, `DOCKER_CONTEXT`,
+`DOCKER_CONFIG`, `COMPOSE_FILE`, `COMPOSE_PROJECT_NAME`) is scrubbed from the
+Compose child process only; and the local default engine is selected explicitly
+(`--context default`, the global flag placement Docker accepts). Podman is NOT
+supported by this automatic path (its CONTAINER_HOST/CONTAINER_CONNECTION/
+configured-connection local-vs-remote selection is not repository-owned; a remote-wired
+probe was observed to hang), which is the smaller honest solution. If no trusted local
+runtime exists, the lifecycle fails closed with an honest message.
+### Test ownership decision
+
+No new test suite was created. The repository's existing required owners were extended:
+`scripts/dev-environment-test.js` (deterministic; fixed identity, redirection refusals,
+collision matrix, port bounding, provisioning/create idempotency seams, compose-bound
+lifecycle ordering with recording store/client/spawn seams, doctor dev semantics, reset
+bounded-destructive ordering, channel-split coexistence, package wiring,
+credential-hygiene) and `scripts/migration-execution-authority-test.js` (deterministic; the
+module-internal single-site disposable allowlist, guarded defaults, NO exported authority
+from env alone, create/drop/reset surfaces that accept only non-identity mechanics, lexical
+AND functional compose-ownership-before-construction ordering, zero construction on
+collision/compose failure, no env/CLI bypass, no authorization-record composer). The P6-S2 owning suites were corrected coherently with the doctor's
+development-target semantics: `scripts/p6-s2-health-readiness-contract-test.js` now pins the
+disposable-development ledger classifier (current/behind/uninitialized/unknown/drifted with
+`dev:reset` remediation and NO authorization claim; the offline fixture-repository
+authorization-coherence scenarios were retired WITH the doctor's own consumption of
+authorization, and the canonical inspection remains pinned by the authority owner and by the
+real-gate refusal scenario), and `scripts/p6-s2-readiness-postgres-test.js` pins the REAL
+behind/unknown/missing development ledger states plus the unchanged canonical guarded
+refusal of an unauthorized pending transition. Manifest/checkpoint registration is
+unchanged: no new required owner exists, so no new registration and no new checkpoint
+coverage trigger occurred.
+
+### Fourth-round finding: shared bundled-service topology (BUNDLED-TOPOLOGY-A)
+
+The REAL developer smoke on the supported local topology surfaced a defect the previous
+rounds had not modeled: the repository's bundled local PostgreSQL Compose SERVICE hosted
+BOTH the operational database `ticket_system` AND the disposable `ticket_system_dev`
+(one physical service, two databases; the sanctioned local topology). Running the
+development lifecycle with `TICKET_SYSTEM_POSTGRES_PORT=55432` recreated that SAME
+container published at 55432, so the explicit operational `DATABASE_URL` (correctly kept
+byte-exact at `127.0.0.1:5432/ticket_system`) became REACHABLE-NEVER: the physical
+service the operational URL named had moved. The application layer cannot disambiguate
+which local PostgreSQL process binds a port, but it CAN refuse the remapping when the
+configured operational target IS the bundled service — code-owned
+`DevelopmentServiceTopologyError` (BUNDLED-TOPOLOGY-A, deliberately distinct from
+COLLISION-A): a `ticket_system`@loopback/`ticket_system` explicit URL (any password is
+accepted for SHAPE purposes; the password never participates) means the operational
+target resolves to the bundled service, so the development Compose host port MUST equal
+the exact operational URL port; an incompatible `TICKET_SYSTEM_POSTGRES_PORT` refuses
+BEFORE any Compose/runtime/database contact with honest guidance (use the operational
+port or leave TSPP unset). The explicit URL is never rewritten. With an
+external/non-bundled operational target, TSPP keeps independently choosing the local
+development service port. The doctor renders the refusal as a FAILED row before any
+database contact. The smoke incident itself (a smoke helper had pinned the 55432 dev
+probe; after restoring the supported 5432 topology it failed predictably — helper
+corrected OUTSIDE the repository) proved the operational CONTENTS unchanged throughout.
+
+Also corrected in the same round (DEV-RUNTIME-A completeness): the Compose CLI PLUGIN is
+now pinned, not only the Docker binary. The lifecycle resolves only a trusted absolute
+system Docker CLI (root-owned), creates a STERILE per-invocation Docker CLI
+configuration directory (a user's personal ~/.docker/cli-plugins NEVER participates —
+proven harmless-by-construction with a sterile `DOCKER_CONFIG` loaded compose from the
+system site), and recovers the Compose plugin path actually loaded via the supported
+`docker info --format '{{json .ClientInfo.Plugins}}'` surface, then validates it with the
+same narrow policy (absolute, regular, ROOT-OWNED, not writable by the invoking user or
+group, under the code-owned accepted system CLI-plugin sites /usr/libexec/docker/cli-plugins
+or /usr/lib/docker/cli-plugins). Root ownership is enforced for the CLI and plugin (the
+supported topology satisfies it). No adversarial claim changed: this remains
+deterministic DevEx defense in depth against ACCIDENTAL redirection only.
+
+
+### Third-round test-ownership simplification (trust claim corrected)
+
+The second round still described injected proof-mechanism seams and a later draft used
+fake `PATH` executables as affirmative evidence of "trusted" Compose ownership; the
+third adjudication rejected that claim as an application-layer overreach and SIMPLIFIED
+the owners. The final deterministic coverage is: exactly two zero-argument production
+lifecycle exports plus two PURE non-authority helper classifiers; any argument refuses
+before contact; no caller proof-mechanism injection anywhere (no default-value seams);
+fixed dev identity constants; explicit `DATABASE_URL` byte-exactness for any URL shape;
+`TICKET_SYSTEM_POSTGRES_PORT` parity with the canonical registry; `POSTGRES_SCHEMA`
+operational-only; the full collision matrix (including the post-rewrite non-collision of
+an explicit bundled-shaped URL at the operational port and the collision of an explicit
+URL naming the fixed development identity); the single module-internal disposable
+construction site; the real repository compose file and the explicit local-default
+engine selection pinned statically; the pure trusted-executable-path classifier
+(user-writable prefixes refused) and the pure Compose-environment redirector sanitation
+(the exactly named Docker/Podman redirection variables stripped, the frozen contract
+channel passing); ambient executable resolution never consulted (static); dev/doctor/
+setup/reset call shapes; server/operational guarded construction; and no T10
+authorization-record composition. Runtime-flow ordering and ownership are statically
+pinned, with the real bounded smoke as the affirmative runtime proof; fake-executable
+PATH machinery was removed as a proof instrument, though the negative property
+(ambient resolution cannot choose the runtime) remains pinned statically and by the
+classifier refusal cases.
+
+### Real verification boundary (final candidate bytes)
+
+Bounded real developer smoke against the supported shared-bundled-service topology
+(the configured operational `ticket_system` database and the disposable
+`ticket_system_dev` inside the ONE bundled Compose service at its exact operational
+port 5432; `TICKET_SYSTEM_POSTGRES_PORT` unset), rerun on the FINAL corrected candidate
+bytes: operating posture captured first (head 043, 43 ledger rows, 43 identity rows,
+044 unapplied, 521 events); `npm run dev:db` started/verified the bundled Compose
+service and `ticket_system_dev` through the trusted absolute system Docker CLI with the
+PINNED root-owned Compose plugin and the sterile per-invocation Docker configuration;
+`npm run dev:setup` ensured and migrated the development database under disposable
+authority and preserved/created the initial admin/agent (creation-only password via
+process environment; local provider configuration only), `npm run dev` diagnosed and
+started the guarded server with `/health` ready, a clean stop and restart proved the
+development database persisted (identical ledger/admin/agent counts on the ACTUAL dev
+target through a target-deriving helper), `npm run dev:doctor` reported the truthful
+development posture plus the informational operational row; `npm run dev:reset`
+destroyed/recreated ONLY `ticket_system_dev` and re-migrated it to the canonical source
+head under the verified lifecycle; the dev state was reprovisioned afterwards
+(`dev:setup`). THROUGHOUT, the operational database remained content-unchanged (head
+043 with 044 pending, exactly 43 migration ledger rows and 43 identity rows, 521
+events, authorization record untouched — `npm run db:migrate` is still governed by the
+canonical `NOT_AUTHORIZED` refusal) AND continuously reachable at its exact configured
+`DATABASE_URL` (each posture verification connected at `127.0.0.1:5432/ticket_system`).
+The topology-refusal matrix (bundled operational URL + incompatible TSPP refuses before
+any contact; TSPP=5432 or unset allowed; external URL + custom TSPP allowed) and the
+channel split are deterministic coverage in the existing owners; no real external
+database is required or contacted.
+
+**NEXT BOUNDARY: FRESH KIMI K3 MAX-REASONING INDEPENDENT REVIEW OF THE FINAL P6 DEVEX
+CANDIDATE — NO PUBLICATION OR P6-S3 YET.**

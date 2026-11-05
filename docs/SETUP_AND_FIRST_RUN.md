@@ -3,7 +3,9 @@
 ## Prerequisites
 
 - Node.js 24+
-- PostgreSQL 17 (CI baseline), or Docker Compose/Podman Compose for the bundled database
+- PostgreSQL 17 (CI baseline), and Docker Compose for the bundled database (a system
+  installation under /usr/bin, /bin, or /usr/local/bin; Podman is not supported by this
+  automatic disposable-development path)
 - pnpm 11 for lockfile-faithful installation
 - An OpenAI API key, or a running Ollama installation with a pulled model
 
@@ -15,22 +17,52 @@ corepack enable
 corepack install
 
 pnpm install --frozen-lockfile
-# Skip this when DATABASE_URL points to an existing PostgreSQL 17 database:
+# Start the bundled PostgreSQL and prepare the disposable development database:
 pnpm dev:db
 pnpm dev:setup
 ```
 
-`dev:setup` creates `.env.local` with mode `0600` only when absent, applies explicit migrations,
-and creates the initial admin when absent and a provider-configured agent when no runnable
-agent exists. Existing
-configuration, users, agents, memberships, and credentials are preserved on repeated runs.
+After this, `pnpm dev` is normally all that is needed.
 
-Interactive setup prompts for the database URL, a hidden admin password, an OpenAI or Ollama
-provider, an agent name, and model details. An interactively entered OpenAI key is hidden and stored
-only in local PostgreSQL through the existing agent repository. For non-interactive automation,
-provide `DATABASE_URL`, `SESSION_SECRET`, and `ADMIN_BOOTSTRAP_PASSWORD`, plus either
-`OPENAI_API_KEY` and `OPENAI_MODEL` or `OLLAMA_MODEL`. Supply the same provider environment
-when starting the server if it is not persisted in `.env.local`.
+**Development target:** the daily dev commands (`pnpm dev`, `dev:db`, `dev:setup`,
+`dev:doctor`, `dev:reset`) operate on ONE fixed, repository-owned disposable development
+database — host `127.0.0.1`, database `ticket_system_dev`, schema `ticket_system`,
+bundled development credentials (owner: `scripts/dev-environment.js`;
+`TICKET_SYSTEM_POSTGRES_PORT` selects the bundled Compose SERVICE host port. When the
+configured operational database is also the bundled service's `ticket_system` database,
+the Compose host port MUST equal the exact operational URL port (an incompatible
+TICKET_SYSTEM_POSTGRES_PORT refuses before any contact; the automatic lifecycle resolves
+only a trusted system Docker Compose CLI with a root-owned system Compose plugin).
+`DATABASE_URL` remains the operational/persistent target
+(T10 migration-authority protected): it is never migrated by dev commands, and a configured
+operational target whose identity equals the development identity refuses all development
+contact before any mutation. The configuration channels are independent on EXACT terms: an
+explicitly supplied `DATABASE_URL` — external or bundled-named — owns the operational
+identity exactly (byte-exact URL, port, database, schema) with no URL-shape exception, while
+the coexisting bundled development port keeps selecting only the fixed development target.
+The development
+database persists across `pnpm dev` restarts,
+auto-migrates to the current source head under the explicit code-declared disposable
+development authority on every `pnpm dev`, and is reset only explicitly:
+
+```sh
+pnpm dev:reset   # destroys and recreates ONLY ticket_system_dev, then re-migrates it
+```
+
+`dev:setup` creates `.env.local` with mode `0600` only when absent, prepares and migrates the
+fixed disposable development database, and creates the initial admin when absent and a
+provider-configured agent when no runnable agent exists. Existing configuration, users,
+agents, memberships, and credentials are preserved on repeated runs. It never attempts to
+migrate the operational `DATABASE_URL` target.
+
+Setup prompts for the operational database URL (persistent state), a hidden admin password,
+an OpenAI or Ollama provider, an agent name, and model details. An interactively entered OpenAI
+key is hidden and stored only in local PostgreSQL through the existing agent repository. For
+non-interactive automation, provide `DATABASE_URL`, `SESSION_SECRET`, and
+`ADMIN_BOOTSTRAP_PASSWORD`, plus either `OPENAI_API_KEY` and `OPENAI_MODEL` or `OLLAMA_MODEL`.
+Supply the same provider environment when starting the server if it is not persisted in
+`.env.local`. If a database volume is reset (`pnpm dev:reset`), rerun `pnpm dev:setup` to
+recreate the initial admin and agent inside the development database.
 
 For OpenAI, choose `openai` during interactive setup and accept `gpt-4.1-mini` or enter another
 model enabled for the account; the API-key prompt is hidden. For Ollama, provision the provider
@@ -54,7 +86,15 @@ server boot, `dev:doctor`, and the canonical configuration registry
 server refuses to start on any required startup configuration the registry calls invalid
 (fail-closed startup). Optional environment variables are:
 
-- `POSTGRES_SCHEMA` (default `ticket_system`)
+- `TICKET_SYSTEM_POSTGRES_PORT` (default `5432`; selects the host port of the repository's
+  bundled PostgreSQL Compose SERVICE, inside which the fixed disposable development target
+  `ticket_system_dev` lives. It NEVER rewrites an explicit `DATABASE_URL`. When the
+  configured operational database is ALSO the bundled service's `ticket_system` database,
+  the Compose host port must equal the exact operational URL port — an incompatible value
+  refuses before any contact; when the operational target is external, it may
+  independently choose the local development-service port)
+- `POSTGRES_SCHEMA` (default `ticket_system`; operational-channel configuration — the
+  disposable development database always uses the code-owned schema `ticket_system`)
 - `WORKSPACE_ROOT` (development default `workspace-root` — one canonical default shared with the
   server boot surface; the canonical registry is
   `runtime/environment-config-registry.js`)
@@ -65,25 +105,31 @@ server refuses to start on any required startup configuration the registry calls
 - `DEV_AGENT_PROVIDER`, `DEV_AGENT_NAME`
 - `OPENAI_API_KEY`, `OPENAI_MODEL`, `OLLAMA_MODEL`, `OLLAMA_BASE_URL`
 
-The migration CLI and server use the same `POSTGRES_SCHEMA` setting.
+The migration CLI (`npm run db:migrate`) and the server use the same `POSTGRES_SCHEMA`
+setting for the OPERATIONAL channel. The disposable development database is unaffected by it.
 
-### Migration ledger state before first run
+### Development migration-ledger state
 
-`dev:doctor` reports migration-ledger state honestly under the migration-execution authority gate
-(`docs/DEPLOYMENT_CONTRACT.md`, migration and bootstrap doctrine):
+`dev:doctor` diagnoses the fixed disposable development database honestly
+(`docs/DEPLOYMENT_CONTRACT.md` §9, **E-dev**):
 
-- **current** — the canonical ledger is current and migration identities are valid;
-- **behind + authorized** — an exact pending transition is currently authorized; apply it with the
-  canonical migration command (`npm run db:migrate`; setup uses the same authority gate);
-- **behind + NOT authorized** — pending migrations exist but the authorization record does not
-  authorize that transition; `pnpm dev:setup` cannot bypass the gate, so authorization must be
-  established through the governed migration/bootstrap procedure first;
-- **behind + NOT verified** — read-only inspection could not establish the canonical
-  repository/publication authority (for example a git/publication transport failure), so the
-  pending transition is never reported as authorized; the canonical migration command remains the
-  final authority,
-- **incompatible / drifted / uninitialized** — unknown future migrations, identity/checksum drift,
-  or an uninitialized schema; these fail closed and remediation is not guessed.
+- **current** — the development ledger is current and migration identities are valid;
+- **behind** — informational: `pnpm dev` auto-migrates the disposable development database to
+  the source head (no migration-execution authorization is involved for this code-declared
+  disposable target; no authorization claim is made);
+- **missing** — informational: `pnpm dev` / `pnpm dev:setup` provisions it;
+- **incompatible / drifted (unknown future migrations, identity or checksum drift, partial
+  ledger)** — FAIL; remediation is exactly `pnpm dev:reset` (destroys and recreates ONLY the
+  disposable development identity);
+- **collision** — the configured operational target identity equals the development identity:
+  FAIL before any development database contact.
+
+The doctor also renders ONE informational operational-target row (derived without contact)
+showing the configured `DATABASE_URL` identity, so it is always explicit that
+`DATABASE_URL` remains T10-protected and untouched by dev commands. Operational
+ledger-state guidance (behind + authorized / behind + NOT authorized) continues to be decided
+by the canonical migration-execution authority when the OPERATIONAL migration command runs
+(`npm run db:migrate`).
 
 ## Start and verify the first ticket
 
@@ -92,9 +138,12 @@ pnpm dev:doctor
 pnpm dev
 ```
 
-The `dev` command runs the same read-only preflight before startup. It does not silently migrate,
-create accounts, or rotate credentials. Run `pnpm dev:setup` again when explicit migrations or a
-missing initial account are needed.
+`pnpm dev` starts and verifies the bundled PostgreSQL service, ensures the fixed disposable
+development database, auto-migrates it to the current source head under the code-declared
+disposable development authority, runs the same read-only preflight against it, and then
+points the server process at the development identity. It does not create accounts, rotate
+credentials, or migrate the operational target. Run `pnpm dev:setup` when the initial admin or
+agent is needed.
 
 With the server running, use a second terminal:
 

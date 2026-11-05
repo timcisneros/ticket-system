@@ -20,9 +20,16 @@
 //   - CAPACITY-A/B: mutation admission saturates, keeps refusing work through
 //     its existing authority, and remains observable while /health stays
 //     200/ready — saturation never becomes a readiness failure;
-//   - the development doctor classifies the REAL ledger states
-//     (current / behind+NOT authorized) with honest authority guidance;
-//   - `dev:setup` still refuses an unauthorized pending transition (T10).
+//   - the development doctor classifies the REAL disposable-development
+//     ledger states (current / behind / unknown-future) with honest dev
+//     semantics (behind = informational auto-migrate; corruption = FAIL with
+//     `npm run dev:reset`) — and never claims operational migration
+//     authorization for the dev channel;
+//   - the missing disposable development DATABASE is informational (dev
+//     provisioning);
+//   - the OPERATIONAL migration-execution authority (T10) still refuses an
+//     unauthorized pending transition on a defaulted (guarded) store, and the
+//     refused transition applies nothing.
 //
 // All mutation/corruption happens inside the disposable harness schema and a
 // sibling disposable schema — never the operational schema. No migration
@@ -35,7 +42,6 @@ const { PostgresRuntimeStore, migrationFiles, migrationChecksum, quoteIdentifier
 const { probePostgresReadiness, buildHealthProjection, classifyMigrationStatus } = require('../runtime/health-readiness');
 const { validateEnvironment } = require('../runtime/environment-config-registry');
 const { inspectDevelopmentEnvironment } = require('./dev-doctor');
-const { runSetup } = require('./dev-setup');
 const { MigrationExecutionAuthorityError } = require('../persistence/postgres/migration-authority');
 
 const SATISFIED_PROJECTION_CONFIGURATION = validateEnvironment({
@@ -312,7 +318,7 @@ async function main() {
     scenario('7: PostgreSQL unavailable → readiness false, 503 designed, liveness true (canonical store seam)');
   });
 
-  // ── 8. Sibling disposable schema: behind + NOT authorized, setup refusal ─
+  // ── 8. Sibling disposable schemas: doctor dev-ledger states + T10 refusal ─
   const databaseUrl = env.TEST_DATABASE_URL || env.DATABASE_URL;
   const siblingSchema = createTestSchemaName('p6s2-behindUnauthorized'.slice(0, 24));
   const sibling = new PostgresRuntimeStore({
@@ -348,8 +354,10 @@ async function main() {
       );
     }
 
-    // 8a. Doctor classifies the real behind state with the REAL (NOT_AUTHORIZED)
-    // authorization record — guidance must not claim a dev:setup bypass.
+    // 8a. Doctor classifies the REAL behind state with the disposable
+    // development semantics: behind is INFORMATIONAL (the dev command
+    // auto-migrates this code-declared disposable target), and the row makes
+    // NO authorization claim — dev channels never decide or claim T10.
     const behindDoctor = await inspectDevelopmentEnvironment({
       storeFactory: () => new PostgresRuntimeStore({ connectionString: databaseUrl, schema: siblingSchema }),
       env: {
@@ -361,39 +369,91 @@ async function main() {
     });
     const behindRows = behindDoctor.checks.filter(check => check.label === 'PostgreSQL migrations');
     assert.ok(behindRows.length === 1, '8a: one ledger row');
-    assert.equal(behindRows[0].status, 'fail', '8a: behind + unauthorized fails the doctor');
-    assert.match(behindRows[0].message, /behind by 1 pending migration/i, '8a: the row reports the schema is behind');
-    assert.match(behindRows[0].message, /NOT authorized/i, '8a: the row reports the transition is NOT authorized');
-    assert.match(behindRows[0].message, /pnpm dev:setup cannot bypass/i, '8a: the guidance never claims dev:setup can bypass T10');
-    assert.match(behindRows[0].message, /migration\/bootstrap authority/i, '8a: the guidance points at the governed procedure');
-    scenario('8a: doctor distinguishes BEHIND + NOT AUTHORIZED against a real behind schema');
+    assert.equal(behindRows[0].status, 'info', '8a: a behind disposable development ledger is informational');
+    assert.match(behindRows[0].message, /behind the canonical migration source by 1/i, '8a: the row reports the dev schema is behind');
+    assert.match(behindRows[0].message, /auto-migrate/i, '8a: the row states `npm run dev` auto-migrates the dev target');
+    assert.doesNotMatch(behindRows[0].message, /IS authorized/i, '8a: the dev ledger row never claims authorization');
+    assert.ok(behindDoctor.checks.some(check =>
+      check.status === 'info' && check.label.startsWith('Operational database')), '8a: exactly the informational operational row exists');
+    scenario('8a: doctor classifies a real BEHIND disposable development ledger informationally (auto-migrate)');
 
-    // 8b. Setup still refuses: dev:setup routes through the real gate.
+    // 8a-2. Unknown future migration → the doctor FAILS the row with exactly
+    // the `dev:reset` remediation (destroy/recreate ONLY the disposable dev
+    // identity) — never a guessed operational remediation.
+    const unknownVersion = '099_not_from_this_repository.sql';
+    let appliedCountBeforeUnknown = 0;
+    await sibling.withTransaction(async client => {
+      appliedCountBeforeUnknown = (await client.query(`SELECT count(*)::int AS n FROM ${schemaSql}.schema_migrations`)).rows[0].n;
+    });
+    await sibling.pool.query(`INSERT INTO ${schemaSql}.schema_migrations (version) VALUES ($1)`, [unknownVersion]);
+    const unknownDoctor = await inspectDevelopmentEnvironment({
+      storeFactory: () => new PostgresRuntimeStore({ connectionString: databaseUrl, schema: siblingSchema }),
+      env: {
+        ...env,
+        DATABASE_URL: databaseUrl,
+        POSTGRES_SCHEMA: siblingSchema,
+        SESSION_SECRET: 'p6s2-doctor-unknown-development-secret-0123456789abcdef'
+      }
+    });
+    const unknownRows = unknownDoctor.checks.filter(check => check.label === 'PostgreSQL migrations');
+    assert.equal(unknownRows[0].status, 'fail', '8a-2: an unknown future migration fails the doctor');
+    assert.match(unknownRows[0].message, /unknown future migrations/i, '8a-2: the row names the incompatibility');
+    assert.match(unknownRows[0].message, /dev:reset/, '8a-2: the remediation is exactly the disposable dev reset');
+    await sibling.pool.query(`DELETE FROM ${schemaSql}.schema_migrations WHERE version = $1`, [unknownVersion]);
+    const appliedCountAfterUnknown = await sibling.withTransaction(async client =>
+      (await client.query(`SELECT count(*)::int AS n FROM ${schemaSql}.schema_migrations`)).rows[0].n);
+    assert.equal(appliedCountAfterUnknown, appliedCountBeforeUnknown, '8a-2: the unknown row was restored (disposable sibling only)');
+    scenario('8a-2: doctor fails real unknown-future dev state with the dev:reset remediation');
+
+    // 8b. The OPERATIONAL channel still refuses: a store with the DEFAULT
+    // guarded construction (disposableMigrations unset) migrates NOTHING
+    // through the canonical migration-execution authority gate on this
+    // pending (NOT_AUTHORIZED) transition, exactly as governed.
     let refusalError = null;
+    const guardedOperationalStore = new PostgresRuntimeStore({
+      connectionString: databaseUrl,
+      schema: siblingSchema
+    });
     try {
-      await runSetup({
-        env: {
-          DATABASE_URL: databaseUrl,
-          POSTGRES_SCHEMA: siblingSchema,
-          SESSION_SECRET: 'p6s2-setup-refusal-secret-0123456789abcdefghijklmnop'
-        }
-      });
+      const applied = await guardedOperationalStore.migrate();
+      assert.equal(applied.length, 0, '8b: a guarded refusal applies nothing');
     } catch (error) {
       refusalError = error;
+    } finally {
+      await guardedOperationalStore.close();
     }
-    assert.ok(refusalError, '8b: setup refuses a pending unauthorized transition');
+    assert.ok(refusalError, '8b: the canonical authority gate refuses the pending unauthorized transition');
     assert.equal(refusalError.code, 'MIGRATION_EXECUTION_AUTHORITY_REFUSED', '8b: refusal carries the migration authority code');
     assert.ok(refusalError instanceof MigrationExecutionAuthorityError, '8b: the canonical authority error class refuses');
     assert.match(String(refusalError.message), /NOT_AUTHORIZED/, '8b: the refusal names the authorization record state');
     const appliedAfter = await sibling.pool.query(`SELECT count(*)::int AS n FROM ${schemaSql}.schema_migrations`);
     assert.equal(appliedAfter.rows[0].n, appliedBefore.rows[0].n - 1, '8b: the refused transition applied NOTHING (no mutation)');
-    scenario('8b: dev:setup still refuses an unauthorized migration (no auto-authorization)');
+    scenario('8b: the canonical guarded migration gate still refuses an unauthorized pending transition (T10 factual)');
+
+    // 8c. A store bound to a MISSING database in the same cluster renders the
+    // doctor's disposable-development informational row (no failure).
+    const missingUrl = databaseUrl.replace(/\/[^/?]*(\?.*)?$/, `/p6s2_missing_dev_${STAMP}`);
+    const missingDoctor = await inspectDevelopmentEnvironment({
+      storeFactory: () => new PostgresRuntimeStore({ connectionString: missingUrl, connectionTimeoutMs: 750, schema: siblingSchema }),
+      env: {
+        ...env,
+        DATABASE_URL: missingUrl,
+        POSTGRES_SCHEMA: siblingSchema,
+        SESSION_SECRET: 'p6s2-doctor-missing-development-secret-0123456789abcdef'
+      }
+    });
+    assert.ok(missingDoctor.checks.some(check =>
+      check.status === 'info' && check.label === 'Disposable development database' &&
+      /does not exist yet/.test(check.message)), '8c: the missing dev database renders informationally');
+    assert.ok(missingDoctor.checks.some(check =>
+      check.status === 'info' && check.label === 'admin account'), '8c: admin inspection is deferred informationally');
+    scenario('8c: doctor reports a missing disposable development database informationally');
   } finally {
     try { await sibling.pool.query(`DROP SCHEMA IF EXISTS "${siblingSchema}" CASCADE`); } catch (_) {}
     try { await sibling.close(); } catch (_) {}
   }
 
-  assertScenariosExecuted({
+    assertScenariosExecuted({
     label: 'p6-s2 readiness postgres test',
     assertions: assert.count(),
     scenarios: scenariosRun

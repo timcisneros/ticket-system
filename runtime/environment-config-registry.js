@@ -292,7 +292,7 @@ const SETTINGS = Object.freeze([
     required: 'always',
     validation: 'non-empty postgres:// or postgresql:// URL that names a database; never echoed, printed, or serialized',
     canonicalDefault: null,
-    developmentDefault: 'bundled development database URL; TICKET_SYSTEM_POSTGRES_PORT may override the bundled port (scripts/dev-environment.js)',
+    developmentDefault: 'the bundled operational database URL (scripts/dev-environment.js) when DATABASE_URL is entirely unset — the fallback. An EXPLICITLY supplied DATABASE_URL owns the operational identity EXACTLY, always, regardless of URL shape (external, localhost, bundled credentials, or the bundled database name): TICKET_SYSTEM_POSTGRES_PORT never rewrites it and no URL-shape heuristic reconnects the two channels. The daily dev command targets the fixed repository-owned disposable development database (ticket_system_dev) and cannot be redirected by this value; `npm run dev` overrides it inside its own server process for the dev identity only',
     productionBehavior: 'required; startup refuses when absent (fail-closed)',
     secret: true
   },
@@ -304,7 +304,7 @@ const SETTINGS = Object.freeze([
     required: 'never',
     validation: 'non-empty PostgreSQL schema name; non-empty text is stored trimmed',
     canonicalDefault: 'ticket_system',
-    developmentDefault: 'ticket_system',
+    developmentDefault: 'ticket_system; POSTGRES_SCHEMA is operational-channel configuration — the disposable development database always uses the code-owned schema ticket_system (scripts/dev-environment.js)',
     productionBehavior: 'same default as development when unset ("ticket_system")',
     secret: false
   },
@@ -822,7 +822,7 @@ const DEVELOPMENT_SETTINGS = Object.freeze([
     category: 'dev-database',
     exposure: false,
     required: 'never',
-    validation: 'integer from 1 through 65535; configures the BUNDLED development database and is refused when combined with an external DATABASE_URL',
+    validation: 'integer from 1 through 65535; selects the host port of the repository bundled PostgreSQL Compose SERVICE, inside which the disposable development database lives (consumed exclusively through the bundled compose owner, scripts/dev-database.js) and NEVER alters an explicitly supplied operational DATABASE_URL: the two channel inputs stay configuration-independent, and an explicit operational URL keeps its exact identity byte for byte regardless of shape. PHYSICAL TOPOLOGY: when the configured operational database is the bundled service itself (a ticket_system@loopback/ticket_system URL), the Compose host port must EQUAL the exact operational URL port and an incompatible TICKET_SYSTEM_POSTGRES_PORT refuses BEFORE any Compose/database contact (BUNDLED-TOPOLOGY-A); with an external operational target the bundled port may independently select the local development service 127.0.0.1:<port>/ticket_system_dev. The compose owner launches the repository-owned compose.dev.yml through a trusted absolute system Docker CLI with a root-owned Compose CLI plugin pinned to an accepted system plugin site (sterile per-invocation Docker configuration; runtime/context redirection environment scrubbed); Podman is not part of this automatic path',
     canonicalDefault: 5432,
     developmentDefault: '5432 (bundled compose port)',
     productionBehavior: 'not deployment configuration; has no production effect',

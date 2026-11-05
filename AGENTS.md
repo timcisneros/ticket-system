@@ -41,10 +41,11 @@ subject to runtime authority, evidence, replay, recovery, evaluation, and conseq
 ## Commands
 
 - Install: `pnpm install --frozen-lockfile`
-- Start bundled PostgreSQL with Docker or Podman Compose: `pnpm dev:db`
-- Configure/migrate/bootstrap local development: `pnpm dev:setup`
-- Diagnose local configuration without mutation: `pnpm dev:doctor`
-- Start with read-only preflight: `pnpm dev`
+- Start bundled PostgreSQL with Docker Compose: `pnpm dev:db` (system installation; Podman is not supported by this automatic disposable-development path)
+- Configure/bootstrap local development against the disposable development database: `pnpm dev:setup`
+- Diagnose local configuration and the disposable development database without mutation: `pnpm dev:doctor`
+- Start with automatic development provisioning and auto-migration: `pnpm dev`
+- Reset the disposable development database ONLY (`ticket_system_dev`; no arguments accepted): `pnpm dev:reset`
 - Verify the first real ticket/provider/workspace path: `pnpm dev:smoke`
 - Rotate a user password through the audited repository: `pnpm admin:password`
 - Apply migrations only: `pnpm db:migrate`

@@ -3,14 +3,14 @@
 
 const fs = require('fs');
 const argon2 = require('argon2');
-const { PostgresRuntimeStore } = require('../persistence/postgres/store');
 const {
+  DEVELOPMENT_TARGET_SCHEMA,
   DEFAULT_BUNDLED_POSTGRES_PORT,
   DEFAULT_DATABASE_URL,
   LOCAL_ENV_PATH,
   applyLocalEnv,
   bundledDatabaseUrl,
-  developmentConfig,
+  createGuardedDevelopmentStore,
   generateSessionSecret,
   promptHidden,
   promptVisible,
@@ -20,6 +20,9 @@ const {
   validateSessionSecret,
   writeLocalEnv
 } = require('./dev-environment');
+const {
+  prepareAndMigrateDisposableDevelopmentDatabase
+} = require('./dev-database');
 const { ensureInitialAgent } = require('./dev-agent-config');
 const { postgresHelp } = require('./dev-doctor');
 
@@ -70,7 +73,10 @@ async function prepareLocalEnv(env = process.env) {
   const defaultDatabaseUrl = bundledDatabaseUrl(
     env.TICKET_SYSTEM_POSTGRES_PORT || DEFAULT_BUNDLED_POSTGRES_PORT
   );
-  const databaseUrl = env.DATABASE_URL || await promptVisible('PostgreSQL URL', { defaultValue: defaultDatabaseUrl });
+  // This URL names the OPERATIONAL/persistent target (T10-protected). The
+  // daily dev command targets the fixed disposable development database and
+  // cannot be redirected by it.
+  const databaseUrl = env.DATABASE_URL || await promptVisible('Operational PostgreSQL URL (persistent state)', { defaultValue: defaultDatabaseUrl });
   const sessionSecret = env.SESSION_SECRET || generateSessionSecret();
   const databaseError = validateDatabaseUrl(databaseUrl);
   if (databaseError) throw new Error(databaseError);
@@ -89,20 +95,27 @@ async function prepareLocalEnv(env = process.env) {
   console.log('Created ignored .env.local with mode 0600. Existing files are never overwritten.');
 }
 
-async function runSetup({ env = process.env, storeFactory = config => new PostgresRuntimeStore(config) } = {}) {
+async function runSetup({ env = process.env } = {}) {
   await prepareLocalEnv(env);
-  const config = developmentConfig(env);
-  const databaseError = validateDatabaseUrl(config.databaseUrl);
-  if (databaseError) throw new Error(databaseError);
-  const sessionError = validateSessionSecret(config.sessionSecret);
-  if (sessionError) throw new Error(sessionError);
-
-  const store = storeFactory({ connectionString: config.databaseUrl, schema: config.postgresSchema });
+  // P6-DEVEX-A: dev:setup is the one-time setup path for the DEVELOPMENT
+  // target. DB mutations target ONLY the fixed disposable development
+  // database through the verified bundled-compose lifecycle (called with NO
+  // arguments: the lifecycle owns every proof mechanism internally):
+  // collision guard → bundled compose start/verification → create → migrate
+  // under the code-declared disposable authority (the canonical
+  // migration-execution authorization record is untouched; `npm run
+  // db:migrate` remains the governed operational command).
+  const prepared = await prepareAndMigrateDisposableDevelopmentDatabase();
+  const appliedVersions = prepared.appliedVersions;
+  // Post-migration provisioning (admin/agent) uses the ordinary GUARDED
+  // development seam: it carries no disposable migration authority and
+  // cannot migrate anything; the migration already happened inside the
+  // verified lifecycle above.
+  const store = createGuardedDevelopmentStore(env);
   try {
-    const applied = await store.migrate();
-    console.log(applied.length
-      ? `Applied ${applied.length} PostgreSQL migration(s): ${applied.join(', ')}`
-      : `PostgreSQL schema ${config.postgresSchema} is current.`);
+    console.log(appliedVersions.length
+      ? `Applied ${appliedVersions.length} PostgreSQL migration(s) to the disposable development database: ${appliedVersions.join(', ')}`
+      : `Disposable development database is current (schema ${DEVELOPMENT_TARGET_SCHEMA}).`);
 
     const existing = await store.getUserByUsername('admin');
     if (existing) {
@@ -138,7 +151,7 @@ async function runSetup({ env = process.env, storeFactory = config => new Postgr
 
 async function main() {
   if (process.argv.includes('--help')) {
-    console.log('Usage: pnpm dev:setup\n\nCreates local config only when absent, runs migrations, and creates an admin when absent and an agent when no runnable agent exists.');
+    console.log('Usage: pnpm dev:setup\n\nCreates local config only when absent, prepares and migrates the fixed disposable development database, and creates an admin when absent and an agent when no runnable agent exists. It never migrates the operational DATABASE_URL target.');
     return;
   }
   if (process.argv.length > 2) throw new Error('dev:setup does not accept arguments');

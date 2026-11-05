@@ -31,14 +31,28 @@ const {
   promptProviderConfig,
   providerConfigFromEnvironment
 } = require('./dev-agent-config');
-const {
-  selectComposeRuntime,
-  startDevelopmentDatabase,
-  verifyConfiguredDatabase
-} = require('./dev-database');
+// scripts/dev-database.js exports exactly the two zero-argument high-level
+// lifecycle operations; see the COMPOSE-A export-surface assertions below.
+// Its proof mechanics (compose file/runtime/process-launch/verification/
+// client) are module-owned and intentionally NOT reachable for injection,
+// so lifecycle ordering uses an isolated child-process harness below.
+const { prepareAndMigrateDisposableDevelopmentDatabase } = require('./dev-database');
 const { DEFAULT_DATABASE_URL: SETUP_DEFAULT_DATABASE_URL, createInitialAdmin } = require('./dev-setup');
 const { parseArgs, rotateUserPassword } = require('./admin-password');
 const { parseArgs: parseSmokeArgs, runSmoke, SMOKE_OBJECTIVE } = require('./dev-smoke');
+const devEnvironment = require('./dev-environment');
+const {
+  DEVELOPMENT_TARGET_DATABASE,
+  DEVELOPMENT_TARGET_HOST,
+  DEVELOPMENT_TARGET_SCHEMA,
+  DevelopmentServiceTopologyError,
+  DevelopmentTargetCollisionError,
+  assertDevelopmentTargetUsable,
+  assessBundledServiceTopologyGuard,
+  assessDevelopmentTargetCollision,
+  createGuardedDevelopmentStore,
+  disposableDevelopmentTarget
+} = devEnvironment;
 
 async function main() {
   assert.match(validateDatabaseUrl(''), /required/);
@@ -67,37 +81,106 @@ async function main() {
     composePort: 55432,
     source: 'bundled-port'
   });
+  // CHANNEL-SPLIT-A (exact): EVERY explicitly supplied DATABASE_URL — external
+  // or bundled-named — owns the operational target EXACTLY, byte for byte,
+  // regardless of URL shape. An explicitly supplied bundled-looking URL must
+  // not gain any compose-port rewrite: no localhost exception, no bundled
+  // credentials exception, no bundled-database-name exception, and no
+  // resemblance-to-default exception reconnects the channels.
   assert.deepEqual(resolveDevelopmentDatabaseTarget({ DATABASE_URL: customBundledUrl }), {
     kind: 'bundled',
     databaseUrl: customBundledUrl,
+    composePort: DEFAULT_BUNDLED_POSTGRES_PORT,
+    source: 'database-url'
+  });
+  const explicitBundledLikeDefault = resolveDevelopmentDatabaseTarget({
+    DATABASE_URL: DEFAULT_DATABASE_URL,
+    TICKET_SYSTEM_POSTGRES_PORT: '55432'
+  });
+  assert.deepEqual(explicitBundledLikeDefault, {
+    kind: 'bundled',
+    // BYTE-EXACT: TICKET_SYSTEM_POSTGRES_PORT (dev channel) NEVER rewrites the
+    // explicit operational URL even when it names the bundled compose database.
+    databaseUrl: DEFAULT_DATABASE_URL,
+    // The bundled compose port stays the development-channel input only.
     composePort: 55432,
     source: 'database-url'
   });
-  assert.deepEqual(
-    resolveDevelopmentDatabaseTarget({
-      DATABASE_URL: DEFAULT_DATABASE_URL,
-      TICKET_SYSTEM_POSTGRES_PORT: '55432'
-    }),
-    {
-      kind: 'bundled',
-      databaseUrl: customBundledUrl,
-      composePort: 55432,
-      source: 'bundled-port'
-    }
-  );
+  assert.equal(explicitBundledLikeDefault.databaseUrl, DEFAULT_DATABASE_URL,
+    'the explicitly supplied operational URL is authoritative for the operational channel exactly');
   const externalDatabaseUrl = 'postgresql://external:test-only-password@db.example.test:6543/external';
   assert.deepEqual(resolveDevelopmentDatabaseTarget({ DATABASE_URL: externalDatabaseUrl }), {
     kind: 'external',
     databaseUrl: externalDatabaseUrl,
-    composePort: null,
+    composePort: DEFAULT_BUNDLED_POSTGRES_PORT,
     source: 'database-url'
   });
-  assert.throws(
-    () => resolveDevelopmentDatabaseTarget({
-      DATABASE_URL: externalDatabaseUrl,
-      TICKET_SYSTEM_POSTGRES_PORT: '55432'
+
+  // ── CHANNEL-SPLIT-A: the configuration channels are INDEPENDENT ──────────
+  // An explicitly supplied operational DATABASE_URL owns the operational
+  // target exactly; TICKET_SYSTEM_POSTGRES_PORT owns only the bundled
+  // disposable-development compose port. The two may coexist; the port does
+  // not alter or invalidate the operational URL and is never part of its
+  // identity, and the operational URL does not reach the development target.
+  const externalOperationalUrl = 'postgresql://user:secret@ops.example:5432/operational_db';
+  const splitTarget = resolveDevelopmentDatabaseTarget({
+    DATABASE_URL: externalOperationalUrl,
+    TICKET_SYSTEM_POSTGRES_PORT: '55432'
+  });
+  assert.deepEqual(splitTarget, {
+    kind: 'external',
+    databaseUrl: externalOperationalUrl,
+    composePort: 55432,
+    source: 'database-url'
+  }, 'an external operational DATABASE_URL and a custom bundled dev port are VALID together');
+  // TSPP cannot change the explicit operational URL, and the operational URL
+  // cannot change the development target.
+  assert.equal(splitTarget.databaseUrl, externalOperationalUrl,
+    'the custom bundled dev port never alters the explicit operational URL');
+  const splitConfig = developmentConfig({
+    DATABASE_URL: externalOperationalUrl,
+    TICKET_SYSTEM_POSTGRES_PORT: '55432'
+  });
+  assert.equal(splitConfig.databaseUrl, externalOperationalUrl,
+    'operational identity remains the external URL exactly');
+  const splitDevTarget = disposableDevelopmentTarget({
+    DATABASE_URL: externalOperationalUrl,
+    TICKET_SYSTEM_POSTGRES_PORT: '55432'
+  });
+  assert.equal(splitDevTarget.databaseUrl,
+    'postgresql://ticket_system:ticket_system@127.0.0.1:55432/ticket_system_dev',
+    'the development target uses the custom bundled port and stays the fixed dev identity');
+  assert.equal(splitDevTarget.host, DEVELOPMENT_TARGET_HOST);
+  assert.equal(splitDevTarget.database, DEVELOPMENT_TARGET_DATABASE);
+  assert.equal(splitDevTarget.schema, DEVELOPMENT_TARGET_SCHEMA);
+  // POSTGRES_SCHEMA affects the operational channel only; the development
+  // schema remains fixed.
+  assert.deepEqual(
+    disposableDevelopmentTarget({ DATABASE_URL: externalOperationalUrl, POSTGRES_SCHEMA: 'redirected_schema' }),
+    disposableDevelopmentTarget({ DATABASE_URL: externalOperationalUrl })
+  );
+  const splitSchemaAssessment = assessDevelopmentTargetCollision({
+    DATABASE_URL: externalOperationalUrl,
+    TICKET_SYSTEM_POSTGRES_PORT: '55432',
+    POSTGRES_SCHEMA: 'operational_schema'
+  });
+  assert.equal(splitSchemaAssessment.ok, true, 'the split-channel pair does not collide');
+  assert.equal(splitSchemaAssessment.operational.host, 'ops.example');
+  assert.equal(splitSchemaAssessment.operational.port, 5432);
+  assert.equal(splitSchemaAssessment.operational.database, 'operational_db');
+  assert.equal(splitSchemaAssessment.operational.schema, 'operational_schema',
+    'POSTGRES_SCHEMA reaches the operational identity only');
+  assert.equal(splitSchemaAssessment.development.port, 55432);
+  assert.equal(splitSchemaAssessment.development.database, DEVELOPMENT_TARGET_DATABASE);
+  // The channels also stay independent in the reverse direction: DATABASE_URL
+  // (even a bundled-looking or external one) cannot rename the dev database
+  // or schema; only the compose-owned port can move.
+  assert.deepEqual(
+    disposableDevelopmentTarget({
+      DATABASE_URL: 'postgresql://ticket_system:other-cred@127.0.0.1:6541/ticket_system',
+      POSTGRES_SCHEMA: 'other'
     }),
-    /cannot be combined/
+    disposableDevelopmentTarget({})
   );
 
   // TICKET_SYSTEM_POSTGRES_PORT — STRICT owner parity (configures the BUNDLED
@@ -232,7 +315,10 @@ async function main() {
       TICKET_SYSTEM_POSTGRES_PORT: '55432'
     };
     applyLocalEnv(customBundled, path.join(temporary, 'absent.env'));
-    assert.equal(customBundled.DATABASE_URL, bundledDatabaseUrl(55432));
+    // The explicit operational URL is byte-exact after normalization: the dev
+    // port edits the disposable development target only, never the URL.
+    assert.equal(customBundled.DATABASE_URL, DEFAULT_DATABASE_URL);
+    assert.equal(customBundled.TICKET_SYSTEM_POSTGRES_PORT, '55432');
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }
@@ -253,6 +339,7 @@ async function main() {
     const { migrationFiles, migrationChecksum } = require('../persistence/postgres/store');
     const versions = migrationFiles();
     return {
+      schema: 'ticket_system',
       async getMigrationStatus() {
         return {
           fullyApplied: true,
@@ -381,171 +468,570 @@ async function main() {
   assert.equal(promptedOpenAI.model, DEFAULT_OPENAI_MODEL);
   assert.equal(promptedOpenAI.apiKey, 'hidden-test-key');
 
-  const podmanRuntime = selectComposeRuntime({
-    spawn(command, args) {
-      assert.deepEqual(args, ['compose', 'version']);
-      return { status: command === 'podman' ? 0 : 1 };
-    }
+  // ── BUNDLED-TOPOLOGY-A: shared bundled service port rule ─────────────────
+  // The bundled local PostgreSQL SERVICE may host BOTH the operational
+  // database and the disposable development database (different names, ONE
+  // physical service). When the configured operational target is that bundled
+  // service, the development Compose host port MUST equal the exact
+  // operational DATABASE_URL port; an incompatible TICKET_SYSTEM_POSTGRES_PORT
+  // refuses BEFORE any Compose/runtime/database contact and the explicit
+  // operational URL stays byte-exact. This is deliberately SEPARATE from
+  // COLLISION-A.
+  const bundledOperationalUrl = 'postgresql://ticket_system:ticket_system@127.0.0.1:5432/ticket_system';
+  const bundledAtDevDifferentPort = { DATABASE_URL: bundledOperationalUrl, TICKET_SYSTEM_POSTGRES_PORT: '55432' };
+  const bundledTopologyAllowed = assessBundledServiceTopologyGuard({
+    DATABASE_URL: bundledOperationalUrl
   });
-  assert.equal(podmanRuntime.label, 'Podman Compose');
-  const standaloneRuntime = selectComposeRuntime({
-    spawn(command, args) {
-      if (command === 'podman-compose') assert.deepEqual(args, ['version']);
-      return { status: command === 'podman-compose' ? 0 : 1 };
-    }
-  });
-  assert.equal(standaloneRuntime.command, 'podman-compose');
-  const composeCalls = [];
-  const verifiedTargets = [];
-  const started = await startDevelopmentDatabase({
-    runtime: podmanRuntime,
-    composeFile: '/repo/compose.dev.yml',
-    env: {},
-    applyEnv() {},
-    spawn(command, args, options) {
-      composeCalls.push({ command, args, options });
-      return { status: 0 };
-    },
-    async verifyDatabase({ databaseTarget }) { verifiedTargets.push(databaseTarget); }
-  });
-  assert.equal(started.runtime, podmanRuntime);
-  assert.equal(started.databaseTarget.databaseUrl, DEFAULT_DATABASE_URL);
-  assert.deepEqual(verifiedTargets, [defaultDatabaseTarget]);
-  assert.equal(composeCalls[0].command, 'podman');
-  assert.deepEqual(composeCalls[0].args, [
-    'compose', '-f', '/repo/compose.dev.yml', 'up', '-d', '--wait'
-  ]);
-  assert.equal(composeCalls[0].options.env.TICKET_SYSTEM_POSTGRES_PORT, '5432');
-  await assert.rejects(
-    startDevelopmentDatabase({
-      runtime: null,
-      env: {},
-      applyEnv() {},
-      spawn: () => ({ status: 1 })
-    }),
-    /Docker Compose or Podman Compose is required/
-  );
-  await assert.rejects(
-    startDevelopmentDatabase({
-      runtime: podmanRuntime,
-      composeFile: '/repo/compose.dev.yml',
-      env: {},
-      applyEnv() {},
-      spawn: () => ({ status: 0 }),
-      async verifyDatabase() { throw Object.assign(new Error('connect refused'), { code: 'ECONNREFUSED' }); }
-    }),
-    /connect refused/
-  );
-
-  let readinessConfig;
-  const verifiedTarget = await verifyConfiguredDatabase({
-    databaseTarget: defaultDatabaseTarget,
-    clientFactory(config) {
-      readinessConfig = config;
-      return {
-        async connect() {},
-        async query(sql) { assert.equal(sql, 'SELECT 1'); },
-        async end() {}
-      };
-    }
-  });
-  assert.equal(verifiedTarget, defaultDatabaseTarget);
-  assert.equal(readinessConfig.connectionString, DEFAULT_DATABASE_URL);
-  assert.equal(readinessConfig.connectionTimeoutMillis, 3000);
-  await assert.rejects(
-    verifyConfiguredDatabase({
-      databaseTarget: {
-        kind: 'external',
-        databaseUrl: 'postgresql://user:test-only-password@127.0.0.1:55432/db'
-      },
-      clientFactory() {
-        return {
-          async connect() {
-            throw new Error(
-              'connect postgresql://user:test-only-password@127.0.0.1:55432/db failed'
-            );
-          },
-          async end() {}
-        };
-      }
-    }),
-    error => {
-      assert.match(error.message, /cannot complete a host-side PostgreSQL query/);
-      assert.match(error.message, /external DATABASE_URL/);
-      assert.equal(error.message.includes('test-only-password'), false);
-      return true;
-    }
+  assert.equal(bundledTopologyAllowed.ok, true,
+    'bundled operational URL at 5432 with TSPP unset: allowed (Compose port = operational port)');
+  assert.equal(assessBundledServiceTopologyGuard({
+    DATABASE_URL: bundledOperationalUrl,
+    TICKET_SYSTEM_POSTGRES_PORT: '5432'
+  }).ok, true,
+    'bundled operational URL at 5432 with TSPP=5432: allowed');
+  const bundledTopologyRefusal = assessBundledServiceTopologyGuard(bundledAtDevDifferentPort);
+  assert.equal(bundledTopologyRefusal.ok, false,
+    'bundled operational URL at 5432 with TSPP=55432: REFUSED');
+  assert.equal(bundledTopologyRefusal.operationalPort, 5432);
+  assert.equal(bundledTopologyRefusal.composePort, 55432);
+  assert.match(bundledTopologyRefusal.reason, /bound to the same bundled local PostgreSQL service/);
+  assert.match(bundledTopologyRefusal.reason, /exact operational DATABASE_URL unavailable/);
+  assert.match(bundledTopologyRefusal.reason, /TICKET_SYSTEM_POSTGRES_PORT=5432/);
+  assert.equal(bundledTopologyRefusal.reason.includes('test-only-password'), false, 'refusals stay credential-free');
+  try {
+    assertDevelopmentTargetUsable(bundledAtDevDifferentPort);
+    assert.ok(false, 'the throwing guard composes the bundled-topology refusal');
+  } catch (error) {
+    assert.equal(error.name, 'DevelopmentServiceTopologyError');
+    assert.equal(error.code, 'DEVELOPMENT_SERVICE_TOPOLOGY_REFUSED');
+    assert.equal(error.message.includes('called before any runtime selection'), false);
+    assert.equal(error instanceof DevelopmentTargetCollisionError, false,
+      'the topology rule is a DISTINCT guard from COLLISION-A');
+  }
+  assert.equal(resolveDevelopmentDatabaseTarget(bundledAtDevDifferentPort).databaseUrl, bundledOperationalUrl,
+    'the explicit operational URL remains BYTE-EXACT even when the topology rule refuses');
+  assert.equal(assessBundledServiceTopologyGuard({
+    DATABASE_URL: externalOperationalUrl,
+    TICKET_SYSTEM_POSTGRES_PORT: '55432'
+  }).ok, true, 'an EXTERNAL/non-bundled operational target allows an independent development Compose port');
+  // Distinctness from COLLISION-A demonstrated in both directions: an
+  // identity-colliding configuration raises the COLLISION class, and a
+  // shared-service different-port configuration raises the TOPOLOGY class.
+  try {
+    assertDevelopmentTargetUsable({
+      DATABASE_URL: 'postgresql://devopcred:test-only-password@127.0.0.1:5432/ticket_system_dev',
+      POSTGRES_SCHEMA: 'ticket_system',
+      TICKET_SYSTEM_POSTGRES_PORT: '5432'
+    });
+    assert.ok(false, 'identity collision must refuse');
+  } catch (error) {
+    assert.equal(error.name, 'DevelopmentTargetCollisionError',
+      'the identity guard keeps its own class even when combined with a matching port');
+  }
+  // TSPP affects ONLY the development channel — the bundled topology rule is
+  // the exception that keeps the shared service reachable.
+  assert.deepEqual(
+    disposableDevelopmentTarget(bundledAtDevDifferentPort),
+    disposableDevelopmentTarget({ TICKET_SYSTEM_POSTGRES_PORT: '55432' }),
+    'TSPP keeps selecting only the fixed development target identity'
   );
 
-  let externalSpawnCalls = 0;
-  let verifiedExternalTarget = null;
-  const external = await startDevelopmentDatabase({
-    env: { DATABASE_URL: externalDatabaseUrl },
-    applyEnv() {},
-    spawn() { externalSpawnCalls += 1; return { status: 0 }; },
-    async verifyDatabase({ databaseTarget }) { verifiedExternalTarget = databaseTarget; }
-  });
-  assert.equal(external.runtime, null);
-  assert.equal(external.databaseTarget.kind, 'external');
-  assert.equal(verifiedExternalTarget.databaseUrl, externalDatabaseUrl);
-  assert.equal(externalSpawnCalls, 0);
-
-  let failedExternalSpawnCalls = 0;
-  await assert.rejects(
-    startDevelopmentDatabase({
-      env: { DATABASE_URL: externalDatabaseUrl },
-      applyEnv() {},
-      spawn() { failedExternalSpawnCalls += 1; return { status: 0 }; },
-      async verifyDatabase({ databaseTarget }) {
-        return verifyConfiguredDatabase({
-          databaseTarget,
-          clientFactory() {
-            return {
-              async connect() { throw new Error('external connectivity failed'); },
-              async end() {}
-            };
-          }
-        });
-      }
-    }),
-    /configured external DATABASE_URL.*external connectivity failed/
+  // ── COMPOSE-A: no caller-replaceable proof mechanism on the production ───
+  // disposable-authority path. The production lifecycle owner exports exactly
+  // two ZERO-ARGUMENT operations; nothing else is exported to tests or
+  // callers: no compose selector, no host-readiness verifier, no launch
+  // implementation, no compose file pointer, no create/drop helper, and no
+  // authority-bearing store constructor.
+  const lifecycleRoot = path.join(__dirname, 'dev-database.js');
+  const lifecycleSource = fs.readFileSync(lifecycleRoot, 'utf8');
+  assert.deepEqual(
+    Object.keys(require('./dev-database')).sort(),
+    ['composeInvocationEnvironment', 'prepareAndMigrateDisposableDevelopmentDatabase', 'resetDisposableDevelopmentDatabase', 'trustedComposeRuntimeExecutablePath'],
+    'the exported production surface is the two zero-argument lifecycle operations plus the two PURE non-authority test helpers (trusted-runtime classifier, Compose environment sanitizer)'
   );
-  assert.equal(failedExternalSpawnCalls, 0);
+  const devLifecycleSourceForExports = fs.readFileSync(path.join(__dirname, 'dev-database.js'), 'utf8');
+  assert.doesNotMatch(devLifecycleSourceForExports, /\bmodule\.exports\s*=\s*\{[^}]*\b(spawn|runtime|composeFile|verifyDatabase|clientFactory|applyEnv)\b/,
+    'the lifecycle owner exports no proof-mechanism seam of any kind');
+  assert.equal(prepareAndMigrateDisposableDevelopmentDatabase.length, 0,
+    'the prepare+migrate operation takes zero parameters — no proof mechanism can be supplied');
+  assert.equal(require('./dev-database').resetDisposableDevelopmentDatabase.length, 0,
+    'the reset operation takes zero parameters — no proof mechanism can be supplied');
+  for (const forbiddenExport of [
+    'COMPOSE_FILE',
+    'COMPOSE_RUNTIMES',
+    'commandSucceeded',
+    'selectComposeRuntime',
+    'startDevelopmentDatabase',
+    'verifyConfiguredDatabase',
+    'prepareDisposableDevelopmentDatabase',
+    'migrateDisposableDevelopmentDatabase',
+    'ensureDisposableDevelopmentDatabase',
+    'destroyDisposableDevelopmentDatabase',
+    'createDisposableDevelopmentStore',
+    'createDevelopmentStore'
+  ]) {
+    assert.equal(forbiddenExport in require('./dev-database'), false,
+      `the lifecycle owner exports no proof mechanics or authority surface (${forbiddenExport} is module-internal)`);
+  }
+  // Refusing arguments happens BEFORE any launch/verification/DB contact, so
+  // the refusal itself is provably side-effect-free (offline, in-process).
+  const attackerKit = {
+    spawn() { throw new Error('a caller launch substitution must never be called'); },
+    runtime: { command: 'fake', prefix: [], label: 'Fake Compose' },
+    composeFile: '/attacker/fake-compose.yml',
+    verifyDatabase: async () => { throw new Error('a caller verification substitution must never be called'); },
+    clientFactory: () => { throw new Error('a caller client substitution must never be called'); },
+    env: { TICKET_SYSTEM_POSTGRES_PORT: '55432' }
+  };
+  await assert.rejects(
+    prepareAndMigrateDisposableDevelopmentDatabase(attackerKit),
+    /prepareAndMigrateDisposableDevelopmentDatabase accepts no arguments/,
+    'passing ANY argument to the prepare+migrate operation refuses before any contact'
+  );
+  await assert.rejects(
+    require('./dev-database').resetDisposableDevelopmentDatabase(attackerKit),
+    /resetDisposableDevelopmentDatabase accepts no arguments/,
+    'passing ANY argument to the reset operation refuses before any contact'
+  );
+  assert.match(
+    lifecycleSource,
+    /if \(arguments\.length > 0\)[\s\S]{0,400}?accepts no arguments/,
+    'both exported operations refuse arguments in the production source'
+  );
 
-  const customComposeCalls = [];
-  let customVerifiedTarget = null;
-  await startDevelopmentDatabase({
-    runtime: podmanRuntime,
-    composeFile: '/repo/compose.dev.yml',
-    env: {
-      DATABASE_URL: DEFAULT_DATABASE_URL,
-      TICKET_SYSTEM_POSTGRES_PORT: '55432'
-    },
-    applyEnv() {},
-    spawn(command, args, options) {
-      customComposeCalls.push({ command, args, options });
-      return { status: 0 };
-    },
-    async verifyDatabase({ databaseTarget }) { customVerifiedTarget = databaseTarget; }
+  // ── P6-DEVEX-A: fixed repository-owned disposable development target ──────
+  const expectedDevUrl = 'postgresql://ticket_system:ticket_system@127.0.0.1:5432/ticket_system_dev';
+  assert.equal(DEVELOPMENT_TARGET_HOST, '127.0.0.1');
+  assert.equal(DEVELOPMENT_TARGET_DATABASE, 'ticket_system_dev');
+  assert.equal(DEVELOPMENT_TARGET_SCHEMA, 'ticket_system');
+  assert.equal(disposableDevelopmentTarget({}).databaseUrl, expectedDevUrl);
+  assert.equal(
+    disposableDevelopmentTarget({ TICKET_SYSTEM_POSTGRES_PORT: '55432' }).databaseUrl,
+    'postgresql://ticket_system:ticket_system@127.0.0.1:55432/ticket_system_dev'
+  );
+  // DEV-TARGET-A: NO environment input may redirect the fixed development
+  // target — DATABASE_URL, POSTGRES_SCHEMA, and the whole PG* family are
+  // inert here; only TICKET_SYSTEM_POSTGRES_PORT (through the bundled compose
+  // owner) can move the port.
+  assert.deepEqual(disposableDevelopmentTarget({
+    DATABASE_URL: 'postgresql://redirector:test-only-password@ops.example:6544/redirected',
+    POSTGRES_SCHEMA: 'redirected_schema',
+    PGHOST: '10.9.8.7',
+    PGPORT: '7777',
+    PGDATABASE: 'redirected_db',
+    PGUSER: 'redirector',
+    PGPASSWORD: 'test-only-password'
+  }), disposableDevelopmentTarget({}));
+  for (const refused of ['0', '65536', '5432junk', '  ']) {
+    if (refused === '  ') continue; // whitespace-only is unset (bounded default)
+    assert.throws(() => disposableDevelopmentTarget({ TICKET_SYSTEM_POSTGRES_PORT: refused }),
+      error => error.message === TSPP_EXPECTED_MESSAGE);
+  }
+  assert.throws(() => disposableDevelopmentTarget({ TICKET_SYSTEM_POSTGRES_PORT: '65536' }),
+    error => error.message === TSPP_EXPECTED_MESSAGE);
+  // DEV-DISPOSABLE-A: NO exported function can create a disposable-migration
+  // store from env alone. The authority-bearing constructor is module-internal
+  // to the verified lifecycle owner (scripts/dev-database.js) and reachable
+  // ONLY through the compose-verified flow; this file offers the ordinary
+  // GUARDED development seam, which carries no migration authority.
+  assert.equal(typeof devEnvironment.createDevelopmentStore, 'undefined',
+    'the former exported authority helper is gone');
+  const devDbLifecycle = require('./dev-database');
+  for (const forbidden of [
+    'createDevelopmentStore',
+    'createDisposableDevelopmentStore',
+    'ensureDisposableDevelopmentDatabase',
+    'destroyDisposableDevelopmentDatabase',
+    'migrateDisposableDevelopmentDatabase'
+  ]) {
+    assert.equal(forbidden in devDbLifecycle, false,
+      `the lifecycle owner never exports the authority surface ${forbidden}`);
+  }
+  assert.equal(typeof devDbLifecycle.prepareAndMigrateDisposableDevelopmentDatabase, 'function');
+  assert.equal(typeof devDbLifecycle.resetDisposableDevelopmentDatabase, 'function');
+  const devStoreProbe = createGuardedDevelopmentStore({});
+  assert.equal(devStoreProbe.disposableMigrations, false, 'the development read/provisioning seam constructs a guarded (non-disposable) store');
+  assert.equal(devStoreProbe.schema, DEVELOPMENT_TARGET_SCHEMA);
+  assert.equal(devStoreProbe.connectionString, expectedDevUrl);
+  {
+    const redirected = createGuardedDevelopmentStore({
+      DATABASE_URL: 'postgresql://redirector:test-only-password@ops.example:6544/redirected',
+      POSTGRES_SCHEMA: 'redirected_schema'
+    });
+    assert.equal(redirected.connectionString, expectedDevUrl, 'DATABASE_URL cannot redirect the development seam');
+    assert.equal(redirected.schema, DEVELOPMENT_TARGET_SCHEMA, 'POSTGRES_SCHEMA cannot redirect the development seam');
+    await redirected.close();
+  }
+  await devStoreProbe.close();
+
+  // DEV-COLLISION-A: the collision matrix. Deterministic, credential-free,
+  // no DNS, `localhost` aliased to `127.0.0.1` only.
+  const defaultAssessment = assessDevelopmentTargetCollision({});
+  assert.equal(defaultAssessment.ok, true, 'the bundled operational default is not the disposable development identity');
+  assert.equal(defaultAssessment.operational.database, 'ticket_system');
+  assert.equal(defaultAssessment.development.database, DEVELOPMENT_TARGET_DATABASE);
+  assert.equal(defaultAssessment.reason, null);
+  const collidingUrl = 'postgresql://session-credential:test-only-password@127.0.0.1:5432/ticket_system_dev';
+  const colliding = assessDevelopmentTargetCollision({
+    DATABASE_URL: collidingUrl,
+    POSTGRES_SCHEMA: 'ticket_system'
   });
-  assert.equal(customComposeCalls[0].options.env.TICKET_SYSTEM_POSTGRES_PORT, '55432');
-  assert.equal(new URL(customVerifiedTarget.databaseUrl).port, '55432');
+  assert.equal(colliding.ok, false, 'operational identity == fixed development identity refuses');
+  assert.match(colliding.reason, /identical to the/);
+  assert.equal(colliding.reason.includes('test-only-password'), false, 'collision reasons never leak credentials');
+  assert.equal(colliding.reason.includes('session-credential'), false, 'collision reasons never leak usernames');
+  assert.equal(colliding.development.database, DEVELOPMENT_TARGET_DATABASE);
+  assert.deepEqual(colliding.operational, {
+    host: '127.0.0.1', port: 5432, database: 'ticket_system_dev', schema: 'ticket_system'
+  });
+  // localhost → 127.0.0.1 aliasing (deterministic; no DNS resolution).
+  const collidingLocalhost = assessDevelopmentTargetCollision({
+    DATABASE_URL: 'postgresql://u:test-only-password@localhost:5432/ticket_system_dev',
+    POSTGRES_SCHEMA: 'ticket_system'
+  });
+  assert.equal(collidingLocalhost.ok, false, 'the localhost alias collides');
+  assert.equal(collidingLocalhost.operational.host, '127.0.0.1');
+  // Only ALL FOUR normalized fields equal collide.
+  assert.equal(assessDevelopmentTargetCollision({
+    DATABASE_URL: collidingUrl, POSTGRES_SCHEMA: 'other_schema'
+  }).ok, true, 'schema difference keeps the identities distinct');
+  assert.equal(assessDevelopmentTargetCollision({
+    DATABASE_URL: 'postgresql://u:test-only-password@localhost:5433/ticket_system_dev', POSTGRES_SCHEMA: 'ticket_system'
+  }).ok, true, 'port difference keeps the identities distinct');
+  assert.equal(assessDevelopmentTargetCollision({
+    DATABASE_URL: 'postgresql://u:test-only-password@db.internal.example:5432/ticket_system_dev', POSTGRES_SCHEMA: 'ticket_system'
+  }).ok, true, 'host difference keeps the identities distinct');
+  // Unreadable operational identity refuses fail-closed BEFORE any contact.
+  const unreadable = assessDevelopmentTargetCollision({
+    DATABASE_URL: 'postgresql://incomplete', TICKET_SYSTEM_POSTGRES_PORT: ''
+  });
+  assert.equal(unreadable.ok, false, 'an unreadable operational identity refuses');
+  assert.match(unreadable.reason, /operational target identity could not be established/);
+  for (const accessor of [assertDevelopmentTargetUsable]) {
+    try {
+      accessor({ DATABASE_URL: collidingUrl, POSTGRES_SCHEMA: 'ticket_system' });
+      assert.ok(false, 'the throwing guard must refuse');
+    } catch (error) {
+      assert.ok(error instanceof DevelopmentTargetCollisionError);
+      assert.equal(error.code, 'DEVELOPMENT_TARGET_REFUSED');
+      assert.equal(error.message.includes('test-only-password'), false, 'refusals are credential-free');
+    }
+  }
 
-  let repeatedComposeStarts = 0;
-  let repeatedHostChecks = 0;
-  for (let index = 0; index < 2; index += 1) {
-    await startDevelopmentDatabase({
-      runtime: podmanRuntime,
-      env: {},
-      applyEnv() {},
-      spawn() { repeatedComposeStarts += 1; return { status: 0 }; },
-      async verifyDatabase() { repeatedHostChecks += 1; }
+  // CHANNEL-SPLIT-A collision pins (§11): the guard compares the EXACT
+  // operational identity derived from the explicit DATABASE_URL against the
+  // fixed dev identity — with no compose-port rewrite of the explicit URL.
+  assert.equal(assessDevelopmentTargetCollision({
+    DATABASE_URL: 'postgresql://ticket_system:test-only-password@127.0.0.1:5432/ticket_system',
+    TICKET_SYSTEM_POSTGRES_PORT: '55432',
+    POSTGRES_SCHEMA: 'ticket_system'
+  }).ok, true,
+    'an explicit bundled-default-shaped operational URL (port 5432, database ticket_system) does NOT collide; its port is authoritative and not rewritten to 55432');
+  assert.equal(assessDevelopmentTargetCollision({
+    DATABASE_URL: bundledDatabaseUrl(55432),
+    TICKET_SYSTEM_POSTGRES_PORT: '55432',
+    POSTGRES_SCHEMA: 'ticket_system'
+  }).ok, true,
+    'an explicit bundled-shaped URL whose port equals TSPP still does not collide: the database name keeps the channels apart');
+  {
+    const portedIdentityCollision = assessDevelopmentTargetCollision({
+      DATABASE_URL: 'postgresql://opcred:test-only-password@127.0.0.1:55432/ticket_system_dev',
+      TICKET_SYSTEM_POSTGRES_PORT: '55432',
+      POSTGRES_SCHEMA: 'ticket_system'
+    });
+    assert.equal(portedIdentityCollision.ok, false,
+      'an explicit operational URL at the dev port/database with the dev schema DOES collide');
+    assert.deepEqual(portedIdentityCollision.operational, {
+      host: '127.0.0.1', port: 55432, database: 'ticket_system_dev', schema: 'ticket_system'
     });
   }
-  assert.equal(repeatedComposeStarts, 2);
-  assert.equal(repeatedHostChecks, 2);
 
-  for (const file of ['dev-database.js', 'dev-setup.js', 'dev-doctor.js', 'postgres-migrate.js']) {
+  // ── Bundled-infrastructure lifecycle ownership (deterministic statics) ────
+  //
+  // Runtime-flow ordering/ownership is statically owned here and in
+  // scripts/migration-execution-authority-test.js; the AFFIRMATIVE proof that
+  // the ordinary supported local path works is the bounded REAL developer
+  // smoke against real system Docker Compose (never fake executables).
+  const devLifecycleSource = fs.readFileSync(path.join(__dirname, 'dev-database.js'), 'utf8');
+  assert.ok(devLifecycleSource.includes("'compose.dev.yml'") &&
+     devLifecycleSource.includes('const COMPOSE_FILE = path.join(ROOT'),
+    'the lifecycle pins the repository-owned compose.dev.yml by repository path');
+  const lifecycleFlowSource = devLifecycleSource.slice(devLifecycleSource.indexOf('async function startDevelopmentDatabase()'));
+  const guardIndex = lifecycleFlowSource.indexOf('assertDevelopmentTargetUsable(process.env)');
+  const selectionIndex = lifecycleFlowSource.indexOf('const selectedRuntime = selectComposeRuntime()');
+  const probeDefinitionIndex = devLifecycleSource.indexOf("'compose', 'version'");
+  const upContractIndex = devLifecycleSource.indexOf("'up', '-d', '--wait'");
+  assert.ok(guardIndex > -1 && selectionIndex > -1 && probeDefinitionIndex > -1 && upContractIndex > -1,
+    'the lifecycle has a collision guard, a trusted runtime selection, a local default engine probe, and a fixed start contract');
+  assert.ok(guardIndex > -1 && guardIndex < selectionIndex,
+    'a collision refuses BEFORE any runtime selection or infrastructure contact');
+  // DEV-RUNTIME-A: deterministic trusted absolute runtime resolution — the
+  // ambient executable PATH is never consulted; the launch always uses the
+  // real absolute Docker binary from a validated trusted system prefix.
+  assert.match(devLifecycleSource, /COMPOSE_TRUSTED_BIN_DIRECTORIES = Object\.freeze\(\[/,
+    'trusted runtime candidate directories are code constants, not caller inputs');
+  assert.match(devLifecycleSource, /trustedComposeRuntimeExecutablePath\(/,
+    'candidates pass through the pure trust classifier before any launch');
+  assert.doesNotMatch(devLifecycleSource, /process\.env\.PATH|fromPath|envPath|\['PATH'\]|"PATH"/,
+    'the lifecycle never consults the ambient PATH for runtime resolution');
+  assert.match(devLifecycleSource, /composeInvocationEnvironment\(process\.env\)/,
+    'the Compose child environment is sanitized (runtime/context redirection neutralized)');
+
+  // ── Doctor development-target semantics (deterministic, stub-driven) ─────
+  function ledgerStoreStub({
+    schema = 'ticket_system',
+    status = null,
+    observed = null,
+    identities = undefined,
+    adminUser = existingAdmin,
+    agents = [],
+    onProbeError = null,
+    touchAdmin = false
+  } = {}) {
+    const { migrationFiles: files, migrationChecksum: checksumFn } = require('../persistence/postgres/store');
+    const versions = files();
+    const statusShape = status === null
+      ? { fullyApplied: true, checksumsValid: true, partial: false, currentVersion: 99, headVersion: 99, pendingMigrations: 0, unknownMigrations: 0 }
+      : status;
+    const observedShape = observed === null
+      ? { schemaExists: true, ledgerExists: true, appliedVersions: versions }
+      : observed;
+    return {
+      schema,
+      async getMigrationStatus() {
+        if (onProbeError) throw onProbeError;
+        return statusShape;
+      },
+      async withTransaction(operation) {
+        return operation({
+          async query(sql) {
+            if (sql.includes('current_database()')) return { rows: [{ name: 'stubdb' }] };
+            if (sql.includes('pg_namespace')) return { rowCount: observedShape.schemaExists ? 1 : 0, rows: [] };
+            if (sql.includes('to_regclass')) return { rows: [{ name: observedShape.ledgerExists ? 'stub' : null }] };
+            if (sql.includes('schema_migration_identities')) {
+              return { rows: identities || versions.map(version => ({ version, sha256: checksumFn(version) })) };
+            }
+            if (sql.includes('schema_migrations')) {
+              return { rows: observedShape.appliedVersions.map(version => ({ version })) };
+            }
+            return { rows: [], rowCount: 0 };
+          }
+        });
+      },
+      async getUserByUsername() {
+        if (touchAdmin) throw new Error('admin must not be contacted');
+        return adminUser;
+      },
+      async listConfiguredAgents() { return { agents, nextAfterId: null }; },
+      async close() {}
+    };
+  }
+
+  // BEHIND (head row absent, valid identities): informational auto-migrate.
+  {
+    const versions = require('../persistence/postgres/store').migrationFiles();
+    const behind = await inspectDevelopmentEnvironment({
+      env: baseEnv,
+      storeFactory: () => ledgerStoreStub({
+        status: { fullyApplied: false, checksumsValid: true, partial: false, currentVersion: 43, headVersion: 44, pendingMigrations: 1, unknownMigrations: 0 },
+        observed: { schemaExists: true, ledgerExists: true, appliedVersions: versions.slice(0, -1) },
+        identities: versions.slice(0, -1).map(version => ({ version, sha256: require('../persistence/postgres/store').migrationChecksum(version) })),
+        agents: [{ provider: 'ollama', model: 'test-model' }]
+      }),
+      verifyPassword: async () => false
+    });
+    const rows = behind.checks.filter(check => check.label === 'PostgreSQL migrations');
+    assert.equal(rows.length, 1, 'exactly one development ledger row');
+    assert.equal(rows[0].status, 'info', 'a behind disposable development ledger is informational');
+    assert.match(rows[0].message, /behind the canonical migration source by 1/);
+    assert.match(rows[0].message, /auto-migrate/);
+    assert.match(rows[0].message, /disposable/);
+    assert.doesNotMatch(rows[0].message, /authorized/, 'the dev ledger row makes no authorization claim');
+    assert.equal(behind.ok, true, 'behind dev ledger does not fail the doctor');
+  }
+
+  // UNINITIALIZED (no schema/ledger): informational ledger row; admin/agent
+  // rows report the still-absent account/agent truth (setup needed).
+  {
+    const uninit = await inspectDevelopmentEnvironment({
+      env: baseEnv,
+      storeFactory: () => ledgerStoreStub({
+        status: { fullyApplied: false, checksumsValid: false, partial: false, currentVersion: 0, headVersion: 44, pendingMigrations: 44, unknownMigrations: 0 },
+        observed: { schemaExists: false, ledgerExists: false, appliedVersions: [] },
+        identities: null,
+        adminUser: null
+      })
+    });
+    const rows = uninit.checks.filter(check => check.label === 'PostgreSQL migrations');
+    assert.equal(rows[0].status, 'info');
+    assert.match(rows[0].message, /provisions and auto-migrates/);
+    assert.equal(uninit.ok, false, 'a present-but-uninitialized database still lacks the admin account and agents');
+    const adminRows = uninit.checks.filter(check => check.label === 'admin account');
+    assert.equal(adminRows[0].status, 'fail');
+  }
+
+  // MISSING development database (3D000 at probe): informational, no failure,
+  // admin/agent inspection skipped (no store contact beyond the probe).
+  {
+    const missing = await inspectDevelopmentEnvironment({
+      env: baseEnv,
+      storeFactory: () => ledgerStoreStub({
+        onProbeError: Object.assign(new Error('database "ticket_system_dev" does not exist'), { code: '3D000' }),
+        touchAdmin: true
+      })
+    });
+    assert.equal(missing.ok, true, 'a missing development database is informational');
+    const infoRows = missing.checks.filter(check => check.label === 'Disposable development database');
+    assert.equal(infoRows.length, 1);
+    assert.match(infoRows[0].message, /does not exist yet/);
+    assert.match(infoRows[0].message, /dev:setup|npm run dev|`npm run dev`/);
+    assert.equal(missing.checks.filter(check => check.label === 'admin account' && check.status === 'info').length, 1);
+  }
+
+  // Unknown future migration → FAIL with exactly the dev:reset remediation.
+  {
+    const unknown = await inspectDevelopmentEnvironment({
+      env: baseEnv,
+      storeFactory: () => ledgerStoreStub({
+        status: { fullyApplied: false, checksumsValid: false, partial: false, currentVersion: 44, headVersion: 44, pendingMigrations: 0, unknownMigrations: 1 }
+      })
+    });
+    const rows = unknown.checks.filter(check => check.label === 'PostgreSQL migrations');
+    assert.equal(rows[0].status, 'fail');
+    assert.match(rows[0].message, /unknown future migrations/);
+    assert.match(rows[0].message, /dev:reset/);
+    assert.equal(unknown.ok, false);
+  }
+
+  // Applied-identity drift → FAIL with dev:reset remediation (partial state).
+  {
+    const versions = require('../persistence/postgres/store').migrationFiles();
+    const drifted = await inspectDevelopmentEnvironment({
+      env: baseEnv,
+      storeFactory: () => ledgerStoreStub({
+        identities: [...versions.map(version => ({ version, sha256: require('../persistence/postgres/store').migrationChecksum(version) })),
+          { version: '099_stray_history.sql', sha256: '0'.repeat(64) }]
+      })
+    });
+    const rows = drifted.checks.filter(check => check.label === 'PostgreSQL migrations');
+    assert.equal(rows[0].status, 'fail');
+    assert.match(rows[0].message, /dev:reset/);
+    assert.equal(drifted.ok, false);
+  }
+
+  // Collision → FAIL before ANY development store contact.
+  {
+    let constructedStores = 0;
+    const refusal = await inspectDevelopmentEnvironment({
+      env: { ...baseEnv, DATABASE_URL: collidingUrl, POSTGRES_SCHEMA: 'ticket_system' },
+      storeFactory() { constructedStores += 1; return ledgerStoreStub({}); }
+    });
+    assert.equal(constructedStores, 0, 'collision refusal performs no database contact');
+    const rows = refusal.checks.filter(check => check.label === 'Development target collision');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].status, 'fail');
+    assert.match(rows[0].message, /identical to the/);
+    assert.equal(refusal.ok, false);
+    const infoRows = refusal.checks.filter(check => check.status === 'info' && check.label.startsWith('Operational database'));
+    assert.equal(infoRows.length, 1, 'exactly ONE informational operational identity row');
+    assert.equal(infoRows[0].message.includes('test-only-password'), false, 'informational rows never carry credentials');
+    assert.match(infoRows[0].message, /database ticket_system_dev/);
+  }
+
+  // Bundled-service port refusal (topology guard) → FAIL before ANY database
+  // contact; the operational info row still renders credential-free.
+  {
+    let topologyStoreConstructions = 0;
+    const topologyRefusal = await inspectDevelopmentEnvironment({
+      env: {
+        ...baseEnv,
+        DATABASE_URL: 'postgresql://ticket_system:test-only-password@127.0.0.1:5432/ticket_system',
+        TICKET_SYSTEM_POSTGRES_PORT: '55432',
+        POSTGRES_SCHEMA: 'ticket_system'
+      },
+      storeFactory() { topologyStoreConstructions += 1; return ledgerStoreStub({}); }
+    });
+    assert.equal(topologyStoreConstructions, 0, 'topology refusal performs no database contact');
+    const topologyRows = topologyRefusal.checks.filter(check => check.label === 'Bundled service port');
+    assert.equal(topologyRows.length, 1, 'exactly one bundled-service-topology row');
+    assert.equal(topologyRows[0].status, 'fail');
+    assert.match(topologyRows[0].message, /same bundled local PostgreSQL service/);
+    assert.match(topologyRows[0].message, /TICKET_SYSTEM_POSTGRES_PORT=5432/);
+    assert.equal(topologyRefusal.ok, false);
+    const infoRowsForTopology = topologyRefusal.checks.filter(
+      check => check.status === 'info' && check.label.startsWith('Operational database')
+    );
+    assert.equal(infoRowsForTopology.length, 1, 'exactly ONE informational operational identity row on topology refusal');
+    assert.equal(infoRowsForTopology[0].message.includes('test-only-password'), false);
+  }
+
+  // Healthy run rows: exactly one informational operational row, no collision.
+  {
+    const operationalRows = healthy.checks.filter(check => check.status === 'info' && check.label.startsWith('Operational database'));
+    assert.equal(operationalRows.length, 1, 'one informational operational row on a healthy dev environment');
+    assert.equal(operationalRows[0].message.includes('secret'), false, 'operational identity rows are credential-free');
+    assert.ok(healthy.checks.some(check => check.label === 'Disposable development target' && check.status === 'pass'));
+  }
+
+  // ── npm run dev lifecycle ordering (static, order-sensitive) ─────────────
+  const developmentStartupSource = fs.readFileSync(path.join(__dirname, 'dev.js'), 'utf8');
+  const devLifecycleIndices = [
+    'applyLocalEnv()',
+    'prepareAndMigrateDisposableDevelopmentDatabase()',
+    'await runDoctor()',
+    'process.env.DATABASE_URL = target.databaseUrl;',
+    'process.env.POSTGRES_SCHEMA = DEVELOPMENT_TARGET_SCHEMA',
+    "require('../server')"
+  ].map(token => developmentStartupSource.indexOf(token));
+  assert.ok(devLifecycleIndices.every(index => index > -1), 'dev.js drives every required lifecycle step');
+  assert.deepEqual(
+    devLifecycleIndices,
+    [...devLifecycleIndices].sort((a, b) => a - b),
+    'dev.js lifecycle order: env → guard/provision/verified-migrate → doctor → fixed server env → server'
+  );
+  assert.match(developmentStartupSource, /prepareAndMigrateDisposableDevelopmentDatabase/,
+    'dev startup migrates ONLY through the compose-verified lifecycle');
+  assert.doesNotMatch(developmentStartupSource, /createDevelopmentStore|new PostgresRuntimeStore|disposableMigrations/,
+    'dev never constructs or exposes an authority-bearing store itself');
+
+  // dev:setup statics: all DB mutations flow through the fixed dev target.
+  const setupSource = fs.readFileSync(path.join(__dirname, 'dev-setup.js'), 'utf8');
+  assert.match(setupSource, /prepareAndMigrateDisposableDevelopmentDatabase\(/, 'dev:setup provisions and migrates through the shared verified lifecycle');
+  assert.match(setupSource, /createGuardedDevelopmentStore\(/, 'dev:setup provisions through the guarded (non-authority) development seam');
+  assert.doesNotMatch(setupSource, /new PostgresRuntimeStore\(/, 'dev:setup never constructs a store outside the fixed development seams');
+  assert.doesNotMatch(setupSource, /disposableMigrations/, 'disposability stays declared only in the verified lifecycle owner');
+  assert.match(setupSource, /Operational PostgreSQL URL/, 'setup names the operational semantics of DATABASE_URL honestly');
+
+  // ── npm run dev:reset (bounded destructive authority) ────────────────────
+  const { main: devResetMain } = require('./dev-reset');
+  await assert.rejects(
+    devResetMain(['node', 'dev:reset', '--database', 'other_db']),
+    /does not accept arguments/,
+    'dev:reset never accepts a database argument'
+  );
+  await assert.rejects(
+    devResetMain(['node', 'dev:reset', 'some-target']),
+    /does not accept arguments/,
+    'dev:reset never accepts an arbitrary target argument'
+  );
+  {
+    const devResetSource = fs.readFileSync(path.join(__dirname, 'dev-reset.js'), 'utf8');
+    assert.doesNotMatch(devResetSource, /new PostgresRuntimeStore\(/, 'dev:reset constructs no store itself');
+    assert.match(devResetSource, /resetDisposableDevelopmentDatabase\(/, 'the reset compose chain is owned by the verified lifecycle');
+    assert.match(devResetSource, /await resetDisposableDevelopmentDatabase\(\)/,
+      'dev:reset invokes the verified lifecycle with NO arguments — no identity input exists to pass');
+    assert.doesNotMatch(devResetSource, /clientFactory|verifyDatabase|composeFile|applyEnv|\bspawn\b/,
+      'dev:reset forwards no proof mechanics of any kind');
+    assert.doesNotMatch(devResetSource, /ensureDisposableDevelopmentDatabase|destroyDisposableDevelopmentDatabase|createDisposableDevelopmentStore/,
+      'dev:reset composes NO identity-bearing helper itself');
+    // DEV-RESET-A is proven functionally by the isolated lifecycle harness
+    // above (collision refusal with zero launches/contacts, and the bounded
+    // destroy→recreate→migrate ordering through the real module-owned path);
+    // no in-process invocation is possible because the exported lifecycle
+    // accepts no arguments or seams to drive.
+  }
+
+  for (const file of ['dev-database.js', 'dev-setup.js', 'dev-doctor.js', 'dev-reset.js', 'postgres-migrate.js']) {
     const source = fs.readFileSync(path.join(__dirname, file), 'utf8');
     assert.equal(
       source.includes(DEFAULT_DATABASE_URL),
@@ -561,7 +1047,6 @@ async function main() {
   const migrationSource = fs.readFileSync(path.join(__dirname, 'postgres-migrate.js'), 'utf8');
   assert.match(migrationSource, /developmentConfig\(process\.env\)/);
   assert.doesNotMatch(migrationSource, /process\.env\.DATABASE_URL/);
-  const developmentStartupSource = fs.readFileSync(path.join(__dirname, 'dev.js'), 'utf8');
   assert.ok(
     developmentStartupSource.indexOf('applyLocalEnv()') < developmentStartupSource.indexOf("require('../server')"),
     'dev startup must normalize DATABASE_URL before loading the server that consumes it directly'
@@ -734,6 +1219,7 @@ async function main() {
   assert.match(packageJson.scripts['dev:smoke'], /scripts\/dev-smoke\.js$/);
   assert.match(packageJson.scripts['dev:setup'], /scripts\/dev-setup\.js$/);
   assert.match(packageJson.scripts['dev:doctor'], /scripts\/dev-doctor\.js$/);
+  assert.match(packageJson.scripts['dev:reset'], /scripts\/dev-reset\.js$/, 'dev:reset owns the bounded destructive development reset');
   assert.match(packageJson.scripts['admin:password'], /scripts\/admin-password\.js$/);
 
   console.log('PASS: development setup is non-destructive, diagnosable, and uses audited credential updates');

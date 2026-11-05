@@ -1,31 +1,39 @@
 #!/usr/bin/env node
 'use strict';
 
-// Development doctor (read-only). P6-S2 semantics:
+// Development doctor (read-only). P6-DEVEX-A semantics:
 //
-// Migration-ledger guidance is honest under the migration-execution authority
-// gate (docs/DEPLOYMENT_CONTRACT.md §9). Operators are told which state the
-// schema is actually in instead of being told to run `pnpm dev:setup` as if
-// that command could bypass the gate:
+// The doctor diagnoses the FIXED repository-owned disposable development
+// target (scripts/dev-environment.js: host 127.0.0.1, database
+// ticket_system_dev, schema ticket_system; bounded bundled port). The
+// configured DATABASE_URL remains the operational/persistent target: it is
+// validated and rendered as ONE non-mutating informational identity row
+// (never contacted), and it can never redirect the development target.
 //
-//   CURRENT             — canonical ledger current and identity valid.
-//   BEHIND + AUTHORIZED — a governed exact pending transition is currently
-//                         authorized; apply it through the canonical migration
-//                         command (setup routes through the same gate).
-//   BEHIND + NOT AUTHORIZED — pending migrations exist and the canonical
-//                         migration-execution authority inspection refuses
-//                         that exact transition; `pnpm dev:setup` cannot and
-//                         will not bypass T10 — the governed migration/bootstrap
-//                         procedure owns authorization.
-//   BEHIND + NOT VERIFIED — the canonical authority facts could not be
-//                         established read-only (for example git/publication
-//                         transport failure); the transition is NOT claimable
-//                         as authorized. The migration command remains the
-//                         final authority.
-//   INCOMPATIBLE / DRIFTED — unknown future migrations, applied-identity
-//                         checksum drift, uninitialized/no ledger, or a
-//                         partial ledger; fail-closed with no guessed
-//                         remediation.
+// Development migration-ledger guidance is honest under the disposable
+// development authority (docs/DEPLOYMENT_CONTRACT.md §9 development category;
+// docs/ARCHITECTURAL_DECISIONS_PENDING.md P6-DEVEX-A entry):
+//
+//   CURRENT   — canonical ledger current and identities valid.
+//   BEHIND    — informational: `npm run dev` auto-migrates the disposable
+//               development database to the canonical source head under the
+//               code-declared disposable development authority (this row
+//               makes NO authorization claim and never implies the
+//               OPERATIONAL channel may migrate without authorization).
+//   MISSING   — informational: `npm run dev` / `npm run dev:setup`
+//               provisions it.
+//   CORRUPT   — unknown future migrations, applied-identity drift, or a
+//               partial ledger → FAIL, remediation is exactly
+//               `npm run dev:reset` (destroy + recreate + migrate the fixed
+//               disposable identity only).
+//   COLLISION — the configured operational target identity equals the fixed
+//               development identity → FAIL BEFORE ANY CONTACT.
+//
+// Operational migration-authority classification (behind+authorized /
+// behind+unauthorized) is NOT attempted here: the operational channel is not
+// the development diagnosis target, and the canonical authority inspection
+// remains owned by the migration gate (persistence/postgres/migration-authority.js,
+// pinned by scripts/migration-execution-authority-test.js).
 //
 // Every migration fact comes from the canonical persistence owner
 // (`PostgresRuntimeStore.getMigrationStatus`, `migration-authority`
@@ -42,33 +50,25 @@ const {
   migrationFiles,
   quoteIdentifier
 } = require('../persistence/postgres/store');
-const migrationAuthority = require('../persistence/postgres/migration-authority');
 const {
+  assessBundledServiceTopologyGuard,
+  assessDevelopmentTargetCollision,
   applyLocalEnv,
+  createGuardedDevelopmentStore,
   developmentConfig,
+  formatTargetIdentity,
   safeErrorMessage,
+  targetIdentity,
   validateAdminPassword,
   validateDatabaseUrl,
   validateSessionSecret,
   writablePathStatus
 } = require('./dev-environment');
+const migrationAuthority = require('../persistence/postgres/migration-authority');
 const {
   validateEnvironment
 } = require('../runtime/environment-config-registry');
 const { agentReadiness, firstConfiguredAgentPage } = require('./dev-agent-config');
-
-// The canonical machinery that can apply an authorized transition —
-// referenced rather than re-derived (docs/DEPLOYMENT_CONTRACT.md §9). The
-// authorization record has a canonical tracked home and is never written by
-// the doctor or setup. Doctor authorization diagnostics reuse the CANONICAL
-// read-only authority inspection (`migrationAuthority.inspectTransitionAuthority`)
-// — the exact shared implementation the enforcing migration gate performs —
-// so the doctor can never classify an exact transition as authorized when the
-// canonical migration-execution authority does not.
-const GOVERNED_MIGRATION_PROCEDURE =
-  'apply it with the canonical migration command (`npm run db:migrate`, which runs the governed authority gate; `pnpm dev:setup` routes through the same gate)';
-const BOOTSTRAP_AUTHORITY_PROCEDURE =
-  'authorize a transition only through the governed migration/bootstrap authority (config/migration-execution-authorization.json and the migration/bootstrap doctrine in docs/DEPLOYMENT_CONTRACT.md)';
 
 function addCheck(checks, status, label, message) {
   checks.push({ status, label, message });
@@ -91,35 +91,21 @@ function packageManagerCheck(userAgent) {
   return { status: 'warn', label: 'package manager', message: 'version could not be inferred' };
 }
 
-// ── Pure migration-ledger state classification ─────────────────────────────
+// ── Pure disposable-development migration-ledger state classification ──────
 //
 // Consumes CANONICAL facts only: the exact `getMigrationStatus()` shape, the
 // read-only observation (`observeAppliedMigrationState`), the applied-identity
 // evaluator (`evaluateAppliedMigrationIdentities` — evaluated over the applied
 // subset so a ledger that is simply behind is not mis-classified as drifted),
-// the canonical pending-set helper, and the CANONICAL migration-execution
-// authority inspection (`migrationAuthority.inspectTransitionAuthority` — the
-// exact shared read-only authority path the enforcing gate performs). It never
-// re-implements enumeration, checksum handling, target binding, publication
-// authority, or authorization evaluation: the classifier consumes the
-// canonical inspection OUTCOME verbatim.
+// and the canonical pending-set helper. It never re-implements enumeration,
+// checksum handling, or identity evaluation, and it makes NO migration
+// authorization claim: the disposable development authority is a repository
+// code declaration, and the operational migration-execution authority is not
+// consulted for this target.
 //
-// Returns one of: current | behind_authorized | behind_unauthorized |
-// behind_authorization_record_present_but_not_verified | uninitialized |
-// incompatible_unknown | drifted, plus an honest message and (for behind
-// states) the exact pending-transition facts.
-//
-// The positive `behind_authorized` classification is reachable ONLY when the
-// canonical authority inspection itself returns ok — i.e. the exact transition
-// being diagnosed (target identity, required applied pre-state, ordered pending
-// set with source sha256, authorized baseline, and repository/publication
-// authority) is genuinely authorized at inspection time. Every conservative
-// outcome name must never read as "execution is authorized": when the full
-// authority facts cannot be established read-only (e.g. git/publication
-// transport failure), the state is
-// `behind_authorization_record_present_but_not_verified` — the migration
-// command remains the final authority.
-function classifyMigrationLedgerState({
+// States: current | behind_disposable | uninitialized | incompatible_unknown |
+// drifted, plus an honest message.
+function classifyDisposableDevelopmentLedgerState({
   schemaExists = false,
   ledgerExists = false,
   appliedVersions = [],
@@ -127,15 +113,14 @@ function classifyMigrationLedgerState({
   migrations,
   migrationChecksum: checksum = migrationChecksum,
   identityRows = null,
-  pendingMigrations = null,
-  authorizationInspection = null
+  pendingMigrations = null
 }) {
   const statusShape = status || {};
   if (!schemaExists || !ledgerExists) {
     return {
       state: 'uninitialized',
-      message: 'schema is not initialized (no migration ledger); a fresh bootstrap requires an authorized bootstrap transition',
-      guidance: `initialization cannot start without an authorized transition — ${BOOTSTRAP_AUTHORITY_PROCEDURE}; pnpm dev:setup cannot bypass that gate`,
+      message: 'the disposable development database has no migration ledger yet; `npm run dev` (or `npm run dev:setup`) provisions and auto-migrates it under the code-declared disposable development authority (the operational migration-execution authorization record is not involved)',
+      remediation: null,
       pending: null
     };
   }
@@ -143,15 +128,14 @@ function classifyMigrationLedgerState({
   if (unknownMigrations > 0) {
     return {
       state: 'incompatible_unknown',
-      message: `the ledger contains ${unknownMigrations} migration(s) that are not part of this repository's canonical migration set (unknown future migrations)`,
-      guidance: 'this is incompatible state; the runtime fails closed. Do not guess remediation. Consult docs/DEPLOYMENT_CONTRACT.md (migration/bootstrap/rollback doctrine) and the migration authority records',
+      message: `the development ledger contains ${unknownMigrations} migration(s) that are not part of this repository's canonical migration set (unknown future migrations); this is incompatible disposable state`,
+      remediation: '`npm run dev:reset` (destroys and recreates ONLY the disposable development database)',
       pending: null
     };
   }
-  let appliedIdentityEvaluation = null;
   if (identityRows) {
     const appliedSet = new Set(appliedVersions);
-    appliedIdentityEvaluation = migrationAuthority.evaluateAppliedMigrationIdentities(
+    const appliedIdentityEvaluation = migrationAuthority.evaluateAppliedMigrationIdentities(
       identityRows,
       migrations.filter(version => appliedSet.has(version)),
       checksum
@@ -159,8 +143,8 @@ function classifyMigrationLedgerState({
     if (!appliedIdentityEvaluation.ok) {
       return {
         state: 'drifted',
-        message: `applied migration identities are not valid (checksum/history drift): ${appliedIdentityEvaluation.reasons.slice(0, 5).join('; ')}`,
-        guidance: 'this is incompatible state; the runtime fails closed. Applied migration bytes changed, an applied identity is missing, or an unknown identity row exists. Consult docs/DEPLOYMENT_CONTRACT.md and the migration authority records; do not guess remediation',
+        message: `development applied migration identities are not valid (checksum/history drift): ${appliedIdentityEvaluation.reasons.slice(0, 5).join('; ')}`,
+        remediation: '`npm run dev:reset` (destroys and recreates ONLY the disposable development database)',
         pending: null
       };
     }
@@ -168,8 +152,8 @@ function classifyMigrationLedgerState({
   if (statusShape.partial === true) {
     return {
       state: 'drifted',
-      message: 'the canonical migration facts report a partial ledger or invalid migration identities',
-      guidance: 'this is incompatible state; the runtime fails closed. Consult docs/DEPLOYMENT_CONTRACT.md and the migration authority records; do not guess remediation',
+      message: 'the canonical migration facts report a partial or inconsistent development ledger',
+      remediation: '`npm run dev:reset` (destroys and recreates ONLY the disposable development database)',
       pending: null
     };
   }
@@ -183,51 +167,23 @@ function classifyMigrationLedgerState({
   if (statusShape.fullyApplied === true && pending.length === 0) {
     return {
       state: 'current',
-      message: 'schema is fully current and migration identities are valid',
-      guidance: null,
+      message: 'the disposable development schema is fully current and migration identities are valid',
+      remediation: null,
       pending: []
     };
   }
   if (pending.length === 0) {
-    // No pending set yet the ledger is not fully applied and no canonical
-    // fact names the inconsistency.
     return {
       state: 'drifted',
-      message: 'the ledger is in a partial or inconsistent state the canonical migration facts do not resolve',
-      guidance: 'this is incompatible state; the runtime fails closed. Consult docs/DEPLOYMENT_CONTRACT.md and the migration authority records; do not guess remediation',
+      message: 'the development ledger is in a partial or inconsistent state the canonical migration facts do not resolve',
+      remediation: '`npm run dev:reset` (destroys and recreates ONLY the disposable development database)',
       pending: []
     };
   }
-  const behindCount = pending.length;
-  if (authorizationInspection && authorizationInspection.ok === true) {
-    return {
-      state: 'behind_authorized',
-      message: `schema is behind by ${behindCount} pending migration(s) and the pending transition IS authorized for this exact target, pre-state, and migration set (record ${authorizationInspection.migrationTransitionId}, as may be applied by the canonical migration command ONLY)`,
-      guidance: GOVERNED_MIGRATION_PROCEDURE,
-      pending: pending.map(entry => entry.version)
-    };
-  }
-  if (!authorizationInspection ||
-      (authorizationInspection.unverifiable === true)) {
-    const reasons = authorizationInspection ? authorizationInspection.reasons : ['the canonical authorization inspection was not performed'];
-    return {
-      state: 'behind_authorization_record_present_but_not_verified',
-      message: `schema is behind by ${behindCount} pending migration(s) and the pending transition could NOT be verified as authorized through read-only canonical inspection (the repository/publication authority or the authorization record could not be established: ${reasons.slice(0, 5).join('; ')}) — it must be treated as NOT authorized until verified`,
-      guidance: `the canonical migration command re-establishes the full authority at execution time and remains the final authority; pnpm dev:setup cannot bypass the migration execution authority. ${BOOTSTRAP_AUTHORITY_PROCEDURE}, then run the canonical migration command`,
-      pending: pending.map(entry => entry.version)
-    };
-  }
-  const canonicalReasons = authorizationInspection.reasons || [];
-  const recordNotAuthorized = canonicalReasons.some(reason =>
-    /authorizationState .* is not "AUTHORIZED"/.test(reason));
   return {
-    state: 'behind_unauthorized',
-    message: `schema is behind by ${behindCount} pending migration(s) and the pending transition is NOT authorized by the canonical migration-execution authority` +
-      (recordNotAuthorized
-        ? ' (the canonical authorization record is NOT_AUTHORIZED)'
-        : ' (the canonical authorization record does not authorize this exact pending transition)') +
-      `: ${canonicalReasons.slice(0, 5).join('; ')}`,
-    guidance: `pnpm dev:setup cannot bypass the migration execution authority. ${BOOTSTRAP_AUTHORITY_PROCEDURE}, then run the canonical migration command`,
+    state: 'behind_disposable',
+    message: `the disposable development schema is behind the canonical migration source by ${pending.length} pending migration(s); \`npm run dev\` will auto-migrate this disposable development database to the source head (no migration-execution authorization is involved for this code-declared disposable target)`,
+    remediation: null,
     pending: pending.map(entry => entry.version)
   };
 }
@@ -236,33 +192,38 @@ function ledgerCheckRow(classification, schemaName) {
   switch (classification.state) {
     case 'current':
       return { status: 'pass', label: 'PostgreSQL migrations', message: `schema ${schemaName}: ${classification.message}` };
-    case 'behind_authorized':
-      return { status: 'warn', label: 'PostgreSQL migrations', message: `${classification.message}; ${classification.guidance}` };
+    case 'behind_disposable':
+    case 'uninitialized':
+      return {
+        status: 'info',
+        label: 'PostgreSQL migrations',
+        message: `schema ${schemaName}: ${classification.message}` +
+          (classification.remediation ? ` Remediation: ${classification.remediation}` : '')
+      };
     default:
       return {
         status: 'fail',
         label: 'PostgreSQL migrations',
-        message: `${classification.message}. ${classification.guidance || ''}`.replace(/\s+\.$/, '.').trim()
+        message: `schema ${schemaName}: ${classification.message}. Remediation: ${classification.remediation || 'do not guess remediation; consult the migration authority doctrine'}`.trim()
       };
   }
 }
 
-const AUTHORIZATION_RECORD_RELATIVE_PATH = path.join('config', 'migration-execution-authorization.json');
-const REPO_ROOT = path.resolve(__dirname, '..');
-
-function readAuthorizationRecordRaw(navRoot = REPO_ROOT) {
-  try {
-    return fs.readFileSync(path.join(navRoot, AUTHORIZATION_RECORD_RELATIVE_PATH), 'utf8');
-  } catch (_) {
-    return null;
-  }
+// Missing-DATABASE failure shape (SQLSTATE 3D000). The disposable development
+// database simply does not exist yet — information, not outage.
+function isMissingDatabaseError(error) {
+  return Boolean(error) && (
+    error.code === '3D000' ||
+    /database ".*" does not exist/.test(String(error && error.message))
+  );
 }
+
+const REPO_ROOT = path.resolve(__dirname, '..');
 
 async function inspectDevelopmentEnvironment({
   env = process.env,
-  storeFactory = config => new PostgresRuntimeStore(config),
-  verifyPassword = argon2.verify,
-  authorizationRecordRaw = undefined
+  storeFactory = null,
+  verifyPassword = argon2.verify
 } = {}) {
   const checks = [];
   const nodeMajor = Number(process.versions.node.split('.')[0]);
@@ -295,125 +256,153 @@ async function inspectDevelopmentEnvironment({
 
   if (databaseError) return { ok: false, checks, config };
 
+  // Fixed development target identity + topology/collision guards (all
+  // derivation is code/constants — NO database contact). On refusal the
+  // doctor stops before any development or operational database interaction.
+  let devAssessment = null;
+  let topologyAssessment = null;
+  try {
+    devAssessment = assessDevelopmentTargetCollision(env);
+  } catch (error) {
+    addCheck(checks, 'fail', 'Disposable development target',
+      `${safeErrorMessage(error)}; the fixed development identity cannot be constructed. Fix the setting (or remove it) and rerun.`);
+  }
+  if (devAssessment && devAssessment.ok) {
+    try {
+      topologyAssessment = assessBundledServiceTopologyGuard(env);
+    } catch (error) {
+      topologyAssessment = {
+        ok: false,
+        operational: devAssessment.operational,
+        reason: safeErrorMessage(error)
+      };
+    }
+  }
+  const operationalInfoRow = identity =>
+    addCheck(checks, 'info', 'Operational database (informational, never contacted)',
+      `configured operational target: ${formatTargetIdentity(identity)} — operational/persistent state; the migration-execution authorization gate applies; dev commands do not migrate it`);
+
+  if (devAssessment && devAssessment.ok && topologyAssessment && !topologyAssessment.ok) {
+    addCheck(checks, 'fail', 'Bundled service port', `${topologyAssessment.reason}.`);
+    if (devAssessment.operational) operationalInfoRow(devAssessment.operational);
+    return { ok: false, checks, config };
+  }
+  if (devAssessment && devAssessment.ok) {
+    addCheck(checks, 'pass', 'Disposable development target',
+      `${formatTargetIdentity(targetIdentity(devAssessment.devTarget))} — code-owned; DATABASE_URL/POSTGRES_SCHEMA cannot redirect it; \`npm run dev\` ensures and auto-migrates it; \`npm run dev:reset\` destroys ONLY it`);
+    if (devAssessment.operational) operationalInfoRow(devAssessment.operational);
+  } else if (devAssessment) {
+    addCheck(checks, 'fail', 'Development target collision', `${devAssessment.reason}.`);
+    if (devAssessment.operational) operationalInfoRow(devAssessment.operational);
+  }
+
+  // DEV-COLLISION-A: on refusal the doctor proves NO database contact — the
+  // store below is never constructed when the identity guard refuses.
+  if (!devAssessment || !devAssessment.ok) {
+    return { ok: false, checks, config };
+  }
+
   let store;
   try {
-    store = storeFactory({ connectionString: config.databaseUrl, schema: config.postgresSchema });
+    // The default diagnosis store is the ordinary GUARDED development seam
+    // (scripts/dev-environment.js createGuardedDevelopmentStore): it carries
+    // NO disposable migration authority and cannot migrate anything — the
+    // doctor is read-only. Overrides (tests) may supply the store whose facts
+    // are inspected; no identity is accepted from callers.
+    store = storeFactory ? storeFactory() : createGuardedDevelopmentStore(env);
+    const storeSchema = store.schema;
 
     let probeStatus = null;
-    let probeFailed = false;
+    let probeError = null;
     try {
       probeStatus = await store.getMigrationStatus();
     } catch (error) {
-      probeFailed = true;
-      addCheck(checks, 'fail', 'PostgreSQL', `${safeErrorMessage(error)}. ${postgresHelp()}`);
+      probeError = error;
+    }
+
+    if (probeError && isMissingDatabaseError(probeError)) {
+      addCheck(checks, 'info', 'Disposable development database',
+        'the disposable development database does not exist yet; `npm run dev` (or `npm run dev:setup`) provisions it and auto-migrates it to the canonical source head under the code-declared disposable development authority');
+      addCheck(checks, 'info', 'admin account', 'cannot be inspected before the disposable development database exists; `npm run dev` / `npm run dev:setup` provisions it');
+      addCheck(checks, 'info', 'configured agents', 'cannot be inspected before the disposable development database exists; `npm run dev` / `npm run dev:setup` provisions it');
+      return { ok: !checks.some(check => check.status === 'fail'), checks, config };
+    }
+    if (probeError) {
+      addCheck(checks, 'fail', 'PostgreSQL', `${safeErrorMessage(probeError)}. ${postgresHelp()}`);
+      return { ok: false, checks, config };
     }
 
     let classification = null;
-    if (!probeFailed) {
-      try {
-        const migrations = migrationFiles();
-        const schemaSql = quoteIdentifier(config.postgresSchema);
-        const observed = await store.withTransaction(async client =>
-          migrationAuthority.observeAppliedMigrationState(client, { schema: config.postgresSchema, schemaSql }));
-        let identityRows = null;
-        if (observed.ledgerExists) {
-          try {
-            const result = await store.withTransaction(async client => client.query(
-              `SELECT version, sha256 FROM ${schemaSql}."schema_migration_identities"`
-            ));
-            identityRows = result.rows;
-          } catch (_) {
-            identityRows = null;
-          }
+    try {
+      const migrations = migrationFiles();
+      const schemaSql = quoteIdentifier(storeSchema);
+      const observed = await store.withTransaction(async client =>
+        migrationAuthority.observeAppliedMigrationState(client, { schema: storeSchema, schemaSql }));
+      let identityRows = null;
+      if (observed.ledgerExists) {
+        try {
+          const result = await store.withTransaction(async client => client.query(
+            `SELECT version, sha256 FROM ${schemaSql}."schema_migration_identities"`
+          ));
+          identityRows = result.rows;
+        } catch (_) {
+          identityRows = null;
         }
-        // Canonical authorization diagnosis (read-only). The doctor NEVER
-        // decides T10 authority itself: when the observed ledger is behind, the
-        // exact transition is inspected through the canonical shared
-        // implementation the enforcing migration gate performs — target
-        // identity, required applied pre-state, ordered pending set with
-        // source sha256, authorized baseline, and repository/publication
-        // authority. Transport-level refusals produce the conservative
-        // `behind_authorization_record_present_but_not_verified` state; a
-        // decision refusal produces `behind_unauthorized`. Only `ok === true`
-        // from that canonical inspection can classify `behind_authorized`.
-        let pendingMigrations = null;
-        let authorizationInspection = null;
-        if (observed.ledgerExists) {
-          pendingMigrations = migrationAuthority.computePendingMigrations(
-            migrationAuthority.canonicalizeAppliedVersions(observed.appliedVersions, migrations),
-            migrations,
-            migrationChecksum
-          );
-          if (pendingMigrations.length > 0) {
-            authorizationInspection = migrationAuthority.inspectTransitionAuthority({
-              repoRoot: REPO_ROOT,
-              connectionString: config.databaseUrl,
-              schema: config.postgresSchema,
-              currentDatabaseName: observed.databaseName,
-              migrations,
-              migrationChecksum,
-              appliedVersions: observed.appliedVersions,
-              pendingMigrations,
-              loadRecordRaw: () => authorizationRecordRaw === undefined
-                ? readAuthorizationRecordRaw()
-                : authorizationRecordRaw
-            });
-          }
-        }
-        classification = classifyMigrationLedgerState({
-          schemaExists: observed.schemaExists,
-          ledgerExists: observed.ledgerExists,
-          appliedVersions: observed.appliedVersions,
-          status: probeStatus,
-          migrations,
-          migrationChecksum,
-          identityRows,
-          pendingMigrations,
-          authorizationInspection
-        });
-        const row = ledgerCheckRow(classification, config.postgresSchema);
-        addCheck(checks, row.status, row.label, row.message);
-      } catch (error) {
-        addCheck(checks, 'fail', 'PostgreSQL migrations', `${safeErrorMessage(error)}; migration ledger state could not be established fail-closed`);
       }
+      classification = classifyDisposableDevelopmentLedgerState({
+        schemaExists: observed.schemaExists,
+        ledgerExists: observed.ledgerExists,
+        appliedVersions: observed.appliedVersions,
+        status: probeStatus,
+        migrations,
+        migrationChecksum,
+        identityRows
+      });
+      const row = ledgerCheckRow(classification, storeSchema);
+      addCheck(checks, row.status, row.label, row.message);
+    } catch (error) {
+      addCheck(checks, 'fail', 'PostgreSQL migrations', `${safeErrorMessage(error)}; migration ledger state could not be established fail-closed`);
+      classification = null;
     }
 
-    const admin = await store.getUserByUsername('admin');
-    if (!admin) {
-      const passwordError = validateAdminPassword(config.adminBootstrapPassword, { required: true });
-      const detail = passwordError ? `${passwordError}; run pnpm dev:setup` : 'account is missing; run pnpm dev:setup';
-      addCheck(checks, 'fail', 'admin account', detail);
-    } else {
-      addCheck(checks, 'pass', 'admin account', 'configured');
-      try {
-        if (await verifyPassword(admin.passwordHash, 'admin123')) {
-          addCheck(checks, 'warn', 'admin password', 'current password is a predictable default; change it with pnpm admin:password');
+    if (classification) {
+      const admin = await store.getUserByUsername('admin');
+      if (!admin) {
+        const passwordError = validateAdminPassword(config.adminBootstrapPassword, { required: true });
+        const detail = passwordError ? `${passwordError}; run pnpm dev:setup` : 'account is missing; run pnpm dev:setup';
+        addCheck(checks, 'fail', 'admin account', detail);
+      } else {
+        addCheck(checks, 'pass', 'admin account', 'configured');
+        try {
+          if (await verifyPassword(admin.passwordHash, 'admin123')) {
+            addCheck(checks, 'warn', 'admin password', 'current password is a predictable default; change it with pnpm admin:password');
+          }
+        } catch (_) {
+          // A malformed stored hash is reported by runtime integrity checks.
         }
-      } catch (_) {
-        // A malformed stored hash is reported by runtime integrity checks.
       }
-    }
 
-    const agentPage = await firstConfiguredAgentPage(store);
-    const readiness = agentPage.agents.map(agent => ({
-      agent,
-      status: agentReadiness(agent, env)
-    }));
-    const readyAgents = readiness.filter(item => item.status.ready);
-    if (agentPage.agents.length === 0) {
-      addCheck(checks, 'fail', 'configured agents', 'none exist; run pnpm dev:setup');
-    } else if (readyAgents.length === 0) {
-      const reasons = [...new Set(readiness.flatMap(item => item.status.reasons))].join(', ');
-      addCheck(checks, agentPage.truncated ? 'warn' : 'fail', 'runnable agent configuration',
-        agentPage.truncated
-          ? `none of the first 100 agents is runnable (${reasons}); inspect the remaining catalog in Admin`
-          : `no agent has complete provider configuration (${reasons}); update Admin or rerun pnpm dev:setup`);
-    } else {
-      addCheck(checks, 'pass', 'runnable agent configuration',
-        `${readyAgents.length} of ${agentPage.agents.length} inspected agent(s) have a provider, model, and required credential`);
-    }
-    if (agentPage.truncated) {
-      addCheck(checks, 'warn', 'configured agents', 'doctor inspection is intentionally bounded to the first 100 agents');
+      const agentPage = await firstConfiguredAgentPage(store);
+      const readiness = agentPage.agents.map(agent => ({
+        agent,
+        status: agentReadiness(agent, env)
+      }));
+      const readyAgents = readiness.filter(item => item.status.ready);
+      if (agentPage.agents.length === 0) {
+        addCheck(checks, 'fail', 'configured agents', 'none exist; run pnpm dev:setup');
+      } else if (readyAgents.length === 0) {
+        const reasons = [...new Set(readiness.flatMap(item => item.status.reasons))].join(', ');
+        addCheck(checks, agentPage.truncated ? 'warn' : 'fail', 'runnable agent configuration',
+          agentPage.truncated
+            ? `none of the first 100 agents is runnable (${reasons}); inspect the remaining catalog in Admin`
+            : `no agent has complete provider configuration (${reasons}); update Admin or rerun pnpm dev:setup`);
+      } else {
+        addCheck(checks, 'pass', 'runnable agent configuration',
+          `${readyAgents.length} of ${agentPage.agents.length} inspected agent(s) have a provider, model, and required credential`);
+      }
+      if (agentPage.truncated) {
+        addCheck(checks, 'warn', 'configured agents', 'doctor inspection is intentionally bounded to the first 100 agents');
+      }
     }
   } catch (error) {
     addCheck(checks, 'fail', 'PostgreSQL', `${safeErrorMessage(error)}. ${postgresHelp()}`);
@@ -426,21 +415,25 @@ async function inspectDevelopmentEnvironment({
 
 function printChecks(result, output = process.stdout) {
   for (const check of result.checks) {
-    output.write(`[${check.status.toUpperCase()}] ${check.label}: ${check.message}\n`);
+    const prefix = check.status === 'info' ? 'INFO' : check.status.toUpperCase();
+    output.write(`[${prefix}] ${check.label}: ${check.message}\n`);
   }
   output.write(result.ok ? 'Development environment is ready.\n' : 'Development environment needs attention.\n');
 }
 
 async function runDoctor(options = {}) {
   applyLocalEnv(options.env || process.env);
-  const result = await inspectDevelopmentEnvironment(options);
+  const result = await inspectDevelopmentEnvironment({
+    ...options,
+    env: options.env || process.env
+  });
   printChecks(result, options.output || process.stdout);
   return result.ok;
 }
 
 async function main() {
   if (process.argv.includes('--help')) {
-    console.log('Usage: pnpm dev:doctor\n\nRuns read-only development environment checks. Secret values are never printed.');
+    console.log('Usage: pnpm dev:doctor\n\nRuns read-only development environment checks against the fixed disposable development database. The configured operational DATABASE_URL is shown as one informational row and never contacted. Secret values are never printed.');
     return;
   }
   if (process.argv.length > 2) throw new Error('dev:doctor does not accept arguments');
@@ -448,8 +441,9 @@ async function main() {
 }
 
 module.exports = {
-  classifyMigrationLedgerState,
+  classifyDisposableDevelopmentLedgerState,
   inspectDevelopmentEnvironment,
+  isMissingDatabaseError,
   ledgerCheckRow,
   packageManagerCheck,
   postgresHelp,
