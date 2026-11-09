@@ -44,19 +44,43 @@ environment registry (`runtime/environment-config-registry.js`), admin
 bootstrap only on first initialization, and a configured agent/provider for
 product work.
 
-1. `pnpm dev:doctor` (same as `node --env-file-if-exists=.env.local
-   scripts/dev-doctor.js`) — read-only preflight. It
-   validates the configuration registry, the disposable-development posture,
-   and renders one informational row for the CONFIGURED operational target
-   (identity only, never contacted). Resolve every `fail` row before starting;
-   an invalid configuration fails the server startup itself (fail-closed boot).
-2. Migration posture (read-only procedure, `T10`-safe):
-   - `pnpm db:migrate` is the canonical migration command. On a fully-current
-     schema it prints `PostgreSQL schema <schema> is current` — a no-op (no
-     authorization needed, no mutation). On a pending-but-UNAUTHORIZED
-     transition it REFUSES BEFORE ANY MUTATION
-     (`MigrationExecutionAuthorityError`, `NOT_AUTHORIZED` in the record) —
-     that refusal is the honest posture read. There is no force flag.
+1. `pnpm operational:preflight` — the operational-only read-only deployment
+   preflight (`scripts/operational-preflight.js`). `pnpm dev:doctor` is
+   DEVELOPMENT-ONLY by design: it diagnoses the fixed disposable development
+   database and never contacts operational state, so it is not deployment
+   validation. The operational preflight establishes, with ZERO writes, no
+   migration application, and no authorization change:
+   - canonical configuration validity (the same registry gate the server boot
+     fails closed on, `runtime/environment-config-registry.js`);
+   - the ONE pre-normalization operational authority decision and the exact
+     operational database identity, printed credential-free BEFORE any
+     contact (`host`, `port`, `database`, `schema`);
+   - operational PostgreSQL reachability (a real connection through the exact
+     resolved target);
+   - the migration ledger/identity compatibility facts and the T10
+     runtime-integrity gate, from single READ ONLY transactions
+     (`getMigrationStatus` + `prepareRuntimePersistence`);
+   - effect-root usability (`WORKSPACE_ROOT`, `ARTIFACT_ROOT`) through the
+     canonical directory-boundary walk;
+   - a READ-ONLY observation of configured agents (informational; product
+     runs stay pending until one exists).
+   An unconfigured or explicitly blank operational `DATABASE_URL`, invalid
+   boot configuration, unreachable database, unusable effect root, or a
+   behind/incompatible ledger REFUSES with the canonical facts and a nonzero
+   exit. Resolve every refusal before starting; a server started against an
+   incompatible ledger refuses the same way.
+2. Migration posture (`T10`-guarded migration command, not an observation
+   command):
+   - `pnpm db:migrate` is the canonical T10-guarded migration/upgrade
+     command. Be precise about what it does: on a fully-current schema it
+     prints `PostgreSQL schema <schema> is current` and is a NO-OP; on a
+     pending transition that is NOT exactly authorized it REFUSES BEFORE ANY
+     MUTATION (`MigrationExecutionAuthorityError`, `NOT_AUTHORIZED` in the
+     record) — that refusal is the honest posture read; and when a transition
+     is EXACTLY authorized by the migration execution authorization record,
+     the same command INTENTIONALLY APPLIES the migration — that is its
+     purpose. It is a deliberately run upgrade command, never a probe; use
+     the eye-level SQL below (or the preflight above) for read-only checks.
    - Equivalent read-only eye-level SQL (bounded, no mutation):
      `SELECT version FROM <schema>.schema_migrations ORDER BY version;` and
      `SELECT version, sha256 FROM <schema>.schema_migration_identities ORDER BY
@@ -88,13 +112,15 @@ product work.
   checks PostgreSQL, migrations, providers, or capacity.
 - Process ready: `ready: true` in `/health`. A `ready: false` carries a
   sanitized `reason` (`postgres_unreachable`, `migrations_incompatible`,
-  `configuration_invalid`, `effect_root_unusable`, `evidence_persistence_latched`,
-  `starting`) plus a `readiness` fact block, and is HTTP 503 — designed,
-  bounded, credential-free.
+  `configuration_invalid`, `effect_root_unusable`, `evidence_persistence_latched`)
+  plus a `readiness` fact block, and is HTTP 503 — designed,
+  bounded, credential-free. When the process is booting, `/health` reports the
+  separate `status: "starting"`; `starting` is a status, not a readiness
+  reason code, so it is reported with no `reason`.
 - Migration status: §1 item 2.
 - Evidence latch: `/health` `status: "degraded"`,
   `reason: "evidence_persistence_latched"`; `/api/runtime/status`
-  (authenticated, `ops:read`-gated) exposes the event-persistence provenance
+  (authenticated, `ticket:read`-gated) exposes the event-persistence provenance
   (first-failure channel, PostgreSQL code, run/ticket binding — bounded and
   read-only).
 - Run/worker/lease state: `/api/runtime/status` (authenticated) lists
@@ -105,10 +131,12 @@ product work.
   scheduler refusals) with hashes — read-only.
 - Capacity/backpressure: `capacity.mutationAdmission` in `/health` shows the
   PROCESS-local admission state (`outstanding`, `availableSlots`, `status`:
-  `available`/`backpressured`, high-water marks). Capacity pressure is
-  recoverable and NEVER makes the process unready (P6-S2 `CAPACITY-A/B`
+  `available`/`backpressured`/`draining`, high-water marks). Capacity pressure
+  is recoverable and NEVER makes the process unready (P6-S2 `CAPACITY-A/B`
   evidence; `MULTIPROCESS-A` shows the same distinction while blocked by a
-  peer's deployment-wide seat). The deployment-wide seat is inferred from
+  peer's deployment-wide seat). `status: "draining"` is the process-local
+  terminal graceful-shutdown state (§8): new mutations are refused for this
+  process's remaining lifetime. The deployment-wide seat is inferred from
   pending-but-claimed capacity evidence (`capacity.waiting`) in the event
   journal, not from readiness.
 - Operational door: `/ops` and `/api/ops/summary` — read-only summary with
@@ -144,13 +172,16 @@ repository-defined (`CRASH-A`/`LEASE-A` evidence):
 ## 4. Whole-service restart
 
 1. Stop every process with SIGTERM ('graceful drain', `DRAIN-A`): the process
-   stops accepting new work immediately, lets already-started governed work
-   settle, closes its HTTP surface, and exits with code 143. The drain is
-   bounded (`SHUTDOWN_RUN_DRAIN_TIMEOUT_MS`); if it cannot finish inside the
-   bound the process prints an explicit `Shutdown run-drain timeout` message
-   and still stops — that message is the forced-stop boundary, NOT a claim of
-   clean completion. Whatever remained active is recoverable by its lease
-   rules (§3), and the exit is honest either way.
+   arms its terminal process-local drain at the FIRST SYNCHRONOUS shutdown
+   boundary — new application mutations are refused with
+   `MUTATION_ADMISSION_DRAINING` from that instant (§8) — the process lets
+   already-started governed work settle, closes its HTTP surface, and exits
+   with code 143. The drain is bounded (`SHUTDOWN_RUN_DRAIN_TIMEOUT_MS`); if
+   it cannot finish inside the bound the process prints an explicit `Shutdown
+   run-drain timeout` message and still stops — that message is the
+   forced-stop boundary, NOT a claim of clean completion. Whatever remained
+   active is recoverable by its lease rules (§3), and the exit is honest
+   either way.
 2. Confirm each process exited (143 or 130 on SIGINT).
 3. Start processes again (§1 item 4). Startup performs
    `interruptStaleRunsOnStartup` — it reconciles stale runs (mode
@@ -244,14 +275,30 @@ real PostgreSQL boundary), the process latches fail-closed:
 ## 8. Drain / shutdown
 
 (`DRAIN-A` evidence; the mechanical owner for evidence drain is
-`scripts/run-evidence-drain-test.js`.)
+`scripts/run-evidence-drain-test.js`; the during-drain admission proof is
+owned by `scripts/p6-s3-hosted-recovery-postgres-test.js` scenario 6c.)
 
-- `SIGTERM` / `SIGINT` = bounded graceful drain. New HTTP work closes; already-
-  started governed work settles if it can; pending required evidence writes
-  drain through their bounded rounds; the process reports exit 143 (or 130).
-  An active run that cannot settle inside the bound → explicit timeout log —
-  treat as forced-stop; the underlying run remains recoverable per §3. NEVER
-  consider a timed-out shutdown as "clean" beyond what the process logged.
+- `SIGTERM` / `SIGINT` = bounded graceful drain. The FIRST SYNCHRONOUS
+  shutdown boundary — BEFORE ANY await — arms the process-local terminal
+  drain in the mutation-admission owner. From that instant every NEW
+  application mutation is refused (HTTP and internal producers through the
+  same owner) with HTTP 503 `MUTATION_ADMISSION_DRAINING` (bounded, sanitized,
+  no `Retry-After` — retrying never recovers THIS process; traffic belongs to
+  another live process or the restarted deployment). Already-admitted
+  requests and governed work keep their tokens and continue through the
+  bounded drain; health observation stays reachable until the listener
+  closes.
+- Already-started governed work settles if it can; pending required evidence
+  writes drain through their bounded rounds; the process reports exit 143 (or
+  130). An active run that cannot settle inside the bound → explicit timeout
+  log — treat as forced-stop; the underlying run remains recoverable per §3.
+  NEVER consider a timed-out shutdown as "clean" beyond what the process
+  logged.
+- No durable Ticket/Run/workflow/user etc. mutation can enter through ordinary
+  HTTP mutation routes during the drain window (scenario 6c proves this on a
+  REAL process with an in-flight query holding the first shutdown await).
+- The drain flag is process-local: no writable control surface, no operator
+  command, and a fresh process is its only reset.
 - During the drain window and after stop, new work cannot enter through that
   process. Another process will take over work ONLY after the stale-lease
   rules (§3) — a peer does NOT steal validly owned, non-stale work.

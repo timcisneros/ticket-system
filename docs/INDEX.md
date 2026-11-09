@@ -12,10 +12,6 @@
   current-tranche brief.
   Read before starting work that touches runtime enforcement, feasibility, recovery, objective
   interpretation, ticket-kernel sequencing, or any post-T10 forward product work.
-- [`STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md`](STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md)
-  — completed structured allocation and governed model economics roadmap through Tranche 6. The
-  frozen evaluation ended FINAL STOP; the explicit post-result decision demotes future first-class
-  structured activation while preserving general allocation/decomposition and historical readers.
 - [`GOVERNED_REQUIRED_PERSISTENCE_MATRIX.md`](GOVERNED_REQUIRED_PERSISTENCE_MATRIX.md) — every
   durable write in the governed leaf lifecycle, its classification, what happens when it does not
   commit, and which partial states PostgreSQL makes structurally impossible.
@@ -51,6 +47,9 @@
   and the completed FINAL STOP product evaluation. All six tranches are COMPLETE; the Tranche 4 section is the reference for
   role-aware routing, immutable execution targets, bounded economics, the request lifecycle, the
   active-versus-abandoned lease rule, the formal fallback boundary, and the provider-support table.
+  The frozen evaluation ended FINAL STOP; the explicit post-result decision demotes future
+  first-class structured activation while preserving general allocation/decomposition and
+  historical readers.
 - [`decision-memo-work-definition-and-typed-evidence.md`](decision-memo-work-definition-and-typed-evidence.md)
   — rejection of a universal Target framework and the evidence-scoped correction.
 - [`decision-memo-mixed-family-work-model.md`](decision-memo-mixed-family-work-model.md)

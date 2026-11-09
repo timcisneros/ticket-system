@@ -38,7 +38,7 @@ const {
 // so lifecycle ordering uses an isolated child-process harness below.
 const { prepareAndMigrateDisposableDevelopmentDatabase } = require('./dev-database');
 const { DEFAULT_DATABASE_URL: SETUP_DEFAULT_DATABASE_URL, createInitialAdmin } = require('./dev-setup');
-const { parseArgs, rotateUserPassword } = require('./admin-password');
+const { parseArgs, resolvePasswordTarget, rotateUserPassword } = require('./admin-password');
 const { parseArgs: parseSmokeArgs, runSmoke, SMOKE_OBJECTIVE } = require('./dev-smoke');
 const devEnvironment = require('./dev-environment');
 const {
@@ -51,7 +51,9 @@ const {
   assessBundledServiceTopologyGuard,
   assessDevelopmentTargetCollision,
   createGuardedDevelopmentStore,
-  disposableDevelopmentTarget
+  disposableDevelopmentTarget,
+  formatTargetIdentity,
+  resolveOperationalChannelAuthority
 } = devEnvironment;
 
 async function main() {
@@ -1158,9 +1160,171 @@ async function main() {
   assert.equal(update.value.profile, 'preserved');
   assert.equal(update.changedBy, 'admin-password-cli');
   assert.throws(() => parseArgs(['--password', 'visible-secret']), /cannot be passed/);
-  assert.deepEqual(parseArgs(['--username', 'operator']), { help: false, username: 'operator' });
-  assert.deepEqual(parseArgs(['--', '--username', 'operator']), { help: false, username: 'operator' });
+  assert.deepEqual(parseArgs(['--username', 'operator']), { help: false, username: 'operator', operational: false });
+  assert.deepEqual(parseArgs(['--', '--username', 'operator']), { help: false, username: 'operator', operational: false });
+
+  // ── ADMIN-PASSWORD-DEVEX: exactly two target selectors, no caller-selectable
+  // database identity. Deterministic coverage of the target-resolution seam;
+  // non-TTY harnesses cannot drive the secure prompt, so identity selection,
+  // credential-free rendering, and fail-closed argument handling are proven
+  // here, and the CLI live behavior is proven against the running databases
+  // (development passes the integrity gate; operational refuses while the
+  // operational migration ledger is behind the source head).
+  const pwdHostileEnv = {
+    DATABASE_URL: 'postgresql://opsuser:opspw@10.0.0.5:6500/ops_ticket_system',
+    POSTGRES_SCHEMA: 'ops_schema',
+    PGHOST: 'pg-evil-host',
+    PGDATABASE: 'pg-evil-database',
+    PGPORT: '6400',
+    PGPASSWORD: 'pg-evil-password'
+  };
+
+  // ADMIN-PASSWORD-DEV-A + ADMIN-PASSWORD-CHANNEL-A: the default target is the
+  // fixed code-owned disposable development identity; DATABASE_URL,
+  // POSTGRES_SCHEMA, and PG* libpq variables cannot redirect it. The ONLY
+  // environmental input remains the compose-owned TICKET_SYSTEM_POSTGRES_PORT,
+  // exactly like the rest of the dev family.
+  const devPasswordTarget = resolvePasswordTarget({ operational: false, env: pwdHostileEnv });
+  assert.equal(devPasswordTarget.channel, 'development');
+  assert.deepEqual(devPasswordTarget.identity, {
+    host: DEVELOPMENT_TARGET_HOST,
+    port: DEFAULT_BUNDLED_POSTGRES_PORT,
+    database: DEVELOPMENT_TARGET_DATABASE,
+    schema: DEVELOPMENT_TARGET_SCHEMA
+  });
+  assert.equal(devPasswordTarget.schema, 'ticket_system');
+  assert.equal(devPasswordTarget.connectionString, disposableDevelopmentTarget(pwdHostileEnv).databaseUrl);
+
+  // ADMIN-PASSWORD-SECRET-A: rendered target identity is credential-free for
+  // both channels (no URL, no password material of any shape).
+  const renderedDevPasswordIdentity = formatTargetIdentity(devPasswordTarget.identity);
+  assert.doesNotMatch(renderedDevPasswordIdentity, /postgresql/);
+  assert.doesNotMatch(renderedDevPasswordIdentity, /opspw/);
+
+  // OPERATIONAL-AUTHORITY-A (F1 correction): exactly ONE pre-normalization
+  // authority decision owns the operational channel — both its authorization
+  // and its exact connection target come from the SAME frozen decision, and no
+  // source is re-read or re-normalized after the decision. The decisive cases:
+  //   1. explicitly blank env DATABASE_URL + configured .env.local → REFUSED;
+  //   2. explicitly whitespace env DATABASE_URL + configured .env.local → REFUSED;
+  //   3. env property absent + nonempty .env.local URL → the exact file URL;
+  //   4. nonempty explicit env URL + different file URL → the exact env URL;
+  //   5. the resolved target's identity AND connection string both derive from
+  //      that one decision object;
+  //   6. an explicitly blank POSTGRES_SCHEMA resolves to the canonical
+  //      operational default at decision time (canonical precedence; the file's
+  //      schema value never resurfaces after authorization);
+  //   7. no explicit configuration anywhere → REFUSED;
+  //   8. the ordinary development default is untouched (covered above with
+  //      DEV-A/CHANNEL-A) and the T10 operational 043/database-vs-source 044
+  //      refusal stays live behavior through prepareRuntimePersistence.
+  const authorityFixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dev-env-authority-f1-'));
+  try {
+    const authorityFileFixture = path.join(authorityFixtureDir, '.env.local');
+    fs.writeFileSync(authorityFileFixture, [
+      'DATABASE_URL=postgresql://fileuser:filepw@192.0.2.9:7200/file_ticket_system',
+      'POSTGRES_SCHEMA=file_schema',
+      ''
+    ].join('\n'));
+
+    const blankEnvAuthority = resolveOperationalChannelAuthority(
+      { DATABASE_URL: '' }, { localEnvFile: authorityFileFixture });
+    assert.equal(blankEnvAuthority.authorized, false,
+      'an explicitly blank env DATABASE_URL must not authorize the operational channel');
+    assert.match(blankEnvAuthority.reason, /explicitly present but empty/);
+
+    const whitespaceEnvAuthority = resolveOperationalChannelAuthority(
+      { DATABASE_URL: '   ' }, { localEnvFile: authorityFileFixture });
+    assert.equal(whitespaceEnvAuthority.authorized, false,
+      'a whitespace-only env DATABASE_URL must not authorize the operational channel');
+
+    const missingEverythingAuthority = resolveOperationalChannelAuthority(
+      {}, { localEnvFile: path.join(authorityFixtureDir, 'does-not-exist.env') });
+    assert.equal(missingEverythingAuthority.authorized, false,
+      'the operational channel requires an explicitly configured DATABASE_URL somewhere');
+
+    const fileAuthority = resolveOperationalChannelAuthority(
+      {}, { localEnvFile: authorityFileFixture });
+    assert.equal(fileAuthority.authorized, true);
+    assert.equal(fileAuthority.source, 'env-file');
+    assert.equal(fileAuthority.databaseUrl, 'postgresql://fileuser:filepw@192.0.2.9:7200/file_ticket_system',
+      'an env-absent DATABASE_URL selects the exact .env.local URL');
+    assert.equal(fileAuthority.postgresSchema, 'file_schema',
+      'the file schema participates only through the same canonical precedence snapshot');
+
+    const envAuthority = resolveOperationalChannelAuthority(pwdHostileEnv, { localEnvFile: authorityFileFixture });
+    assert.equal(envAuthority.authorized, true);
+    assert.equal(envAuthority.source, 'environment');
+    assert.equal(envAuthority.databaseUrl, pwdHostileEnv.DATABASE_URL,
+      'an explicit nonempty env DATABASE_URL owns the exact operational URL');
+    assert.equal(envAuthority.postgresSchema, 'ops_schema',
+      'the explicit process property owns the operational schema');
+
+    const blankSchemaAuthority = resolveOperationalChannelAuthority(
+      { DATABASE_URL: 'postgresql://u:p@10.0.0.5:6500/ops_ticket_system', POSTGRES_SCHEMA: '' },
+      { localEnvFile: authorityFileFixture });
+    assert.equal(blankSchemaAuthority.postgresSchema, 'ticket_system',
+      'an explicitly blank POSTGRES_SCHEMA is the canonical operational default at decision time');
+
+    // One decision supplies identity AND the exact connection string.
+    const operationalPasswordTarget = resolvePasswordTarget({ operational: true, authority: envAuthority });
+    assert.equal(operationalPasswordTarget.channel, 'operational');
+    assert.deepEqual(operationalPasswordTarget.identity, {
+      host: '10.0.0.5',
+      port: 6500,
+      database: 'ops_ticket_system',
+      schema: 'ops_schema'
+    });
+    assert.equal(operationalPasswordTarget.connectionString, envAuthority.databaseUrl,
+      '--operational must preserve the exact configured operational URL from the SAME authority decision');
+    assert.equal(operationalPasswordTarget.schema, envAuthority.postgresSchema,
+      'the operational schema comes from the same authority decision');
+    const filePasswordTarget = resolvePasswordTarget({ operational: true, authority: fileAuthority });
+    assert.equal(filePasswordTarget.connectionString, fileAuthority.databaseUrl);
+    assert.equal(filePasswordTarget.schema, fileAuthority.postgresSchema);
+    assert.throws(() => resolvePasswordTarget({ operational: true }),
+      /pre-normalization authority decision/,
+      'operational resolution must not bypass the single authority decision');
+    const renderedOperationalPasswordIdentity = formatTargetIdentity(operationalPasswordTarget.identity);
+    assert.doesNotMatch(renderedOperationalPasswordIdentity, /postgresql/);
+    assert.doesNotMatch(renderedOperationalPasswordIdentity, /opspw/);
+  } finally {
+    fs.rmSync(authorityFixtureDir, { recursive: true, force: true });
+  }
+
+  // ADMIN-PASSWORD-ARGS-A: unknown or conflicting selectors fail closed; no
+  // arbitrary target flag exists (--database-url/--host/--database/--schema).
+  assert.deepEqual(parseArgs(['--operational']), { help: false, username: 'admin', operational: true });
+  assert.throws(() => parseArgs(['--operational', '--operational']), /already provided/);
+  assert.throws(() => parseArgs(['--username', 'a', '--username', 'b']), /already provided/);
+  assert.throws(() => parseArgs(['--username', '--operational']), /--username requires a value/);
+  assert.throws(() => parseArgs(['--database-url', 'postgresql://evil/od']), /Unknown argument/);
+  assert.throws(() => parseArgs(['--host', 'evil.example.invalid']), /Unknown argument/);
+  assert.throws(() => parseArgs(['--database', 'evil']), /Unknown argument/);
+  assert.throws(() => parseArgs(['--schema', 'evil']), /Unknown argument/);
+
+  // ADMIN-PASSWORD-AUDIT-A source anchor: the CLI reaches PostgreSQL only
+  // through the PostgresRuntimeStore (integrity gate then audited
+  // store.updateUser); it contains no direct SQL mutation of user rows.
+  const adminPasswordSource = fs.readFileSync(path.join(__dirname, 'admin-password.js'), 'utf8');
+  assert.match(adminPasswordSource, /store\.updateUser\(/,
+    'the password CLI must rotate through the audited repository owner');
+  assert.match(adminPasswordSource, /prepareRuntimePersistence\(\)/,
+    'both channels must pass the runtime-integrity gate before any user lookup');
+  assert.match(adminPasswordSource, /assertDevelopmentTargetUsable\(/,
+    'the default target must reuse the dev-family guarded development target owner');
+  assert.match(adminPasswordSource, /new PostgresRuntimeStore\(/,
+    'the password CLI owns exactly one store construction from the resolved target');
+  assert.doesNotMatch(adminPasswordSource, /\b(query|exec)\s*\(/,
+    'the password CLI must not mutate user rows with direct SQL');
+  assert.match(adminPasswordSource, /resolveOperationalChannelAuthority\(\)/,
+    'operational mode must be authorized from and resolved through the ONE pre-normalization authority decision');
+  assert.match(adminPasswordSource, /authority\.databaseUrl/,
+    'the operational connection string must come from the same authority decision');
+  assert.doesNotMatch(adminPasswordSource, /operationalChannelConfigured/,
+    'the old two-source gate must be superseded by the single authority decision');
   assert.throws(() => parseSmokeArgs(['--password', 'visible-secret']), /cannot be passed/);
+
 
   let smokeTicketCreated = false;
   const smokeOutput = [];

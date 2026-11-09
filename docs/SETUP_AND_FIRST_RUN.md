@@ -157,9 +157,19 @@ its run, and verifies the workspace folder. It is an observational provider chec
 failures remain failures and include the exact `developer-agent:trace` follow-up command.
 
 To change an existing credential, use `pnpm admin:password` (or
-`pnpm admin:password -- --username <name>`). Passwords are accepted only through the hidden prompt,
+`pnpm admin:password -- --username <name>`). The default targets the fixed repository-owned
+disposable development database (`ticket_system_dev`, `ticket_system` schema on the bundled
+compose port) and never reads `DATABASE_URL`, `POSTGRES_SCHEMA`, or PG* libpq variables as
+its target authority; pass `--operational` to target the exact operational
+`DATABASE_URL` / `POSTGRES_SCHEMA` channel instead. Before any contact the command prints a
+credential-free target identity (`host`, `port`, `database`, `schema`) so the operator can
+see which channel it acts on. The selector is an operator-routing guard, not an access-control
+boundary: a process able to run arbitrary code under your account is outside its scope.
+Passwords are accepted only through the hidden prompt,
 never through argv. The command uses the transactional user repository, preserves memberships, and
-writes the normal administrative audit event.
+writes the normal administrative audit event. In operational mode the same runtime-integrity
+gates as the server apply unchanged (an operational ledger behind the source head refuses,
+exactly as T10 requires).
 
 ## Verify the runtime
 

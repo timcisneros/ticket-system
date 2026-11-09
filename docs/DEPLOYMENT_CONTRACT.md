@@ -68,9 +68,10 @@ such capability now.
 - No operational leader-election authority is introduced.
 
 **Proof level.** Store-level contention, admission, and recovery semantics have existing
-deterministic evidence. Full-process multi-scheduler competition, crash, and takeover are
-the **intended supported topology conditional on P6-S3 process-level verification** — they
-are not claimed proven before that evidence exists.
+deterministic evidence. The full-process multi-scheduler competition, crash/takeover,
+restart, outage, evidence-latch, drain, and host-local effect-root behaviors are PROVEN by
+`scripts/p6-s3-hosted-recovery-postgres-test.js` (published P6-S3, part of the release
+checkpoint); the current proof state is itemized in §13.
 
 ## 5. Operational authority boundary
 
@@ -219,11 +220,17 @@ operational identity byte for byte, with no URL-shape exception and no bundled-p
 rewrite), while `TICKET_SYSTEM_POSTGRES_PORT` selects the host port of the repository's
 bundled PostgreSQL Compose SERVICE — the service inside which the disposable development
 database lives. When the configured operational database is THE BUNDLED SERVICE'S OWN
-`ticket_system` database (a `ticket_system@loopback/ticket_system` URL), that one physical
+`ticket_system` database, that one physical
 service also carries the operational state, so the Compose host port MUST equal the
 exact operational URL port and an incompatible `TICKET_SYSTEM_POSTGRES_PORT` refuses
 BEFORE any Compose/database contact (BUNDLED-TOPOLOGY-A; distinct from the identity
-collision rule). When the operational target is external/non-bundled, TSPP may
+collision rule). The exact recognized bundled-service shape is the code-level shape
+guard (`scripts/dev-environment.js` `isBundledServiceShape`): a `postgresql:`/`postgres:`
+URL whose username is exactly `ticket_system`, whose host is `127.0.0.1` or `localhost`,
+whose database path is exactly `/ticket_system`, and which carries no query and no
+fragment; any password byte-shape stays accepted (the password does not participate in
+the shape). Everything else — other usernames, other databases, other hosts, or URLs
+with query/fragment — is treated as external/non-bundled. When the operational target is external/non-bundled, TSPP may
 independently choose the local development-service port. No URL-shape heuristic
 reconnects the channels. The bundled infrastructure lifecycle is deterministic
 repository/application defense in depth (NOT an adversarial security boundary): it
@@ -242,6 +249,14 @@ the same unrestricted Unix principal (see the P6-DEVEX-A decision record's adver
 developer-agent boundary). Disposability stays an explicit
 code declaration only; no environment variable, CLI flag, or caller argument may select the
 development database, schema, or host, and `server.js` keeps its guarded construction.
+The audited password CLI (`pnpm admin:password`) belongs to the same two-channel seam:
+DEFAULT targets the fixed disposable development identity (never reading `DATABASE_URL`,
+`POSTGRES_SCHEMA`, or PG* libpq variables as its target authority; the connection string is
+always fully specified so no libpq fallback can retarget it), `--operational` selects the
+exact operational `DATABASE_URL` / `POSTGRES_SCHEMA` channel (which keeps every
+runtime-integrity gate unchanged), and the printed target identity is credential-free and
+printed before any contact. This selector is a human-error/command-routing guard, not an
+OS capability boundary.
 
 Prohibited: permanent bootstrap authorization; wildcard authorization; environment bypass;
 CLI force flag; "first startup automatically migrates" (the operational channel; the fixed
@@ -301,21 +316,25 @@ P6 closure requirement.
 ## 13. Failure and recovery matrix
 
 Current proof state, stated honestly — nothing here upgrades architectural inference to
-"proven safe":
+"proven safe". P6-S3 is PUBLISHED and its process-level evidence is part of the release
+checkpoint (`scripts/p6-s3-hosted-recovery-postgres-test.js`; scenario anchors below; the
+historical design-freeze statements in the P6 register record remain exactly as written
+historical evidence).
 
 | Failure | Proof state |
 |---|---|
-| Application process crash | Architecture says recoverable; needs P6-S3 full-process proof |
-| Scheduler crash | Same class as application-process crash (the scheduler is in-process); needs P6-S3 proof |
-| Worker crash | No separate worker tier in the baseline; in-process task failure/recovery uses Run lease/recovery authority; needs process proof where appropriate |
-| PostgreSQL outage | Fail-closed mutation posture already exists; health/readiness signaling correction belongs to P6-S2; full-process outage behavior belongs to P6-S3 |
-| PostgreSQL restart | Architecture expects recovery; P6-S3 proves process behavior |
-| Lease expiration | Store-level semantics proven; full-process takeover belongs to P6-S3 |
-| Duplicate schedulers | Store-level contention proven; full-process topology conditional on P6-S3 |
-| Deployment restart | Startup recovery and bounded drain mechanisms exist; P6-S3 proves deployment behavior |
-| Configuration failure | Fail-closed startup |
+| Application process crash | PROVEN at full-process level (S3 scenarios 3a–3d: authoritative state recoverable, no fabrication, same Run/attempt recovery) and by the canonical checkpoint owner |
+| Scheduler crash | Same class as the application-process crash: the scheduler is in-process; the SAME S3 crash/lease-expiry evidence covers its loss — no separate scheduler process layer exists in the baseline topology |
+| Worker crash | No separate worker tier in the baseline; in-process task failure/recovery uses Run lease/recovery authority (same S3 evidence); no separate proof layer is owed |
+| PostgreSQL outage | PROVEN at full-process level with the designed fail-closed readiness/mutation posture and per-request recovery (S3 5a–5c), plus P6-S2's canonical `postgres_unreachable` seam and per-request health contract |
+| PostgreSQL restart | PROVEN at full-process level: recovery is per request (S3 5a–5c); the process-level outage/latch lifecycle (5d–5e) covers restart-shaped interference |
+| Lease expiration | Store-level semantics proven AND full-process takeover proven (S3 3b/3c: no takeover before canonical expiry; the continuing recovery names `mode: 'lease_expiry'`) |
+| Duplicate schedulers | Store-level contention proven AND the multi-process topology proven live without a leader (S3 2a–2d, 7) |
+| Deployment restart | PROVEN at full-process level: startup recovery and bounded drain are live (S3 scenario 4 idempotent restart; scenario 6/6a/6b/6c bounded drain, forced stop, and in-drain admission refusal) |
+| Configuration failure | Fail-closed startup (P6-S2 canonical registry; operational preflight composes the same gate) |
 | Missing required secret | Fail-closed startup |
-| Migration mismatch | Fail-closed startup; already canonical |
+| Migration mismatch | Fail-closed startup; already canonical (T10-guarded refuses via preflight, boot, and `db:migrate`) |
+| Health observation with session cookies | PROVEN: `/health` and `/api/health` bypass PostgreSQL session load/save and return the canonical readiness projection under outage (P6-S2 7b) |
 | Workspace/artifact failure | Effect failure must remain truthful; shared multi-host backend remains deferred |
 
 ## 14. Demand-gated exclusions

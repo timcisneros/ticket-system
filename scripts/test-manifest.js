@@ -300,6 +300,12 @@ const TESTS = Object.freeze([
   { file: "oquery-cli-parity-test.js", status: "orphaned", reason: "cutover-orphan" },
   { file: "oquery-parity-test.js", status: "required" },
   { file: "organization-guidance-test.js", status: "required" },
+  // OP-PREFLIGHT-A — the operational-only read-only deployment preflight.
+  // Deterministic: refusal shapes fail closed before any contact, the
+  // composed owners are the canonical ones, and the rendered identity is
+  // credential-free; the live PostgreSQL posture is owned by
+  // p6-s2-readiness-postgres-test.js.
+  { file: "operational-preflight-test.js", status: "required" },
   { file: "p5-r1-workflow-invocation-postgres-test.js", status: "required" },
   { file: "p5-r2-delegated-admission-postgres-test.js", status: "required" },
   { file: "p5-r2-delegated-unit-contract-test.js", status: "required" },

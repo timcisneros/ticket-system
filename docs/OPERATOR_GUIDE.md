@@ -23,8 +23,12 @@ with the password chosen during setup. With the server running, execute `pnpm de
 second terminal to prove login, agent resolution, ticket/run execution, and the workspace target.
 
 Use `pnpm dev:doctor` for read-only diagnostics and `pnpm admin:password` for a hidden-input,
-audited password change. The development workspace and browser artifact defaults are
-`.local-workspace` and `.local-artifacts`; PostgreSQL owns structured runtime state.
+audited password change (default: the fixed disposable development database;
+`--operational`: the exact operational `DATABASE_URL` / `POSTGRES_SCHEMA` channel from a single
+pre-normalization authority decision). The development workspace default is `workspace-root`
+(resolved under the repository root; the canonical registry default in
+`runtime/environment-config-registry.js`) and the browser artifact default is `.local-artifacts`;
+PostgreSQL owns structured runtime state.
 
 ## 3. Accounts and permissions
 

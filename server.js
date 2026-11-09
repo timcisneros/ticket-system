@@ -2419,6 +2419,37 @@ function requestOriginAllowed(request) {
   return parsed.host === String(request.headers.host || '').trim();
 }
 
+// HEALTH-COOKIE-A: the two public observation routes live in their own
+// registration scope, whose single hook presents the request to the session
+// system WITHOUT session identity. Fastify evaluates child-scope hooks BEFORE
+// the parent-scope @fastify/session hooks (registered below), so a request
+// carrying ANY session cookie — valid, stale, or garbage — takes exactly the
+// already-frozen anonymous (cookie-less) session path on /health and
+// /api/health: no PostgreSQL session lookup, no session-store save, no
+// authentication requirement, and no readiness-session coupling even during a
+// PostgreSQL outage. This is one projection consumed by both routes (no second
+// readiness implementation; health semantics are not duplicated) and the hook
+// exists nowhere else: every authenticated route, and login/logout/session
+// rotation, are untouched.
+fastify.register(async function publicObservationScope(instance) {
+  instance.addHook('onRequest', async (request, reply) => {
+    const url = String(request.raw.url).split('?', 1)[0];
+    if (url === '/health' || url === '/api/health') {
+      if (request.raw.headers.cookie) delete request.raw.headers.cookie;
+    }
+  });
+  instance.get('/health', async (request, reply) => {
+    const projection = await buildLiveHealthProjection({ includeUptime: false });
+    reply.code(projection.statusCode);
+    return projection.payload;
+  });
+  instance.get('/api/health', async (request, reply) => {
+    const projection = await buildLiveHealthProjection({ includeUptime: true });
+    reply.code(projection.statusCode);
+    return projection.payload;
+  });
+});
+
 // Register Fastify plugins
 fastify.register(require('@fastify/cookie'));
 fastify.register(require('@fastify/session'), {
@@ -2468,6 +2499,20 @@ fastify.addHook('onRequest', async (request, reply) => {
     return reply.send({ error: 'Request origin is not allowed' });
   }
   if (requiresMutationAdmission) {
+    // DRAIN-ADMISSION-A: once shutdown has begun, the admission owner itself is
+    // in the terminal drain state (set synchronously before any shutdown
+    // await), so every NEW application mutation is refused for the entire
+    // drain window. This is not backpressure — retrying never recovers this
+    // process (no retryability hint is advertised); callers reach another live
+    // process or a restarted deployment. Tokens admitted before the drain keep
+    // working.
+    if (mutationAdmission.closing) {
+      reply.code(503);
+      return reply.send({
+        error: 'Runtime shutdown drain is in progress; new application mutations are refused for this process lifetime',
+        code: 'MUTATION_ADMISSION_DRAINING'
+      });
+    }
     const token = mutationAdmission.tryAcquireAdmission({
       source: 'http',
       method: request.method,
@@ -2534,7 +2579,6 @@ fastify.get('/styles.css', async (request, reply) => {
   reply.type('text/css; charset=utf-8');
   return fs.readFileSync(path.join(__dirname, 'src', 'styles.css'), 'utf8');
 });
-
 // P6-S2 shared health semantics: liveness (the process exists and can
 // answer), readiness (the process may safely receive normal application
 // traffic), and capacity (work-admission load state — observable but NEVER a
@@ -2576,12 +2620,6 @@ async function buildLiveHealthProjection({ includeUptime }) {
     configurationFailures: validateEnvironment(process.env)
   });
 }
-
-fastify.get('/health', async (request, reply) => {
-  const projection = await buildLiveHealthProjection({ includeUptime: false });
-  reply.code(projection.statusCode);
-  return projection.payload;
-});
 
 fastify.register(require('@fastify/view'), {
   engine: { ejs: require('ejs') },
@@ -30510,12 +30548,6 @@ fastify.get('/tickets/:id', { preHandler: fastify.requireAuth }, async (request,
   }, request.session.userId));
 });
 
-fastify.get('/api/health', async (request, reply) => {
-  const projection = await buildLiveHealthProjection({ includeUptime: true });
-  reply.code(projection.statusCode);
-  return projection.payload;
-});
-
 fastify.get('/api/runtime/identity', { preHandler: fastify.requireAuth }, async (request, reply) => {
   if (!hasPermission(request.session.userId, 'ticket:read')) {
     reply.code(403);
@@ -35395,6 +35427,14 @@ async function waitForActiveRunTasksToSettle(timeoutMs = SHUTDOWN_RUN_DRAIN_TIME
 
 function shutdown(signal) {
   if (shutdownPromise) return shutdownPromise;
+  // DRAIN-ADMISSION-A: the terminal drain is armed at the FIRST SYNCHRONOUS
+  // boundary of shutdown, BEFORE ANY await. From this instant the admission
+  // owner refuses new application mutations (HTTP hooks and internal
+  // producers consult the same flag), while already-admitted work continues
+  // through the bounded drain. The flag is process-local: it has no writable
+  // control surface and no operator command, and a process restart is its
+  // only reset.
+  mutationAdmission.beginDrain();
   shutdownPromise = (async () => {
     serverReady = false;
     if (sessionMaintenanceTimer) {

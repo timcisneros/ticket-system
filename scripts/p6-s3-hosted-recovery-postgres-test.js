@@ -103,9 +103,21 @@ function rawHealthProbe(port) {
 // child's perspective (idle pool clients die AND in-flight queries die).
 // openUp() restores forward transit without restarting PostgreSQL. No
 // production flag, no mutation, no second database cluster.
-function createPostgresConnectionProxy(targetPort) {
+//
+// Drain-window seam (DRAIN-ADMISSION-A): arm({ delayMs }) delays
+// CLIENT→SERVER query bytes received AFTER that call, so the runtime
+// scheduler's in-flight tick holds `whenIdle()` — the shutdown path's first
+// await — for a deterministic interval while the HTTP listener is still open.
+// The save (post-exit) refusal assertion is not sufficient; the delay is armed
+// AT shutdown time so the child's boot and login stay delay-free until the
+// drain window begins. receivedChunks() chi counters every forwarded query
+// chunk, letting the drain scenario signal shutdown exactly while a query is
+// still in flight (its response timer has not yet fired).
+function createPostgresConnectionProxy(targetPort, { delayMs = 0 } = {}) {
   const sockets = new Set();
   let open = true;
+  let armedDelayMs = delayMs;
+  let receivedChunks = 0;
   const server = net.createServer(client => {
     if (!open) { client.destroy(); return; }
     const upstream = net.connect(targetPort, '127.0.0.1');
@@ -113,10 +125,31 @@ function createPostgresConnectionProxy(targetPort) {
     sockets.add(client); sockets.add(upstream);
     const fail = () => {
       try { client.destroy(); } catch (_) {}
-      try { upstream.destroy(); } catch (_) {}
-      cleanup();
+      try { upstream.destroy(); } catch (_) {} cleanup();
     };
-    client.on('data', chunk => { try { upstream.write(chunk); } catch (_) { fail(); } });
+    let pendingChunks = [];
+    let drainTimer = null;
+    const flushPending = () => {
+      drainTimer = null;
+      while (pendingChunks.length > 0) {
+        const chunk = pendingChunks.shift();
+        try { upstream.write(chunk); } catch (_) { fail(); }
+      }
+    };
+    client.on('data', chunk => {
+      try {
+        receivedChunks += 1;
+        if (armedDelayMs > 0) {
+          // Bounded FIFO in test-established chunk order: the delayed bytes (a
+          // query in flight) cannot reach PostgreSQL before their timer, so
+          // the child's await is held open for at least the remaining delay.
+          pendingChunks.push(chunk);
+          if (drainTimer === null) drainTimer = setTimeout(flushPending, armedDelayMs);
+        } else {
+          upstream.write(chunk);
+        }
+      } catch (_) { fail(); }
+    });
     upstream.on('data', chunk => { try { client.write(chunk); } catch (_) { fail(); } });
     client.on('error', fail);
     upstream.on('error', fail);
@@ -128,6 +161,8 @@ function createPostgresConnectionProxy(targetPort) {
       server.once('error', reject);
       server.listen(0, '127.0.0.1', () => resolve(server.address().port));
     }),
+    arm({ delayMs = 0 } = {}) { armedDelayMs = Number(delayMs); },
+    receivedChunks: () => receivedChunks,
     cut() { open = false; for (const socket of sockets) { try { socket.destroy(); } catch (_) {} } sockets.clear(); },
     openUp() { open = true; },
     close() {
@@ -529,6 +564,8 @@ async function main() {
       ok(recoveryObserved, '3: a peer took over through the canonical recovery authority');
       const previousLease = recoveryObserved && recoveryObserved.recovery.payload.previousLease;
       okEqual(previousLease.leaseOwner, crashClaim.lease_owner, '3: recovery names the exact dead owner');
+      okEqual(recoveryObserved.recovery.payload.mode, 'lease_expiry',
+        '3: the takeover is the canonical lease-expiry recovery mode, not the startup restart path');
       ok(Date.parse(recoveryObserved.recovery.payload.recoveredAt) >= Date.parse(previousLease.leaseExpiresAt) - 20,
         '3: takeover happened at/after the previous lease expiry — never early');
       okEqual(ownerPid(recoveryObserved.recovery.payload.recoveryOwner), peerServer.child.pid,
@@ -573,10 +610,20 @@ async function main() {
       await sleep(500);
       // Let the stale lease canonically expire BEFORE the cold boot, so the
       // startup recovery path (not a later scheduler pass) owns the recovery.
-      for (let i = 0; i < 120; i += 1) {
+      // DETERMINISM: this loop must wait for the EXACT condition the recovery
+      // claim fences on — the DATBASE's own clock
+      // (`lease_expires_at <= clock_timestamp()`), never a client-side
+      // comparison of a database timestamp against this process's clock. A
+      // client/DB clock lag could break this loop while the database itself
+      // still sees the lease as valid, the boot-time `process_restart` claim
+      // would then refuse, and the restarted process's first scheduler sweep
+      // would re-claim the run with `lease_expiry` — which is the race this
+      // window had observed under load.
+      for (let i = 0; i < 240; i += 1) {
         const row = (await store.pool.query(
-          `SELECT lease_expires_at FROM ${store.table('runs')} WHERE id = $1`, [restartClaim.id])).rows[0];
-        if (row && Date.parse(row.lease_expires_at) <= Date.now()) break;
+          `SELECT (lease_expires_at IS NOT NULL AND lease_expires_at <= clock_timestamp()) AS expired
+             FROM ${store.table('runs')} WHERE id = $1`, [restartClaim.id])).rows[0];
+        if (row && row.expired) break;
         await sleep(250);
       }
       const staleRow = await latestRun();
@@ -671,22 +718,35 @@ async function main() {
       scenario('5c: after restoration the same processes become ready again with no restart and no manual clearing');
 
       // Real evidence-write failure latch (one process, real DB boundary).
+      // DETERMINISTIC LATCH TARGET: the trigger fires only for THIS fixture
+      // run's `run.postconditions_checked` append, and the healthy peers are
+      // frozen (SIGSTOP) while the trigger is armed, so the process executing
+      // that run — the freshly started latch server — is the one whose required
+      // evidence write fails. A schema-global trigger would race which live
+      // claimer executes a postcondition check during the armed window and
+      // could latch an unintended (supposedly healthy) peer, which contradicts
+      // the scenario's own claim ("the peer stays healthy") without any
+      // production defect.
       await store.pool.query(
         `CREATE OR REPLACE FUNCTION "${schema}".p6s3_latch_injector() RETURNS trigger AS $$
            BEGIN
-             IF NEW.type = 'run.postconditions_checked' THEN
+             IF NEW.type = 'run.postconditions_checked' AND NEW.run_id = TG_ARGV[0]::bigint THEN
                RAISE EXCEPTION 'p6s3 injected evidence persistence failure';
              END IF;
              RETURN NEW;
            END; $$ LANGUAGE plpgsql;`);
-      await store.pool.query(
-        `CREATE TRIGGER p6s3_latch_injector_trg BEFORE INSERT ON ${store.table('events')}
-           FOR EACH ROW EXECUTE FUNCTION "${schema}".p6s3_latch_injector();`);
+      process.kill(outageA.child.pid, 'SIGSTOP');
+      process.kill(outageB.child.pid, 'SIGSTOP');
       const latchServer = await startServer({ env: outageEnv });
       await sleep(250);
       const latchCookie = await loginCookie(latchServer);
       const latchWorkflow = await createWriteWorkflow();
       await createTicket(`p6s3 latch trigger ${STAMP}`, latchWorkflow.workflowId, latchServer);
+      const latchRunId = (await latestRun()).id;
+      if (!Number.isSafeInteger(Number(latchRunId))) throw new Error('6c-adjacent: the latch victim Run id was not established');
+      await store.pool.query(
+        `CREATE TRIGGER p6s3_latch_injector_trg BEFORE INSERT ON ${store.table('events')}
+           FOR EACH ROW EXECUTE FUNCTION "${schema}".p6s3_latch_injector(${Number(latchRunId)});`);
       let latchedHealth = null;
       for (let i = 0; i < 220 && !latchedHealth; i += 1) {
         await sleep(150);
@@ -859,7 +919,191 @@ async function main() {
       const forcedRow = await latestRun();
       okEqual(forcedRow.id, forcedClaim.id, '6b: the forced-stop run keeps its identity');
       okEqual(forcedRow.status, 'running', '6b: an abrupt forced stop keeps the run honestly stale — never completed');
+      ok(Date.parse(forcedRow.lease_expires_at) > Date.now(),
+        '6b: the interrupted lease is still valid for a peer');
+      okEqual(forcedRow.lease_owner, forcedClaim.lease_owner,
+        '6b: the lease still names the interrupted owner; no premature takeover claimed it');
       scenario('6b: the forced-stop boundary never fabricates completion; the lease survives for a peer');
+
+      // ══════════════ 6c. DRAIN-ADMISSION-A: refusal INSIDE the drain window ═
+      // The post-exit refusal above is necessary but NOT sufficient: the review
+      // demanded proof that a NEW application mutation cannot ENTER while the
+      // drain window is open (after shutdown begins, before listener close).
+      // A CONTROLLED REAL DRAIN WINDOW does exactly that: this process's
+      // DATABASE_URL runs through a delaying (1200 ms per query) suite-owned
+      // TCP proxy, and SIGTERM is issued the instant a new query chunk passes
+      // the proxy — so the in-flight tick's pending response timer HOLDS
+      // `whenIdle()` (the shutdown path's first await) for the FULL bounded
+      // delay while the HTTP listener is still open. The first synchronous
+      // shutdown boundary already armed the terminal drain flag, so the
+      // mutation issued inside that real window must be refused — no durable
+      // state may appear, and the observation routes keep working until the
+      // listener closes.
+      {
+        let drainProxy = null;
+        let drainWindowChild = null;
+        try {
+          drainProxy = createPostgresConnectionProxy(Number(realUrl.port || 5432));
+          const drainProxyPort = await drainProxy.listen();
+          const drainProxiedUrl = new URL(databaseUrl);
+          drainProxiedUrl.port = String(drainProxyPort);
+          const drainWindowEnv = {
+            ...baseEnv,
+            DATABASE_URL: drainProxiedUrl.toString(),
+            // The scheduler stays continuously tick-busy in the drain window
+            // (any instant has a query in flight), which is what the armed
+            // delay below will hold open at signal time.
+            RUNTIME_SCHEDULER_INTERVAL_MS: '120'
+          };
+          drainWindowChild = await startServer({ env: drainWindowEnv });
+
+          // Baseline: the same single health projection answers while the
+          // process is healthy and the delay is NOT yet armed (observation is
+          // reachable by design).
+          const servedHealthBefore = drop(await drainWindowChild.request('GET', '/health'));
+          okEqual(servedHealthBefore.statusCode, 200, '6c: /health is served before the drain begins');
+          okEqual((servedHealthBefore.body || {}).ready, true, '6c: the process is ready before the drain begins');
+
+          const refusalObjective = `p6s3 drain window refusal ${STAMP}`;
+          const durableRefusalTickets = async () => (await store.pool.query(
+            `SELECT count(*)::int AS n FROM ${store.table('tickets')} WHERE body->>'objective' = $1`,
+            [refusalObjective])).rows[0].n;
+          okEqual(await durableRefusalTickets(), 0, '6c: no such Ticket exists before the drain-window attempt');
+
+          // DETERMINISTIC IN-SHUTDOWN WORKLOAD: the single delayed in-flight
+          // query only holds the shutdown path's first await while THAT query
+          // is outstanding, so the window's width would otherwise depend on
+          // which scheduler step the signal happened to catch. Giving the
+          // child REAL PENDING RUNS (created through the same repository
+          // authority any producer uses, by-passing only the HTTP surface)
+          // makes every armed tick do bounded real work per pending Run —
+          // several delayed queries per tick — so the shutdown path's first
+          // await holds for MULTIPLE hold-intervals after the signal, while
+          // the listener is still open. The runs execute to their own truthful
+          // terminal/lease-recoverable boundary; no 6c assertion reads them,
+          // and the process still exits through the bounded drain path. The
+          // pre-window child never sees an armed proxy.
+          const windowPendingRuns = [];
+          for (let pendingIndex = 0; pendingIndex < 3; pendingIndex += 1) {
+            const pendingTicket = await store.createTicket({
+              status: 'open', title: `p6s3 drain window pending ${pendingIndex + 1} ${STAMP}`,
+              objective: `p6s3 drain window pending ${pendingIndex + 1} ${STAMP}`,
+              createdBy: 'p6-s3-hosted-recovery-postgres-test', changedBy: 'p6-s3-hosted-recovery-postgres-test'
+            });
+            const pendingRun = await store.createRun({
+              ticketId: pendingTicket.id,
+              agentId: agent.id,
+              agentName: agent.name,
+              runtimeLimitsSnapshot: currentRuntimeLimitsSnapshot({
+                maxExecutionSteps: 32, maxModelRequestsPerRun: 8,
+                maxWorkspaceOperationsPerRun: 32, maxRuntimeDurationMs: 120000
+              }),
+              executionPolicySnapshot: { requireVerification: 'when_declared' },
+              status: 'pending'
+            });
+            windowPendingRuns.push(pendingRun);
+          }
+          let drainAttempt = null;
+          let drainAttemptHealth = null;
+          let drainAttemptHeaders = null;
+          let lastDrainError = '';
+          for (let attempt = 0; attempt < 3 && drainAttempt === null; attempt += 1) {
+            if (attempt > 0) {
+              console.log(`6c: attempt ${attempt - 1} missed the controlled drain window (${lastDrainError || 'no verdict'}); retrying`);
+              try { await drainWindowChild.stop(); } catch (_) {}
+              // DISARM before respawning: a still-armed proxy would delay the new
+              // child's boot queries and starve its readiness clock.
+              drainProxy.arm({ delayMs: 0 });
+              drainWindowChild = await startServer({ env: drainWindowEnv });
+            }
+            const drainCookie = await loginCookie(drainWindowChild);
+
+            // ARM the deterministic hold NOW: every query received from this
+            // instant is delayed, so a query that arrives between arming and
+            // SIGTERM keeps ITS await pending for the full hold interval, and
+            // the in-shutdown tick's remaining per-pending-Run work keeps the
+            // shutdown path's first await open for MULTIPLE hold intervals.
+            // 1200 ms is deliberately UNDER the runtime pool's own 5 s
+            // connection-establishment ceiling: the drain window's in-window
+            // reads must never need a fresh pool connection handshake that
+            // could race that ceiling under load.
+            drainProxy.arm({ delayMs: 1200 });
+            const chunksBefore = drainProxy.receivedChunks();
+            for (let i = 0; i < 400 && drainProxy.receivedChunks() === chunksBefore; i += 1) {
+              await sleep(25);
+            }
+            drainWindowChild.child.kill('SIGTERM');
+
+            // Bounded pause strictly observes the synchronous boundary; the
+            // held tick keeps the listener open for the full delay window.
+            await sleep(80);
+            try {
+              const refusalResponse = await drainWindowChild.request('POST', '/tickets', {
+                cookie: drainCookie,
+                form: {
+                  objective: refusalObjective,
+                  assignmentTargetType: 'agent', assignmentTargetId: String(agent.id),
+                  assignmentMode: 'individual'
+                }
+              });
+              drainAttempt = drop(refusalResponse);
+              drainAttemptHeaders = refusalResponse.headers || {};
+            } catch (error) {
+              lastDrainError = String(error && error.message ? error.message : error);
+            }
+            if (drainAttempt !== null) {
+              try {
+                drainAttemptHealth = drop(await drainWindowChild.request('GET', '/health'));
+              } catch (_) { /* the listener may already be closed; bounded */ }
+              // The drain-window verdict is captured: DISARM so the child's own
+              // remainder-of-drain steps (release authority, store close) run at
+              // full speed and the bounded exit completes as designed.
+              drainProxy.arm({ delayMs: 0 });
+            }
+          }
+          ok(drainAttempt !== null, `6c: a NEW application mutation issued inside the real drain window received the designed verdict (${lastDrainError})`);
+          if (drainAttempt !== null) {
+            okEqual(drainAttempt.statusCode, 503, `6c: the in-window mutation is REFUSED with HTTP 503 (got ${drainAttempt.statusCode} body ${JSON.stringify(drainAttempt.body).slice(0, 220)}; child tail: ${drainWindowChild.output ? String(drainWindowChild.output()).slice(-500) : 'n/a'})`);
+            okEqual(drainAttempt.body.code, 'MUTATION_ADMISSION_DRAINING',
+              `6c: the in-window refusal carries the designed terminal-drain code (child tail: ${drainWindowChild.output ? String(drainWindowChild.output()).slice(-600) : 'n/a'})`);
+            okEqual(typeof drainAttempt.body.error, 'string',
+              '6c: the refusal carries a bounded human-readable error');
+            ok(String(drainAttempt.body.error).indexOf('POST') === -1 &&
+               String(drainAttempt.body.error).indexOf(String(agent.id)) === -1 &&
+               String(drainAttempt.body.error).indexOf('SQL') === -1,
+              '6c: the refusal is sanitized (no route, caller, or SQL internals)');
+            okEqual(drainAttemptHeaders['retry-after'], undefined,
+              '6c: the terminal drain carries no Retry-After (retrying never recovers this process)');
+          }
+          if (drainAttemptHealth !== null) {
+            // Observation may remain reachable until the listener closes; when
+            // it is reachable it MUST still be the same single designed
+            // projection with the drain armed in capacity.
+            ok(drainAttemptHealth.statusCode === 503 && drainAttemptHealth.body.alive === true &&
+              (drainAttemptHealth.body.status === 'starting' || drainAttemptHealth.body.status === 'unready'),
+              '6c: observation during the drain window stays the designed bounded projection');
+            okEqual(drainAttemptHealth.body.capacity.mutationAdmission.status, 'draining',
+              '6c: capacity exposes the process-local terminal drain, never fake-availability');
+          }
+
+          // The process still exits through the honest bounded drain path.
+          let drainWindowExit = null;
+          for (let i = 0; i < 200 && drainWindowExit === null; i += 1) {
+            await sleep(100);
+            drainWindowExit = drainWindowChild.child.exitCode;
+          }
+          ok(drainWindowExit !== null, `6c: the drain-window process exits through the bounded path (child tail: ${drainWindowChild.output ? String(drainWindowChild.output()).slice(-400) : 'n/a'})`);
+          okEqual(drainWindowExit, 143, `6c: the drain window ends with the declared code (got ${drainWindowExit})`);
+
+          // No durable application mutation entered through the in-window
+          // refusal: zero such Tickets exist after the child is gone.
+          okEqual(await durableRefusalTickets(), 0, '6c: the refused in-window mutation left NO durable Ticket');
+          scenario('6c: a NEW application mutation inside the controlled real drain window is refused by the admitted-drain owner — no durable state, observation bounded');
+        } finally {
+          if (drainWindowChild) { try { await drainWindowChild.stop(); } catch (_) {} }
+          if (drainProxy) { try { await drainProxy.close(); } catch (_) {} }
+        }
+      }
 
       // ══════════════ 7. HOST-LOCAL-A ══════════════════════════════════════
       const effectFiles = fs.readdirSync(workspaceRoot);

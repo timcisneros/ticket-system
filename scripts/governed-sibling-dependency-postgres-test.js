@@ -490,6 +490,19 @@ async function main() {
         // block's own fields are asserted against the persisted block: this row
         // is distinguished from a verified-progress block by carrying sibling
         // and path identity, and the CLI must show exactly that.
+        //
+        // DETERMINISTIC COUNT WINDOW: the Ticket-scoped zero-drift counts below
+        // must observe a FULLY quiescent Ticket — otherwise the window races
+        // the sibling's own claim→start transition (while a claimed Run's row
+        // is still status 'pending', each scheduler tick legitimately records
+        // one `scheduler.run_skipped` fact until `startClaimedRun` commits the
+        // status flip). Those facts are the deployment's OWN machinery, not a
+        // projection side effect, and under load the sibling's normal claim can
+        // land inside this window. The same gate the closing matrix stage uses
+        // (`waitForSchedulerQuiescence`, durable state, no clock) binds the
+        // read to the designed zero-drift condition: nothing pending, nothing
+        // running, no lease, stable across consecutive reads.
+        await waitForSchedulerQuiescence(store, readerRun.ticketId, { timeoutMs: 180_000 });
         const cliCountsBefore = await fullTerminalCounts(store, readerRun.ticketId);
         const cliSibling = await runOquery(['replay', String(readerRun.id)],
           { baseUrl: fresh.baseUrl, cookie });

@@ -23,6 +23,13 @@ function createMutationAdmissionController(options = resolveMutationAdmissionOpt
   let outstandingBytes = 0;
   let admissionVersion = 0;
   let closed = false;
+  // Terminal drain state (P6 DRAIN-ADMISSION-A). It is set exactly once by
+  // beginDrain() at the FIRST SYNCHRONOUS boundary of shutdown — before any
+  // await — and can never be cleared in this process. It refuses every NEW
+  // admission (HTTP hooks and in-process producers alike) for the entire
+  // drain window, while tokens that are already outstanding keep working and
+  // releasing normally. Only a fresh process clears the flag.
+  let draining = false;
   let acquired = 0;
   let released = 0;
   let rejected = 0;
@@ -38,8 +45,16 @@ function createMutationAdmissionController(options = resolveMutationAdmissionOpt
     waiters.clear();
   }
 
+  // Ordering guarantee owned by the shutdown seam: beginDrain must be called
+  // synchronously before the shutdown path's first await.
+  function beginDrain() {
+    if (draining || closed) return;
+    draining = true;
+    signalChange();
+  }
+
   function tryAcquireAdmission(metadata = {}, reservationBytes = options.maxReservationBytes) {
-    if (closed) { rejected += 1; return null; }
+    if (draining || closed) { rejected += 1; return null; }
     const bytes = positiveInteger(reservationBytes, options.maxReservationBytes, 'reservationBytes');
     if (bytes > options.maxReservationBytes) { rejected += 1; oversizedRejected += 1; return null; }
     if (outstanding >= options.maxOutstanding || outstandingBytes + bytes > options.maxOutstandingBytes) {
@@ -66,7 +81,7 @@ function createMutationAdmissionController(options = resolveMutationAdmissionOpt
   }
 
   function waitForAdmissionChange(version) {
-    if (version !== admissionVersion || closed) return Promise.resolve();
+    if (version !== admissionVersion || draining || closed) return Promise.resolve();
     return new Promise(resolve => waiters.add(resolve));
   }
 
@@ -87,7 +102,10 @@ function createMutationAdmissionController(options = resolveMutationAdmissionOpt
         backend: 'postgres',
         role: 'mutation_admission',
         scope: 'process',
-        status: closed ? 'closed' : backpressured ? 'backpressured' : 'available',
+        status:
+      closed ? 'closed' :
+      draining ? 'draining' :
+      backpressured ? 'backpressured' : 'available',
         current: {
           outstanding,
           outstandingBytes,
@@ -106,9 +124,10 @@ function createMutationAdmissionController(options = resolveMutationAdmissionOpt
       };
     },
     close,
+    beginDrain,
     get admissionVersion() { return admissionVersion; },
     get failure() { return null; },
-    get closing() { return false; },
+    get closing() { return draining; },
     get closed() { return closed; }
   };
 }

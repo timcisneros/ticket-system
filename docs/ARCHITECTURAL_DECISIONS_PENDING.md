@@ -18644,3 +18644,584 @@ fixes. Nothing in this slice introduces writable operator capability.
 **NEXT BOUNDARY: FRESH KIMI K3 MAX-REASONING INDEPENDENT REVIEW OF THE EXACT P6-S3
 CANDIDATE — NO PUBLICATION, NO STAGING/COMMIT/PUSH, NO P7, AND NO OPERATIONAL
 MIGRATION.**
+
+## P6 COMBINED-CLOSURE CANDIDATE — deferred findings adjudicated, checkpoint-repeatability residual resolved, closure authority audited
+
+**STATUS:** P6 COMBINED-CLOSURE CANDIDATE — built on the PUBLISHED P6 design freeze and the
+CLOSED/PUBLISHED P6-S1, P6-S2, P6-DEVEX-A, and P6-S3 slices; NOT YET INDEPENDENTLY REVIEWED,
+NOT STAGED, NOT COMMITTED, NOT PUBLISHED. P6 overall remains OPEN until a fresh independent
+review of these exact bytes accepts the candidate. P7 and Browser Phase 3 remain unopened.
+This record does not revise any closed slice's historical text above.
+
+### 1. Opening gate
+
+Branch `master`, HEAD exactly `aa74cb7fca4dfac341bd2b5c9ffcf96750af237e`
+("Publish P6-S3 hosted recovery and operator runbook"), cached `origin/master` = fresh
+`git ls-remote` = HEAD, clean tree, nothing staged, zero untracked, stash empty,
+`git diff --check` clean before any candidate byte. Operational posture verified read-only
+and unchanged: canonical migration-execution authorization exactly the deterministic
+`NOT_AUTHORIZED` shape (`config/migration-execution-authorization.json`); operational applied
+head `043` under `ticket_system.schema_migrations`; source head `044`
+(`044_browser_interaction_authority.sql` present, pending); migration 044 remains
+operationally UNAPPLIED and NOT_AUTHORIZED throughout this session.
+
+### 2. REQUIRED MEDIUM correction — `admin:password` DevEx target inconsistency (FIXED)
+
+The published S3 bytes left `pnpm admin:password` consuming the OPERATIONAL `DATABASE_URL`
+channel (store built from `developmentConfig()`), so the daily password rotation against the
+operational ledger at 043 failed with the T10 integrity refusal for the pending 044 — a
+coherent DevEx surface must reserve that refusal for the explicit operational channel.
+`scripts/admin-password.js` now resolves exactly two explicit channels through the existing
+owners, with no caller-selectable database identity and no new env redirect:
+
+- DEFAULT: the fixed repository-owned disposable development target via
+  `assertDevelopmentTargetUsable` + `disposableDevelopmentTarget` (identical identity owner
+  as `dev`, `dev:setup`, `dev:doctor`, `dev:reset`); `DATABASE_URL`, `POSTGRES_SCHEMA`, PG*
+  libpq variables cannot redirect it (the connection string is always fully specified, and
+  the pool is constructed from the resolved target only); the incidental channel guards
+  (COLLISION-A, BUNDLED-TOPOLOGY-A) stay active exactly as for the rest of the family.
+- `--operational`: the exact operational `DATABASE_URL` / `POSTGRES_SCHEMA` channel through
+  the canonical resolver (`developmentConfig` → `validateDatabaseUrl`); operational mode
+  REQUIRES an explicitly configured `DATABASE_URL` (raw environment or `.env.local`,
+  decided BEFORE `applyLocalEnv` normalization) and keeps every runtime-integrity gate — the
+  operational ledger at 043 still refuses password mutation while source head is 044.
+- Before any contact, a credential-free target identity (host/port/database/schema via
+  `formatTargetIdentity`) is printed, in an unmistakable `development` / `operational`
+  phrasing. No password or credential is ever printed. Unknown or conflicting flags (no new
+  arbitrary target flag — `--database-url/--host/--database/--schema` all remain unknown
+  arguments; duplicate `--operational`/`--username` or flag-valued `--username` fail closed).
+- The mutation continues exclusively through the existing audited repository owner
+  (`store.updateUser` by `admin-password-cli`); the CLI contains no direct SQL mutation and
+  both channels pass `prepareRuntimePersistence` before any user lookup.
+- Scope honesty: the selector is a human-error/command-routing guard, NOT an OS capability
+  boundary; adversarial developer-agent isolation remains an OS/account boundary (documented
+  in `docs/DEPLOYMENT_CONTRACT.md` §E-dev and `docs/SETUP_AND_FIRST_RUN.md`).
+
+Proof (`scripts/dev-environment-test.js` narrowed-owner extension, PASS): DEV-A exact
+`ticket_system_dev` / `ticket_system` selection under hostile channels;
+CHANNEL-A `DATABASE_URL`/`POSTGRES_SCHEMA` and `PGHOST`/`PGDATABASE`/`PGPORT`
+hostility leaves the default identity byte-stable; SECRET-A credential-free rendered
+identity for both channels; ARGS-A fail-closed unknown/conflicting selectors; AUDIT-A source
+anchors (single store construction, `prepareRuntimePersistence`, audited `store.updateUser`,
+no direct SQL, operational-channel explicitness). Live behavior proof on this session's
+actual databases: hostile-channel default run printed the development target and reached the
+non-TTY prompt refusal with no mutation; `pnpm admin:password --operational` printed the
+exact operational identity (`ticket_system`) and refused with the unchanged T10 integrity
+message — `missing required migration(s): 044_browser_interaction_authority.sql`.
+
+### 3. Deferred LOW findings adjudicated
+
+- LOW-S3-1 (runbook `starting` semantics) — FIXED. `docs/DEPLOYMENT_RUNBOOK.md` no longer
+  lists `starting` inside the readiness reason enumeration; it now states `starting` is a
+  separate `status` with no readiness `reason` (source truth: `runtime/health-readiness.js`
+  sets `status = 'starting'` and leaves `reason = null`).
+- LOW-S3-2 (runtime-status gate wording) — FIXED in the documentation only.
+  `docs/DEPLOYMENT_RUNBOOK.md` now states `/api/runtime/status` is authenticated and
+  `ticket:read`-gated (`server.js` enforces `ticket:read`); the source permission authority
+  was NOT changed to make the docs true.
+- LOW-S3-3 (register claimed scenario 3c asserts mode `lease_expiry`) — FIXED by the
+  minimal direct assertion. The owning suite
+  (`scripts/p6-s3-hosted-recovery-postgres-test.js`, scenario 3) now asserts
+  `recovery.payload.mode === 'lease_expiry'`, mirroring its own RESTART-A precedent
+  (`process_restart`) and guarding the production label (`server.js` emits
+  `mode: 'lease_expiry'`); no new scenario, no duplication.
+- LOW-S3-4 (drain-stage lease-owner continuity) — FIXED with a minimal, non-redundant pair.
+  Scenario 6b already asserted only run identity + staleness while its evidence-anchor label
+  claims "the lease survives for a peer"; it now additionally asserts the interrupted lease
+  is still valid (`lease_expires_at`) and still names the SAME owner (owner continuity
+  subsumes the absence of a claimed `run.recovery_claimed` at that instant). The equivalent
+  no-premature-takeover authority path remains owned by scenario 3b/3c; nothing was added
+  for 6a.
+- DevEx LOW 1 (bundled-service topology shape wording) — FIXED.
+  `docs/DEPLOYMENT_CONTRACT.md` §E-dev now states the exact recognized shape
+  (`isBundledServiceShape`: `postgresql:`/`postgres:`, username exactly `ticket_system`,
+  host `127.0.0.1`/`localhost`, path exactly `/ticket_system`, no query/fragment, password
+  byte-shape non-participating) and names everything else external/non-bundled; no topology
+  semantics changed.
+- DevEx LOW 2 (stale README Podman/`dev:setup` wording) — FIXED. `README.md` no longer
+  advertises Podman Compose for the bundled database; it now names the
+  system-Docker-Compose requirement for `pnpm dev:db` (Podman unsupported by the automatic
+  path) exactly as `docs/SETUP_AND_FIRST_RUN.md` and `docs/DEPLOYMENT_CONTRACT.md` already
+  state.
+- Pre-existing `docs/INDEX.md` duplicate entry — FIXED (obvious exact duplicate removed).
+  `STRUCTURED_ALLOCATION_AND_MODEL_ECONOMICS_ROADMAP.md` was indexed twice inside the same
+  "Living current guidance" list with two different descriptions; the fuller entry was kept
+  and the other removed. No other docs cleanup was performed.
+
+### 4. `P6-RESIDUAL-CHECKPOINT-REPEATABILITY` — RESOLVED (RESIDUAL-FIX-A)
+
+Concrete repository-owned repeatability defect, fixed at its narrow owner. Recovered truth
+owner chain: the barrier suite
+`scripts/evaluation-zero-drift-barrier-postgres-test.js` builds its trial output paths under
+a STABLE per-commit `/tmp/evaluation-zero-drift-barrier/<commit8>/` root, while the shared
+evaluation runner (`scripts/structured-allocation-evaluation-runner.js`) REFUSES to
+overwrite an existing trial artifact and the suite performs no cleanup; namespaces were
+already per-invocation, artifacts were not. Historical persisted failure evidence (4
+independent checkpoint result records — e.g.
+`.local-artifacts/release-checkpoint-results/20261102T141935756Z-…/owners/137-…/stderr.log`,
+also 20261102T023713003Z, 20261102T043446299Z, 20260911T172936968Z): the exact
+`EvaluationRunnerError: refusing to overwrite an existing trial artifact at
+/tmp/evaluation-zero-drift-barrier/6cb8bb19/zero-drift-normal.json` — the checkpoint failing
+on UNCHANGED repository bytes purely from external leftover state.
+
+Minimum owner-level correction: the barrier suite now derives a PER-INVOCATION root
+(`pid + Date.now()`, exactly the established namespace-root scheme) for BOTH trial artifact
+paths (`zero-drift-normal.json`, `zero-drift-adversarial.json`). Consequences: the runner's
+immutable-artifact refusal remains untouched (genuine same-path reuse still refuses loudly);
+no broad `/tmp` deletion exists; separate/concurrent checkpoint runs cannot erase or rewrite
+each other's artifacts (independent pid+time roots; unrelated failures are not masked); no
+zero-drift semantics changed (the runner comment was precision-corrected to
+"caller-chosen artifact paths" without altering its refusal). Counterfactual recurrence
+proof on these exact bytes: THREE consecutive suite runs PASS back-to-back (the historical
+defect failed the SECOND run), and the three per-invocation artifact subtrees persist
+side-by-side under `/tmp/evaluation-zero-drift-barrier/aa74cb7f/`. The residual is therefore
+RESOLVED-FIXED, not merely "did not recur".
+
+### 5. P6 closure authority audit (all verdicts on these candidate bytes)
+
+- DEPLOYMENT-A PASS — `docs/DEPLOYMENT_CONTRACT.md` baseline closure remains single-host
+  multi-process with repo-owned `compose.dev.yml` evidence; no multi-host or shared-storage
+  language introduced.
+- PG-A PASS — PostgreSQL remains the sole structured authority; no server JSON fallback
+  path exists (`persistence/postgres/store.js`, `server.js`).
+- CLAIM-A PASS — multi-process claim/lease coordination through PostgreSQL authority
+  (S3 suite 2a–2d freshly PASS); no leader election introduced.
+- CRASH-A PASS — process death remains recoverable without fabricated completion
+  (S3 3a–3d, 6b freshly PASS).
+- PROVIDER-UNCERTAINTY-A PASS — uncertain post-transport provider state remains
+  classified (`server.js` target reconciliation `uncertain`), conservative, and never
+  blindly redispatched; the governed post-transport owners are unchanged and
+  re-run in the canonical checkpoint.
+- HEALTH-A PASS — liveness, readiness, and capacity remain separate
+  (`runtime/health-readiness.js` precedence, `p6-s2` contract suite 48 scenarios PASS);
+  the runbook `starting` wording correction documents the existing code shape.
+- OUTAGE-A PASS — plain PostgreSQL reachability loss fails closed per request and recovers
+  per request (S3 5a–5c freshly PASS; store pool-error observation unchanged).
+- LATCH-A PASS — the required evidence-write failure remains restart-terminal for the
+  affected process (S3 5d–5e freshly PASS).
+- DRAIN-A PASS — bounded drain remains truthful (S3 6a freshly PASS with the corrected 6b
+  ownership evidence; `run-evidence-drain-test.js` re-run PASS).
+- HOST-LOCAL-A PASS — effects remain explicitly host-local
+  (S3 scenario 7 freshly PASS; contract §"Effect storage" unchanged).
+- CONFIG-A PASS — canonical environment configuration registry remains coherent
+  (`runtime/environment-config-registry` validation shared by server and DevEx; dev-suite
+  PASS).
+- T10-A PASS — migration execution authority unchanged
+  (`scripts/migration-execution-authority-test.js` 143 assertions PASS); migration 044
+  remains operationally unapplied and `NOT_AUTHORIZED`; operational 043 vs source 044
+  refusal re-proven LIVE through `admin:password --operational`.
+- DEVEX-A PASS — daily development path remains the fixed disposable target with the
+  operational channel separated; this session EXTENDED the seam to the last divergent
+  developer-facing command (`admin:password`) and re-registered its ownership in
+  `scripts/dev-environment-test.js`.
+- RUNBOOK-A PASS — `docs/DEPLOYMENT_RUNBOOK.md` remains executable with no hidden chat
+  knowledge; both LOW-S3 corrections are wording-level truth fixes against live source.
+- OPS-A PASS — operational visibility remains read-only/procedural
+  (`operational-summary-readonly-test.js` re-run PASS; no new write surface).
+
+### 6. No authority expansion
+
+No writable operational control plane, force-release lease, clear-latch endpoint,
+mark-run-success endpoint, migration authorization endpoint, leader election, Redis,
+multi-host support, shared object storage, P7, or Browser Phase 3 was introduced. The
+pass-A code delta is limited to: `scripts/admin-password.js` (channel selection),
+`scripts/dev-environment.js` (one pure-function export),
+`scripts/dev-environment-test.js` (narrow-owner proof extension),
+`scripts/p6-s3-hosted-recovery-postgres-test.js` (three minimal assertions),
+`scripts/evaluation-zero-drift-barrier-postgres-test.js` (per-invocation artifact roots),
+`scripts/structured-allocation-evaluation-runner.js` (comment precision only), and the
+six non-register documentation files (`docs/DEPLOYMENT_RUNBOOK.md`, `docs/DEPLOYMENT_CONTRACT.md`,
+`README.md`, `docs/SETUP_AND_FIRST_RUN.md`, `docs/OPERATOR_GUIDE.md`, `docs/INDEX.md`).
+No projection, migration, or contract authority changed. The pass-A delta was
+exactly thirteen modified paths: those seven code/test files, the six
+documentation files listed above, and this register record
+(`docs/ARCHITECTURAL_DECISIONS_PENDING.md`) itself. The pass-B record below
+states the exact pass-B delta the same way.
+
+### 7. Verification and protected checkpoint
+
+Targeted owners re-run PASS on the session's test posture (disposable
+`ticket_system_test` parent schemas): `npm run build` (632 files);
+`dev-environment-test.js` (PASS, extended); `migration-execution-authority-test.js`
+(143 assertions); `p6-s2-health-readiness-contract-test.js` (48 scenarios);
+`p6-s2-readiness-postgres-test.js` (16 scenarios); `api-token-authority-postgres-test.js`
+(21 scenarios) + `api-token-contract-test.js` (15 scenarios);
+`p6-s3-hosted-recovery-postgres-test.js` (21 scenarios, 122 assertions,
+including the three added S3 assertions — one direct lease-expiry mode assert
+and the drain 6b pair — as verified against the pass-A bytes; pass-B extends the
+suite to 22 scenarios / 135 assertions with the drain-window scenario 6c); the
+zero-drift barrier suite ×3 (repeatability counterfactual);
+`test-manifest.js` + `release-checkpoint-coverage-test.js`; and the S3-adjacency owners
+(drain, backpressure, concurrency, operational-summary, lease-renewal, startup recovery,
+startup data integrity, event-record containment). The full canonical release checkpoint
+(`TEST_DATABASE_URL=<disposable> node scripts/release-checkpoint.js`) is the protected
+gate for this candidate: it MUST run on the EXACT final bytes; per S3 precedent the
+candidate bytes embed no checkpoint result — the durable result record
+(`.local-artifacts/release-checkpoint-results/…`) is the verification evidence that
+travels with the candidate identity to independent review.
+
+### 8. Stop conditions honored
+
+No staging, no commit, no push, no P6 publication, no migration-044 execution or
+authorization change, no P2–P5/S1/S2/S3 reopening, no DevEx architecture reopening, no
+operational write, no P7, no Browser Phase 3, no new demand-gated features, and no
+authority expansion beyond Section 6's exact file list.
+
+**NEXT BOUNDARY: FRESH KIMI K3 MAX-REASONING INDEPENDENT REVIEW OF THE EXACT P6
+COMBINED-CLOSURE CANDIDATE — NO PUBLICATION, NO STAGING/COMMIT/PUSH, NO P7, AND NO
+OPERATIONAL MIGRATION.**
+
+## P6 COMBINED-CLOSURE CANDIDATE CORRECTION PASS B — F1–F9 adjudicated on the independent review, corrected candidate rebuilt
+
+**STATUS:** P6 remains OPEN / CORRECTED COMBINED-CLOSURE CANDIDATE. The previous exact
+candidate (`P6-CLOSURE-REVIEW-B` aggregate; `git diff | sha256sum`
+`3fd0895afd07748fcaf29446403c2d712629cec5d6ef70447f7048719db38dc1`, 13 paths) was
+independently rejected by a fresh max-reasoning review. This pass applies ONLY that review's
+findings — no finding was silently waived — and rebuilds the candidate. NOT staged, NOT
+committed, NOT published. P7 and Browser Phase 3 remain unopened. Migration 044 remains
+operationally unapplied and the canonical migration authorization remains exactly
+`NOT_AUTHORIZED` (`config/migration-execution-authorization.json`). The prior record above is
+historical for its own bytes and stays as written; where this pass supersedes its operational
+mechanics, the supersession is stated here explicitly.
+
+### 1. Findings recovered and disposition
+
+Blocking MEDIUM findings (all corrected):
+
+- **F1 (admin operational authority).** A blank or whitespace-only `DATABASE_URL` present as
+  an explicit process property passed the operational gate through the `.env.local` fallback
+  while `applyLocalEnv()` preserved the blank property and `developmentConfig()`
+  normalized the blank to the bundled `ticket_system` default — gate and resolver could
+  authorize different targets. CORRECTED with ONE pre-normalization authority decision.
+- **F2 (drain-window admission).** `shutdown()` set readiness/stopped schedulers first and
+  performed awaits before `fastify.close()`, with no shutdown refusal in the
+  mutation-admission path, so normal HTTP mutations could enter during part of the drain
+  window. CORRECTED: a terminal process-local drain state arms at the FIRST SYNCHRONOUS
+  shutdown boundary (before ANY await) inside the ONE admission owner, and the existing HTTP
+  mutation-admission hook consults it. Proven on a REAL process inside a REAL drain window.
+- **F3 (cookie-bearing health).** A valid/stale session cookie still drove a PostgreSQL
+  session load and a rolling save through `@fastify/session` before the health routes, so a
+  PostgreSQL outage could fail observation before the designed readiness projection.
+  CORRECTED structurally (observation routes outside the session-I/O path) and proven
+  through the real outage seam.
+- **F4 (operational runbook).** The runbook mandated `pnpm dev:doctor` — a DEVELOPMENT-ONLY
+  doctor over the fixed disposable development target — as operational deployment
+  validation, and called `pnpm db:migrate` categorically read-only. CORRECTED with
+  recovered-current preflight ownership and truthful migration wording.
+
+Non-blocking LOW findings (all corrected):
+
+- **F5** — root README DevEx semantics finished (see §4) and `scripts/README.md` no longer
+  advertises Docker-or-Podman Compose; system Docker Compose is the supported automatic
+  bundled development path and Podman is explicitly unsupported there.
+- **F6** — `docs/OPERATOR_GUIDE.md` states the canonical development workspace default
+  `workspace-root` (verified against `runtime/environment-config-registry.js`
+  `WORKSPACE_ROOT canonicalDefault`); no registry value was changed to make old prose true.
+- **F7** — `docs/DEPLOYMENT_CONTRACT.md` §4 proof-level paragraph and the §13 matrix now
+  state the CURRENT truth: P6-S3 published, full-process multi-process competition, crash/
+  lease takeover, restart recovery, outage/latch, drain, and host-local boundary PROVEN with
+  the S3 scenario anchors; the historical design-freeze register records remain untouched
+  historical evidence.
+- **F8** — the combined-closure register's S3 assertion count (three added S3 assertions:
+  one `lease_expiry` mode assert plus the drain 6b pair) and the miss-counting of the
+  register file itself in the documentation delta are corrected IN the pass-A record, with
+  this pass-B record stating the exact exact deltas mechanically.
+- **F9** — the dup-INDEX removal had discarded a unique semantic clause (the structured
+  allocation FINAL STOP evaluation "demotes future first-class structured activation while
+  preserving general allocation/decomposition and historical readers"). It is MERGED into
+  the one retained `docs/INDEX.md` entry: one link, one complete description; no duplicate
+  link was restored.
+
+Accepted residual (unchanged disposition):
+
+- **INFO** — per-invocation zero-drift artifacts accumulate a small linear `/tmp` state
+  under `/tmp/evaluation-zero-drift-barrier/<commit8>/`: ACCEPTED RESIDUAL, non-blocking,
+  NO cleanup added now (the immutable-artifact refusal remains untouched and historical
+  evidence is never deleted).
+- The prior aggregate-hash wording error was a review-manifest issue, not a repository byte
+  defect; this pass defines the candidate aggregate identity exactly (§7) and does not
+  reclaim the old "sorted" wording.
+
+### 2. F1 — the operational channel has ONE pre-normalization authority
+
+New canonical pure owner in `scripts/dev-environment.js`
+(`resolveOperationalChannelAuthority(env)`, exported) — and §2 of the pass-A record is
+SUPERSEDED on exactly this point (its `developmentConfig`-based operational mechanics are
+gone). Rules, implemented exactly:
+
+| Explicit `process.env.DATABASE_URL` property | `.env.local` `DATABASE_URL` | Decision |
+|---|---|---|
+| present, nonempty (trimmed non-empty) | any | AUTHORIZED, source `environment`; THAT value owns the exact URL |
+| present, blank/whitespace (`''`, `'   '`) | any value | REFUSE `--operational`; NO `.env.local` fallback |
+| absent | nonempty | AUTHORIZED, source `env-file`; the exact file URL owns the target |
+| absent | absent/empty/whitespace | REFUSE `--operational` |
+
+- The SAME frozen decision object supplies the authorization AND the connection string:
+  `resolveOperationalPasswordTarget` builds identity and `connectionString` from the
+  decision alone (`authority.databaseUrl`, `authority.postgresSchema`) — no re-read, no
+  re-normalization, no post-authorization `developmentConfig()` round trip for the target.
+- `POSTGRES_SCHEMA` follows the repository's canonical operational precedence (explicit
+  process property → `.env.local` → canonical default `ticket_system`) read from the SAME
+  decision-time snapshot; an explicitly blank `POSTGRES_SCHEMA` is the canonical default at
+  decision time and never resurrects another source after authorization.
+- Ordinary development behavior unchanged: `applyLocalEnv()` semantics, the fixed dev
+  target owner, and the payload of `resolveDevelopmentPasswordTarget` are untouched.
+- The T10 posture is unchanged: both channels pass `prepareRuntimePersistence()` before any
+  contact; the operational 043-behind refusals keep the canonical integrity messages.
+- Tests (verifiable `scripts/dev-environment-test.js`, `OPERATIONAL-AUTHORITY-A`):
+  blank-explicit + configured file → REFUSED; whitespace-explicit → REFUSED; absent-env +
+  configured file → exact file URL selected; nonempty explicit env + different file URL →
+  exact explicit env selected; target identity and connection string derive from the SAME
+  decision object; explicitly blank `POSTGRES_SCHEMA` → canonical default at decision time;
+  unconfigured anywhere → REFUSED; dev default unchanged (pre-existing DEV-A/CHANNEL-A) and
+  the audited `store.updateUser` / single-store / gating source anchors preserved.
+- Live posture at build time: `DATABASE_URL=''` and `DATABASE_URL='   '` with the
+  repository's real `.env.local` both refused before any contact (exit 1); the DEFAULT dev
+  selection remained byte-identical.
+
+### 3. F2 — terminal drain admission from the first synchronous shutdown boundary
+
+- `runtime/mutation-admission.js` gains the terminal `draining` state with `beginDrain()`;
+  `tryAcquireAdmission` refuses (counted), `waitForAdmissionChange` releases waiters, the
+  metrics `status` becomes `draining` while draining, in-flight tokens still release
+  normally, and `closing` is now the truthful getter (it can never be cleared in the
+  process). Only a fresh process resets it: no writable surface, no operator command, no
+  route.
+- `server.js` shutdown(): `mutationAdmission.beginDrain()` is the FIRST action after the
+  idempotence guard, BEFORE ANY await (deterministic structural anchors in
+  `mutation-admission-contract-test.js`: the synchronous prefix contains `beginDrain()` and
+  no `await`).
+- The ONE normal HTTP mutation-admission hook consults `mutationAdmission.closing` BEFORE
+  any token acquisition and refuses with HTTP 503 and the designed bounded shape
+  (`code: 'MUTATION_ADMISSION_DRAINING'`; bounded `error`; no `Retry-After`). The internal
+  producers (`runWithNewMutationAdmission`, `acquireRequiredMutationAdmission`) fail closed
+  on the same state with the truthful drain label.
+- **During-drain proof (REAL window):** `scripts/p6-s3-hosted-recovery-postgres-test.js`
+  scenario 6c boots a REAL server whose `DATABASE_URL` transit goes through the suite-owned
+  TCP proxy, ARMS a 1200 ms query delay at shutdown time, and sends SIGTERM the instant a
+  query chunk is in flight — the in-flight tick's pending response holds `whenIdle()` (the
+  shutdown path's first await) for the full bounded interval while the listener is still
+  open. Then a REAL authenticated `POST /tickets` inside the window: refused 503
+  `MUTATION_ADMISSION_DRAINING`, sanitized (no route/caller/SQL internals), no
+  `Retry-After`; observation in-window still answers (same single projection, capacity
+  `status: "draining"` when reachable); the process exits through the honest bounded path
+  (code 143); and ZERO durable Tickets exist afterward (counted before and after). The
+  suite totals: 22 scenarios, 135 assertions, PASS.
+- Implementation honesty: the wait between SIGTERM and the in-window POST is bounded and
+  only observes the synchronous boundary; the DETERMINISTIC hold is the armed in-flight
+  query, not a sleep race.
+
+### 4. F3 — public observation routes bypass PostgreSQL session I/O
+
+- `/health` and `/api/health` now live in their own registration scope whose single
+  `onRequest` hook presents the request to the session system WITHOUT session identity
+  (it removes the presented cookie header for exactly those two paths). Fastify evaluates
+  child-scope hooks BEFORE the parent-scope `@fastify/session` hooks, so a request carrying
+  a VALID or STALE session cookie takes exactly the already-frozen anonymous cookie-less
+  path: no session-store lookup, no rolling save, no authentication requirement, no session
+  row anywhere. One projection is consumed by both routes (single implementation of the
+  same `buildLiveHealthProjection` handler shape; no duplicated health semantics, no second
+  readiness implementation); the hook exists nowhere else, so every authenticated route and
+  login/logout/session rotation are untouched mechanically.
+- **Outage proof:** `scripts/p6-s2-readiness-postgres-test.js` scenario 7b — a REAL server
+  on its OWN disposable schema keeps a REAL login session while its ONLY PostgreSQL transit
+  runs through a severing proxy, cut() is the real outage seam, and calls WITH the cookie
+  required: healthy observation stays ready pre-cut; during the outage BOTH `/health` WITH
+  the cookie and `/api/health` WITH the cookie return the designed 503
+  `postgres_unreachable` projection, byte-identical to the cookie-less observation
+  (proven by deep equality), with no session-stack failure in any response; after
+  restoration the SAME cookie-bearing client is ready again; and the observation schema's
+  `http_sessions` table ends with the exact row count and the exact newest `updated_at`
+  it had after login — proving NO session-store read/write ever occurred on the
+  observation plane. Suite totals: 19 scenarios, 161 assertions, PASS.
+
+### 5. F4 — operational deployment guidance uses operational read-only facts
+
+- Recovered current preflight owners BEFORE editing: `scripts/release-db-preflight.js`
+  (read-only release-channel ledger check), `operational-summary` read-only surfaces, the
+  canonical registry gate — NO existing command owned all the operator facts together, so
+  the SMALLEST operational-only composition was added:
+  `scripts/operational-preflight.js` (npm script `operational:preflight`). It performs no
+  mutation, applies no migration, and offers no remediation:
+  same-authority channel resolution (F1) + a canonical-registry boot-context validity gate
+  + credential-free exact identity printing before contact + the canonical ledger
+  probe/identity gate + effect-root usability walk + a read-only configured-agent
+  observation. An incompatible or behind ledger REFUSES with the canonical classification
+  and bound facts (the server refuses the same ledger at boot, so the preflight must not
+  declare it viable).
+- `pnpm dev:doctor` is no longer described as operational validation; it stays the
+  development doctor. The runbook's `db:migrate` wording is now truthful: a T10-guarded
+  migration/upgrade COMMAND (no-op only when fully current; refusing an unauthorized
+  pending transition BEFORE mutation; INTENTIONALLY APPLYING an exactly authorized
+  transition), never an observation command; read-only facts come from the preflight and
+  the eye-level SQL. Backup/drain/authorization ordering stayed as designed.
+- Tests: `scripts/operational-preflight-test.js` (deterministic owner: no-contact refusal
+  shapes — unconfigured, blank explicit, invalid configuration, unreachable target — plus
+  source-owned structural anchors and credential-free rendering; registered in
+  `scripts/test-manifest.js` + `scripts/release-checkpoint.js`), and the PostgreSQL-native
+  live compositions in `p6-s2-readiness-postgres-test.js` (5c: live preflight against a
+  fully-current disposable schema with zero writes; 8a-3: live preflight refusal of a
+  real behind ledger with the exact pending count).
+
+### 5.5 CORRECTED-CANDIDATE-REQUIRED SUITE DETERMINISM (checkpoint requirement)
+
+The FIRST full checkpoint run of this pass
+(`.local-artifacts/release-checkpoint-results/20261106T013150361Z-…`, root-cause
+re-confirmed by the retry root `20261106T023738788Z-…`) failed at owner
+`governed-sibling-dependency-postgres-test.js` with
+`the CLI read creates no durable fact (events +1/+2)` — on BYTES THAT DID NOT
+INCLUDE THAT SUITE (the suite is byte-identical at HEAD, pass-A, and pass-B;
+its file was never a candidate path before this correction). Root cause
+established with real instrumentation and reruns: the suite's CLI-stage
+Ticket-scoped zero-drift count read events emitted by the deployment's OWN
+claim→start machinery — while a claimed Run's row is still status `pending`
+(start in flight), every scheduler tick legitimately records one bounded
+`scheduler.run_skipped` fact until the same process's `startClaimedRun`
+commits the status flip — so under load-induced delay the read window could
+intersect the sibling's normal claim and count it as projection drift. The
+suite's own closing stage solves this exact problem with the durable
+`waitForSchedulerQuiescence(store, ticketId)` gate immediately before its
+counts. The CLI stage now uses the same gate immediately before
+`cliCountsBefore`, so the zero-drift observation binds to the designed
+quiescent condition with no clock and no new authority. On the corrected
+bytes the suite ran four consecutive PASS runs after an ~80% pristine-bytes
+failure rate (pristine-byte reruns: repeated failures at that owner, against
+two passes). No production code changed; the suite file joins the exact
+pass-B delta because the protected checkpoint REQUIRED deterministic PASS on
+the candidate bytes.
+
+The SAME checkpoint pressure exposed two further SUITE-OWN DETERMINISM DEFECTS
+in `scripts/p6-s3-hosted-recovery-postgres-test.js` (already a pass-B candidate
+path), corrected at the same narrow owner:
+
+- **6c drain-window robustness.** The retry path respawned its child WITHOUT
+  disarming the delaying proxy, so a retry boot was starved at the 45s
+  readiness clock (`server did not become ready within 45000ms` — the third
+  checkpoint's recorded failure at owner `p6-s3-hosted-recovery-…`).
+  Corrected: the retry disarms before the respawn (and re-arms inside the
+  loop), the armed in-window hold is exactly 1200 ms — deliberately UNDER the
+  runtime pool's own 5 s connection-establishment ceiling so the in-window
+  reads never need a fresh pool-connection handshake that could race that
+  ceiling under load (a 2000 ms hold demonstrated exactly that reach in the
+  fourth checkpoint run at owner `p6-s3-hosted-recovery-…`, durable root
+  `20261106T045455260Z-…`:
+  `Connection terminated due to connection timeout`), the in-window verdict
+  DISARMS the proxy so the child's remainder-of-drain steps (release
+  authority, store close) run at full speed and the bounded exit completes as
+  designed, and the attempt-miss is printed in the suite's stdout for durable
+  diagnosis. The refusal assertions remain the designed 503
+  `MUTATION_ADMISSION_DRAINING`.
+- **5d latch-target determinism.** The evidence-latch trigger was SCHEMA-GLOBAL
+  (any process appending any `run.postconditions_checked` fact got the
+  injected failure), so under load the WORKING peer could be the one latched,
+  contradicting the scenario's own "the peer stays healthy" claim without any
+  production defect. Corrected: the injector trigger carries the exact fixture
+  run id (`TG_ARGV[0]`, trigger functions cannot take declared arguments) and
+  the healthy peers are frozen (SIGSTOP, the suite's own existing staging)
+  while the trigger is armed, making the freshly started latch server — and
+  only it — the process whose required evidence write fails. The restored
+  post-trigger assertions are unchanged.
+- **Scenario 4 startup-recovery clock fence.** The restart stage's pre-boot
+  expiry wait compared the run row's `lease_expires_at` (a DATABASE
+  timestamp) against the SUITE process's own client clock
+  (`Date.now()`), while the recovery claim fences entirely on the
+  DATABASE's own `clock_timestamp()`. A client/DB clock lag could break the
+  loop while the database still saw the lease as valid: the boot-time
+  `interruptStaleRunsOnStartup()` claim (`process_restart`) would refuse, and
+  the restarted process's FIRST scheduler sweep would re-claim the stale run
+  with `lease_expiry` — recorded as the standalone failure
+  `4: the recovery mode is the startup path`. Corrected: the wait now reads
+  the EXACT database-fenced boolean the claim itself uses
+  (`lease_expires_at IS NOT NULL AND lease_expires_at <= clock_timestamp()`)
+  with a widened 240×250 ms bound, so the boot-time recovery's claim always
+  fences on an already-expired lease. The assertion set is unchanged.
+
+Post-correction stability evidence for the S3 owner: SEVEN consecutive PASS
+suite runs (22 scenarios / 138 assertions) after the mixed pre-correction
+retry set. The third and fourth checkpoint records are the durable evidence
+of the two distinct suite-owned nondeterminism mechanisms on the unformed
+window; all three corrected mechanisms above are bounded by database-fenced
+or suite-staged determinism, never by clock sleeps alone. Owner labels for
+the verification boundaries: SIBLING-DETERMINISM-A (the sibling suite's
+quiescence gate), S3-6C-DETERMINISM-A (the drain-window proxy staging:
+unarmed at boot, armed only for the window, disarmed before a retry boot and
+after the captured verdict, hold 1200 ms under the pool's 5 s connection ceiling),
+S3-5D-DETERMINISM-A (the latch trigger scoped to the exact fixture Run with
+the peers staged), and S3-4-RECOVERY-FENCE-A (the Stage-4 pre-boot expiry
+wait reads the same database-fenced condition the recovery claim tests).
+
+### 6. LOW documentation corrections (F5–F9)
+
+- F5: `README.md` — the false never-migrates claim replaced by the real split (`pnpm dev`
+  ensures and auto-migrates the fixed disposable `ticket_system_dev` target under explicit
+  disposable development authority and never auto-migrates the operational `DATABASE_URL`
+  target; `dev:setup` performs one-time/bootstrap setup against the fixed dev target and
+  preserves existing credentials/state on rerun; operational migration remains the separate
+  T10-guarded `pnpm db:migrate` command), and the `admin:password` paragraph states both
+  channels incl. the explicit-blank refusal. `scripts/README.md`: Docker-or-Podman wording
+  replaced by system Docker Compose only (Podman unsupported by the automatic path).
+- F6: `docs/OPERATOR_GUIDE.md` workspace default corrected to `workspace-root` per
+  `runtime/environment-config-registry.js` (`.local-workspace` gone from current docs;
+  the browser-target id `local-workspace` is a distinct frozen concept and stays).
+- F7: `docs/DEPLOYMENT_CONTRACT.md` §4 + §13 current proof-state truth (published P6-S3
+  evidence anchors); the design-freeze records are preserved as historical evidence.
+- F8: as §1; exact pass-B delta accounting below.
+- F9: as §1; single merged INDEX entry.
+
+### 7. Preserved accepted corrections and repeatability residual
+
+All previously accepted corrections are intact and re-verified: default
+`admin:password` fixed development target with hostile env unable to redirect it; audited
+`store.updateUser`; credential-free target printing; explicit OS-boundary honesty;
+`starting` status wording; `ticket:read` runtime-status wording; the direct `lease_expiry`
+assertion; the drain owner-continuity assertions; exact bundled-service topology
+documentation; and the zero-drift per-invocation artifact roots. The per-invocation
+`/tmp` zero-drift accumulation remains the ACCEPTED RESIDUAL: no cleanup added, no
+historical evidence deleted, immutable artifact refusal untouched. REPEATABILITY-ROOT-A,
+IMMUTABILITY, CONCURRENCY, EVIDENCE, RUNNER, and PROOF verdicts remain PASS.
+
+### 8. Exact pass-B delta
+
+The exact pass-B candidate path set is 24 paths: 22 TRACKED modified files and
+2 ADDED (untracked) files (`scripts/operational-preflight.js` and
+`scripts/operational-preflight-test.js`), stated mechanically in the candidate
+identity report. No code path outside it was touched. No projection, migration,
+or contract authority changed; no migration authorization state was altered;
+and no demand-gated feature appeared.
+
+### 9. Verification and the protected checkpoint
+
+Targeted owners re-run PASS on the disposable posture: `npm run build`;
+`dev-environment-test.js` (F1 pins); `migration-execution-authority-test.js`;
+`mutation-admission-contract-test.js` + `mutation-admission-scheduler-test.js` +
+`mutation-admission-backpressure-test.js`; `p6-s2-health-readiness-contract-test.js`;
+`p6-s2-readiness-postgres-test.js` (19 scenarios incl. 5c/7b/8a-3);
+`operational-preflight-test.js` + `operational-preflight.js --self-test`;
+`governed-sibling-dependency-postgres-test.js` (four consecutive PASS runs after
+the quiescence-window correction; see §5.5); `p6-s3-hosted-recovery-postgres-test.js`
+(seven consecutive PASS runs after the §5.5 suite-determinism corrections, 22
+scenarios incl. the corrected 6c drain window and the deterministic 5d latch);
+`api-token-authority-postgres-test.js` + session/auth registration owners;
+`test-manifest.js` (267 required owners) + `release-checkpoint-coverage-test.js`; and the
+zero-drift barrier suite once for no-regression. The FULL canonical release checkpoint is
+the protected gate per the task: it MUST run on the exact final bytes of this pass with a
+disposable `TEST_DATABASE_URL`, and its durable result root (under
+`.local-artifacts/release-checkpoint-results/…`) is the checkpoint evidence that travels
+with this candidate identity to the fresh independent review. The earlier checkpoint
+applications whose owners exposed the suite-owned nondeterminism are the recorded
+flake-evidence roots of §5.5; the final PASSING full checkpoint on the corrected bytes
+(268 checks = the 267 required manifest owners plus the syntax owner) is the protected
+gate evidence for this candidate. No checkpoint result is embedded in candidate bytes.
+
+### 10. Stop conditions and boundary
+
+No staging, no commit, no push, no P6 publication, no migration-044 execution or
+authorization change, no P2–P5/S1/S2/S3 reopening, no DevEx architecture reopening, no
+operational write, no P7, no Browser Phase 3, no new demand-gated features, and no
+authority expansion beyond this record's exact delta. After this pass P6 remains:
+`OPEN / CORRECTED COMBINED-CLOSURE CANDIDATE` until another fresh independent review
+accepts the exact final bytes.
+
+**NEXT BOUNDARY: FRESH KIMI K3 MAX-REASONING RE-REVIEW OF THE EXACT CORRECTED P6
+COMBINED-CLOSURE CANDIDATE — NO PUBLICATION, NO STAGING/COMMIT/PUSH, NO P7, AND NO
+OPERATIONAL MIGRATION.**

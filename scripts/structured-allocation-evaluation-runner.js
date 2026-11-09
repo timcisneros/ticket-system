@@ -785,11 +785,12 @@ async function runTrial({
   }
 
   const trialId = trialIdFor(scenario, arm, repetition);
-  // Fixture namespaces live under a PER-INVOCATION root while artifacts stay at
-  // a stable per-commit path. Reuse inside one invocation still refuses — that
-  // is the isolation guarantee — but re-running the milestone is not blocked by
-  // the previous attempt's leftovers, which would otherwise make the guarantee
-  // indistinguishable from a broken harness.
+  // Fixture namespaces live under a PER-INVOCATION root; artifact paths are
+  // caller-chosen (the checkpoint barrier suite uses a per-invocation root for
+  // the same repeatable-checkpoint reason). Reuse inside one invocation still
+  // refuses — that is the isolation guarantee — but re-running the milestone
+  // is not blocked by the previous attempt's leftovers, which would otherwise
+  // make the guarantee indistinguishable from a broken harness.
   const namespace = createFixtureNamespace(namespaceRoot || smokeRoot, trialId);
 
   // ISOLATED INITIAL WORKSPACE STATE.

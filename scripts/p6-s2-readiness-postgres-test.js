@@ -42,6 +42,7 @@ const { PostgresRuntimeStore, migrationFiles, migrationChecksum, quoteIdentifier
 const { probePostgresReadiness, buildHealthProjection, classifyMigrationStatus } = require('../runtime/health-readiness');
 const { validateEnvironment } = require('../runtime/environment-config-registry');
 const { inspectDevelopmentEnvironment } = require('./dev-doctor');
+const { runOperationalPreflight } = require('./operational-preflight');
 const { MigrationExecutionAuthorityError } = require('../persistence/postgres/migration-authority');
 
 const SATISFIED_PROJECTION_CONFIGURATION = validateEnvironment({
@@ -76,7 +77,7 @@ function parse(body) {
 const SCHEMA_HEAD_EXPECTED = migrationFiles()[migrationFiles().length - 1];
 
 async function main() {
-  await withHarness('p6 s2 readiness', async ({ store, schema, databaseUrl, startServer }) => {
+  await withHarness('p6 s2 readiness', async ({ store, schema, databaseUrl, startServer, workspaceRoot }) => {
     const schemaSql = quoteIdentifier(schema);
 
     // ── 1. Canonical readiness facts on a real current ledger ────────────
@@ -207,6 +208,48 @@ async function main() {
       '5b: capacity did not simply close; some work still admitted');
     scenario('5b: saturation is observable in health and never marks the process unready');
 
+    // ── 5c. OP-PREFLIGHT-A: the operational deployment preflight against one
+    // LIVE disposable schema. The preflight's own owner (its CLI) proves the
+    // no-contact refusal shapes; this scenario proves the LIVE composition on
+    // real PostgreSQL: the canonical configuration gate, the exact resolved
+    // operational identity (credential-free), effect-root usability, the
+    // canonical ledger/identity facts, the T10 integrity gate, and the
+    // read-only agent observation — all through the same code the runbook
+    // requires, with zero writes.
+    {
+      const preflightEnv = {
+        ...env,
+        DATABASE_URL: databaseUrl,
+        POSTGRES_SCHEMA: schema,
+        SESSION_SECRET: 'p6s2-operational-preflight-secret-0123456789abcdef'
+      };
+      const agentsBefore = (await store.pool.query(
+        `SELECT count(*)::int AS n FROM ${store.table('configured_agents')}`
+      )).rows[0].n;
+      const preflight = await runOperationalPreflight({
+        env: preflightEnv,
+        cwd: workspaceRoot
+      });
+      assert.equal(preflight.ok, true, '5c: the operational preflight passes against a live current schema');
+      assert.equal((preflight.facts.configuration || {}).ok, true, '5c: the canonical registry gate passes');
+      assert.equal(preflight.facts.channel, 'environment', '5c: the exact operational channel is the resolved authority');
+      assert.match(preflight.lines.join('\n'), /host 127\.0\.0\.1, port \d+, database \S+, schema tstharness_p6/,
+        '5c: the preflight prints the exact resolved operational identity');
+      assert.doesNotMatch(preflight.lines.join('\n'), /postgresql/,
+        '5c: the rendered preflight identity is credential-free');
+      assert.ok((preflight.facts.effectRoots || []).every(entry => entry.usable),
+        '5c: effect-root usability is established through the canonical walk');
+      assert.equal((preflight.facts.migration || {}).code, 'migrations_current',
+        '5c: the live preflight classifies the current ledger canonically');
+      const agentsAfter = (await store.pool.query(
+        `SELECT count(*)::int AS n FROM ${store.table('configured_agents')}`
+      )).rows[0].n;
+      assert.equal(agentsAfter, agentsBefore, '5c: the preflight wrote no agent catalog rows');
+      assert.match(preflight.lines.join('\n'), /read-only preflight passed/,
+        '5c: the passing preflight concludes honestly (read-only posture)');
+      scenario('5c: the operational deployment preflight composes canonical owners on live PostgreSQL with zero writes');
+    }
+
     // ── 6. Readiness fails on REAL ledger changes under the running server ─
     const headVersion = SCHEMA_HEAD_EXPECTED;
 
@@ -316,6 +359,143 @@ async function main() {
       await unreachableStore.close();
     }
     scenario('7: PostgreSQL unavailable → readiness false, 503 designed, liveness true (canonical store seam)');
+
+    // ── 7b. HEALTH-COOKIE-A: cookie-bearing public observation during a REAL
+    // server-process outage. A REAL server keeps a REAL login session while
+    // its ONLY PostgreSQL transit runs through a suite-owned severing proxy;
+    // cut() is the existing real outage seam. A request carrying that valid
+    // session cookie must reach the health projection WITHOUT any PostgreSQL
+    // session lookup or write — mechanically identical to the anonymous
+    // observation — and readiness must restore per request. This is the
+    // session-bypass correction demanded for /health and /api/health (one
+    // projection, no second implementation, authenticated routes untouched).
+    {
+      const observationBackend = new URL(databaseUrl);
+      let observationOpen = true;
+      const observationSockets = new Set();
+      const observationServerSeam = require('node:net').createServer(client => {
+        if (!observationOpen) { client.destroy(); return; }
+        const upstream = require('node:net').connect(Number(observationBackend.port || 5432), '127.0.0.1');
+        observationSockets.add(client); observationSockets.add(upstream);
+        const fail = () => { try { client.destroy(); } catch (_) {} try { upstream.destroy(); } catch (_) {} observationSockets.delete(client); observationSockets.delete(upstream); };
+        client.on('data', chunk => { if (observationOpen) { try { upstream.write(chunk); } catch (_) { fail(); } } else { fail(); } });
+        upstream.on('data', chunk => { try { client.write(chunk); } catch (_) { fail(); } });
+        client.on('error', fail); upstream.on('error', fail);
+        client.on('close', () => { try { upstream.destroy(); } catch (_) {} fail(); });
+        upstream.on('close', () => { try { client.destroy(); } catch (_) {} fail(); });
+      });
+      const severProxy = {
+        listen: () => new Promise((resolve, reject) => { observationServerSeam.once('error', reject); observationServerSeam.listen(0, '127.0.0.1', () => resolve(observationServerSeam.address().port)); }),
+        cut() { observationOpen = false; for (const socket of observationSockets) { try { socket.destroy(); } catch (_) {} } observationSockets.clear(); },
+        openUp() { observationOpen = true; },
+        close: () => { observationOpen = false; for (const socket of observationSockets) { try { socket.destroy(); } catch (_) {} } observationSockets.clear(); return new Promise(resolve => observationServerSeam.close(resolve)); }
+      };
+      let observationServer = null;
+      let observationSchemaStore = null;
+      const observationSchema = createTestSchemaName('p6s2_cookiepicture'.slice(0, 24));
+      try {
+        // The main harness schema intentionally ends section 6 without its
+        // ledger (6d's designed drift probe), so the observation server gets
+        // its OWN disposable schema (same explicit migration authority).
+        observationSchemaStore = new PostgresRuntimeStore({
+          connectionString: databaseUrl,
+          schema: observationSchema,
+          disposableMigrations: true
+        });
+        await observationSchemaStore.pool.query(`DROP SCHEMA IF EXISTS "${observationSchema}" CASCADE`);
+        await observationSchemaStore.pool.query(`CREATE SCHEMA "${observationSchema}"`);
+        await observationSchemaStore.migrate();
+        const observationBackend = new URL(databaseUrl);
+        const observationSockets = new Set();
+        let observationOpen = true;
+        const observationServerSeam = require('node:net').createServer(client => {
+          if (!observationOpen) { client.destroy(); return; }
+          const upstream = require('node:net').connect(Number(observationBackend.port || 5432), '127.0.0.1');
+          observationSockets.add(client); observationSockets.add(upstream);
+          const fail = () => { try { client.destroy(); } catch (_) {} try { upstream.destroy(); } catch (_) {} observationSockets.delete(client); observationSockets.delete(upstream); };
+          client.on('data', chunk => { if (observationOpen) { try { upstream.write(chunk); } catch (_) { fail(); } } else { fail(); } });
+          upstream.on('data', chunk => { try { client.write(chunk); } catch (_) { fail(); } });
+          client.on('error', fail); upstream.on('error', fail);
+          client.on('close', () => { try { upstream.destroy(); } catch (_) {} fail(); });
+          upstream.on('close', () => { try { client.destroy(); } catch (_) {} fail(); });
+        });
+        const severProxy = {
+          listen: () => new Promise((resolve, reject) => { observationServerSeam.once('error', reject); observationServerSeam.listen(0, '127.0.0.1', () => resolve(observationServerSeam.address().port)); }),
+          cut() { observationOpen = false; for (const socket of observationSockets) { try { socket.destroy(); } catch (_) {} } observationSockets.clear(); },
+          openUp() { observationOpen = true; },
+          close: () => { observationOpen = false; for (const socket of observationSockets) { try { socket.destroy(); } catch (_) {} } observationSockets.clear(); return new Promise(resolve => observationServerSeam.close(resolve)); }
+        };
+        try {
+          const observationProxyPort = await severProxy.listen();
+          const observationSeverUrl = new URL(databaseUrl);
+          observationSeverUrl.port = String(observationProxyPort);
+          observationServer = await startServer({ env: {
+            RUNTIME_SCHEDULER_INTERVAL_MS: '5000',
+            DATABASE_URL: observationSeverUrl.toString(),
+            POSTGRES_SCHEMA: observationSchema
+          } });
+          const observationCookie = await observationServer.login();
+
+          const sessionsBefore = (await observationSchemaStore.pool.query(
+            `SELECT count(*)::int AS n, max(updated_at)::text AS newest FROM ${quoteIdentifier(observationSchema)}.http_sessions`
+          )).rows[0];
+          const labeledHealth = await observationServer.request('GET', '/health', { cookie: observationCookie });
+          assert.equal(labeledHealth.statusCode, 200, `7b: healthy observation WITH the session cookie stays ready (${labeledHealth.statusCode})`);
+
+          const touchedAtLogin = (await observationSchemaStore.pool.query(
+            `SELECT count(*)::int AS n FROM ${quoteIdentifier(observationSchema)}.http_sessions`
+          )).rows[0];
+          assert.equal(touchedAtLogin.n, sessionsBefore.n,
+            '7b: the healthy observation wrote no session row at all');
+
+          severProxy.cut();
+          await sleep(400);
+          // THE invariant: a valid session cookie must not couple /health or
+          // /api/health to the session store.
+          const cookieOutage = await observationServer.request('GET', '/health', { cookie: observationCookie });
+          assert.equal(cookieOutage.statusCode, 503, `7b: outage observation WITH the cookie is the designed 503 (${cookieOutage.statusCode})`);
+          const cookieOutageBody = parse(cookieOutage.body);
+          assert.equal(cookieOutageBody.alive, true, '7b: liveness holds for cookie-bearing observation');
+          assert.equal(cookieOutageBody.reason, 'postgres_unreachable', '7b: the outage reason is the canonical one (not a session failure)');
+
+          const anonymousOutage = await observationServer.request('GET', '/health');
+          assert.equal(anonymousOutage.statusCode, 503, '7b: cookie-less outage observation is the same designed 503');
+          assert.deepEqual(parse(anonymousOutage.body), cookieOutageBody,
+            '7b: cookie-bearing and cookie-less outage observations return the SAME projection');
+
+          const apiCookieOutage = await observationServer.request('GET', '/api/health', { cookie: observationCookie });
+          assert.equal(apiCookieOutage.statusCode, 503, `7b: /api/health with the cookie refuses into the designed projection (${apiCookieOutage.statusCode})`);
+          const apiCookieOutageBody = parse(apiCookieOutage.body);
+          assert.equal(apiCookieOutageBody.reason, 'postgres_unreachable', '7b: /api/health outage reason is canonical with the cookie');
+          assert.ok(typeof apiCookieOutageBody.uptime === 'number', '7b: /api/health keeps its uptime contract with the cookie');
+          assert.equal(String(cookieOutageBody.error || '').includes('session'), false,
+            '7b: no session-stack failure surfaces on the observation plane');
+
+          // After the outage, the SAME session still owns exactly its row and no
+          // observation tried (or succeeded) to write session state.
+          severProxy.openUp();
+          await sleep(900);
+          const restoredCookieHealth = await observationServer.request('GET', '/health', { cookie: observationCookie });
+          assert.equal(restoredCookieHealth.statusCode, 200, `7b: restoration restores readiness for the same cookie-bearing client (${restoredCookieHealth.statusCode})`);
+          assert.equal((parse(restoredCookieHealth.body)).ready, true, '7b: restored readiness is the designed true');
+          const sessionsAfter = (await observationSchemaStore.pool.query(
+            `SELECT count(*)::int AS n, max(updated_at)::text AS newest FROM ${quoteIdentifier(observationSchema)}.http_sessions`
+          )).rows[0];
+          assert.equal(sessionsAfter.n, touchedAtLogin.n, '7b: no NEW session row appeared (observation never materialized sessions)');
+          assert.equal(sessionsAfter.newest, sessionsBefore.newest,
+            '7b: no session row was touched by any observation (session-store writes are impossible here)');
+          scenario('7b: cookie-bearing public observation bypasses PostgreSQL session I/O through a real outage and returns the canonical projection');
+        } finally {
+          if (observationServer) { try { await observationServer.stop(); } catch (_) {} }
+          try { await severProxy.close(); } catch (_) {}
+        }
+      } finally {
+        if (observationSchemaStore) {
+          try { await observationSchemaStore.pool.query(`DROP SCHEMA IF EXISTS "${observationSchema}" CASCADE`); } catch (_) {}
+          try { await observationSchemaStore.close(); } catch (_) {}
+        }
+      }
+    }
   });
 
   // ── 8. Sibling disposable schemas: doctor dev-ledger states + T10 refusal ─
@@ -376,6 +556,36 @@ async function main() {
     assert.ok(behindDoctor.checks.some(check =>
       check.status === 'info' && check.label.startsWith('Operational database')), '8a: exactly the informational operational row exists');
     scenario('8a: doctor classifies a real BEHIND disposable development ledger informationally (auto-migrate)');
+
+    // 8a-3. OP-PREFLIGHT-A: the OPERATIONAL preflight treats the same behind
+    // ledger as a canonical refusal (a server cannot start against it), on the
+    // real sibling schema, still without a single write.
+    {
+      const siblingPreflight = await runOperationalPreflight({
+        env: {
+          ...env,
+          DATABASE_URL: databaseUrl,
+          POSTGRES_SCHEMA: siblingSchema,
+          SESSION_SECRET: 'p6s2-operational-preflight-secret-0123456789abcdef'
+        },
+        cwd: process.cwd()
+      });
+      assert.equal(siblingPreflight.ok, false, '8a-3: the operational preflight refuses a behind ledger');
+      assert.match(String(siblingPreflight.reason), /not compatible with this source/,
+        '8a-3: the refusal names the canonical incompatibility');
+      assert.match(String(siblingPreflight.reason), /pending migrations: 1/,
+        '8a-3: the refusal carries the exact pending count as the canonical probe does');
+      assert.match(String(siblingPreflight.reason), /never from this preflight/,
+        '8a-3: the preflight never offers or performs the migration itself');
+      assert.equal((siblingPreflight.facts.migration || {}).code, 'migrations_pending',
+        '8a-3: the canonical behind classification is surfaced');
+      const siblingAgentCount = (await sibling.pool.query(
+        `SELECT count(*)::int AS n FROM ${quoteIdentifier(siblingSchema)}.configured_agents`
+      )).rows[0];
+      assert.equal(siblingAgentCount.n, 0,
+        '8a-3: the sibling schema stays intact through the refusing preflight (read-only)');
+      scenario('8a-3: the operational preflight refuses a live behind ledger canonically (T10-guarded truth)');
+    }
 
     // 8a-2. Unknown future migration → the doctor FAILS the row with exactly
     // the `dev:reset` remediation (destroy/recreate ONLY the disposable dev

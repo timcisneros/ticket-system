@@ -49,7 +49,9 @@ restart-required outage.
 ## Requirements
 
 - Node.js 24 or newer
-- PostgreSQL 17 (the CI baseline), or Docker Compose/Podman Compose for the bundled database
+- PostgreSQL 17 (the CI baseline) reachable through `DATABASE_URL`, or a system-installed
+  Docker Compose for the bundled development database (`pnpm dev:db`; Podman is not
+  supported by this automatic path)
 - pnpm 11 is the lockfile/package-manager baseline; npm remains supported for invoking scripts
 - One model provider: an OpenAI API key, or a running Ollama installation with a pulled model
 
@@ -67,9 +69,10 @@ pnpm dev:setup
 pnpm dev
 ```
 
-`dev:setup` creates ignored `.env.local` only when absent, applies explicit migrations, and
-creates the initial admin when absent and a provider-configured agent when no runnable
-agent exists. Interactive
+`dev:setup` creates ignored `.env.local` only when absent, applies explicit
+migrations to the fixed disposable development target (`ticket_system_dev`),
+and creates the initial admin when absent and a provider-configured agent when
+no runnable agent exists. Interactive
 password and OpenAI-key entry is hidden. Existing configuration, users, agents, and credentials are
 preserved on repeated runs.
 
@@ -88,8 +91,11 @@ Provider preparation:
 The repository does not create external provider accounts or download model weights implicitly.
 
 `pnpm dev` runs a read-only preflight that verifies the schema, paths, admin, and at least one
-provider-configured agent. It never migrates or rotates credentials. Use `pnpm dev:doctor` for the
-same checks without starting the server.
+provider-configured agent, and then ensures and automatically migrates the fixed disposable
+development target (`ticket_system_dev`) under the repository's explicit disposable-development
+authority. It never auto-migrates the operational `DATABASE_URL` target: operational migration
+remains the separate T10-guarded `pnpm db:migrate` command. Use `pnpm dev:doctor` for the same
+checks without starting the server.
 
 In a second terminal, exercise one real provider-backed ticket and verify its workspace effect:
 
@@ -107,8 +113,12 @@ node scripts/oquery.js create-ticket --url http://127.0.0.1:3099 --agent 'Develo
 npm run developer-agent:trace -- --run <runId>
 ```
 
-Rotate an existing credential with `pnpm admin:password`; passwords are rejected as command-line
-arguments. `ADMIN_BOOTSTRAP_PASSWORD` is creation-only and ignored after the account exists.
+Rotate an existing credential with `pnpm admin:password` (default: the fixed disposable
+development target; `--operational`: the exact operational `DATABASE_URL` / `POSTGRES_SCHEMA`
+channel from a single pre-normalization authority decision — an explicitly blank `DATABASE_URL`
+refuses the operational channel instead of falling back to another source); passwords are
+rejected as command-line arguments. `ADMIN_BOOTSTRAP_PASSWORD` is creation-only and ignored
+after the account exists.
 
 ## Evidence
 

@@ -37,6 +37,7 @@
     "test:migration-authority": "node scripts/migration-execution-authority-test.js",
     "test:page-render:postgres": "node scripts/page-render-regression-test.js",
     "db:migrate": "node --env-file-if-exists=.env.local scripts/postgres-migrate.js",
+    "operational:preflight": "node --env-file-if-exists=.env.local scripts/operational-preflight.js",
     "release:db-preflight": "node --env-file-if-exists=.env.local scripts/release-db-preflight.js",
     "release:db-migrate": "node --env-file-if-exists=.env.local scripts/release-db-migrate.js",
     "release:admission": "node --env-file-if-exists=.env.local scripts/process-execution-admission.js",

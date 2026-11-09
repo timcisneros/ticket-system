@@ -73,7 +73,18 @@ async function main() {
   const smokeRoot = path.join(os.tmpdir(),
     'evaluation-zero-drift-barrier', commit.slice(0, 8));
   fs.mkdirSync(smokeRoot, { recursive: true });
-  const namespaceRoot = path.join(smokeRoot, 'namespaces', `${process.pid}-${Date.now()}`);
+  // Namespace roots AND trial artifact paths are PER-INVOCATION. The runner's
+  // refusal to overwrite an existing artifact is the trial-isolation guarantee,
+  // so a stale artifact left by an earlier checkpoint run on the SAME commit
+  // bytes must never block or fail a later checkpoint on those unchanged bytes
+  // (P6-RESIDUAL-CHECKPOINT-REPEATABILITY: the historical collision was
+  // `/tmp/evaluation-zero-drift-barrier/<commit8>/zero-drift-normal.json`
+  // surviving a prior invocation). `pid + Date.now()` keeps separate
+  // checkpoint runs independent — no invocation can erase or rewrite another
+  // invocation's artifacts — and a genuine same-path reuse still refuses
+  // loudly inside the runner instead of silently overwriting evidence.
+  const invocationRoot = path.join(smokeRoot, `${process.pid}-${Date.now()}`);
+  const namespaceRoot = path.join(invocationRoot, 'namespaces', `${Date.now()}`);
   fs.mkdirSync(namespaceRoot, { recursive: true });
 
   const scenario = getScenario('family-3-sibling-dependency');
@@ -84,7 +95,7 @@ async function main() {
       // ── Trial 1 — normal fixture-mode trial (A, B, E) ────────────────────
       const observedPhases = [];
       let serverExitedBeforeMeasurement = false;
-      const outputPathNormal = path.join(smokeRoot, 'zero-drift-normal.json');
+      const outputPathNormal = path.join(invocationRoot, 'zero-drift-normal.json');
       const artifact = await runTrial({
         store, startServer, workspaceRoot, scenario, arm,
         repetition: 1, seed: 'zero-drift-barrier-normal-seed',
@@ -117,7 +128,7 @@ async function main() {
       'quiescence provided the guarantee');
 
       // ── Trial 2 — adversarial write between the reports (C, D) ───────────
-      const outputPathAdversarial = path.join(smokeRoot, 'zero-drift-adversarial.json');
+      const outputPathAdversarial = path.join(invocationRoot, 'zero-drift-adversarial.json');
       let driftError = null;
       try {
         await runTrial({

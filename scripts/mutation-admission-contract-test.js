@@ -95,6 +95,46 @@ assert.doesNotMatch(server, /process_concurrency_limit|getRunStartBlockReason|ac
   'process-local scheduler capacity must not duplicate deployment admission');
 assert.doesNotMatch(scheduler, /process_concurrency_limit|getRunStartBlockReason/);
 
+// DRAIN-ADMISSION-A: a terminal, process-local drain flag arms at the FIRST
+// SYNCHRONOUS boundary of shutdown — before ANY await — and the single normal
+// HTTP mutation-admission owner consults it, refusing every new application
+// mutation for the entire drain window. Structural anchors:
+//   1. `beginDrain()` is the first shutdown action (before the async drain
+//      body's first await);
+//   2. the admission hook refuses with the bounded terminal-drain code INSIDE
+//      the mutation pre-admission branch, before any token could be acquired;
+//   3. no Retry-After on the terminal refusal (retrying never recovers the
+//      process);
+//   4. only a fresh process clears the flag (not wired to any route, command,
+//      or writable control surface).
+const shutdownFnStart = server.indexOf('function shutdown(signal)');
+assert.ok(shutdownFnStart >= 0, 'the shutdown path exists in server.js');
+const shutdownIifeStart = server.indexOf('shutdownPromise = (async () => {', shutdownFnStart);
+assert.ok(shutdownIifeStart > shutdownFnStart, 'the shutdown body is present');
+const shutdownSyncPrefix = server.slice(shutdownFnStart, shutdownIifeStart);
+assert.match(shutdownSyncPrefix, /mutationAdmission\.beginDrain\(\)/,
+  'shutdown must arm the terminal drain flag synchronously, before ANY await');
+assert.doesNotMatch(shutdownSyncPrefix, /await\s/, 'no await may precede the synchronous drain arming');
+const shutdownBody = server.slice(shutdownIifeStart, shutdownFnStart + 4000);
+assert.match(shutdownBody, /await runtimeScheduler\.whenIdle\(\)/,
+  'the drain window between arming and HTTP close still exists for the live proof');
+const hookNeedle = 'request.routeStartedAtNs = process.hrtime.bigint();';
+const mutationHookStart = server.indexOf(hookNeedle);
+assert.ok(mutationHookStart > 0, 'the normal HTTP mutation-admission hook exists in server.js');
+const closingFlagRead = server.indexOf('if (mutationAdmission.closing) {', mutationHookStart);
+assert.ok(closingFlagRead > mutationHookStart && closingFlagRead < mutationHookStart + 3000,
+  'the admission owner consults the terminal drain flag inside its own onRequest hook');
+const closingFlagReadBlock = server.slice(closingFlagRead, server.indexOf('const token = mutationAdmission.tryAcquireAdmission', closingFlagRead));
+assert.match(closingFlagReadBlock, /MUTATION_ADMISSION_DRAINING/,
+  'the terminal-drain HTTP refusal carries the designed bounded code');
+assert.doesNotMatch(closingFlagReadBlock, /Retry-After/,
+  'the terminal-drain refusal must not advertise retryability');
+assert.ok(closingFlagRead < server.indexOf('const token = mutationAdmission.tryAcquireAdmission', mutationHookStart) &&
+  closingFlagRead > mutationHookStart,
+  'the terminal-drain refusal stands before any token acquisition in the hook');
+assert.doesNotMatch(server, /beginDrain\s*=\s*(function|async)|app\.(get|post)\('[^']*drain/i,
+  'no HTTP surface may own or reset the terminal drain flag');
+
 assert.match(store, /pg_advisory_xact_lock\(hashtextextended\('ticket-system:run-admission', 0\)\)/,
   'deployment admission must serialize only its short Postgres decision');
 assert.match(store, /active\.total < policy\.max_active_runs/);

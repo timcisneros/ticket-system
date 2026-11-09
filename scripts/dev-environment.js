@@ -225,6 +225,87 @@ function operationalIdentityFrom(config) {
   };
 }
 
+// ── Operational-channel authority (ONE pre-normalization decision) ─────────
+//
+// The operational channel (admin:password --operational) must be authorized
+// from and resolved through ONE decision, made BEFORE any applyLocalEnv
+// normalization — applyLocalEnv writes a DEVELOPMENT-shaped default back into
+// DATABASE_URL, so a decision read after that point could not distinguish an
+// explicitly configured target from the bundled development default. Exactly
+// one of two sources owns the decision:
+//
+//   1. The explicit process-environment property. If DATABASE_URL exists as an
+//      own property of the process environment, environment values OWN the
+//      channel: the value is trimmed only to decide whether it is empty, and
+//      an explicitly empty/whitespace DATABASE_URL REFUSES the channel — it
+//      never falls back to .env.local (a blank explicit override cannot
+//      authorize a different source than the one it defeated). A nonempty
+//      property supplies the exact operational URL (trimmed once by the same
+//      rule every operational consumer validates with).
+//   2. Only when the process environment has NO DATABASE_URL property may
+//      .env.local supply it (the canonical explicit-file fallback the rest of
+//      the domain layering already follows). Absent or empty/whitespace here
+//      too REFUSES the channel.
+//
+// POSTGRES_SCHEMA follows the repository's canonical operational precedence —
+// explicit process property first, then .env.local, then the canonical default
+// `ticket_system` (this is the exact precedence every operational consumer
+// already applies, e.g. release-db-preflight and db:migrate) — read from the
+// SAME decision-time snapshot. An explicitly blank POSTGRES_SCHEMA is therefore
+// the canonical default at the same instant the URL is fixed; no post-authorization
+// re-read can re-derive either value from a different source.
+//
+// The frozen decision object is the operational target's single authority:
+// consumers must not re-read or re-normalize another source after receiving it.
+function resolveOperationalChannelAuthority(env = process.env, { localEnvFile = LOCAL_ENV_PATH } = {}) {
+  const canonicalSchemaDefault = 'ticket_system';
+  const resolveSchema = (explicit, fileValue) => {
+    if (explicit !== undefined && explicit !== null) {
+      const value = String(explicit).trim();
+      return value ? value : canonicalSchemaDefault;
+    }
+    const value = String(fileValue === undefined || fileValue === null ? '' : fileValue).trim();
+    return value ? value : canonicalSchemaDefault;
+  };
+  const local = loadLocalEnvFile(localEnvFile);
+  if (Object.prototype.hasOwnProperty.call(env, 'DATABASE_URL')) {
+    const explicit = env.DATABASE_URL === undefined || env.DATABASE_URL === null ? '' : String(env.DATABASE_URL);
+    if (!explicit.trim()) {
+      return Object.freeze({
+        authorized: false,
+        source: 'environment',
+        databaseUrl: null,
+        postgresSchema: null,
+        reason: 'DATABASE_URL is explicitly present but empty; the operational channel does not fall back to another source'
+      });
+    }
+    return Object.freeze({
+      authorized: true,
+      source: 'environment',
+      databaseUrl: explicit.trim(),
+      postgresSchema: resolveSchema(env.POSTGRES_SCHEMA, local.POSTGRES_SCHEMA),
+      reason: null
+    });
+  }
+  const fileUrl = String(local.DATABASE_URL || '').trim();
+  if (!fileUrl) {
+    return Object.freeze({
+      authorized: false,
+      source: 'env-file',
+      databaseUrl: null,
+      postgresSchema: null,
+      reason: 'DATABASE_URL is not configured; the operational channel requires an explicit nonempty DATABASE_URL in the process environment or .env.local'
+    });
+  }
+  return Object.freeze({
+    authorized: true,
+    source: 'env-file',
+    databaseUrl: fileUrl,
+    postgresSchema: resolveSchema(env.POSTGRES_SCHEMA, local.POSTGRES_SCHEMA),
+    reason: null
+  });
+}
+
 // Pure, credential-free collision assessment. The operational side is
 // recovered through the existing canonical operational resolver
 // (developmentConfig → resolveDevelopmentDatabaseTarget), never re-derived.
@@ -551,6 +632,8 @@ module.exports = {
   generateSessionSecret,
   loadLocalEnvFile,
   normalizeTargetHost,
+  operationalIdentityFrom,
+  resolveOperationalChannelAuthority,
   promptHidden,
   promptVisible,
   renderLocalEnv,
