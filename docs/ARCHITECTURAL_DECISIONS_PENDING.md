@@ -19225,3 +19225,1047 @@ accepts the exact final bytes.
 **NEXT BOUNDARY: FRESH KIMI K3 MAX-REASONING RE-REVIEW OF THE EXACT CORRECTED P6
 COMBINED-CLOSURE CANDIDATE — NO PUBLICATION, NO STAGING/COMMIT/PUSH, NO P7, AND NO
 OPERATIONAL MIGRATION.**
+
+---
+
+## P7 — INTEGRATIONS — P7-S1 AUTHORITY DESIGN-FREEZE CANDIDATE (P7-REVIEW-A incorporated)
+
+**STATUS:** P7-S1 INTEGRATION AUTHORITY DESIGN-FREEZE CANDIDATE — NOT AUTHORITY UNTIL
+INDEPENDENT REVIEW, ACCEPTANCE, COMMIT, AND PUBLICATION — UNCOMMITTED AND UNPUBLISHED.
+**THIS RECORD GRANTS DESIGN AUTHORITY ONLY. IT DOES NOT AUTHORIZE ANY P7 RUNTIME
+IMPLEMENTATION (NO P7-S2, NO P7-S3, NO PROVIDER CODE, NO MIGRATION) UNTIL THE
+DESIGN-FREEZE BYTES THEMSELVES ARE INDEPENDENTLY REVIEWED AND PUBLISHED. Authoring the
+freeze does not itself authorize implementation.** This candidate is docs-only: it changes
+no runtime/source behavior, creates or authorizes NO migration, and neither executes nor
+operationalizes migration 044 — canonical migration execution authorization remains exactly
+`NOT_AUTHORIZED`. Browser Phase 3 remains unopened. P2/P3/P4/P5 remain closed and are not
+reopened.
+
+### 1. Candidate baseline (opening repository gate)
+
+Candidate baseline: branch `master`; local HEAD = cached origin/master = fresh
+`git ls-remote` origin/master = `a7ef4ffb734a96d018d6cd48112fde09ebb5ca39` ("Close P6
+deployment and operations"); worktree clean; nothing staged; stash empty; `git diff --check`
+clean; zero untracked at the gate. Canonical migration-execution authorization
+(`config/migration-execution-authorization.json`) remains in the exact deterministic
+`NOT_AUTHORIZED` shape; repository migration source head is
+`044_browser_interaction_authority.sql` and migration 044 is operationally UNAPPLIED
+(applied count 0) throughout this authoring. No P7 implementation exists anywhere in tracked
+source: no P7 external-business-system / GitHub provider transport and no integration
+operation family exist in tracked source (the repository's existing standalone
+model-provider transport is unrelated, unchanged, and its existence is not contradicted by
+this statement); no
+earlier P7 record exists in this register. The purpose of this record is hermeticity: a fresh
+reviewer and a fresh implementation agent must be able to recover the frozen P7-S1 contract
+from this register and existing repository authority alone, without prior-agent memory or
+conversation context.
+
+### 2. Accepted independent review state (P7-REVIEW-A)
+
+A fresh independent architectural review concluded **P7-REVIEW-A**: P7 Integrations is
+accepted as the correct next product stage, subject to reviewed architectural corrections,
+all of which are incorporated into this freeze: HERMETIC-6-A (the P6 closure
+current-authority note of §4); STAGE-A (the exact product-stage statement and central
+invariant, §5); REUSE-A (the closed ontology reuse map, §6); TWOSIDE-A (immutable Run
+authority versus mutable connector state, contract §4); BOUNDS-A (ONE resolved v1
+resource-bound rule — exact canonical repository identities, no wildcard authority, contract
+§5); CRED-A (resolver-only credential boundary with the closed-world alias registry,
+contract §6); KIND-A (the provider-neutral provider-kind contract, contract §7); IDENT-A
+(two-role operation identity with exact canonicalization, contract §11); INTENT-A (the
+durable prepared-intent state machine before any migration authoring, contract §13); DOC-A
+(ONE living integration contract owner with linked — not copied — existing owners, §8
+below). Encoded adjudications are frozen without restating the full contract body:
+`docs/INTEGRATION_CONTRACT.md` is the living normative restatement; this record is the
+design-freeze authority.
+
+### 3. Current authorization state
+
+- P6 deployment/operations: **CLOSED / PUBLISHED** (see §4).
+- P7 Integrations: **accepted as the correct next product stage** (P7-REVIEW-A).
+- P7-S1: **DESIGN-FREEZE CANDIDATE** (this record + `docs/INTEGRATION_CONTRACT.md`).
+- P7 runtime implementation: **NOT AUTHORIZED** until the P7-S1 freeze is independently
+  accepted AND published.
+- P7-S2: **NOT AUTHORIZED**. P7-S3: **NOT AUTHORIZED**.
+- Browser Phase 3: **NOT AUTHORIZED**. Migration 044: operationally unapplied /
+  `NOT_AUTHORIZED`.
+
+### 4. P6 closure current-authority hermeticity note
+
+The historical P6 combined-closure correction record above (pass B) still says "P6 remains
+OPEN / CORRECTED COMBINED-CLOSURE CANDIDATE" for its own bytes; that text is preserved
+unaltered as historical evidence. CURRENT AUTHORITY, established by the publication commit
+and the living deployment/operations documents, is:
+
+- publication commit: `a7ef4ffb734a96d018d6cd48112fde09ebb5ca39`;
+- subject: "Close P6 deployment and operations";
+- P6: **CLOSED / PUBLISHED** (the P6 design freeze, P6-S1, P6-S2, P6-DEVEX-A, P6-S3, and the
+  combined-closure correction candidate were published together by that commit; the living
+  contract's §4/§13 and the runbook state the published proof state);
+- P7: **current roadmap sequence head** (roadmap order `P2 → P3 → P4 → P5 → P6 → P7`);
+- P7-S1: authorized for design-freeze authoring (this record);
+- P7 runtime implementation: **NOT AUTHORIZED** until the P7-S1 freeze is independently
+  accepted and published.
+
+This note repairs current discoverability WITHOUT rewriting any historical record.
+
+### 5. Product-stage freeze
+
+P7 extends the governed-effect perimeter to external business systems ONE reviewed provider
+kind at a time. P7 advances CAP-3 (external surface breadth, one connector/authority surface
+at a time under the connector review gate); CAP-5 mapping occurs ONLY via separately
+registered authorization (T9 remains EMPTY/DEFERRED).
+
+P7 is NOT: a plugin framework; a generic API tool; arbitrary HTTP; a second execution graph;
+a new Ticket lifecycle; a replacement for browser automation.
+
+Central invariant: **connector availability, provider capability, credential possession,
+and model intent are never authority.**
+
+P7 reuses the existing authority chain — Ticket authority → Run/attempt → immutable
+execution policy → mutation admission → operation authority → runtime budget → prepared
+external intent → provider transport → reconciliation/result evidence → completion and
+consequence — and introduces no new lifecycle object and no second execution graph.
+
+### 6. Ontology reuse map (frozen)
+
+REUSED unchanged (existing owners, by reference): Ticket; Run; attempt;
+`executionPolicySnapshot`; `runtimeBudgetSnapshot`; Work Context; connector record;
+connector status/revision; mutation admission; authority checks; operation receipts;
+events/replay; completion authority; consequence authority; target evidence shape; operator
+recourse; PostgreSQL recovery authority.
+
+GENUINELY NEW semantic surface — ONLY these seven:
+
+1. immutable integration authorization inside the execution-policy snapshot
+   (`executionPolicy.integrations`, exact closed shape in contract §3);
+2. the provider-kind operation catalog (contract §7, §9, §10);
+3. the integration operation family in the existing run loop (phase surfaces and
+   authorization-gated presence, contract §3 and §23 rules);
+4. the integration external target kind (provider-kind token `github`, connector `kind`
+   extension at implementation, contract §8/§25);
+5. the durable integration-operation intent/state relation
+   (`integration_operation_intents`, semantic freeze in contract §13, realization at
+   implementation, contract §25);
+6. the integration runtime-budget dimension `integration_operation` with its mutating
+   sub-bound (exact numbers in contract §18);
+7. the narrow provider-neutral credential-alias resolver (one resolver, closed alias
+   registry, contract §6).
+
+No other lifecycle object and no second execution graph is introduced.
+
+### 7. Frozen architectural choices (exact values; full shape in the contract)
+
+- Immutable integration authorization: `executionPolicy.integrations` — default NULL (off);
+  object shape `{ version: 1, connectorId, providerKind, authorizedOperations, resources,
+  credentialRef, workContextId }`; operator-authored, permissioned at Ticket
+  creation/configuration by the canonical user permission **`integration:authorize`**
+  (single reference for the gate, on the `connector:*`/`browser:interact` precedent); the
+  durable permission row is migration-owned at implementation; immutable once admitted;
+  hash-bound through `runtimeBudgetSnapshot.executionPolicyHash`. No migration authorized
+  in S1.
+- Two-sided connector rule: admission freezes connectorId/providerKind/operation
+  set/resource bounds/credentialRef alias/workContextId and admits no later widening;
+  every dispatch re-checks connector existence+kind, connector `active`, Work Context
+  `active`, and current alias resolution; effective authority is per direction over the EXISTING
+  connector fields (repository truth: reads bound by `sourceRoots`, writes bound by
+  `targetRoots`):
+  `effectiveReadResources = frozenRunResources ∩ currentConnector.sourceRoots`,
+  `effectiveMutationResources = frozenRunResources ∩ currentConnector.targetRoots`,
+  with `read` required in current `allowedScopes` for reads — and for MUTATIONS BOTH
+  `read` AND `write` in current `allowedScopes` plus the exact repository inside BOTH
+  effective bounds (`canStartV1Mutation`: the read path is required by ordinary-Issue
+  class verification, post-dispatch reconciliation, and uncertainty recovery; NO
+  read-scope bypass exists);
+  current connector state reduces admitted authority through status, Work Context status,
+  `allowedScopes` (a scope removal stops matching future dispatches from already-admitted
+  Runs), provider kind, credential resolvability, and provider resource bounds; widening is
+  inert, narrowing takes effect immediately, empty intersection refuses; a connector's later
+  `credentialRef` change can never re-point an admitted Run.
+- Resource bounds (v1 rule, resolved): exact canonical GitHub repository identities only —
+  `owner/repository` grammar, canonical lowercase form, dedup, empty refuses, NO wildcard
+  resource authority; issue operand is an exact positive integer
+  `1 ≤ n ≤ 999999999`; per-operation canonical resource identity
+  `repos/{owner}/{repository}/issues/{issueNumber}`.
+- Credential boundary: provider modules have NO ambient `process.env` access; exactly ONE
+  repository-owned credential resolver (validate alias → resolve secret → pass resolved
+  secret as an explicit function argument); alias registry v1 closed-world:
+  `github` → `GITHUB_TOKEN`, exactly ONE GitHub credential slot; unknown aliases refuse;
+  `GITHUB_TOKEN` MUST become a secret-classified canonical environment-registry setting at
+  implementation (S2 registry precedent: `OPENAI_API_KEY`, never echoed/printed/serialized);
+  secrets never enter model context, prompts, logs, events, replay, evidence, receipts,
+  operator responses, or hashes/fingerprints of secret material; missing/revoked alias
+  resolution fails closed BEFORE dispatch; no cross-call secret-material cache; a second
+  independent credential is a STOP/registered extension decision, never pretend-registry
+  support.
+- First provider: GitHub Issues REST over the fixed host `api.github.com` (HTTPS) with the
+  PINNED reproducible protocol contract — every request sends the fixed non-secret headers
+  `X-GitHub-Api-Version: 2026-03-10` and `Accept: application/vnd.github+json` (catalog
+  owned; the implicit default REST version is never relied upon; changing the pinned
+  version is a provider-catalog semantic/version change requiring catalog-appropriate
+  review); static PAT via the `github` alias with least-privilege token-scope guidance
+  frozen as OPERATOR CONFIGURATION DOCTRINE (fine-grained PAT where supported, operator
+  SHOULD scope to intended repositories, minimum provider permission Issues read/write;
+  defense in depth, never an authority substitute); ordinary-Issues-ONLY baseline — a
+  resource resolving to a pull request refuses BEFORE mutation via EXACTLY ONE budgeted
+  pre-dispatch class-verification read under the mutation's own authority direction;
+  automatic redirect following DISABLED (any 3xx is a provider response under the universal
+  outcome/evidence rules); every dynamic path component encoded as exactly ONE URI path
+  segment by transport code (removeLabel's label percent-encoded single-segment; no `/`,
+  query, fragment, or alternate route from a label value); repository-owned loopback HTTP
+  fixture double for deterministic tests
+  (deferred-complexity challengers rejected: Jira — object/workflow complexity; Slack —
+  non-idempotent create semantics; Google Drive — forces OAuth). NOT baseline: GitHub
+  Enterprise/alternate host; OAuth; a second provider. Real GitHub proof only through
+  separately authorized live verification.
+- v1 read catalog: exactly `github.issues.get` (closed args `{ repository, issueNumber }`;
+  agent-visible bounded normalized result whose truncation markers are PRESENTATION
+  truncation — reconciliation derives exact per-operation predicates BEFORE presentation
+  truncation, never concludes absence/non-equality from an omitted/over-ceiling field, and
+  stores predicate evidence not full external content; title/body are bounded
+  agent-visible READ content only, NOT v1 mutation fields; result ceiling per §18; it
+  reconciles every v1 mutation; no list/search op admitted).
+- v1 mutation catalog: exactly TWO label operations — `github.issues.addLabel` (ONE label)
+  and `github.issues.removeLabel` (ONE label) — both naturally idempotent (taxonomy class
+  1) over one explicit desired membership state, with `github.issues.get` as reconciliation
+  read; the exact mutation predicate is `desiredLabelPresent: true|false` evaluated under
+  PROVIDER-VERIFIED label-equivalence semantics (MEDIUM LABEL-SEMANTICS-A correction: the
+  generic runtime never hardcodes case-sensitive/lowercase/Unicode-normalization/locale
+  equality — those are provider semantics and the official GitHub REST contract does not
+  authoritatively define label-name case/Unicode equivalence, so byte-exact comparison
+  CANNOT be assumed to equal provider identity semantics); LABEL-EQUIVALENCE EXPOSURE
+  GATE: before the GitHub v1 mutation catalog may be exposed in P7-S3, separately
+  authorized live-provider verification MUST establish the provider's actual
+  label-equivalence behavior (minimum matrix: case-only variants; representative
+  non-ASCII/Unicode-normalization variants; response spelling vs requested; duplicate/add
+  behavior under equivalent spellings; remove behavior under equivalent spellings), the
+  verified rule is recorded in the versioned provider catalog, and failure to reduce it to
+  ONE deterministic mechanically enforceable rule → STOP for registered design
+  adjudication before mutation exposure; SAFE BEHAVIOR until then: mutation catalog
+  exposure remains CLOSED, `desiredLabelPresent` must NOT assume byte-exact equality, any
+  reconciliation whose truth depends on unresolved equivalence classifies `effect_unknown`,
+  and no adoption/success may be inferred from byte-exact absence (S2/S3 gate; no live
+  contact in this S1 correction); the byte-exact ticket-scoped logical-identity
+  fingerprint REMAINS unchanged and intentionally conservative (it may UNDER-MERGE
+  provider-equivalent spellings — an extra current-state reconciliation, never a false
+  desired-state success; evidence of a safety defect → STOP for adjudication, not a
+  silent change) (add: present →
+  applied, absent → not applied; remove: absent → applied, present → not applied;
+  incomplete/ambiguous/unreadable → unknown; no status code alone establishes desired-state
+  truth — ANY removeLabel 404 enters reconciliation via the authoritative issue read);
+  label grammar: 1–64 UTF-8 bytes; no byte below 0x20; no ASCII comma; no line-breaking
+  characters; no leading/trailing ASCII whitespace; a canonical label of exactly `.` or
+  exactly `..` REFUSES (MEDIUM GITHUB-PROTOCOL-A correction: RFC 3986 dot-segment hazards
+  in a path parameter; refusing them mechanically preserves the one-path-segment route
+  containment claim — grammar validation happens BEFORE encoding, percent-encoding then
+  occurs as frozen, and final request construction may NOT normalize into a route outside
+  the catalog-owned template; provider labels outside this narrow v1 grammar are simply
+  unsupported in P7 v1).
+  `github.issues.updateFields` is REMOVED from v1 and DEFERRED pending a separately
+  reviewed concurrency/precondition contract (no provider-documented atomic lost-update
+  protection; no invented ETag/If-Match; no new concurrency subsystem; title/body remain
+  read-only agent-visible content). EVERY v1 mutation dispatch requires the CURRENT
+  connector to hold BOTH `read` AND `write` scopes AND the exact repository inside BOTH
+  effective directional bounds (`canStartV1Mutation`; the read path is required by
+  class verification, post-dispatch reconciliation, and uncertainty recovery — no
+  read-scope bypass), and performs EXACTLY ONE pre-dispatch ordinary-Issue class
+  verification as a NORMAL READ-AUTHORIZED safety precondition (same exact resource,
+  current read scope, resource inside `effectiveReadResources`, defined read charge,
+  non-agent-visible unless it IS the requested read, minimal predicate
+  `resourceClass = issue|pull_request|unknown`; pull_request or unknown/unreadable →
+  release BEFORE mutation dispatch; ordinary issue → continue).
+  EXCLUDED: create issue; create comment;
+  close/reopen; milestone; assignees (unjustified); merge; publish; delete;
+  send/notification; payments; any destructive/irreversible class.
+  Create-with-fingerprint is DEFERRED (not needed to prove P7).
+- Operation identity (two roles): the SAME-RUN key keeps the existing Run-scoped derivation
+  exactly (`run:{runId}:slot:{slotHash}:input:{inputHash}`) for resume/restart/
+  exactly-once; the new TICKET-SCOPED LOGICAL IDENTITY for cross-attempt deduplication is
+  `integration:{ticketId}:connector:{connectorId}:provider:{providerKind}:op:{operationId}:resource:{resourceSha256}:args:{argsSha256}`
+  with the exact existing canonicalizer for args (`canonicalOperationJson` sorted-keys
+  canonical JSON of `{operation, args}`), lowercase SHA-256 hex components, canonical
+  lowercase resource form, ≤ 512 characters, no transient ordinal, no random key, no
+  provider-response-derived identity. Future non-idempotent classes need their own reviewed
+  identity rule before exposure.
+- Prepare/adopt: reconcile-before-dispatch is mandatory for a matching logical identity —
+- Historical truth vs current truth: HISTORICAL intent classification answers "what could
+  that Run durably establish at its settlement boundary?" (immutable, §13.2); CURRENT
+  reconciliation answers "does the desired external state hold NOW?" — the two facts are
+  NEVER collapsed.
+- Prepare/adopt: same-Run + same `operationKey` is REPLAY ONLY (existing Run-scoped
+  exactly-once semantics; replay the durable result, never redispatch, no new logical
+  operation, no new current-state reconciliation merely to replay historical execution
+  evidence); EVERY NEW operation proposal with a matching ticket-scoped logical identity
+  (a later attempt OR a later distinct operation slot in the same Run) MUST establish
+  CURRENT desired-state truth through a fresh bounded reconciliation read BEFORE
+  suppressing OR permitting mutation dispatch, in the exact sequence over IMMUTABLE prior
+  intents (contract §12): inspect prior intent(s); CURRENT reconciliation read under
+  CURRENT connector authority (active connector/Work Context, current `read` scope,
+  resource inside `effectiveReadResources`, alias resolving); append evidence owned by the
+  CURRENT observing Run; classify CURRENT desired-state truth — HOLDS (addLabel present /
+  removeLabel absent) → adoption/satisfaction evidence for the CURRENT proposal, dispatch
+  NOTHING, no rewrite; DOES NOT HOLD → the historical prior classification does not block
+  current work, a NEW prepared intent only via normal admission/reservation gates;
+  UNKNOWN → no dispatch, no new intent, append unknown evidence, honest non-success/blocked
+  termination, operator recourse. ADOPTION means a CURRENT reconciliation observation
+  proves the desired external state presently holds and is linked to the matching
+  historical logical effect — NEVER "the prior intent once said applied"; historical
+  applied/not-applied/released NEVER independently decides a NEW proposal (humans may have
+  changed state since). Cross-attempt/current-state reconciliation stays DISTINCT from
+  the new-mutation pre-dispatch safety read (the design freeze does not merge the reads);
+  it is charging-classified as recovery/adoption reconciliation (§18); a historical
+  `released` intent proves only that the old mutation request never began. P7 v1 label
+  operations provide convergent desired-state behavior, NOT a global lock; no distributed
+  lock with the provider is claimed. Blind duplicate dispatch forbidden.
+- Durable intent relation (semantic freeze, NO SQL in S1):
+  `integration_operation_intents`, one row per `(runId, operationKey)` plus the
+  ticket-scoped logical identity for cross-attempt reconciliation; required durable facts
+  as listed in contract §13 (ticketId, attempt identity, runId, same-Run operationKey,
+  logical identity, connectorId, providerKind, workContextId, credential alias identity,
+  canonical resource identity, operation, canonical/redacted args fingerprint,
+  authority-decision reference, budget reservation linkage, dispatch state,
+  authority-safe response evidence facts, reconciliation metadata, effect classification,
+  timestamps); NO secret material; NO unrestricted provider payload;
+  agent-visible external content is NOT stored there (it stays with the existing
+  tool-result/replay owner; the relation links, never duplicates). State vocabulary
+  exactly: `prepared`, `dispatch_started`, `response_persisted`, `reconciled`,
+  `released`; terminal effect classification exactly: `effect_applied`, `effect_not_applied`,
+  `effect_unknown`, recorded ONLY in the `reconciled` state. `released` is the separate
+  terminal PRE-DISPATCH state — precisely: the MUTATING external-effect request owned by
+  the intent never began dispatch (bounded read-only safety traffic does not move it past
+  `prepared`; the FIRST byte of the actual mutating request is the
+  `dispatch_started` boundary) — carrying NO effect classification, and satisfying
+  settlement because there is provably no external consequence from the intent.
+  INTENT-LOCAL HISTORICAL TRUTH: once `reconciled` with any classification
+  (`effect_applied`/`effect_not_applied`/`effect_unknown`), that classification is IMMUTABLE
+  forever for that intent (it records what the owning Run could durably establish at its
+  settlement boundary); NO later Run/attempt rewrites it; there is NO in-place
+  unknown→applied or unknown→not-applied refinement on a prior intent row. Later
+  knowledge about the same ticket-scoped logical external effect is APPEND-ONLY evidence
+  owned by the CURRENT observing Run on the ONE existing append-only owner — the per-Run
+  hash-chained event chain (`events` + `run_event_chain_tips`, database-enforced
+  append-only, integrity owner `runtime/event-integrity.js`), with Run-visible receipt
+  material continuing through the existing `operation_receipts` owner — referencing
+  exactly: `priorIntentId`; the ticket-scoped logical identity; prior Run/attempt;
+  observing Run/attempt; reconciliation resource; reconciliation evidence; OBSERVED
+  classification; timestamp. The system may project the logical external effect as
+  later-resolved from such append-only facts WITHOUT rewriting historical Run truth (the
+  prior row stays `reconciled(effect_unknown)` forever). `effect_unknown` is terminal for
+  the owning Run's current consequence determination (never success authority, never
+  redispatch permission); the exact transition-guard table is contract §13.3; no transition
+  may invent certainty.
+- Kill-point truth: pre-dispatch death → the durable `prepared` intent exists and the
+  PROVABLE truth is that its MUTATING request never began (bounded read-only safety traffic
+  does not move the intent past `prepared`) — it is releasable with durable
+  release evidence or later dispatchable under full authority; post-mutating-dispatch/
+  pre-durable death → UNKNOWN, mandatory
+  reconciliation, no redispatch; provider-applied-before-response → UNKNOWN until
+  reconciliation; response-lost-to-memory → UNKNOWN (in-memory observation is not
+  authority).
+- Reconciliation triggers: EXACTLY three automatic seams — owning-Run resume/recovery; the
+  owning Run terminalization seam before settlement; a later attempt's
+  reconcile-before-dispatch for the same logical identity (which establishes NEW knowledge
+  about the same logical effect through append-only evidence owned by the observing Run —
+  never a rewrite of the prior intent, §13.2). No background scheduler, no
+  polling daemon, no webhook, no T9 authority; recovery reconciliation completes an
+  existing authorized obligation (it is not new work) and is NOT T9 triggering; there is
+  also CURRENT-AUTHORITY CONTAINMENT of reconciliation — a connector narrowed below
+  reconciliation capability (paused/archived, read scope removed, sourceRoot narrowed,
+  credential revoked) never makes reconciliation bypass, redispatch, mint connector scope,
+  or resurrect revoked credentials: the truth that cannot be re-established stays
+  `effect_unknown`, the immutable prior row never changes, and operator recourse is
+  surfaced.
+- Uncertainty/retry doctrine: never blindly redispatch an uncertain external mutation;
+  universal minimum mapping (post-write/no-response, timeout, ambiguous 5xx,
+  malformed/oversized/empty response, lost success, process death post-dispatch → unknown;
+  429-with-definitive-rejection → not applied; a proven PRE-DISPATCH failure does NOT
+  produce `effect_not_applied` — the intent is `released` with durable release evidence and
+  carries NO external-effect classification); a status code alone is never definitive v1
+  effect evidence (any 404 on a v1 mutation resolves ONLY through the §10 desired-state
+  reconciliation rule: authoritative issue read, label absent → applied, label present →
+  not applied, unreadable/ambiguous/truncated → unknown); provider mappings refine evidence
+  only where evidence supports it and may NEVER
+  weaken the minimum or manufacture certainty; NO runtime automatic retry in v1; explicit
+  redispatch after `effect_not_applied` requires a NEW explicit proposal and normal
+  admission; historical intent classifications are IMMUTABLE after settlement — later
+  knowledge about the same logical effect is append-only evidence owned by the observing
+  Run, never a rewrite of the prior intent row; historical
+  `effect_applied`/`effect_not_applied`/`released` NEVER independently decides a NEW
+  proposal (current reconciliation always decides; same-Run + same `operationKey` replay
+  is the ONLY case that replays prior terminal evidence without current reconciliation).
+- Idempotency taxonomy (six classes): naturally idempotent; provider idempotency key;
+  conditional/etag; provider-native dedup; reconciliation-only; unsupported-for-unattended-
+  mutation — every cataloged mutation must declare identity class, reconciliation read, and
+  consequence class; class 6 is not exposable without a later registered design.
+- Budget model: new dimension `integration_operation` with mutating sub-bound. Exact
+  numbers: runtime defaults `maxIntegrationOperationsPerRun = 8`,
+  `maxIntegrationMutatingOperationsPerRun = 4`; hard caps `64` total / `32` mutating
+  (admission refuses above); unset/invalid per-Ticket override → runtime default
+  (authorization ABSENT → dimension inert at zero); mutating ≤ total enforced at admission;
+  request payload limit 16 KiB canonical args; result-size ceiling 64 KiB of
+  authority-safe response/reconciliation evidence; dispatch timeout ceiling 30 000 ms (v1
+  catalog fixes 15 000 ms; no
+  configuration surface raises it); recovery-reconciliation bound ≤ 3 attempts per
+  unreconciled intent per seam invocation, per-intent hard bound 24 attempts, each ≤
+  30 000 ms, exhaustion leaves the intent `reconciled` with `effect_unknown`; TWO-CASE
+  reconciliation-attempt accounting (no later attempt ever mutates a settled prior intent
+  row to count attempts): Case A owning-Run reconciliation of its own nonterminal intent
+  uses the frozen 3-per-seam/24-pre-settlement limits with the row's own pre-settlement
+  metadata; Case B later observing-Run adoption/current-state reconciliation is owned by
+  and counted from the OBSERVING Run's append-only reconciliation-attempt events
+  (max 3 per seam invocation; max 24 per observing Run per ticket-scoped logical
+  identity; derivable from append-only evidence, never mutating the prior terminal
+  intent; a new later Run gets its own bound under its own authorization; no global
+  forever-counter and no free unbounded read channel). Charging
+  rule: recovery reconciliation of
+  an already-dispatched prepared intent does NOT consume ordinary
+  `integration_operation` budget (it is bounded recovery authority; it NEVER mints
+  connector scope nor resurrects a revoked credential); ordinary and
+  pre-dispatch reads DO consume it — including ONE ordinary read charge per mutation for
+  the §10 pre-dispatch ordinary-Issue class verification; THREE-RESERVATION MUTATION
+  COHERENCE (HIGH TWO-CHARGE-A correction; verified against
+  `persistence/postgres/runtime-budget-methods.js` and migration `030`): every NEW v1
+  mutation proposal reserves THREE deterministic rows in the existing budget reservation
+  authority (rows keyed `(run_id, dimension, source_identity)`; states
+  `reserved`/`committed`/`released`; committing less than reserved releases the unused
+  remainder; a repeat same-amount commit against a committed row is an idempotent no-op;
+  committed rows can never be released; re-reserving the same source identity with a
+  different amount conflicts; released identities cannot be reused) BEFORE the safety
+  read begins — with `K` the mutation's same-Run `operationKey`:
+  `(integration_operation, K + ":integration-safety-read")` amount `1`,
+  `(integration_operation, K + ":integration-mutation")` amount `1`, and
+  `(integration_operation.mutating, K + ":integration-mutation")` amount `1` (the
+  mutating row reuses the mutation source string; the dimension keeps the rows distinct);
+  ANY reservation failure → no safety read, no mutation intent, release of every obtained
+  reservation, refusal through the existing budget authority; the safety read completing
+  durably commits ONLY the safety-read row (never the mutation charge); a
+  safety-read refusal/release (PR class, unknown class, narrowed connector, invalid
+  authority before dispatch, other frozen pre-effect refusals) keeps the safety row
+  committed, releases the uncommitted mutation + mutating reservations, and may then
+  `release` the mutation intent with the mutating request never begun; the mutation
+  reaching its actual dispatch charge point commits the mutation row AND the mutating row
+  at the existing frozen dispatch charging boundary — no single row is partially
+  committed twice and no committed reservation is ever later released; crash/recovery
+  truth: before the safety read all three rows are reserved (existing budget-reservation
+  reconciliation, no effect occurred), after the durable safety read the safety row is
+  committed with mutation rows reserved until dispatch/refusal truth resolves, after the
+  dispatch charge point all applicable rows are committed; budget evidence is
+  reconstructable from the existing reservation/commit/release authority and its events
+  (no new budget mechanism); response-derived reconciliation from
+  already-durable success-response predicates (§13.4) performs no new network contact and
+  no budget item, as does recording a release/refusal evidence; CROSS-ATTEMPT ADOPTION
+  RECONCILIATION — the current-state reconciliation a NEW proposal performs before any
+  adoption/dispatch decision over a historically matching logical identity — is recovery/
+  adoption authority under the separately bounded reconciliation bounds and NOT an
+  ordinary `integration_operation` charge (current connector/Work Context/read scope/
+  read containment/alias required; it NEVER mints connector scope or credentials; if it
+  proves the current desired state does NOT hold, the consequent NEW mutation then takes
+  its normal reserved three-reservation path — two reads in that case is the frozen simple
+  truthful posture); mutating operations
+  additionally consume the mutating
+  sub-bound.
+- Evidence ownership (one canonical owner per fact): contract §19 table — prepared
+  intent/dispatch lifecycle/provider response authority facts (bounded, agent-content-free:
+  request identity, resource identity, size/hash facts, provider status, exact predicates,
+  classified outcome)/a Run's own reconciliation facts/effect classification (immutable
+  after reconciliation) in
+  `integration_operation_intents`; a LATER Run's reconciliation observations of a prior
+  intent are append-only evidence owned by the OBSERVING Run on the existing per-Run
+  hash-chained event chain (`events` + `run_event_chain_tips`, integrity owner
+  `runtime/event-integrity.js`), referencing the prior intent without rewriting it; external
+  resource identity in the
+  intent relation plus the final Run receipt reference; Run-visible immutable receipt in
+  the EXISTING operation receipt; event/replay visibility in the existing event/replay
+  system; agent-visible external business content (read-operation issue title/body
+  presented to the model) stays with the existing tool-result/replay/run-output owner —
+  the intent relation LINKS and never duplicates it; full external content (whole issue
+  body) is NEVER persisted into the intent relation merely because the agent was allowed
+  to read it; connector view a read-only projection by `connectorId`. NO second
+  connector-receipt ledger is created for Run-integrated effects; existing standalone
+  connector receipt semantics remain historical/current for their existing surface.
+- Completion/settlement (exact rule): a Run may settle through the existing canonical
+  settlement authority ONLY when every integration intent it created is (A) `released` —
+  the MUTATING request owned by the intent provably never began dispatch, with durable
+  release evidence (no external consequence from the intent to reconcile; no effect
+  classification exists or claimed) — or (B) `reconciled` with its immutable measured
+  classification (`effect_applied` = usable external-effect truth;
+  `effect_not_applied` = usable non-application truth; `effect_unknown` = terminal
+  uncertainty evidence sufficient for honest NON-SUCCESS Run termination through the
+  existing non-success dispositions, but NEVER completion/success authority and NEVER
+  permission to redispatch; later operator-authorized attempts may establish NEW knowledge
+  about the same logical effect through append-only evidence owned by the observing Run —
+  without rewriting historical intent truth). Any nonterminal state (`prepared`,
+  `dispatch_started`, `response_persisted`)
+  blocks settlement until the intent reaches `released` or `reconciled`. An unresolved
+  external effect is not success, not an ordinary (fabricated-clean) failure, not "probably
+  applied"; missing/partial integration evidence remains an integrity/uncertainty
+  condition; the rule stays compatible with the canonical one-unsettled-attempt rule
+  (retry/rerun = NEW attempt; resume = same Run); P2 completion authority is unchanged.
+- Operator visibility/recourse: pre-action (connector identity, provider kind, authorized
+  operations, exact resource bounds, credential alias identity, Work Context) and
+  post-action (external resource identity, operation, effect classification,
+  transport/result classification, intent/receipt/evidence references,
+  uncertainty/reconciliation history) — never secret material. Recourse: pause/archive
+  connector; remove/revoke credential; cancel Ticket; a separately authorized compensating
+  action is a NEW governed consequence. No fake undo.
+- Boundaries: destructive/irreversible classes are semantically classified (never by HTTP
+  method) and excluded from unattended v1 (send, submit, publish, merge, delete-resource,
+  payment, irrevocable notification, equivalents; inclusion requires its own registered
+  design); composition stays agent-loop-only, non-workflow-usable (`isWorkflowUsableAction`
+  exclusion carries), non-delegable — children inherit NO integration authority and remain
+  default-off, workflows cannot mint integration authority, future integration-target
+  composition needs a separately registered design under P5 non-amplification; triggering
+  stays request/Run-driven only (no webhooks, inbound triggers, polling daemon, background
+  or automatic sync, background reconciliation scheduler, or new scheduler authority).
+- Provider-kind contract: the sixteen required registration elements and the
+  runtime-owns-authority / provider-owns-transport split with the exact provider-forsaken
+  list (contract §7); provider-specific error classification may refine evidence only where
+  evidence supports it and may never turn an ambiguous post-dispatch outcome into
+  certainty.
+
+### 8. Documentation ownership (live-document model)
+
+- `docs/INTEGRATION_CONTRACT.md` (NEW, by this same candidate) is the ONE living normative
+  owner of P7 integration semantics: integration authority; immutable Run authority versus
+  mutable connector state; the credential resolver and alias model; the provider-kind
+  contract; operation identity; the prepared-intent state machine; the uncertainty/retry
+  doctrine; the idempotency taxonomy; budgets; evidence ownership; operator recourse; the
+  destructive-action, composition, and triggering/background boundaries; and the
+  provider-neutral completion requirements. It LINKS to the existing canonical owners
+  (`LOCAL_CONNECTOR_CONTRACT.md`, `TARGET_PROVIDER_CONTRACT.md`, `OPERATOR_CONTRACT.md`,
+  `DEPLOYMENT_CONTRACT.md`, `TICKET_ATTEMPT_AUTHORITY.md`,
+  `RUN_EVIDENCE_AUTHORITY_SOURCE_OF_TRUTH.md`, this register) rather than copying their
+  contracts. It owns no migration and changes no runtime behavior.
+- `docs/LOCAL_CONNECTOR_CONTRACT.md` remains the owner of existing connector CRUD/current
+  receipt mechanics; its mock-only `kind` statement may require a banner update during S2
+  implementation as current-authority truth — NOT in this docs-only freeze. No competing
+  connector/integration contract, duplicate receipt schema, copied generic provider
+  rulebook, or provider-specific rule inside generic authority documentation may be created.
+- `docs/INDEX.md` gains EXACTLY ONE living-current-guidance entry for
+  `INTEGRATION_CONTRACT.md` (one link, one complete description).
+- `docs/ARCHITECTURAL_DECISIONS_PENDING.md` gains ONLY this record; no historical record is
+  rewritten.
+
+### 9. Slice boundaries (three slices plus combined closure)
+
+- **P7-S1 — Integration Authority Design Freeze.** THIS candidate: docs/authority only.
+  No implementation, no migration, no provider contact. Publication only after independent
+  review of the exact freeze bytes.
+- **P7-S2 — Provider Contract + GitHub Reads.** NOT AUTHORIZED BY THIS TASK. Scope when
+  separately authorized: provider-kind registry; the credential resolver; ONE secret
+  registry slot; the GitHub kind; the v1 read operations; exact resource bounds; the
+  reconciliation read path; result bounds; the loopback fixture; PostgreSQL evidence where
+  required; gated live read proof. NO mutation dispatch.
+- **P7-S3 — Bounded Non-Destructive Mutations + Recourse.** NOT AUTHORIZED BY THIS TASK.
+  Scope when separately authorized: the EXACTLY TWO label mutation classes
+  (`github.issues.addLabel`, `github.issues.removeLabel`; `updateFields` remains DEFERRED
+  pending a separately reviewed concurrency/precondition contract); the
+  `integration_operation_intents` relation; the prepared/dispatch/reconciliation state
+  machine; the integration budget and mutating bound; uncertainty/adoption; operator
+  recourse; process-death recovery; real live governed mutation proof. NO destructive
+  classes, NO composition, NO triggers. That remains sufficient to prove explicit external
+  authority; actual external consequence; prepared intent; uncertainty; reconciliation;
+  crash recovery; cross-attempt adoption; no duplicate effect; and operator recourse —
+  P7 completion does NOT require title/body mutation.
+- **Combined P7 closure:** after S2 and S3 publication — one independent combined closure
+  review; ONE full canonical release checkpoint on the exact final bytes; ONE combined P7
+  closure publication. There is NO separate "hardening tranche"; findings-driven
+  corrections happen before combined closure.
+
+### 10. P7 completion condition (frozen)
+
+P7 must NOT close merely because GitHub works. Complete closure requires ALL fourteen
+items in contract §29, including: the provider-neutral authority model proven; the
+credential boundary proven; real Run-integrated external reads and real governed
+non-destructive consequences executed live; uncertainty/reconciliation proven across the
+kill-point matrix; no blind redispatch possible; cross-attempt adoption preventing
+duplicate effect; all budget/size/time bounds enforced; operator visibility/recourse
+complete; all exclusions holding; the implementation core containing NO GitHub-specific
+authority semantics; a second-provider design exercise expressible WITHOUT changing
+Ticket/Run/attempt, authority, uncertainty, evidence, credential, or budget semantics; one
+combined independent review pass; and one full canonical release checkpoint pass on the
+exact final bytes. The TWO label operations (`github.issues.addLabel`,
+`github.issues.removeLabel`) are sufficient to prove every mutation-side completion item;
+P7 completion does NOT require title/body mutation (`github.issues.updateFields` remains
+DEFERRED pending a separately reviewed concurrency/precondition contract). Provider-neutral
+implications stay exact: the immutable-historical-evidence rule is GENERIC integration
+semantics, while the label-only narrowing is PROVIDER-SPECIFIC catalog content — labels,
+Issues, and GitHub operation ids never become generic integration-runtime semantics, and
+the closure-blocking defect class is unchanged. CLOSURE-BLOCKING DEFECT CLASS: **GitHub-specific semantics appearing in
+the generic integration authority/runtime core.**
+
+### 11. Stop conditions
+
+P7 implementation MUST STOP rather than expand architecture if it appears to require:
+Ticket lifecycle semantic change; Run/attempt semantic change; completion-authority
+semantic change; a second execution graph; arbitrary HTTP; provider-selected authority;
+managed-secret infrastructure as a prerequisite; dynamic provider plugin loading; a
+destructive baseline operation; target-diverse composition; delegated integration
+authority; workflow integration operations; T9 event triggering; background sync; Browser
+Phase 3 dependency; migration 044 dependency; or a generic multi-provider abstraction
+beyond the reviewed provider-kind contract. Each substitute is its own registered design.
+
+### 12. Preserved non-authorizations
+
+This record preserves exactly: P2/P3/P4/P5 closed and published (not reopened); P6
+CLOSED/PUBLISHED (not reopened); P7-S2/P7-S3/any P7 runtime implementation NOT AUTHORIZED
+until this freeze is independently accepted and published; Browser Phase 3 NOT AUTHORIZED;
+migration 044 operationally unapplied and `NOT_AUTHORIZED` (never executed or authorized by
+P7-S1); T9 external triggering EMPTY/DEFERRED; FINAL STOP structured-authority constraint
+untouched. No staging, no commit, no push, no publication, no operational write, no
+PostgreSQL mutation, no provider contact, and no new demand-gated feature beyond the
+documentation set named in §8 belong to this candidate.
+
+### 13. Verification (docs-only)
+
+Because this candidate is documentation-only, verification is exact and narrow:
+
+- `git diff --check` clean on the final candidate bytes;
+- the candidate path set is exactly three documentation paths:
+  `docs/ARCHITECTURAL_DECISIONS_PENDING.md` (modified), `docs/INDEX.md` (modified), and
+  `docs/INTEGRATION_CONTRACT.md` (new); no code, test, migration, or configuration path
+  is touched;
+- repository-owned documentation/index/hermeticity checks for these paths: NONE exist
+  mechanically (the canonical test manifest owns no documentation-parity owner and
+  registers no docs-check suite), so none is claimed;
+- NO full canonical release checkpoint is run for a docs-only design-freeze candidate: no
+  system-wide trust boundary is crossed (no canonical lifecycle change, no migration or
+  release authority change, no canonical invariant/registry change, no checkpoint
+  machinery change, no declared tranche/release boundary);
+- no provider contact and no PostgreSQL mutation occur.
+
+CANDIDATE AGGREGATE IDENTITY (the exact byte identity for independent review): the
+MANIFEST-ORDER aggregate is defined as the output of
+
+```sh
+sha256sum docs/ARCHITECTURAL_DECISIONS_PENDING.md docs/INDEX.md docs/INTEGRATION_CONTRACT.md | sha256sum
+```
+
+— the SHA-256 of the concatenation of manifest lines, each line the 64-character lowercase
+content digest, two ASCII spaces, and the relative path, LF-terminated, in exactly that
+fixed path order. The concrete aggregate value and per-file digests travel with the
+candidate identity report; results are never embedded in candidate bytes. The
+tracked-delta identity is defined as `git diff | sha256sum` (it differs from the aggregate
+because the NEW contract file is untracked); both identities are reported so a reviewer can
+recompute each on the exact bytes. The earlier unreviewed draft values (`8dec4427…`
+register, `a2fee2d4…` contract, `18da48eb…` aggregate, `cb0a6447…` tracked-delta), the
+first pre-review correction-pass values (`5160e8b0…` register, `f9c5842e…` contract,
+`c6e75f41…` aggregate, `b5e02c25…` tracked-delta), the second pre-review
+correction-pass values (`a64e1caa…` register, `308d2a5a…` contract, `0dffec60…`
+aggregate, `9d78d90f…` tracked-delta), AND the third pre-review correction-pass values
+(`5c13b8cb…` register, `cf20d288…` contract, `abaa0309…` aggregate, `08791353…`
+tracked-delta) are SUPERSEDED by this corrected
+candidate and NOT reused; `docs/INDEX.md` remains byte-identical (`63e8e305…`) from the
+initial candidate creation through all correction passes (no pass changed it). The exact
+per-file digests, aggregate, and tracked-delta of the corrected
+final bytes travel with the corrected candidate identity report and are never
+embedded in candidate bytes.
+
+### 14. Pre-review candidate corrections (this exact candidate)
+
+Before independent review, ONE narrow documentation-only correction pass resolved fourteen
+semantic contradictions and provider-contract gaps in the draft candidate. No runtime,
+persistence, migration, or provider behavior changed; the three-path candidate scope
+(`docs/ARCHITECTURAL_DECISIONS_PENDING.md`, `docs/INDEX.md`,
+`docs/INTEGRATION_CONTRACT.md`) is preserved; `docs/INDEX.md` needed no description change.
+This pass-1 record is retained as the correction trail; where the SECOND pre-review
+correction pass (§15 below) supersedes exact elements of pass 1 — most importantly the
+pass-1 in-place `effect_unknown` refinement of prior intent rows, the
+`github.issues.updateFields` catalog membership, its `titleMatches`/`bodyMatches`
+predicates, and the mutation-direction read-scope bypass — §15 states each supersession
+explicitly:
+1. **released versus effect classification** — `released` now means provably undispatched
+   with durable release reason/evidence, is terminal for the intent, carries NO terminal
+   effect classification (a released intent is NEVER `effect_not_applied`), and satisfies
+   settlement because there is provably no external consequence to reconcile; the
+   "proven pre-dispatch failure → effect_not_applied" line is deleted
+   (contract §13.2/§13.3/§16, register §7);
+2. **effect_unknown versus later reconciliation** — the reconciled row carries a CURRENT
+   derived classification whose ONLY legal refinement is the guarded, append-evidenced
+   promotion `effect_unknown -> effect_applied` / `effect_unknown -> effect_not_applied`
+   by NEW durable reconciliation evidence; every prior observation remains durable in the
+   EXISTING append-only event/replay authority (no new history relation); no opposite
+   refinement; no applied ↔ not-applied rewrite; `effect_unknown` is terminal for the
+   owning Run's current consequence determination, never success authority, and never
+   redispatch permission, while later operator-authorized attempts may refine the prior
+   unknown at the reconcile-before-dispatch seam BEFORE any matching redispatch
+   (contract §12/§13.2/§15, register §7);
+3. **settlement semantics** — exact rule frozen: settle ONLY when every intent is
+   `released` (durable release evidence) or `reconciled` (durable classification); unknown
+   = honest non-success termination evidence, never completion/success authority and never
+   redispatch permission; nonterminal states block settlement; compatible with the
+   canonical one-unsettled-attempt rule (contract §20, register §7);
+4. **removeLabel 404 semantics** — the "definitive 404 → effect_not_applied" rule is
+   REMOVED; ANY 404 enters reconciliation and `github.issues.get` must authoritatively
+   read the exact issue (readable + label absent → `effect_applied`; readable + label
+   present → `effect_not_applied`; unreadable/ambiguous/truncated → `effect_unknown`);
+   absence is never inferred from the status code alone (contract §10/§16, register §7);
+5. **full predicate truth** — reconciliation derives exact operation-specific predicates
+   (equality/presence) from the bounded provider response BEFORE presentation truncation;
+   conclusions from omitted/truncated/over-ceiling fields are forbidden; when exact
+   predicate truth cannot be established in bounds → `effect_unknown`; response-derived
+   reconciliation from already-durable success predicates performs no new network contact
+   (contract §9/§13.4, register §7);
+6. **agent-visible versus durable evidence** — agent-visible external business content
+   follows the existing tool-result privacy boundary and is owned by the existing
+   tool-result/replay/run-output surface; the intent relation stores ONLY authority facts
+   (request identity, resource identity, size/hash facts, provider status, exact
+   predicates, classified outcome, bounded safe metadata) and links, never duplicates;
+   full external content is never persisted merely because the agent could read it
+   (contract §13/§19, register §7);
+7. **live connector narrowing** — effective authority is per direction over the EXISTING
+   connector fields exactly: `effectiveReadResources = frozenRunResources ∩
+   currentConnector.sourceRoots`, `effectiveMutationResources = frozenRunResources ∩
+   currentConnector.targetRoots`, `read`/`write` required in current `allowedScopes` per
+   direction; current connector state reduces admitted authority through status, Work
+   Context status, `allowedScopes` (live scope removal), provider kind, credential
+   resolvability, and provider resource bounds (contract §4.3, register §7);
+8. **protocol version** — every request pins `X-GitHub-Api-Version: 2026-03-10` with
+   `Accept: application/vnd.github+json` (fixed non-secret catalog-owned headers; the
+   implicit default REST version is never relied upon; a version change is a
+   provider-catalog semantic/version change requiring catalog-appropriate review)
+   (contract §7/§8, register §7);
+9. **redirect containment** — automatic redirect following is DISABLED; any 3xx is a
+   provider response under the universal outcome/evidence rules; no transport follows
+   redirects to another host/repository/issue/operation; future redirect-following would
+   revalidate targets against frozen authority and is not baseline (contract §8, §7);
+10. **path-segment encoding** — every dynamic path component is encoded as exactly ONE URI
+    path segment by transport code (never shell-style escaping); the removeLabel label is
+    percent-encoded single-segment and can create no `/`/query/fragment/alternate route
+    (contract §8/§10, register §7);
+11. **pull-request boundary** — ordinary-Issues-ONLY baseline: a resource resolving to a
+    pull request refuses BEFORE mutation, proven by EXACTLY ONE budgeted pre-dispatch
+    class-verification read under the mutation's own authority direction against the
+    GitHub structural marker (non-empty `pull_request` member); a class proof that is
+    unreadable/ambiguous/truncated also refuses; no response-after-the-fact inference;
+    class-verification failure releases the intent (contract §8/§10/§13.3/§18, register
+    §7);
+12. **credential least privilege** — token-scope guidance frozen as OPERATOR CONFIGURATION
+    DOCTRINE (explicitly classified; not mechanically verifiable by the runtime and not a
+    mechanical authority check): fine-grained PAT where supported, operator SHOULD scope
+    repositories, minimum provider permission Issues read/write, defense in depth that
+    never substitutes for authority checks (contract §8, register §7);
+13. **baseline statement narrowed** — the register now says exactly "no P7
+    external-business-system / GitHub provider transport and no integration operation
+    family exist in tracked source", explicitly not contradicting the existing standalone
+    model-provider transport (register §1);
+14. **identity supersession** — the draft aggregate/delta/per-file values are superseded by
+    the corrected bytes; the corrected identities travel with the candidate identity
+    report (§13).
+
+### 15. Second pre-review correction pass (this exact candidate)
+
+A SECOND narrow documentation-only correction pass resolved four material design-freeze
+issues discovered after pass 1. No runtime, persistence, migration, or provider behavior
+changed; the three-path scope is preserved and `docs/INDEX.md` needed no change. This
+pass-2 record is retained as the correction trail; the LATER correction passes supersede
+exact elements of it — §16 supersedes its prior-effect-keyed adoption sequence (item 2
+here), and §17 supersedes its amount-`2`/two-charge budget rule (item 7 here) with the
+repository-true three-reservation model:
+
+1. **Historical intent classifications are immutable after settlement.** Pass 1's in-place
+   `effect_unknown -> effect_applied` / `effect_unknown -> effect_not_applied` refinement
+   of a PRIOR intent row is DELETED (it would mutate historical canonical evidence after
+   the owning Run settled). Now: once an intent reaches `reconciled` with any
+   classification, that classification is IMMUTABLE forever for that intent and records
+   what the owning Run could durably establish at its settlement boundary. A later
+   operator-authorized attempt establishes NEW knowledge about the same ticket-scoped
+   logical effect as APPEND-ONLY evidence owned by the CURRENT observing Run, referencing
+   exactly `priorIntentId`; the ticket-scoped logical identity; prior Run/attempt;
+   observing Run/attempt; reconciliation resource; reconciliation evidence; OBSERVED
+   classification; timestamp. ONE existing append-only owner owns this fact — the per-Run
+   hash-chained event chain (`events` + `run_event_chain_tips`, database-enforced
+   append-only, integrity owner `runtime/event-integrity.js`), attached to the observing
+   Run, with Run-visible receipt material through the existing `operation_receipts`
+   owner; no new history ledger is created. The prior row remains
+   `reconciled(effect_unknown)` forever; a "later-resolved" PROJECTION of the logical
+   effect may exist from the append-only later facts and NEVER rewrites historical Run
+   truth (contract §12/§13.2/§13.3/§15/§16/§19/§20/§25, register §7).
+2. **Reconcile-before-dispatch/adoption uses immutable prior intents.** The exact
+   six-step later-attempt sequence is frozen: inspect the immutable prior intent; bounded
+   reconciliation under current authority; append evidence owned by the current Run;
+   proved-applied → adoption evidence + NO dispatch + NO rewrite; proved-not-applied →
+   NEW explicit proposal; still-unknown → NO new mutation intent, unresolved-evidence
+   recording, honest non-success/current-path termination, no redispatch (contract §12).
+3. **`released` semantics corrected.** `released` now means precisely: the MUTATING
+   external-effect request owned by THIS intent never began dispatch. Every
+   "before any network byte" formulation is replaced by that effect-dispatch
+   formulation; bounded read-only safety traffic (resource-class verification,
+   authority/liveness checks, reconciliation/safety probes) does NOT make a mutation
+   intent `dispatch_started`; the FIRST byte of the actual mutating provider request is
+   the boundary; `released` remains terminal with no effect classification; durable
+   release evidence states why mutation dispatch never began; the kill-point matrix is
+   updated (contract §13.3/§14/§16/§20, register §7).
+4. **`github.issues.updateFields` removed from P7 v1.** The v1 mutation catalog is EXACTLY
+   `github.issues.addLabel` + `github.issues.removeLabel` (one label each, converging on
+   one explicit desired membership state). `updateFields` is DEFERRED pending a separately
+   reviewed concurrency/precondition contract: P7 v1 has no frozen provider-documented
+   atomic lost-update protection for title/body and an absolute PATCH could overwrite
+   concurrent human work between observation and PATCH (repetition being idempotent is not
+   protection). NO invented ETag/If-Match semantics, NO new concurrency subsystem; all v1
+   references to title/body mutation, `titleMatches`/`bodyMatches`, and title/body
+   mutation identity examples are removed; `github.issues.get` stays the read/
+   reconciliation operation and title/body remain bounded agent-visible READ content only;
+   the exact label reconciliation predicate `desiredLabelPresent: true|false` is frozen
+   with per-operation truth tables and no status-code-only desired-state inference
+   (contract §10/§11.2/§13.4, register §7).
+5. **Mutation-capable connectors require reconciliation authority.** The pass-1
+   read-scope bypass under the mutation's write direction is DELETED. Every NEW v1
+   mutation dispatch requires BOTH `read` AND `write` in current `allowedScopes` AND the
+   exact repository inside BOTH effective directional bounds (`canStartV1Mutation`) —
+   because class verification, post-dispatch reconciliation, and later uncertainty
+   recovery depend on the provider's read path. The ordinary-Issue pre-dispatch class
+   verification is frozen as a NORMAL read-authorized safety precondition (same exact
+   resource; current read scope; inside `effectiveReadResources`; the defined read charge;
+   non-agent-visible unless it IS the requested read; minimal predicate
+   `resourceClass = issue|pull_request|unknown`) (contract §4.3/§8/§10, register §7).
+6. **Connector narrowing after mutation dispatch.** After a mutation is in
+   `dispatch_started`, later narrowing (paused/archived connector, removed read scope,
+   narrowed `sourceRoots`, revoked credential) never makes reconciliation bypass current
+   authority, redispatch, mint connector scope, or resurrect revoked credentials:
+   unreachable truth stays `effect_unknown`, the immutable prior row never changes, and
+   operator reconciliation/recourse is surfaced; recovery authority exempts reconciliation
+   from ordinary OPERATION BUDGET charging only (contract §15, register §7).
+7. **Budget coherence.** Recovered repository reservation semantics
+   (`RuntimeBudgetController` reserve/commit/release keyed by run, dimension, and stable
+   source identity) anchor the exact rule: every NEW v1 mutation proposal verifies and
+   reserves BOTH required ordinary charges BEFORE the safety read begins —
+   `integration_operation` amount `2` (read + mutation) AND
+   `integration_operation.mutating` amount `1`, keyed to the proposal's stable same-run
+   operation identity; EITHER shortage refuses BEFORE the safety read and BEFORE any
+   prepared intent exists (partial reservation released via the existing release seam; the
+   read unit commits when the safety read is durably recorded; mutation + mutating units
+   commit at the existing dispatch charge point) — so no prepared mutation can exist that
+   could never pass its mandatory safety read (contract §18, register §7).
+8. **Provider-neutral implications and roadmap closure wording.** Immutable-history is
+   provider-neutral generic semantics; label-only narrowing is provider-specific catalog
+   content; labels/Issues/GitHub operation ids never become generic-core semantics
+   (unchanged closure-blocking defect class). P7-S3 now proves governed mutation with the
+   TWO label operations — sufficient for explicit external authority, actual external
+   consequence, prepared intent, uncertainty, reconciliation, crash recovery,
+   cross-attempt adoption, no duplicate effect, and operator recourse; P7 completion does
+   NOT require title/body mutation. ALL pass-1 provider boundaries are preserved
+   unchanged: pinned `X-GitHub-Api-Version: 2026-03-10`;
+   `Accept: application/vnd.github+json`; redirect following disabled; one-path-segment
+   encoding; ordinary-Issues-only; no raw-404 effect inference; exact connector narrowing;
+   agent-visible/durable evidence separation; closed credential alias; no ambient
+   `process.env`; no automatic retry; no composition; no T9/background sync; migration 044
+   `NOT_AUTHORIZED` (register §9/§10, contract §10/§13.2/§25/§29).
+9. **Identity supersession (second pass).** The pass-1 corrected candidate values
+   (`5160e8b0…` register, `f9c5842e…` contract, `c6e75f41…` aggregate, `b5e02c25…`
+   tracked-delta) and the original draft values are SUPERSEDED by this corrected
+   candidate; the recomputed corrected values travel with the candidate identity report
+   and are never embedded in candidate bytes; `docs/INDEX.md` stays byte-identical
+   (`63e8e305…`) (§13).
+
+### 16. Third pre-review correction pass — historical effect truth vs current desired-state truth (this exact candidate)
+
+ONE final narrow pre-review correction separates two facts that pass 2 had partially
+collapsed. No runtime, persistence, migration, or provider behavior changed; the
+three-path scope is preserved and `docs/INDEX.md` stays byte-identical. This pass-3
+record is retained as the correction trail; §17 (the P7-S1-REVIEW-B pass) supersedes its
+amount-`2`/two-charge budget rule (the "Charging"/two-charge wording below) with the
+repository-true three-reservation model:
+
+- **The two facts.** Historical intent classification answers "what could that Run durably
+  establish at its settlement boundary?" and stays immutable intent-local historical
+  truth. Current reconciliation answers "does the desired external state hold NOW?" and is
+  the CURRENT Run's own bounded observation under current connector authority. Worked
+  example frozen: attempt 1 `addLabel("urgent")` → `effect_applied`; a human later removes
+  `urgent`; attempt 2 proposes the same logical identity — historical `effect_applied`
+  does NOT prove `urgent` is present NOW (the inverse holds for historical
+  `effect_not_applied`).
+- **Replay versus new proposal.** Same-Run + same `operationKey` is REPLAY ONLY — existing
+  Run-scoped exactly-once semantics replay the durable result without redispatch, without
+  a new logical operation, and without any new current-state reconciliation merely to
+  replay historical execution evidence. EVERY NEW operation proposal with a matching
+  ticket-scoped logical identity — a later attempt OR a later distinct operation slot in
+  the same Run — MUST establish CURRENT desired-state truth through a fresh bounded
+  reconciliation read before suppressing OR permitting mutation dispatch
+  (contract §12 Cases A/B).
+- **Exact new-proposal sequence frozen** (contract §12; it SUPERSEDES pass-2's earlier
+  prior-effect-keyed sequence, §15 item 2): inspect immutable prior
+  intent(s); CURRENT reconciliation read under CURRENT connector authority (active
+  connector/Work Context, current `read` scope, resource inside
+  `effectiveReadResources`, frozen alias resolving); append evidence owned by the
+  CURRENT observing Run referencing the prior intent/logical identity; classify CURRENT
+  desired-state truth by the §13.4 predicate — HOLDS (addLabel present / removeLabel
+  absent) → adoption/satisfaction evidence for the CURRENT proposal, dispatch NOTHING,
+  no rewrite, the observation is authority for the current Run's own work; DOES NOT HOLD
+  → historical prior classification does not block current work, a NEW prepared intent
+  only through normal admission/reservation gates; UNKNOWN → no dispatch, no new intent,
+  append unknown evidence, honest non-success/blocked termination, operator recourse.
+- **Adoption redefined** (contract §12.1): adoption means a CURRENT reconciliation
+  observation proves the desired external state presently holds and is linked to the
+  matching historical logical effect — NEVER "the prior intent once said
+  effect_applied." Historical `effect_not_applied` never authorizes dispatch by itself;
+  historical `effect_applied` never suppresses dispatch by itself; a historical
+  `released` intent proves only that the old mutation request never began and is never
+  current effect evidence (its later proposal's mandatory safety read may establish the
+  current label state if the implementation reuses the same response predicate).
+- **Charging** (contract §18): cross-attempt/current-state reconciliation before an
+  adoption/dispatch decision is recovery/adoption reconciliation under the separately
+  bounded reconciliation authority — NOT an ordinary `integration_operation` charge; it
+  still requires CURRENT connector active, Work Context active, `read` scope, resource
+  inside `effectiveReadResources`, and the frozen alias resolving, and NEVER mints scope
+  or credentials; a subsequently proposed NEW mutation still takes its normal reserved
+  two-charge safety-read + mutation path (two reads in that case is the frozen simple
+  truthful posture).
+- **The two reads stay distinct** (contract §10/§12): cross-attempt/current-state
+  reconciliation (decides whether a NEW mutation intent is necessary at all) is NOT
+  merged with the new-mutation pre-dispatch safety read (an admitted mutation's Issue
+  class/authority revalidation immediately before dispatch, still the frozen charged
+  read); a later merge requires proof that one observation can safely satisfy both
+  temporal authority positions.
+- **Concurrency expectation stated** (contract §12): P7 v1 label operations provide
+  convergent desired-state behavior — not a global lock against external human changes;
+  the system never claims more than the durable observation proves; no distributed lock
+  with the provider is claimed.
+- **Evidence ownership preserved** (contract §13.2/§19): the current reconciliation fact
+  references the matching ticket-scoped logical identity, `priorIntentId` when
+  applicable, prior Run/attempt, observing Run/attempt, canonical resource, desired
+  label, `desiredLabelPresent`, observation timestamp, and the classification of CURRENT
+  desired-state truth; it lives under the existing append-only observing-Run event-chain
+  owner already frozen; NO prior intent row is modified.
+- **Nothing regressed** (§13): two-label mutation catalog; immutable historical intents;
+  `released` effect-dispatch semantics; read+write mutation reconciliation authority;
+  two-charge new-mutation reservation; current connector narrowing containment; pinned
+  `X-GitHub-Api-Version: 2026-03-10`; `Accept: application/vnd.github+json`; redirect
+  refusal; one-path-segment encoding; Issue-only boundary; no raw-404 inference; label
+  desired-state predicates; no `updateFields`; no automatic retry; no composition; no
+  T9/background sync; migration 044 unapplied/`NOT_AUTHORIZED`.
+- **Identity supersession (third pass).** The pass-2 values (`a64e1caa…` register,
+  `308d2a5a…` contract, `0dffec60…` aggregate, `9d78d90f…` tracked-delta) and all earlier
+  values are SUPERSEDED by this final corrected candidate; the recomputed values travel
+  with the candidate identity report and are never embedded in candidate bytes;
+  `docs/INDEX.md` stays byte-identical (`63e8e305…`) (§13).
+
+### 17. Independent-review correction pass — P7-S1-REVIEW-B (this exact candidate)
+
+A fresh independent review returned **`P7-S1-REVIEW-B`** with three BLOCKING findings
+(HIGH `TWO-CHARGE-A`; MEDIUM `LABEL-SEMANTICS-A`; MEDIUM `GITHUB-PROTOCOL-A`), one LOW
+reconciliation-counter ambiguity, and one INFO budget-rationale wording issue. All are
+corrected in this pass; no runtime, persistence, migration, or provider behavior changed;
+the three-path scope is preserved and `docs/INDEX.md` stays byte-identical:
+
+1. **HIGH `TWO-CHARGE-A` corrected — budget semantics now match repository truth.** The
+   reviewer recovered the repository's actual budget reservation semantics (verified here
+   against `persistence/postgres/runtime-budget-methods.js` and migration
+   `030_runtime_budget_and_capacity.sql` before freezing): a budget row is keyed
+   `(run_id, dimension, source_identity)` (`run_budget_charges_identity` UNIQUE);
+   exactly one `reserved → committed` transition per row (state-shape CHECK + update
+   guard); committing less than reserved releases the unused remainder; a second
+   same-amount commit against a committed row is an idempotent no-op; a committed row
+   cannot later be released; re-reserving the same source identity with a different
+   amount refuses (`RUN_BUDGET_RESERVATION_CONFLICT`); a released identity cannot be
+   reused; existing multi-charge flows use DISTINCT source identities. The previous
+   frozen amount-`2`/single-source reservation was INCOMPATIBLE with this authority and
+   is REPLACED by the exact THREE-reservation rule (contract §18): with `K` the
+   mutation's same-Run `operationKey`,
+   `integrationSafetyReadSource = K + ":integration-safety-read"` and
+   `integrationMutationSource = K + ":integration-mutation"`, the three reservation
+   tuples are `(integration_operation, integrationSafetyReadSource)` amount `1`,
+   `(integration_operation, integrationMutationSource)` amount `1`, and
+   `(integration_operation.mutating, integrationMutationSource)` amount `1` (the
+   mutating row reuses the mutation source string; the dimension keeps the rows
+   distinct). All THREE must succeed BEFORE the safety read; any failure → no safety
+   read, no mutation intent, release of every obtained reservation, refusal through the
+   existing budget authority. Exact commit/release semantics frozen: durable safety read
+   commits ONLY the safety-read row (never the mutation charge); safety-read
+   refusal/release (PR class, unknown class, narrowed connector, invalid authority before
+   dispatch, other frozen pre-effect refusals) keeps the safety row committed, releases
+   the uncommitted mutation + mutating reservations, and the mutation intent may reach
+   `released` with the mutating request never begun; the actual dispatch charge point
+   commits the mutation row AND the mutating row at the existing frozen boundary — no
+   single row is partially committed twice and no committed reservation is later
+   released. Crash/recovery truth frozen: before the safety read all three rows are
+   reserved with existing budget-reservation reconciliation and no effect; after the
+   durable safety read the safety row is committed with mutation rows reserved until
+   dispatch/refusal truth resolves; after the dispatch charge point all applicable rows
+   are committed; budget evidence is reconstructable from the existing
+   reservation/commit/release authority and its events — no invented budget mechanism.
+2. **MEDIUM `LABEL-SEMANTICS-A` corrected — provider-true equivalence, fail-closed until
+   verified.** `desiredLabelPresent` MUST use the provider's VERIFIED TRUE
+   label-equivalence semantics; the generic runtime MUST NOT hardcode case-sensitive
+   equality, lowercase equality, Unicode normalization, or locale-specific folding —
+   those are provider semantics, and the official GitHub REST contract does not
+   authoritatively define label-name case/Unicode equivalence, so byte-exact comparison
+   cannot be assumed to equal provider identity semantics (contract §13.4). Exposure
+   gate: before the GitHub v1 mutation catalog may be exposed in P7-S3, separately
+   authorized live-provider verification MUST establish the provider's actual
+   label-equivalence behavior for `addLabel`/`removeLabel` — minimum matrix: case-only
+   variants; representative non-ASCII/Unicode-normalization variants sufficient to
+   determine whether normalization matters; response spelling versus requested spelling;
+   duplicate/add behavior under equivalent spellings; remove behavior under equivalent
+   spellings — with the verified rule recorded in the versioned provider catalog, and a
+   STOP for registered design adjudication before mutation exposure if the behavior
+   cannot be reduced to ONE deterministic mechanically enforceable rule (contract §10).
+   Safe behavior until then: mutation catalog exposure CLOSED; `desiredLabelPresent`
+   must NOT assume byte-exact equality; any reconciliation whose truth depends on
+   unresolved equivalence classifies `effect_unknown`; no adoption/success inferred from
+   byte-exact absence (an S2/S3 gate requiring no live GitHub contact in this S1
+   correction).
+3. **Byte-exact logical identity PRESERVED.** The ticket-scoped logical-operation
+   identity is unchanged: it is intentionally conservative and may UNDER-MERGE
+   provider-equivalent spellings — which can cause an extra current-state reconciliation
+   but must never cause a false desired-state success; desired-state reconciliation uses
+   provider-verified equivalence. If later implementation evidence shows byte-exact
+   logical identity itself creates a safety defect: STOP for adjudication rather than
+   silently changing it (contract §11.2).
+4. **MEDIUM `GITHUB-PROTOCOL-A` corrected — dot-segment route gap closed.** The reviewer
+   showed the frozen label grammar admitted exactly `.` and `..`, which ordinary URI
+   path construction may treat as RFC 3986 dot-segments — making the earlier "a label
+   can never change route structure" claim stronger than the mechanism guaranteed.
+   Minimum correction frozen: the v1 label grammar now REFUSES a label whose entire
+   canonical string is exactly `.` or exactly `..`; NO special dot-byte encoding
+   machinery is introduced; every other grammar requirement is preserved; provider
+   labels outside the narrow v1 grammar are simply unsupported in P7 v1. The final
+   path-containment invariant is frozen: grammar validation happens BEFORE encoding;
+   exact `.`/`..` refuse; percent-encoding then occurs as already frozen; final request
+   construction may NOT normalize into a route outside the catalog-owned template;
+   automatic redirects remain disabled; no arbitrary URL/method/header path (contract
+   §8/§10).
+5. **LOW reconciliation-counter clarification.** No later attempt ever mutates a settled
+   prior intent row to count reconciliation attempts. Two accounting cases frozen
+   (contract §18): Case A — the owning Run reconciling its own nonterminal intent uses
+   the frozen limits (max 3 attempts per seam invocation; max 24 owning-Run attempts
+   before its own terminal classification) with the row's own pre-settlement metadata;
+   Case B — once the historical intent is terminal/immutable, later
+   adoption/current-state reconciliation attempts are owned by and counted from the
+   OBSERVING Run's append-only reconciliation-attempt events for the matching
+   ticket-scoped logical identity (max 3 per seam invocation; max 24 per observing Run
+   per logical identity), derivable from append-only evidence, never mutating the prior
+   terminal intent; a new later Run gets its own bound under its own authorization while
+   the existing Ticket attempt ceiling and execution-step/runtime ceilings remain
+   additional system bounds; no global forever-counter; no free unbounded read channel.
+   The minimal reconciliation-attempt event fact is frozen: observing Run id; observing
+   attempt identity; ticket-scoped logical identity; `priorIntentId` when applicable;
+   canonical resource; reconciliation seam; the observing Run's attempt ordinal for that
+   Run/logical identity; observation timestamp; result classification or transport
+   outcome — owned by the existing append-only event authority, no new history ledger.
+6. **INFO budget-rationale wording corrected.** The mutating default `4` is exactly HALF
+   of the total default `8` (not "under half"); the hard cap `32` is likewise exactly
+   half of `64` (contract §18 prose).
+7. **Accepted verdicts preserved unchanged.** Everything the independent review passed
+   remains untouched: stage/product boundary; seven-item ontology; integration
+   authorization; two-sided connector model; exact repository bounds; credential
+   resolver/alias; provider-neutral contract; pinned GitHub API version; Issue/PR
+   discriminator; two-label mutation catalog; immutable historical intent truth; current
+   desired-state reconciliation; replay distinction; adoption definition; five-state
+   intent machine; kill-point semantics; uncertainty doctrine; connector narrowing;
+   evidence ownership; settlement semantics; recourse; destructive-operation exclusions;
+   composition exclusion; T9/background exclusion; persistence semantic freeze;
+   three-slice roadmap; provider-neutral completion condition; doc ownership/hermeticity;
+   P6 closure note; migration 044 boundary.
+8. **Accepted residuals (not blockers, untouched).** The `GITHUB_TOKEN`
+   deployment-name observation and the theoretical Work Context mirror-check hardening
+   are ACCEPTED RESIDUALS: no correction is made for them in this pass and those
+   surfaces are not opportunistically touched.
+9. **Identity supersession (review pass).** The independently reviewed rejected identity
+   (`5c13b8cb…` register, `63e8e305…` INDEX, `cf20d288…` contract, `abaa0309…`
+   aggregate, `08791353…` tracked-delta) and ALL prior values are REJECTED/SUPERSEDED by
+   this corrected candidate (§13); the recomputed corrected values travel with the
+   candidate identity report and are never embedded in candidate bytes; `docs/INDEX.md`
+   stays byte-identical (`63e8e305…`).
+
+**NEXT BOUNDARY: FRESH INDEPENDENT RE-REVIEW OF THE EXACT CORRECTED P7-S1 DESIGN-FREEZE CANDIDATE — NO
+IMPLEMENTATION, PUBLICATION, MIGRATION, OR P7-S2 YET.**

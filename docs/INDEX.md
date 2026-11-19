@@ -38,6 +38,13 @@
   operator runbook: starting/status/crash/restart/outage/migration/latch/drain/rollback
   procedures derived from the frozen P6 deployment contract and the process-level
   recovery evidence (`scripts/p6-s3-hosted-recovery-postgres-test.js`).
+- [`INTEGRATION_CONTRACT.md`](INTEGRATION_CONTRACT.md) — canonical P7 integration authority:
+  the ONE living owner of integration authorization, the immutable-Run/mutable-connector
+  rule, the provider-kind contract and credential resolver/alias boundary, exact v1
+  GitHub-operations catalogs, operation identity, the prepared-intent state machine,
+  uncertainty/reconciliation doctrine, integration budgets, evidence ownership, operator
+  recourse, and the destructive/composition/triggering boundaries. Design authority only:
+  it does not by itself authorize P7 runtime implementation.
 - [`WORK_DEFINITION_AND_TYPED_EVIDENCE_ROADMAP.md`](WORK_DEFINITION_AND_TYPED_EVIDENCE_ROADMAP.md)
   — authoritative four-tranche roadmap for typed projection parity and later structured
   work-definition authority.
